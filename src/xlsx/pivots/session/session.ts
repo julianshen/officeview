@@ -34,7 +34,7 @@ import { checkSavedLayout, engineEligibility, type CellReader, type FaithfulResu
 import { liveDefinition, type PivotLayout } from '../engine/place'
 import type { RecordStore } from '../engine/records'
 import { initialViewState, type PivotViewState } from '../engine/view'
-import { captionRule, resolveCaptions, savedCaptions } from './captions'
+import { captionRule, MEASURED_CAPTION_TABLES, resolveCaptions, savedCaptions, type CaptionTable } from './captions'
 import { applyDelta, type PivotDelta, type PivotDeltaKind } from './delta'
 
 export interface PivotSessionInput {
@@ -46,6 +46,8 @@ export interface PivotSessionInput {
   lease?: { release(): void }
   /** The interaction kinds apply accepts; default `ORACLE_VERIFIED_KINDS`. */
   verifiedKinds?: ReadonlySet<PivotDeltaKind>
+  /** The measured caption tables the locale is detected among; default `MEASURED_CAPTION_TABLES`. */
+  captionTables?: Readonly<Partial<Record<'zh-TW', CaptionTable>>>
 }
 export type ChartGate = (charts: readonly ChartModel[], layout: PivotLayout, def: PivotTableDefinition) => EngineResult<readonly ChartModel[]>
 export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[]; charts: readonly ChartModel[] }
@@ -61,12 +63,19 @@ export interface PivotSession {
 /**
  * The interaction kinds whose Excel oracle passed (spec §9: a kind with no passing oracle case is absent from the UI
  * and refused here). Each is pinned by tests/xlsx-pivots-interaction-oracle.test.ts, which asserts that every kind
- * listed has at least one passing case: today the Stage 2 cases that are Excel applying one UI change to the engine
- * seed (collapse: layout-collapsed-item; items: quirk-hidden-row-item, quirk-cross-hidden-item; sort: sort-text-*,
- * sort-number-descending, sort-value-*; filter: filter-label-*, filter-value-*, filter-top-*). `collapseField`,
- * `collapseAll`, `clearFilters` and `page` wait for Task 24's cases.
+ * listed has at least one passing case. As of Task 24's oracle (44d9dbe8) every built task-25 delta case passes:
+ * - collapse: interaction-collapse-item-* (compact, outline, tabular; subtotals top and bottom), interaction-expand-item,
+ *   layout-collapsed-item, interaction-sort-then-collapse;
+ * - collapseField / collapseAll: interaction-collapse-field-*, interaction-collapse-all-*, interaction-expand-field/-all;
+ * - items: quirk-hidden-row-item, quirk-cross-hidden-item, interaction-filter-all-hidden, interaction-items-*;
+ * - page: interaction-page-select-other, -all, -multi, -multi-to-all;
+ * - filter (label, value, top-10 and date): the Stage 2 filter-* cases, interaction-filter-date-between;
+ * - clearFilters: interaction-clear-label/value/top10-filter, -clear-filters-hidden-items, -filter-date-clear;
+ * - sort: the Stage 2 sort-* cases, interaction-sort-value-ascending-ties.
+ * A shape the engine or the delta refuses stays refused inside a listed kind (a second filter family on a field, a
+ * dynamic date filter, a nested ascending value-sort tie, …).
  */
-export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'items', 'sort', 'filter'])
+export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
 
 /** Excel's message for a change that would overlap existing data (§7.1; spec text, until Task 24 measures it). */
 export const PIVOT_OVERLAP_MESSAGE = 'A PivotTable report cannot overlap another PivotTable report.'
@@ -136,7 +145,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
   const view0 = initialViewState(def, cache)
   const computed = computePivot(store, cache, def, view0, { date1904 })
   if (!computed.ok) return computed
-  const rule = captionRule(def, saved, computed.value)
+  const rule = captionRule(def, saved, computed.value, input.captionTables ?? MEASURED_CAPTION_TABLES)
   const layout0 = savedCaptions(computed.value, saved)
   const gate = (layout: PivotLayout, live: PivotTableDefinition): EngineResult<readonly ChartModel[]> => {
     if (!linkedCharts.length) return { ok: true, value: [] }

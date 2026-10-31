@@ -88,6 +88,8 @@ function replay(seed: Loaded, target: Loaded, deltas: readonly PivotDelta[]): Ou
     if (ours !== theirs) return { status: 'differs', reason: `${axis}: live ${ours}, saved ${theirs}` }
   }
   if (JSON.stringify(live.location) !== JSON.stringify(target.def.location)) return { status: 'differs', reason: `location: live ${JSON.stringify(live.location)}, saved ${JSON.stringify(target.def.location)}` }
+  const flags = itemFlags(live), saved = itemFlags(target.def)
+  if (flags !== saved) return { status: 'differs', reason: `item flags (hidden, collapsed): live ${flags}, saved ${saved}` }
   return compareCells(session.layout, target)
 }
 /**
@@ -95,6 +97,15 @@ function replay(seed: Loaded, target: Loaded, deltas: readonly PivotDelta[]): Ou
  * When Excel sorts a field it saves that field's `<items>` in the new order and indexes the lines into it; the live
  * definition keeps the saved list and indexes the lines into that. Both name the same items in the same order.
  */
+/** Each row, column and page field's hidden and collapsed data items, by cache item (h/sd as Excel saves them). */
+function itemFlags(def: PivotTableDefinition): string {
+  const fields = new Set([...def.rowFields, ...def.colFields, ...def.pageFields.map(page => page.fld)])
+  return JSON.stringify([...fields].filter(field => field !== PIVOT_VALUES_FIELD).sort((a, b) => a - b).map(field => {
+    const items = (def.fields[field]?.items ?? []).filter(item => item.type === 'data')
+    const by = (pick: (item: typeof items[number]) => boolean) => items.filter(pick).map(item => item.x).sort((a, b) => a! - b!)
+    return { field, hidden: by(item => item.hidden), collapsed: by(item => !item.showDetails) }
+  }))
+}
 function lines(def: PivotTableDefinition, axis: 'rowItems' | 'colItems'): string {
   const fields = axis === 'rowItems' ? def.rowFields : def.colFields
   return JSON.stringify((def[axis] ?? []).map(line => ({
@@ -171,18 +182,24 @@ const passedKinds = new Set<PivotDeltaKind>()
 
 describe('Excel interaction oracle', () => {
   describe('Task 24 manifests', () => {
-    interface InteractionCase { case: string; file: string; pivot: string; task: number; seed: string; delta: PivotDelta[] }
+    /** Ruling S3-D: `base` (relative to tests/fixtures/xlsx-pivots/, no extension) is the Excel-saved start file, else the
+     * seed's; a `setup` case is a measurement or a base, not a delta oracle. Only built cases run. */
+    interface InteractionCase { case: string; file: string; pivot: string; task: number; seed: string; delta: PivotDelta[]; base?: string; setup?: string; status?: string }
     if (!existsSync(MANIFEST)) {
       it.skip('SKIPPED: tests/fixtures/xlsx-pivots/interaction/manifest.json is absent (Task 24 interaction oracle not built); Task 24 cases not run', () => {})
     } else {
       const manifest = (raw => Array.isArray(raw) ? raw : raw.cases)(JSON.parse(readFileSync(MANIFEST, 'utf8'))) as InteractionCase[]
-      const cases = manifest.filter(entry => entry.task === 25)
-      if (!cases.length) it.skip('SKIPPED: interaction/manifest.json has no task-25 case', () => {})
+      const ours = manifest.filter(entry => entry.task === 25)
+      for (const entry of ours.filter(entry => entry.status !== 'built')) it.skip(`SKIPPED: manifest ${entry.case} is not built (status ${entry.status ?? 'none'})`, () => {})
+      for (const entry of ours.filter(entry => entry.status === 'built' && entry.setup !== undefined)) it.skip(`SKIPPED: manifest ${entry.case} is a setup case, not a delta oracle (${entry.setup})`, () => {})
+      const cases = ours.filter(entry => entry.status === 'built' && entry.setup === undefined)
+      if (!cases.length) it.skip('SKIPPED: interaction/manifest.json has no built task-25 delta case', () => {})
       else it.each(cases.map(entry => [entry.case, entry] as const))('manifest %s', async (_name, entry) => {
-        const seedFile = SEED_FILES[entry.seed]
-        expect(seedFile && existsSync(seedFile), `seed ${entry.seed}`).toBe(true)
-        const outcome = replay(await pivotOf(seedFile!), await pivotOf(resolve(process.cwd(), entry.file), entry.pivot), entry.delta)
+        const start = entry.base !== undefined ? resolve(FIXTURES, `${entry.base}.xlsx`) : SEED_FILES[entry.seed]
+        expect(start && existsSync(start), `start file ${entry.base ?? entry.seed}`).toBe(true)
+        const outcome = replay(await pivotOf(start!, entry.pivot), await pivotOf(resolve(process.cwd(), entry.file), entry.pivot), entry.delta)
         expect(describeOutcome(outcome), entry.case).toBe('ok')
+        // Only a case that starts from the seed itself or an Excel save of it counts towards enabling its kinds.
         for (const delta of entry.delta) passedKinds.add(delta.kind)
       })
     }
@@ -225,10 +242,9 @@ describe('Excel interaction oracle', () => {
       const deltas: PivotDelta[] = [{ kind: 'page', field: F.Product, selected: [0] }, { kind: 'items', field: F.Product, hidden: [] }]
       expect(describeOutcome(replay(await pivotOf(engineCase('quirk-page-multiple')), await pivotOf(engineCase('quirk-page-single')), deltas))).toBe('ok')
     })
-    it('the reverse needs "(Multiple Items)", which the single-selection save never shows: pivot-caption-locale', async () => {
-      const deltas: PivotDelta[] = [{ kind: 'items', field: F.Product, hidden: [1, 3] }, { kind: 'page', field: F.Product, selected: 'all' }]
-      const outcome = replay(await pivotOf(engineCase('quirk-page-single')), await pivotOf(engineCase('quirk-page-multiple')), deltas)
-      expect(outcome.status === 'refused' ? outcome.feature : describeOutcome(outcome)).toBe('pivot-caption-locale')
+    it('the reverse, as a multiple selection, matches the multi-selection save with the measured "(多重項目)"', async () => {
+      const deltas: PivotDelta[] = [{ kind: 'page', field: F.Product, selected: [0, 2] }]
+      expect(describeOutcome(replay(await pivotOf(engineCase('quirk-page-single')), await pivotOf(engineCase('quirk-page-multiple')), deltas))).toBe('ok')
     })
   })
 
@@ -240,6 +256,11 @@ describe('Excel interaction oracle', () => {
     const sorted = await pivotOf(engineCase('sort-value-top-level'))
     const edited = { ...sorted, sheet: { ...sorted.sheet, rows: sorted.sheet.rows.map(row => row.index !== 5 ? row : { ...row, cells: row.cells.map(cell => cell.col === 1 ? { ...cell, value: 1 } : cell) }) } }
     expect(replay(seed, edited, [{ kind: 'sort', field: F.Region, order: 'descending', byData: SALES }]).status).toBe('differs')
+    // Same cells, lines and location, but the innermost field collapsed too, which Excel leaves alone: the item flags differ.
+    const all = await pivotOf(resolve(INTERACTION, 'interaction-collapse-all-compact-top.xlsx'))
+    expect(describeOutcome(replay(seed, all, [{ kind: 'collapseAll', collapsed: true }]))).toBe('ok')
+    const extra = replay(seed, all, [{ kind: 'collapseAll', collapsed: true }, { kind: 'collapseField', field: F.Product, collapsed: true }])
+    expect(extra.status === 'differs' && extra.reason.startsWith('item flags')).toBe(true)
   })
 
   it('ORACLE_VERIFIED_KINDS lists only kinds with a passing seed-based case', () => {

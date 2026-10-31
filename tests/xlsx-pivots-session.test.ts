@@ -51,7 +51,7 @@ function ok<T>(result: { ok: true; value: T } | { ok: false; diagnostic: { featu
 const refusal = (result: { ok: boolean; diagnostic?: { feature: string } }) => result.ok ? 'ok' : result.diagnostic!.feature
 
 describe('applyDelta maps each kind onto the view', () => {
-  it('collapse marks collapsed[item]; collapseField and collapseAll mark every item', async () => {
+  it('collapse marks collapsed[item]; collapseField marks every item; collapseAll every field with a level below it', async () => {
     const p = await baseline()
     const view = initialViewState(p.def, p.cache)
     const one = ok(apply(p, view, { kind: 'collapse', field: REGION, item: 0, collapsed: true }))
@@ -61,9 +61,11 @@ describe('applyDelta maps each kind onto the view', () => {
     expect(ok(apply(p, one, { kind: 'collapse', field: REGION, item: 0, collapsed: false })).fields[REGION]!.collapsed).toEqual(view.fields[REGION]!.collapsed)
     // A field's data items only: the default-subtotal item keeps its state.
     expect(ok(apply(p, view, { kind: 'collapseField', field: REGION, collapsed: true })).fields[REGION]!.collapsed).toEqual([true, true, true, true, true, false])
+    // Excel's "collapse entire field" on every field with a level below it on its axis (interaction-collapse-all-*):
+    // Region on rows, Year above Values on columns; the innermost row field (Product) is left alone.
     const all = ok(apply(p, view, { kind: 'collapseAll', collapsed: true }))
     expect(all.fields[REGION]!.collapsed).toEqual([true, true, true, true, true, false])
-    expect(all.fields[PRODUCT]!.collapsed).toEqual([true, true, true, true, false])
+    expect(all.fields[PRODUCT]).toBe(view.fields[PRODUCT])
     expect(all.fields[YEAR]!.collapsed).toEqual([true, true, true, false])
     // Fields on no axis are left alone.
     expect(all.fields[3]).toBe(view.fields[3])
@@ -92,6 +94,11 @@ describe('applyDelta maps each kind onto the view', () => {
     const view = initialViewState(p.def, p.cache)
     expect(view.pages).toEqual([{ field: PRODUCT, selected: [0] }])
     expect(ok(apply(p, view, { kind: 'page', field: PRODUCT, selected: 'all' })).pages).toEqual([{ field: PRODUCT, selected: 'all' }])
+    // (All) also shows every item of the field (interaction-page-multi-to-all).
+    const hidden = ok(apply(p, view, { kind: 'items', field: PRODUCT, hidden: [1, 3] }))
+    expect(ok(apply(p, hidden, { kind: 'page', field: PRODUCT, selected: 'all' })).fields[PRODUCT]!.hidden).toEqual(view.fields[PRODUCT]!.hidden)
+    // A single selection leaves the hidden items as they are.
+    expect(ok(apply(p, hidden, { kind: 'page', field: PRODUCT, selected: [0] })).fields[PRODUCT]!.hidden).toEqual(hidden.fields[PRODUCT]!.hidden)
     expect(ok(apply(p, view, { kind: 'page', field: PRODUCT, selected: [1, 2] })).pages).toEqual([{ field: PRODUCT, selected: [1, 2] }])
     expect(refusal(apply(p, view, { kind: 'page', field: PRODUCT, selected: [] }))).toBe('pivot-delta-invalid')
     expect(refusal(apply(p, view, { kind: 'page', field: PRODUCT, selected: [4] }))).toBe('pivot-delta-invalid')
@@ -168,20 +175,30 @@ describe('captions', () => {
     expect(ok(resolveCaptions(savedLayout(p, bottomSubtotals(initialViewState(p.def, p.cache))), rule)).captionsUnverified).toBe(false)
     // A table the saved captions contradict is not this pivot's locale.
     expect(captionRule(p.def, saved, layout, { 'zh-TW': { valuesTotal: 'Total {data}' } }).locale).toBe('file')
-    // Until Task 24 measures it the shipped table is empty: no pivot matches it.
-    expect(captionRule(p.def, saved, layout).locale).toBe('file')
+    // The shipped zh-TW table (Task 24's measurements) matches this Excel 16.114 zh-TW save.
+    const shipped = captionRule(p.def, saved, layout)
+    expect(shipped.locale).toBe('zh-TW')
+    expect(shipped.caption('grandTotal', {})).toBe('總計')
+    expect(shipped.caption('blank', {})).toBe('(空白)')
+    expect(shipped.caption('valuesTotal', { data: { kind: 'dataField', args: { fn: 'average', field: 'Units' } } })).toBe('平均值 - Units 的加總')
   })
 
   it('a pivot with no matching table uses its own patterns', async () => {
     const p = await baseline()
-    const rule = captionRule(p.def, sheetCellReader(p.sheet), savedLayout(p))
+    // No measured table to match (an empty table list): the file's own patterns only.
+    const rule = captionRule(p.def, sheetCellReader(p.sheet), savedLayout(p), {})
     expect(rule.locale).toBe('file')
     expect(rule.caption('valuesTotal', { data: 'Sum of Units' })).toBe('Sum of Units 的加總')
     expect(rule.caption('subtotal', { item: 'East' })).toBeUndefined()
     // Another Excel save of the same cache shows the bottom subtotal: its own pattern reproduces its saved cells.
     const bottom = (await load('layout-subtotals-bottom-compact'))[0]!
-    const own = captionRule(bottom.def, sheetCellReader(bottom.sheet), savedLayout(bottom))
+    const own = captionRule(bottom.def, sheetCellReader(bottom.sheet), savedLayout(bottom), {})
     expect(own.caption('subtotal', { item: 'East' })).toBe('East 合計')
+    // A file whose captions contradict the measured table falls back to its own patterns.
+    const english = (row: number, col: number) => row === 3 && col === 7 ? { kind: 'text' as const, value: 'Total Sum of Sales' } : sheetCellReader(p.sheet)(row, col)
+    const fallback = captionRule(p.def, english, savedLayout(p))
+    expect(fallback.locale).toBe('file')
+    expect(fallback.caption('grandTotal', {})).toBeUndefined()
   })
 
   it('nested implicit arguments render through the same rule', () => {
@@ -192,7 +209,7 @@ describe('captions', () => {
     } as unknown as PivotLayout
     const texts = ['加總 - Sales', '加總 - Sales 的加總']
     const reader: CellReader = (row, col) => col === 0 && texts[row] ? { kind: 'text', value: texts[row]! } : undefined
-    const rule = captionRule({} as never, reader, layout)
+    const rule = captionRule({} as never, reader, layout, {})
     expect(rule.caption('valuesTotal', { data: { kind: 'dataField', args: { fn: 'sum', field: 'Units' } } })).toBe('加總 - Units 的加總')
     // The function is part of the pattern: Count has no sample.
     expect(rule.caption('dataField', { fn: 'count', field: 'Units' })).toBeUndefined()
@@ -200,7 +217,7 @@ describe('captions', () => {
 
   it('a needed kind with no pattern refuses pivot-caption-locale', async () => {
     const p = await baseline()
-    const rule = captionRule(p.def, sheetCellReader(p.sheet), savedLayout(p))
+    const rule = captionRule(p.def, sheetCellReader(p.sheet), savedLayout(p), {})
     const layout = savedLayout(p, bottomSubtotals(initialViewState(p.def, p.cache)))
     expect(layout.captionSlots!.some(slot => slot.kind === 'subtotal')).toBe(true)
     const refused = resolveCaptions(layout, rule)
@@ -221,7 +238,10 @@ describe('captions', () => {
         const layout = computed.value, saved = sheetCellReader(p.sheet)
         // Every implicit cell carries its slot.
         expect(layout.captionSlots!.length, name).toBe(layout.cells.filter(cell => cell.caption === 'implicit').length)
-        const filled = ok(resolveCaptions(layout, captionRule(p.def, saved, layout)))
+        const filled = ok(resolveCaptions(layout, captionRule(p.def, saved, layout, {})))
+        // The measured zh-TW table, where a case matches it, renders the same text.
+        const measured = captionRule(p.def, saved, layout)
+        if (measured.locale === 'zh-TW') expect(ok(resolveCaptions(layout, measured)), name).toEqual(filled)
         expect(filled, name).toEqual(savedCaptions(layout, saved))
         for (const slot of layout.captionSlots!) { slots++; expect(textAt(filled, slot.row, slot.col), `${name} R${slot.row + 1}C${slot.col + 1}`).toBe((saved(slot.row, slot.col) as { value: string }).value) }
       }
@@ -456,8 +476,8 @@ describe('session', () => {
   it('apply refuses an interaction kind with no passing oracle, a caption with no rule, and engine refusals', async () => {
     const p = await baseline()
     const session = open(inputOf(p))
-    for (const kind of ['collapseAll', 'collapseField', 'clearFilters', 'page'] as const) expect(ORACLE_VERIFIED_KINDS.has(kind), kind).toBe(false)
-    const unverified = session.apply({ kind: 'collapseAll', collapsed: true })
+    const narrowed = open(inputOf(p, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS].filter(kind => kind !== 'collapseAll')) }))
+    const unverified = narrowed.apply({ kind: 'collapseAll', collapsed: true })
     expect(unverified.ok ? 'ok' : unverified.diagnostic.feature).toBe('pivot-interaction-unverified')
     const widened = open(inputOf(p, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS, 'collapseAll']) }))
     // Five regions and the grand total under three header rows: A3:…11.
@@ -467,11 +487,14 @@ describe('session', () => {
     expect(invalid.ok ? 'ok' : invalid.diagnostic.feature).toBe('pivot-delta-invalid')
     const dynamic = session.apply({ kind: 'filter', field: YEAR, filter: { ...valueFilter(YEAR, 0), type: 'thisYear' } })
     expect(dynamic.ok ? 'ok' : dynamic.diagnostic.feature).toBe('pivot-filter-dynamic-date')
-    // Captions: quirk-page-single saves no "(All)" caption, so selecting every item cannot be captioned.
+    // Captions: a pivot whose saved captions match no measured table and show no "(All)" cannot caption it.
     const page = (await load('quirk-page-single'))[0]!
-    const pages = open(inputOf(page, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS, 'page']) }))
+    const pages = open(inputOf(page, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS, 'page']), captionTables: {} }))
     const all = pages.apply({ kind: 'page', field: PRODUCT, selected: 'all' })
     expect(all.ok ? 'ok' : all.diagnostic.feature).toBe('pivot-caption-locale')
+    // With the measured table it is "(全部)".
+    const measured = open(inputOf(page, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS, 'page']) }))
+    expect(textAt(ok(measured.apply({ kind: 'page', field: PRODUCT, selected: 'all' })).layout, 0, 1)).toBe('(全部)')
   })
 
   it('open sessions on one cache charge its store once to the main ledger until the last release', async () => {

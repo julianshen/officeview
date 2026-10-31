@@ -10,15 +10,20 @@
  * - Only a field's DATA items can be hidden, collapsed or selected; an index past the field's items, or naming a
  *   subtotal item, is `pivot-delta-invalid`. Hiding every data item is refused the same way (Excel's filter list
  *   cannot be confirmed with nothing selected).
- * - `collapseField` and `collapseAll` mark data items only; `collapseAll` covers every row and column field.
+ * - `collapseField` and `collapseAll` mark data items only. `collapseAll` is Excel's "collapse entire field" on every
+ *   field with a level below it on its axis (Task 24 interaction-collapse-all-*: Region on rows, Year above Values on
+ *   columns); the innermost field of each axis is left alone.
  * - `filter`: a filter of the same family on the field (label or date; value or top-10, the engine's two kinds,
  *   axes.ts) is replaced in place. A filter of the other family on a field that already has one refuses with the
  *   engine's "more than one filter" feature, `pivot-engine-unmeasured`, whatever `multipleFieldFilters` says: no
  *   oracle case combines the two families on one field, so neither Excel's replace (one filter per field) nor its
  *   combined evaluation (multiple filters allowed) is measured (§9).
  * - `clearFilters` drops the field's pivot filters and shows its hidden items, and a page field goes back to (All):
- *   Excel's "Clear Filter From" (Task 24 measures it; the kind stays refused until then, session.ts).
- * - `page` sets the page field's selection only; its hidden items are an `items` delta.
+ *   Excel's "Clear Filter From" (Task 24 interaction-clear-*, -clear-filters-hidden-items, -filter-date-clear).
+ * - Item indices stay those of the start file's `items` list across a delta sequence, a sort included: the view never
+ *   reorders a field's items (Excel re-saves a sorted field's list in the new order; interaction-sort-then-collapse).
+ * - `page` sets the page field's selection; selecting (All) also shows every item of the field (Task 24
+ *   interaction-page-multi-to-all), a single or multiple selection leaves its hidden items as they are.
  * - `sort` sets `sortType`; `byData` (a data-field index) sets the `autoSortScope` Excel saves for "sort by a value
  *   column" (Task 15 sort-value-top-level), and a sort without `byData` drops it.
  */
@@ -72,7 +77,8 @@ function valueScope(data: number): PivotArea {
 
 export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTableDefinition, _cache: PivotCacheDefinition): EngineResult<PivotViewState> {
   if (delta.kind === 'collapseAll') {
-    const axis = new Set([...view.rows, ...view.cols].filter(field => field !== PIVOT_VALUES_FIELD))
+    // Every field with a level below it on its axis (the Values field counts as a level).
+    const axis = new Set([...view.rows.slice(0, -1), ...view.cols.slice(0, -1)].filter(field => field !== PIVOT_VALUES_FIELD))
     return { ok: true, value: { ...view, fields: view.fields.map((state, field) => axis.has(field) ? { ...state, collapsed: setFlags(state.collapsed, dataItems(def, view, field), delta.collapsed) } : state) } }
   }
   const field = delta.field
@@ -104,7 +110,8 @@ export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTa
         if (bad !== undefined) return invalid(`item ${bad} is not a data item of field ${field}`)
       }
       const selected = delta.selected === 'all' ? 'all' as const : [...new Set(delta.selected)]
-      return { ok: true, value: { ...view, pages: view.pages.map((page, k) => k === at ? { ...page, selected } : page) } }
+      const next = { ...view, pages: view.pages.map((page, k) => k === at ? { ...page, selected } : page) }
+      return { ok: true, value: selected === 'all' ? withField(next, field, { hidden: state.hidden.map((flag, k) => isData.has(k) ? false : flag) }) : next }
     }
     case 'filter': {
       if (delta.filter.fld !== field) return invalid(`the filter names field ${delta.filter.fld}, not ${field}`)
