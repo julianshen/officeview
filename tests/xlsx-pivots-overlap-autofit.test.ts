@@ -18,6 +18,10 @@ import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { loadPivotParts } from './helpers/xlsx-pivots-load'
 import JSZip from 'jszip'
 import { SheetSizes } from '../src/xlsx/view/axisSizes'
+import { macDigitWidth, PIVOT_FIT_INDENT_PT, PIVOT_FIT_TOLERANCE, pivotAutofit, pivotColumnFits } from '../src/xlsx/pivots/session/autofit'
+import { calibriTextPt } from './helpers/calibri-model'
+import { ensureTableStyleEngine, regionStylesFor } from '../src/xlsx/tableStyleLoader'
+import { cellDisplayText } from '../src/xlsx/render'
 import { StructuralIndex } from '../src/xlsx/view/structure'
 import { guardFilter, guardSort, PIVOT_SHEET_CHANGE_MESSAGE } from '../src/xlsx/view/operationGuard'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
@@ -134,7 +138,7 @@ async function withA23(cell: string): Promise<Blob> {
   const zip = await JSZip.loadAsync(readFileSync(file('engine/layout-collapsed-item')))
   const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
   zip.file('xl/worksheets/sheet1.xml', xml.replace('</sheetData>', `<row r="23">${cell}</row></sheetData>`))
-  return new Blob([await zip.generateAsync({ type: 'uint8array' })])
+  return new Blob([await zip.generateAsync({ type: 'arraybuffer' })])
 }
 let serial = 0
 const id = () => `overlap-${++serial}`
@@ -213,5 +217,61 @@ describe('SheetSizes records which sizes the user set', () => {
     expect(sizes.userSet('col', 1)).toBe(false)
     sizes.reset()
     expect(sizes.userSet('col', 2)).toBe(false)
+  })
+})
+
+describe('§7.8 autofit after a change', () => {
+  const SEEDS: Record<string, string> = { 'engine-seed': 'recipes/engine-seed', 'chart-seed': 'recipes/pivot-chart-seed', 'getpivotdata-seed': 'recipes/getpivotdata-seed', 'refresh-seed': 'recipes/refresh-seed' }
+  /** An Excel-saved pivot: its column widths, and its columns' fits under the Calibri-like measure (bold from the
+   * pivot style, text as the cell paints it). */
+  async function fitted(name: string) {
+    const doc = await load(name)
+    await ensureTableStyleEngine(doc.sheets)
+    const sheet = doc.sheets[pivotSheet(doc)]!, def = sheet.pivotTables![0]!
+    const styles = regionStylesFor(sheet)
+    const cells = new Map<string, NonNullable<XlsxSheet['rows'][number]['cells'][number]>>()
+    for (const line of sheet.rows) for (const cell of line.cells) cells.set(`${line.index},${cell.col}`, cell)
+    const rects = savedPivotLayout(def)!.rects
+    const inPivot = [...cells.values()].filter(cell => rects.some(rect => cell.row >= rect.minRow && cell.row <= rect.maxRow && cell.col >= rect.minCol && cell.col <= rect.maxCol))
+    const measure = { textPt(row: number, col: number) {
+      const cell = cells.get(`${row},${col}`)
+      if (!cell || cell.value === null || cell.value === '') return undefined
+      const style = styles?.styleAt(row, col, cell.style, 'screen') ?? cell.style
+      // The cell's own alignment indent, unless the pivot's compact indent replaces it (autofit adds that one).
+      const own = (style as { indentPx?: number } | undefined)?.indentPx ? 0 : (style?.indent ?? 0) * PIVOT_FIT_INDENT_PT
+      return calibriTextPt(cellDisplayText(sheet, { value: cell.value, style }), Boolean(style?.bold)) + own
+    } }
+    const widths = new Map<number, number>()
+    for (const spec of sheet.cols) for (let col = spec.min; col <= spec.max; col++) if (spec.widthChars !== undefined) widths.set(col, spec.widthChars)
+    return { def, widths, fits: pivotColumnFits({ def, cells: inPivot }, measure, macDigitWidth(7)) }
+  }
+  const manifest = (JSON.parse(readFileSync(resolve(FIXTURES, 'interaction/manifest.json'), 'utf8')) as Array<{ case: string; file: string; seed: string; base?: string; setup?: string }>)
+    .filter(entry => !entry.setup && SEEDS[entry.seed])
+
+  it('autofit widths equal Excel\'s saved <col> widths for every interaction case, within one Excel pixel (1/6 char + the 1/256 truncation)', async () => {
+    const report: string[] = []
+    let columns = 0, changed = 0
+    for (const entry of manifest) {
+      const start = await fitted(entry.base ?? SEEDS[entry.seed]!)
+      const saved = await fitted(entry.file.replace('tests/fixtures/xlsx-pivots/', '').replace('.xlsx', ''))
+      const resized = pivotAutofit(start.fits, saved.fits, col => start.widths.get(col), () => false)
+      for (const col of new Set([...start.fits.keys(), ...saved.fits.keys()])) {
+        columns++
+        const excel = saved.widths.get(col), ours = resized.get(col) ?? start.widths.get(col)
+        if ((excel !== start.widths.get(col)) !== resized.has(col)) report.push(`${entry.case} col ${col}: Excel ${start.widths.get(col)} → ${excel}, autofit ${resized.has(col) ? `→ ${resized.get(col)}` : 'keeps it'}`)
+        else if (excel !== undefined && ours !== undefined && Math.abs(excel - ours) > PIVOT_FIT_TOLERANCE) report.push(`${entry.case} col ${col}: Excel ${excel}, autofit ${ours}`)
+        if (resized.has(col)) changed++
+      }
+    }
+    expect(report).toEqual([])
+    expect(manifest.length).toBeGreaterThan(40)
+    expect(changed).toBeGreaterThan(10)
+    expect(columns).toBeGreaterThan(400)
+  }, 120_000)
+
+  it('a user-resized column keeps its width', async () => {
+    const start = await fitted('recipes/engine-seed'), saved = await fitted('interaction/interaction-collapse-field-compact-top')
+    expect(pivotAutofit(start.fits, saved.fits, col => start.widths.get(col), () => false).get(0)).toBeCloseTo(12.83203125, 2)
+    expect(pivotAutofit(start.fits, saved.fits, col => start.widths.get(col), col => col === 0).has(0)).toBe(false)
   })
 })
