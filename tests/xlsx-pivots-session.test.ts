@@ -12,6 +12,8 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
 import { decodeRecords, RECORD_LIMITS } from '../src/xlsx/pivots/engine/records'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
+import { openPivotSession, ORACLE_VERIFIED_KINDS, type ChartGate, type PivotSession, type PivotSessionInput } from '../src/xlsx/pivots/session/session'
+import type { ChartModel } from '../src/charts/model'
 import { applyDelta, type PivotDelta } from '../src/xlsx/pivots/session/delta'
 import { captionRule, resolveCaptions, savedCaptions } from '../src/xlsx/pivots/session/captions'
 import { sheetCellReader, type CellReader } from '../src/xlsx/pivots/engine/faithful'
@@ -324,5 +326,164 @@ describe('runtime', () => {
     aborted.abort()
     await expect(runtime.lease(cache, ledger, aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
     expect(ledger.snapshot().byPool.document).toBe(0)
+  })
+})
+
+/** Session input for a loaded pivot: its own saved cells, an empty sheet around it, no linked chart. */
+const inputOf = (p: Loaded, over: Partial<PivotSessionInput> = {}): PivotSessionInput => ({
+  def: p.def, cache: p.cache, store: p.store, date1904: p.date1904, saved: sheetCellReader(p.sheet), occupied: () => false, linkedCharts: [], ...over,
+})
+function open(input: PivotSessionInput): PivotSession {
+  const session = openPivotSession(input)
+  if (!session.ok) throw new Error(`open refused ${session.diagnostic.feature}: ${session.diagnostic.message}`)
+  return session.value
+}
+const openRefusal = (input: PivotSessionInput) => { const r = openPivotSession(input); return r.ok ? 'ok' : r.diagnostic.feature }
+const COLLAPSE_EAST: PivotDelta = { kind: 'collapse', field: REGION, item: 0, collapsed: true }
+const EXPAND_EAST: PivotDelta = { kind: 'collapse', field: REGION, item: 0, collapsed: false }
+
+describe('session', () => {
+  it('open refuses each §7.6 case with its feature', async () => {
+    const p = await baseline()
+    expect(openRefusal(inputOf(p))).toBe('ok')
+    // The records part is absent (saveData="0").
+    expect(openRefusal(inputOf(p, { cache: { ...p.cache, saveData: false } }))).toBe('pivot-records-absent')
+    // An OLAP cache, or a non-worksheet source.
+    expect(openRefusal(inputOf(p, { cache: { ...p.cache, olap: true } }))).toBe('pivot-source-unsupported')
+    expect(openRefusal(inputOf(p, { cache: { ...p.cache, source: { ...p.cache.source, type: 'consolidation' } } }))).toBe('pivot-source-unsupported')
+    // An unknown construct in the definition.
+    expect(openRefusal(inputOf(p, { def: { ...p.def, unsupported: ['unknown-element:x'] } }))).toBe('pivot-definition-unsupported')
+    // A calculated field the formula engine cannot evaluate (a cell reference).
+    const calc = (await load('calc-constant'))[0]!
+    const formula = calc.cache.fields.findIndex(field => field.formula !== undefined)
+    expect(openRefusal(inputOf(calc))).toBe('ok')
+    expect(openRefusal(inputOf(calc, { cache: { ...calc.cache, fields: calc.cache.fields.map((f, k) => k === formula ? { ...f, formula: 'A1*2' } : f) } }))).toBe('pivot-calculated-field')
+    // Calculated items, before they are verified.
+    expect(openRefusal(inputOf((await load('calc-item'))[0]!))).toBe('pivot-calculated-item')
+    // The faithfulness check fails: one saved value differs.
+    const base = sheetCellReader(p.sheet)
+    expect(openRefusal(inputOf(p, { saved: (row, col) => row === 5 && col === 1 ? { kind: 'number', value: 1 } : base(row, col) }))).toBe('pivot-faithful-mismatch')
+    // ...or cannot run: no saved rowItems.
+    expect(openRefusal(inputOf(p, { def: { ...p.def, rowItems: undefined } }))).toBe('pivot-faithful-unverified')
+    // The record store over its cap never reaches open: the lease refuses it (runtime test above).
+    const runtime = pivotRuntimeFor(await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx'))))))!
+    const over = await runtime.lease(runtime.cache(p.def)!, new MainMemoryLedger(), new AbortController().signal, { ...RECORD_LIMITS.M, maxRecords: 8 })
+    expect(over.ok ? 'ok' : over.diagnostic.feature).toBe('pivot-records-limit')
+  })
+
+  it('apply is pure; commit rejects a skipped revision; reset returns the saved layout as the next revision', async () => {
+    const p = await baseline()
+    const session = open(inputOf(p))
+    const saved = { revision: session.revision, view: session.view, def: session.def, layout: session.layout }
+    expect(saved.revision).toBe(0)
+    expect(saved.def).toBe(p.def)
+    // The saved state shows what was saved, its implicit captions included.
+    expect(textAt(saved.layout, 3, 7)).toBe('Sum of Sales 的加總')
+    const first = ok(session.apply(COLLAPSE_EAST))
+    expect(first.revision).toBe(1)
+    expect({ revision: session.revision, view: session.view, def: session.def, layout: session.layout }).toEqual(saved)
+    expect(first.layout.rect.maxRow).toBe(saved.layout.rect.maxRow - 3)
+    expect(first.def.location.ref).toBe('A3:I21')
+    // A result two revisions ahead, or one not issued by this session, is refused.
+    const skipped = { ...first, revision: 2 }
+    expect(session.commit(skipped)).toBe(false)
+    expect(session.commit({ ...first })).toBe(false)
+    expect(session.commit(first)).toBe(true)
+    expect(session.revision).toBe(1)
+    expect(session.layout).toBe(first.layout)
+    // A result of the old revision is now stale.
+    const stale = ok(open(inputOf(p)).apply(COLLAPSE_EAST))
+    expect(session.commit(stale)).toBe(false)
+    expect(session.commit(first)).toBe(false)
+    const reset = session.reset()
+    expect(reset.revision).toBe(2)
+    expect(reset.layout).toBe(saved.layout)
+    expect(reset.view).toBe(saved.view)
+    expect(reset.def).toBe(p.def)
+    expect(session.revision).toBe(1)
+    expect(session.commit(reset)).toBe(true)
+    expect(session.revision).toBe(2)
+    expect(session.layout).toBe(saved.layout)
+  })
+
+  it('vacated covers the cells a collapse frees', async () => {
+    const p = await baseline()
+    const session = open(inputOf(p))
+    const collapsed = ok(session.apply(COLLAPSE_EAST))
+    // A3:I24 → A3:I21: rows 22–24 are freed.
+    expect(collapsed.vacated).toEqual([{ minRow: 21, minCol: 0, maxRow: 23, maxCol: 8 }])
+    expect(session.commit(collapsed)).toBe(true)
+    // Growing back frees nothing, and cells of the pivot's own saved area are never an overlap (they hold its saved cells).
+    const grown = session.apply(EXPAND_EAST)
+    expect(ok(grown).vacated).toEqual([])
+    const owned = open(inputOf(p, { occupied: (row, col) => row >= 2 && row <= 23 && col <= 8 }))
+    expect(owned.commit(ok(owned.apply(COLLAPSE_EAST)))).toBe(true)
+    expect(ok(owned.apply(EXPAND_EAST)).layout.rect.maxRow).toBe(23)
+    expect(session.reset().vacated).toEqual([])
+  })
+
+  it('a change whose new cells cover a non-empty cell outside the pivot refuses as an overlap', async () => {
+    const p = (await load('layout-collapsed-item'))[0]!
+    // Saved A3:I21; expanding East grows it to A3:I24.
+    const blocked = open(inputOf(p, { occupied: (row, col) => row === 22 && col === 4 }))
+    const refused = blocked.apply(EXPAND_EAST)
+    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toBe('pivot-overlap')
+    expect(blocked.revision).toBe(0)
+    expect(ok(open(inputOf(p, { occupied: (row, col) => row === 24 && col === 4 })).apply(EXPAND_EAST)).layout.rect.maxRow).toBe(23)
+  })
+
+  it('a pivot with a linked chart and no chart gate refuses pivot-chart-mapping at open, before any apply', async () => {
+    const p = await baseline()
+    const chart = { pivot: { name: `[baseline.xlsx]Pivot!${p.def.name}` } } as unknown as ChartModel
+    expect(openRefusal(inputOf(p, { linkedCharts: [chart] }))).toBe('pivot-chart-mapping')
+    // With a gate: open runs it on the saved layout, every apply on the new one; its refilled charts ride on the result.
+    const refilled = { ...chart } as ChartModel
+    const seen: number[] = []
+    const gate: ChartGate = (charts, layout) => {
+      seen.push(layout.rect.maxRow)
+      expect(charts).toEqual([chart])
+      return layout.rect.maxRow >= 23 ? { ok: true, value: [refilled] }
+        : { ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-chart-mapping', message: 'no measured mapping for this layout' } }
+    }
+    const session = open(inputOf(p, { linkedCharts: [chart], chartGate: gate }))
+    expect(seen).toEqual([23])
+    const refused = session.apply(COLLAPSE_EAST)
+    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toBe('pivot-chart-mapping')
+    expect(session.revision).toBe(0)
+    const sorted = ok(session.apply({ kind: 'sort', field: PRODUCT, order: 'descending' }))
+    expect(sorted.charts).toEqual([refilled])
+    expect(sorted.charts[0]).toBe(refilled)
+  })
+
+  it('apply refuses an interaction kind with no passing oracle, a caption with no rule, and engine refusals', async () => {
+    const p = await baseline()
+    const session = open(inputOf(p))
+    for (const kind of ['collapseAll', 'collapseField', 'clearFilters', 'page'] as const) expect(ORACLE_VERIFIED_KINDS.has(kind), kind).toBe(false)
+    const unverified = session.apply({ kind: 'collapseAll', collapsed: true })
+    expect(unverified.ok ? 'ok' : unverified.diagnostic.feature).toBe('pivot-interaction-unverified')
+    const widened = open(inputOf(p, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS, 'collapseAll']) }))
+    // Five regions and the grand total under three header rows: A3:…11.
+    expect(ok(widened.apply({ kind: 'collapseAll', collapsed: true })).layout.rect.maxRow).toBe(10)
+    // The delta's own refusal, then the engine's (a dynamic date filter, CODEX-4).
+    const invalid = session.apply({ kind: 'collapse', field: REGION, item: 9, collapsed: true })
+    expect(invalid.ok ? 'ok' : invalid.diagnostic.feature).toBe('pivot-delta-invalid')
+    const dynamic = session.apply({ kind: 'filter', field: YEAR, filter: { ...valueFilter(YEAR, 0), type: 'thisYear' } })
+    expect(dynamic.ok ? 'ok' : dynamic.diagnostic.feature).toBe('pivot-filter-dynamic-date')
+    // Captions: quirk-page-single saves no "(All)" caption, so selecting every item cannot be captioned.
+    const page = (await load('quirk-page-single'))[0]!
+    const pages = open(inputOf(page, { verifiedKinds: new Set([...ORACLE_VERIFIED_KINDS, 'page']) }))
+    const all = pages.apply({ kind: 'page', field: PRODUCT, selected: 'all' })
+    expect(all.ok ? 'ok' : all.diagnostic.feature).toBe('pivot-caption-locale')
+  })
+
+  it('release releases the lease once and closes the session', async () => {
+    const p = await baseline()
+    let releases = 0
+    const session = open(inputOf(p, { lease: { release: () => { releases++ } } }))
+    session.release()
+    session.release()
+    expect(releases).toBe(1)
+    const after = session.apply(COLLAPSE_EAST)
+    expect(after.ok ? 'ok' : after.diagnostic.feature).toBe('pivot-session-released')
   })
 })

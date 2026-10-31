@@ -7,7 +7,7 @@ import { paintControl } from './slicers/paint'
 import { pivotRuntimeFor } from './session/runtime'
 
 export { loadPivotWorkbook, retainPivotRuntime } from './load'
-// The Stage 2 engine (library only: no runtime caller yet). Exported here so it lives in this lazy chunk.
+// The Stage 2 engine. Exported here so it lives in this lazy chunk.
 export { decodeRecords, isoToSerial, recordEvents, RECORD_LIMITS, VALUE_TAG } from './engine/records'
 export type { RecordColumn, RecordLimits, RecordResult, RecordStore } from './engine/records'
 export { initialViewState } from './engine/view'
@@ -21,5 +21,15 @@ export { computePivot } from './engine/compute'
 export { computeValues } from './engine/values'
 export { checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader } from './engine/faithful'
 export type { CellDiff, CellReader, FaithfulOptions, FaithfulResult, SavedCell } from './engine/faithful'
+export type { CaptionArg, CaptionArgs, CaptionKind, CaptionRef, CaptionSlot } from './engine/place'
+// The Stage 3 pivot session (Task 25): deltas, captions rule, open/apply/commit/reset, and the resident runtime.
+export { applyDelta, PIVOT_DELTA_KINDS } from './session/delta'
+export type { PivotDelta, PivotDeltaKind } from './session/delta'
+export { captionKey, captionRule, MEASURED_CAPTION_TABLES, resolveCaptions, savedCaptions, ZH_TW_CAPTIONS } from './session/captions'
+export type { CaptionRule, CaptionTable } from './session/captions'
+export { openPivotSession, ORACLE_VERIFIED_KINDS, PIVOT_OVERLAP_MESSAGE } from './session/session'
+export type { ChartGate, PivotApplyResult, PivotSession, PivotSessionInput } from './session/session'
+export { pivotRuntimeFor } from './session/runtime'
+export type { PivotRuntime, RecordLease, RecordLeaseResult, RecordsSource } from './session/runtime'
 
 registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl, runtimeFor: pivotRuntimeFor })
