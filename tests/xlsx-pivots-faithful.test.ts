@@ -44,7 +44,8 @@ const PENDING_TASK: Record<string, string> = {
   'pivot-engine-pending': 'a later task (OLAP or non-worksheet sources, unknown definition constructs, a no-record field without a formula)',
   'pivot-engine-unmeasured': 'Task 15 (Excel oracle measurement)',
 }
-const KNOWN_UNSUPPORTED = new Set(['pivot-filter-dynamic-date'])
+// Calculated items are refused by name (plan Task 22: Task 15's calc-item case is not made ok, spec §5.6).
+const KNOWN_UNSUPPORTED = new Set(['pivot-filter-dynamic-date', 'pivot-calculated-item'])
 const describeResult = (result: FaithfulResult) => result.status === 'mismatch'
   ? `mismatch R${result.firstDiff.row + 1}C${result.firstDiff.col + 1}: ${result.firstDiff.reason}`
   : result.status === 'unverified' ? `unverified:${result.reason}${result.detail ? `:${result.detail}` : ''}` : 'ok'

@@ -12,7 +12,8 @@ import { resolve } from 'node:path'
 import JSZip from 'jszip'
 import { tokenize } from '../src/xlsx/formula/lexer'
 import { compileCalculatedField, calculatedValue } from '../src/xlsx/pivots/engine/calculated'
-import { computeAxes } from '../src/xlsx/pivots/engine/axes'
+import { computeAxes, lineCarriesValues } from '../src/xlsx/pivots/engine/axes'
+import { savedPivotLayout, type PivotLine } from '../src/xlsx/pivots/savedLayout'
 import { computeValues } from '../src/xlsx/pivots/engine/values'
 import { checkSavedLayout, sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
 import { initialViewState, type DataFieldState, type FieldState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
@@ -174,9 +175,17 @@ describe('calculatedValue', () => {
     expect(feature("RAND()*'Unit Price'")).toBe('unsupported:pivot-calculated-field')
     expect(feature("ROW()*'Unit Price'")).toBe('unsupported:pivot-calculated-field')
     expect(feature("YEAR('Unit Price')")).toBe('unsupported:pivot-calculated-field')
-    // A reference to another calculated field: Excel's rule is not measured.
-    expect(feature("'Ratio'/1", 4)).toBe('unsupported:pivot-engine-unmeasured')
-    expect(feature("'Twice'*1", 3)).toBe('unsupported:pivot-engine-unmeasured')
+    // A reference to another calculated field re-applies its formula over the sums (oracle round B2,
+    // calc-references-calculated); a cycle of references cannot be evaluated.
+    expect(feature("'Ratio'/1", 4)).toBe('ok')
+    expect(feature("'Twice'*1", 3)).toBe('ok')
+    const cyclic = { ...cache, fields: cache.fields.map((field, k) => k === 4 ? { ...field, formula: "'Ratio'*2" } : field) } as PivotCacheDefinition
+    const cycle = compileCalculatedField("'Twice'*1", cyclic, 3)
+    expect(cycle.ok ? undefined : cycle.diagnostic).toEqual({ kind: 'unsupported', feature: 'pivot-calculated-field', message: 'calculated field 3: the formula refers to its own field Ratio' })
+    // A cycle that does not pass through the field itself.
+    const loop = { ...cyclic, fields: cyclic.fields.map((field, k) => k === 3 ? { ...field, formula: "'Twice'*1" } : field) } as PivotCacheDefinition
+    const other = compileCalculatedField("'Ratio'+1", { ...loop, fields: [...loop.fields, { name: 'Third', databaseField: false, formula: "'Ratio'+1" }] } as PivotCacheDefinition, 6)
+    expect(other.ok ? undefined : other.diagnostic.message).toBe('calculated field 6: calculated field Ratio refers back to itself')
     // A formula over no field (`2/0`): whether every cell shows it is not measured.
     expect(feature('2/0')).toBe('unsupported:pivot-engine-unmeasured')
   })
@@ -238,8 +247,7 @@ describe('calculated fields in the pivot', () => {
     // Show-as and a function other than sum on the calculated field.
     expect(diagnostic(run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), showAs: 'percentOfTotal' }] }))).toEqual(UNMEASURED)
     expect(diagnostic(run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), fn: 'count' }] }))).toEqual(UNMEASURED)
-    // A reference to another calculated field, and a formula over no field.
-    expect(diagnostic(run(fixture({ 4: "'Ratio'*2" }), { ...f.view, data: [sumOf(4)] }))).toEqual(UNMEASURED)
+    // A formula over no field (its every-cell rule is measured, calc-constant, but values.ts needs a field to sum).
     expect(diagnostic(run(fixture({ 3: '2/0' })))).toEqual(UNMEASURED)
     // A text result.
     expect(diagnostic(run(fixture({ 3: 'IF(\'Unit Price\'>1,"big","small")' })))).toEqual(UNMEASURED)
@@ -312,6 +320,25 @@ describe.skipIf(!existsSync(CORPUS_FILE))('corpus calcfields.xlsx (Collabora-wri
   })
 })
 
+/**
+ * Ruling S2-AA: task-22 manifest cases the engine still refuses, each with its exact refusal and why. `lane A` marks
+ * a rule this round measured (see the oracle round B2 tests above) whose gate lives in values.ts, lane A's file;
+ * the report gives the exact change. `kept` marks a gate Excel's file does not settle.
+ */
+const TASK22_REFUSED: Record<string, { refusal: string; why: string }> = {
+  'calc-cell-without-records': { refusal: 'pivot-engine-unmeasured: a calculated cell without records is not measured', why: 'lane A: measured, the formula over zero sums (R22C4 = 0); values.ts gate' },
+  'calc-quoted-field-name': { refusal: 'pivot-engine-unmeasured: a calculated cell without records is not measured', why: 'lane A: measured, 0/0 shows #DIV/0! (R22C4); values.ts gate' },
+  'calc-division-by-zero': { refusal: 'pivot-engine-unmeasured: calculated data field 2 gives error #DIV/0!; its display is not measured', why: 'lane A: measured, the error value shows (R20C4) with showError off; values.ts gate' },
+  'calc-references-calculated': { refusal: 'pivot-engine-unmeasured: calculated data field 2 gives error #DIV/0!; its display is not measured', why: 'reference lifted in calculated.ts; lane A: Central shows #DIV/0! (R20C4); values.ts gate' },
+  'calc-constant': { refusal: 'pivot-engine-unmeasured: calculated field 12 uses no field; its cells without records are not measured', why: 'measured (1 in every cell, R22C4 included), kept in calculated.ts until values.ts can sum no field (lane A)' },
+  'calc-text-field': { refusal: 'pivot-engine-unmeasured: field 6 has text values; their sum in a calculated field is not measured', why: 'lane A: measured, text is left out of the sum (R13C13 = 84); values.ts gate' },
+  'calc-function-count': { refusal: 'pivot-engine-unmeasured: calculated data field 2 with function count is not measured', why: 'lane A: measured, the function is ignored (R10C7 = Sales*2); values.ts gate' },
+  'calc-show-as': { refusal: 'pivot-engine-unmeasured: show-as on calculated data field 2 is not measured', why: 'kept: percent of the calculated grand total, but 10 of 76 cells differ at the 15th digit (the percent-of-total rounding lane A also refuses)' },
+  'calc-named-subtotals': { refusal: 'pivot-engine-unmeasured: a named subtotal of a calculated data field is not measured', why: 'lane A: measured, blank on named lines except at the column grand (R10C13 = R11C13 = 96237.92); values.ts gate' },
+  'calc-value-sort': { refusal: 'pivot-engine-unmeasured: a filter or sort by calculated data field 2 is not measured', why: 'lane A: measured, the order is the formula over each item\'s sums (West, South, North, East, Central); values.ts aggregateByKey gate' },
+  'calc-item': { refusal: 'pivot-calculated-item: field 1 has calculated items (no Excel oracle, spec §5.6)', why: 'kept: the item is listed under every parent and counted in its totals (calc-item R6, R28); needs axes and values work outside this lane' },
+}
+
 describe('Task 22 Excel manifest cases', () => {
   const fixtures = resolve(process.cwd(), 'tests/fixtures/xlsx-pivots')
   const manifestPath = resolve(fixtures, 'engine/manifest.json')
@@ -328,6 +355,123 @@ describe('Task 22 Excel manifest cases', () => {
     const loaded = await loadAll(existsSync(local) ? local : resolve(process.cwd(), entry.file))
     const pivot = loaded.find(candidate => candidate.def.name === entry.pivot)
     if (!pivot) throw new Error(`${entry.case}: pivot ${entry.pivot} not found`)
-    expect(checkSavedLayout(pivot.store, pivot.cache, pivot.def, sheetCellReader(pivot.sheet), { date1904: pivot.date1904 }).status, entry.case).toBe('ok')
+    const result = checkSavedLayout(pivot.store, pivot.cache, pivot.def, sheetCellReader(pivot.sheet), { date1904: pivot.date1904 })
+    const refused = TASK22_REFUSED[entry.case]
+    if (!refused) { expect(result, entry.case).toEqual({ status: 'ok' }); return }
+    const view = initialViewState(pivot.def, pivot.cache)
+    const axes = computeAxes(pivot.store, pivot.cache, pivot.def, view)
+    const computed = axes.ok ? computeValues(pivot.store, pivot.cache, pivot.def, view, axes.value) : axes
+    expect(computed.ok ? undefined : `${computed.diagnostic.feature}: ${computed.diagnostic.message}`, entry.case).toBe(refused.refusal)
+    expect(result, entry.case).toEqual({ status: 'unverified', reason: 'unsupported', detail: refused.refusal.split(':')[0] })
+  })
+  it('the refusal map names task-22 cases only', () => {
+    for (const name of Object.keys(TASK22_REFUSED)) expect(cases.map(entry => entry.case)).toContain(name)
+  })
+})
+
+// ---------------------------------------------------------------- oracle round B2 (Task 15 Excel cases)
+
+describe('oracle round B2: calculated fields and items against Excel', () => {
+  const engine = async (name: string) => (await loadAll(resolve(process.cwd(), `tests/fixtures/xlsx-pivots/engine/${name}.xlsx`)))[0]!
+  type Pivot = Awaited<ReturnType<typeof engine>>
+  /** Each value cell of data slot `d`: Excel's saved value and the slot's formula over that cell's field sums (each
+   * named field summed through computeValues, a cell without records summing to 0). */
+  function formulaCells(p: Pivot, d: number) {
+    const view = initialViewState(p.def, p.cache)
+    const axes = computeAxes(p.store, p.cache, p.def, view)
+    if (!axes.ok) throw new Error(axes.diagnostic.message)
+    const compiled = compileCalculatedField(p.cache.fields[view.data[d]!.field]!.formula!, p.cache, view.data[d]!.field)
+    if (!compiled.ok) throw new Error(compiled.diagnostic.message)
+    const grids = new Map(compiled.value.fields.map(field => {
+      const grid = computeValues(p.store, p.cache, p.def, { ...view, data: view.data.map(data => ({ ...data, field, fn: 'sum' as const, showAs: 'normal' as const })) }, axes.value)
+      if (!grid.ok) throw new Error(grid.diagnostic.message)
+      return [field, grid.value] as const
+    }))
+    const saved = savedPivotLayout(p.def)!, read = sheetCellReader(p.sheet)
+    const onCols = view.cols.includes(-2)
+    const cells: Array<{ row: number; col: number; rowLine: PivotLine; colLine: PivotLine; formula: unknown; saved: unknown }> = []
+    axes.value.rows.forEach((rowLine, n) => axes.value.cols.forEach((colLine, m) => {
+      if ((onCols ? colLine.data : 0) !== d) return
+      if (!lineCarriesValues(view, 'rows', rowLine) || !lineCarriesValues(view, 'cols', colLine)) return
+      const formula = calculatedValue(compiled.value, field => { const sum = grids.get(field)!.get(n, m, d); return sum.kind === 'number' ? sum.value : 0 })
+      cells.push({ row: saved.dataRow0 + n, col: saved.dataCol0 + m, rowLine, colLine, formula, saved: read(saved.dataRow0 + n, saved.dataCol0 + m) })
+    }))
+    return cells
+  }
+  /** Saved and formula agree: numbers at 15 significant digits, errors by value. */
+  const agrees = (cell: { formula: unknown; saved: unknown }) => {
+    const f = cell.formula as { kind: string; value: number | string }, s = cell.saved as { kind: string; value: number | string } | undefined
+    if (!s || f.kind !== s.kind) return false
+    return f.kind === 'number' ? Number((f.value as number).toPrecision(15)) === Number((s.value as number).toPrecision(15)) : f.value === s.value
+  }
+  const disagreements = (cells: ReturnType<typeof formulaCells>) => cells.filter(cell => !agrees(cell)).map(cell => `R${cell.row + 1}C${cell.col + 1}`)
+
+  it('every cell is the formula over its sums: cells without records sum to 0, errors show as the error', async () => {
+    // calc-cell-without-records: Central x 2022 has no records; Sales and Units are blank, Double Sales shows 0 (R22C4).
+    const empty = formulaCells(await engine('calc-cell-without-records'), 2)
+    expect(disagreements(empty)).toEqual([])
+    expect(empty.find(cell => cell.row === 21 && cell.col === 3)).toMatchObject({ formula: { kind: 'number', value: 0 }, saved: { kind: 'number', value: 0 } })
+    // calc-division-by-zero: Central's Units sum to 0, so Sales/Units is #DIV/0! (R20C4, R21C4); totals are the
+    // formula over the totals' sums (Grand Total 222603.36/2417).
+    const div = formulaCells(await engine('calc-division-by-zero'), 2)
+    expect(disagreements(div)).toEqual([])
+    expect(div.filter(cell => (cell.saved as { kind: string }).kind === 'error').map(cell => `R${cell.row + 1}C${cell.col + 1}`)).toEqual(['R20C4', 'R21C4'])
+    // calc-quoted-field-name: 'Net Amount'/Sales; a cell without records is 0/0, #DIV/0! (R22C4).
+    expect(disagreements(formulaCells(await engine('calc-quoted-field-name'), 2))).toEqual([])
+  })
+
+  it('a reference to a calculated field re-applies its formula over the same sums (calc-references-calculated)', async () => {
+    const p = await engine('calc-references-calculated')
+    // Double Price = 'Price per Unit'*2, Price per Unit = Sales/Units: East is (48118.96/623)*2 (R4C4).
+    const compiled = compileCalculatedField(p.cache.fields[13]!.formula!, p.cache, 13)
+    expect(compiled.ok && compiled.value.fields).toEqual([3, 4])
+    const cells = formulaCells(p, 2)
+    expect(disagreements(cells)).toEqual([])
+    expect(cells[0]).toMatchObject({ row: 3, col: 3, saved: { kind: 'number', value: 154.4749919743178 } })
+  })
+
+  it('text values are left out of the sum; the data field\'s function is ignored (calc-text-field, calc-function-count)', async () => {
+    // Channel*2: Channel has text items and one number item (42), whose records give 84 (R13C13).
+    expect(disagreements(formulaCells(await engine('calc-text-field'), 2))).toEqual([])
+    // Count of Double Sales still shows Sales*2 over the sums (R10C7 North 2023: 47551.48).
+    const count = await engine('calc-function-count')
+    expect(count.def.dataFields[2]!.subtotal).toBe('count')
+    expect(disagreements(formulaCells(count, 2))).toEqual([])
+  })
+
+  it('a formula over no field fills every value cell, cells without records included (calc-constant)', async () => {
+    const p = await engine('calc-constant')
+    const saved = savedPivotLayout(p.def)!, read = sheetCellReader(p.sheet)
+    const values: unknown[] = []
+    // Columns: Year × (Sales, Units, Flat One), then the three grand columns; Flat One is every third column.
+    for (let row = saved.dataRow0; row <= saved.rect.maxRow; row++) for (let col = saved.dataCol0 + 2; col <= saved.rect.maxCol; col += 3) values.push(read(row, col))
+    expect(new Set(values.map(value => JSON.stringify(value)))).toEqual(new Set([JSON.stringify({ kind: 'number', value: 1 })]))
+    // R22C4 (Central x 2022) has no records and still shows 1. The engine keeps its gate until values.ts sums no
+    // field (S2-AA map below).
+    expect(read(21, 3)).toEqual({ kind: 'number', value: 1 })
+  })
+
+  it('named subtotals: calculated cells are blank on named-subtotal lines except at the column grand total (calc-named-subtotals)', async () => {
+    const cells = formulaCells(await engine('calc-named-subtotals'), 2)
+    const named = (line: PivotLine) => line.type !== 'data' && line.type !== 'grand' && line.type !== 'default'
+    expect(disagreements(cells.filter(cell => !named(cell.rowLine)))).toEqual([])
+    for (const cell of cells.filter(cell => named(cell.rowLine))) {
+      if (cell.colLine.type !== 'grand') { expect(cell.saved, `R${cell.row + 1}C${cell.col + 1}`).toBeUndefined(); continue }
+      // At the column grand total both the sum and the count line show the item's formula: East 96237.92 = 48118.96*2.
+      const sumLine = cells.find(other => other.rowLine.type === 'sum' && other.rowLine.items[0] === cell.rowLine.items[0] && other.colLine === cell.colLine)!
+      expect(cell.saved, `R${cell.row + 1}C${cell.col + 1}`).toEqual(sumLine.saved)
+    }
+  })
+
+  it('calculated items: the cache item list parses, and the engine refuses with pivot-calculated-item (calc-item)', async () => {
+    const p = await engine('calc-item')
+    expect(p.cache.unsupported).toEqual([])
+    expect(p.def.unsupported).toEqual([])
+    expect(p.cache.calculatedItems).toEqual([{
+      formula: 'Product[Apples]+Product[Bananas]',
+      area: expect.objectContaining({ cacheIndex: true, outline: false, fieldPosition: 0, references: [expect.objectContaining({ field: 1, x: [4] })] }),
+    }])
+    expect(checkSavedLayout(p.store, p.cache, p.def, sheetCellReader(p.sheet), { date1904: p.date1904 }))
+      .toEqual({ status: 'unverified', reason: 'unsupported', detail: 'pivot-calculated-item' })
   })
 })

@@ -7,11 +7,16 @@
  * The formula text is the cache's, quoted as written (`'Field A'*20`, `SUM('Field A', 'Field B')`); the lexer's
  * `quotedNames` mode (AGY-8) reads a quoted run not followed by `!` as a name.
  *
+ * A name that is another calculated field re-applies that field's formula over the same cell's sums (Task 15
+ * calc-references-calculated: Double Price = 'Price per Unit'*2 shows (48118.96/623)*2 for East, #DIV/0! where Units
+ * sum to 0); `fields` lists the record fields the whole chain sums.
+ *
  * Refused as `pivot-calculated-field` (the engine cannot evaluate it): a parse error, a cell/range/table/array or
  * other reference construct, a function the engine lacks or one whose value depends on the cell, the clock, chance or
- * the workbook's date system, and a name that is no cache field (or more than one). Refused as `pivot-engine-unmeasured` (ruling S2-M, no
- * Excel-written oracle): a reference to another calculated field (whether Excel re-applies its formula over the sums
- * or reads its cell value), and a formula over no field (whether Excel fills cells without records).
+ * the workbook's date system, a name that is no cache field (or more than one), and a cycle of calculated fields.
+ * Refused as `pivot-engine-unmeasured`: a formula over no field. Excel fills every value cell with it (calc-constant:
+ * `=1` shows 1 in every cell, cells without records included), but values.ts sums a named field to place the cells
+ * (lane A's change, oracle-b2-report).
  */
 import { tokenize } from '../../formula/lexer'
 import { parseFormula } from '../../formula/parser'
@@ -23,8 +28,12 @@ import type { PivotCacheDefinition, PivotDiagnostic } from '../model'
 import type { EngineResult } from './axes'
 import type { PivotCellValue } from './place'
 
-/** A calculated field's formula, parsed once, with each name it uses mapped to a cache field. */
-export interface CalculatedField { readonly ast: AstNode; readonly names: ReadonlyMap<string, number>; readonly fields: readonly number[] }
+/** A calculated field's formula, parsed once, with each name it uses mapped to a cache field: `names` the record
+ * fields (bound to their sums), `nested` the calculated fields (bound to their own formula), `fields` every record
+ * field the chain sums. */
+export interface CalculatedField {
+  readonly ast: AstNode; readonly names: ReadonlyMap<string, number>; readonly nested: ReadonlyMap<string, AstNode>; readonly fields: readonly number[]
+}
 
 const fail = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
 
@@ -49,39 +58,51 @@ export function compileCalculatedField(formula: string, cache: PivotCacheDefinit
     const k = key(field.name ?? '')
     byName.set(k, byName.has(k) ? -1 : index)
   })
-  const ast = parseFormula(tokenize(formula, { quotedNames: true }))
-  const names = new Map<string, number>(), fields = new Set<number>()
-  let unsupported: string | undefined, unmeasured: string | undefined
-  const pending: AstNode[] = [ast]
-  while (pending.length) {
-    const node = pending.pop()!
-    switch (node.type) {
-      case 'number': case 'string': case 'boolean': case 'empty': break
-      case 'unary': pending.push(node.expr); break
-      case 'binary': pending.push(node.left, node.right); break
-      case 'call':
-        // Date functions need the workbook's date system, which the value pass does not carry (ruling S2-J).
-        if (!FUNCTIONS[node.name] || CONTEXT_FUNCTIONS.has(node.name) || DATETIME_FUNCTIONS[node.name]) unsupported ??= `function ${node.name} is not evaluated in a pivot`
-        pending.push(...node.args)
-        break
-      case 'name': {
-        const field = node.ref.sheet === undefined ? byName.get(key(node.ref.name)) : undefined
-        if (field === undefined || field < 0) { unsupported ??= `name ${node.ref.name} is not one cache field`; break }
-        const cacheField = cache.fields[field]!
-        if (field === self) unsupported ??= `the formula refers to its own field ${node.ref.name}`
-        else if (cacheField.formula !== undefined) unmeasured ??= `a reference to calculated field ${node.ref.name} is not measured`
-        else if (!cacheField.databaseField) unsupported ??= `field ${node.ref.name} has no records`
-        else { names.set(key(node.ref.name), field); fields.add(field) }
-        break
+  const names = new Map<string, number>(), nested = new Map<string, AstNode>(), fields = new Set<number>()
+  let unsupported: string | undefined
+  // Each calculated field of the chain is parsed once; `active` holds the chain being walked (a cycle check).
+  const active = new Set<number>([self])
+  const walk = (ast: AstNode): void => {
+    const pending: AstNode[] = [ast]
+    while (pending.length) {
+      const node = pending.pop()!
+      switch (node.type) {
+        case 'number': case 'string': case 'boolean': case 'empty': break
+        case 'unary': pending.push(node.expr); break
+        case 'binary': pending.push(node.left, node.right); break
+        case 'call':
+          // Date functions need the workbook's date system, which the value pass does not carry (ruling S2-J).
+          if (!FUNCTIONS[node.name] || CONTEXT_FUNCTIONS.has(node.name) || DATETIME_FUNCTIONS[node.name]) unsupported ??= `function ${node.name} is not evaluated in a pivot`
+          pending.push(...node.args)
+          break
+        case 'name': {
+          const field = node.ref.sheet === undefined ? byName.get(key(node.ref.name)) : undefined
+          if (field === undefined || field < 0) { unsupported ??= `name ${node.ref.name} is not one cache field`; break }
+          const cacheField = cache.fields[field]!
+          if (field === self) unsupported ??= `the formula refers to its own field ${node.ref.name}`
+          else if (cacheField.formula !== undefined) {
+            if (active.has(field)) { unsupported ??= `calculated field ${node.ref.name} refers back to itself`; break }
+            if (nested.has(key(node.ref.name))) break
+            // calc-references-calculated: the referenced formula over the same sums.
+            const inner = parseFormula(tokenize(cacheField.formula, { quotedNames: true }))
+            nested.set(key(node.ref.name), inner)
+            active.add(field)
+            walk(inner)
+            active.delete(field)
+          } else if (!cacheField.databaseField) unsupported ??= `field ${node.ref.name} has no records`
+          else { names.set(key(node.ref.name), field); fields.add(field) }
+          break
+        }
+        case 'error': unsupported ??= `the formula does not parse: ${node.error}`; break
+        default: unsupported ??= `${node.type} is not evaluated in a pivot formula`
       }
-      case 'error': unsupported ??= `the formula does not parse: ${node.error}`; break
-      default: unsupported ??= `${node.type} is not evaluated in a pivot formula`
     }
   }
+  const ast = parseFormula(tokenize(formula, { quotedNames: true }))
+  walk(ast)
   if (unsupported) return fail('pivot-calculated-field', `calculated field ${self}: ${unsupported}`)
-  if (unmeasured) return fail('pivot-engine-unmeasured', `calculated field ${self}: ${unmeasured}`)
   if (!fields.size) return fail('pivot-engine-unmeasured', `calculated field ${self} uses no field; its cells without records are not measured`)
-  return { ok: true, value: { ast, names, fields: [...fields].sort((a, b) => a - b) } }
+  return { ok: true, value: { ast, names, nested, fields: [...fields].sort((a, b) => a - b) } }
 }
 
 /**
@@ -92,6 +113,8 @@ export function calculatedValue(field: CalculatedField, sums: (field: number) =>
   const references: ReferenceServices = {
     resolve: node => node.type === 'name' ? undefined : formulaError('#REF!'),
     bindName: (ref): NameBinding | ReturnType<typeof formulaError> => {
+      const inner = field.nested.get(key(ref.name))
+      if (inner) return { name: ref.name, source: ref.name, ast: inner, baseProvenance: 'explicit' }
       const index = field.names.get(key(ref.name))
       if (index === undefined) return formulaError('#NAME?')
       return { name: ref.name, source: ref.name, ast: { type: 'number', value: sums(index) }, baseProvenance: 'explicit' }
