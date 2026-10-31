@@ -30,6 +30,7 @@ import { looksLikeSvg } from '../../core/svg'
 import { chartReceiver, collectCachedPictures, decodeImageAssets, sheetPaintable, type Paintable, type PaintableArray, type PaintOptions } from '../../render/paint'
 import type { MainMemoryLedger } from '../../xlsx/view/mainLedger'
 import type { ChartParentLedger } from '../../charts/workspace'
+import type { ChartModel } from '../../charts/model'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import { IMAGE_PROBE_BYTES, imageLimitsFor, probeImageHeader, type ImageLimits } from '../../xlsx/storage/imageAdmission'
 
@@ -275,6 +276,30 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       }
     } catch (error) { releaseHeld(); lease.dispose(); throw error }
   })
+}
+
+/**
+ * A pivot commit's charts repaint (plan Task 30, spec §6.6): the charts linked to pivot `name` (`c:pivotSource`, the
+ * name after the last `!`) are replaced, in the document's drawing order (every sheet, as the pivot client collects
+ * them), by the commit's rebuilt `charts`, one for one. Returns the sheet indices whose drawings changed: the viewer
+ * drops their tiles, and each new model object re-keys the chart renders. A count that does not match the linked
+ * charts installs nothing (the commit was built for other charts). Main thread only; walks drawing trees, no chart code.
+ */
+export function installPivotCharts(doc: Pick<XlsxDocument, 'sheets'>, name: string, charts: readonly ChartModel[]): number[] {
+  const linked = (chart: ChartModel) => { const source = chart.pivot?.name ?? ''; return Boolean(chart.pivot) && source.slice(source.lastIndexOf('!') + 1) === name }
+  const found: Array<{ sheet: number; content: { chart: ChartModel } }> = []
+  const walk = (nodes: readonly XlsxDrawing[] | undefined, sheet: number) => {
+    for (const node of nodes ?? []) {
+      const content = node.content as { kind: string; chart?: ChartModel } | undefined
+      if (content?.kind === 'xlsxChart' && content.chart && linked(content.chart)) found.push({ sheet, content: content as { chart: ChartModel } })
+      if (node.children?.length) walk(node.children as XlsxDrawing[], sheet)
+    }
+  }
+  doc.sheets.forEach((sheet, index) => walk(sheet.drawings, index))
+  if (!found.length || found.length !== charts.length) return []
+  const touched = new Set<number>()
+  found.forEach((entry, k) => { if (entry.content.chart !== charts[k]) { entry.content.chart = charts[k]!; touched.add(entry.sheet) } })
+  return [...touched]
 }
 
 export interface PrintUnitsOptions extends SheetAssetsOptions {
