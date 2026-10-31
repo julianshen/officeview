@@ -281,9 +281,29 @@ function valueError(acc: Accumulator, present: Uint8Array, at: number, fn: Value
   return acc.numeric![at] === 1 ? '#DIV/0!' : undefined
 }
 
-/** Aggregate a data field by caller-provided record keys using the engine's existing accumulator semantics. */
+/** An item aggregate for value filters, top-10 filters and value sorts, with its rounding bound (ruling S2-AJ). */
+export interface KeyAggregate {
+  values: Array<number | undefined>
+  /** Per key: how far the aggregate may differ from the same sum taken in any other order (0 when exact). */
+  bounds: Float64Array
+}
+
+/** Unit roundoff of a double. */
+const ROUNDOFF = 2 ** -53
+/** Ruling S2-AJ: a sum of n numbers is exact in any order when every value is an integer and Σ|x| ≤ 2⁵³; otherwise
+ * recursive summation errs by at most (n − 1)·u·Σ|x| in any order, so two orders differ by at most twice that (n
+ * replaces n − 1 to cover the rounding of Σ|x| itself). */
+const sumBound = (count: number, absolute: number, integral: boolean) =>
+  count < 2 || (integral && absolute <= 2 ** 53) ? 0 : 2 * count * ROUNDOFF * absolute
+
+/**
+ * Aggregate a data field by caller-provided record keys using the engine's existing accumulator semantics, for value
+ * filters, top-10 filters and value sorts. Filters decide the axes the displayed S2-AB rollup depends on, so the
+ * display order cannot be reproduced here (ruling S2-AJ): each Sum or Average carries a rounding bound instead, and
+ * the caller refuses a decision closer to its cut than that bound. Count, Count Numbers, Max and Min are exact.
+ */
 export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, view: PivotViewState, dataIndex: number,
-  keys: Uint32Array, keyCount: number, passes: Uint8Array, functionOverride?: PivotDataFunction): EngineResult<Array<number | undefined>> {
+  keys: Uint32Array, keyCount: number, passes: Uint8Array, functionOverride?: PivotDataFunction): EngineResult<KeyAggregate> {
   if (!view.data[dataIndex] || keys.length !== store.count || passes.length !== store.count)
     return invalid('filter aggregate inputs do not match the pivot view')
   const data = view.data[dataIndex]!, sourceField = data.field
@@ -296,7 +316,7 @@ export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, 
     // B2 rule (calc-value-sort): each item's value is the formula over that item's field sums.
     const compiled = compileCalculatedField(formula, cache, sourceField)
     if (!compiled.ok) return compiled
-    const sums = new Map<number, Array<number | undefined>>()
+    const sums = new Map<number, KeyAggregate>()
     for (const field of compiled.value.fields) {
       const sum = aggregateByKey(store, cache, { ...view, data: view.data.map((d, k) => k === dataIndex ? { ...d, field, fn: 'sum', showAs: 'normal' } : d) }, dataIndex, keys, keyCount, passes, 'sum')
       if (!sum.ok) return sum
@@ -306,17 +326,36 @@ export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, 
     // zero, as the displayed cells do (calc-constant, calc-text-field); an item without records has no value.
     const withRecords = new Uint8Array(keyCount)
     for (let record = 0; record < store.count; record++) if (passes[record] && keys[record]! < keyCount) withRecords[keys[record]!] = 1
-    const out = new Array<number | undefined>(keyCount)
+    const out = new Array<number | undefined>(keyCount), bounds = new Float64Array(keyCount)
+    const fields = compiled.value.fields
     for (let key = 0; key < keyCount; key++) {
       if (!withRecords[key]) continue
-      const value = calculatedValue(compiled.value, field => sums.get(field)![key] ?? 0)
+      const value = calculatedValue(compiled.value, field => sums.get(field)!.values[key] ?? 0)
       if (value === 'unsupported' || value.kind !== 'number') return unmeasured(`a filter or sort by calculated data field ${dataIndex} with a non-number item value is not measured`)
       out[key] = value.value
+      // S2-AJ: the formula at every corner of its inexact operands' [sum − bound, sum + bound] box gives the interval
+      // of values another summation order could produce. This assumes the formula is monotone inside that tiny box.
+      const inexact = fields.filter(field => sums.get(field)!.bounds[key]! > 0)
+      if (!inexact.length) continue
+      if (inexact.length > 4) return unmeasured(`a filter or sort by calculated data field ${dataIndex} has more than 4 inexact operand sums; its value is too close to the cut for the summation order to be settled`)
+      let bound = 0
+      for (let corner = 0; corner < 1 << inexact.length; corner++) {
+        const shifted = calculatedValue(compiled.value, field => {
+          const at = inexact.indexOf(field), sum = sums.get(field)!.values[key] ?? 0
+          return at < 0 ? sum : sum + (corner & (1 << at) ? 1 : -1) * sums.get(field)!.bounds[key]!
+        })
+        if (shifted === 'unsupported' || shifted.kind !== 'number' || !Number.isFinite(shifted.value))
+          return unmeasured(`a filter or sort by calculated data field ${dataIndex} is too close to an error or overflow for the summation order to be settled`)
+        bound = Math.max(bound, Math.abs(shifted.value - value.value))
+      }
+      bounds[key] = bound
     }
-    return { ok: true, value: out }
+    return { ok: true, value: { values: out, bounds } }
   }
   const column = store.columns[sourceField], shared = cache.fields[sourceField]?.sharedItems?.items
   const fn = valueFnCode(functionOverride ?? data.fn), acc = accumulator(keyCount, fn), present = new Uint8Array(keyCount)
+  const rounded = fn === VALUE_FN.sum || fn === VALUE_FN.average
+  const absolute = rounded ? new Float64Array(keyCount) : undefined, fractional = rounded ? new Uint8Array(keyCount) : undefined
   const scratch: ReadValue = { kind: 'missing', value: 0 }
   for (let record = 0; record < store.count; record++) {
     if (!passes[record]) continue
@@ -327,14 +366,23 @@ export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, 
     if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
     if (scratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     add(acc, present, key, scratch, fn)
+    if (absolute && scratch.kind === 'number') {
+      absolute[key] += Math.abs(scratch.value)
+      if (!Number.isInteger(scratch.value)) fractional![key] = 1
+    }
   }
-  const result = new Array<number | undefined>(keyCount)
+  const result = new Array<number | undefined>(keyCount), bounds = new Float64Array(keyCount)
   for (let key = 0; key < keyCount; key++) {
     const value = valueOf(acc, present, key, fn)
     if (value !== undefined && !Number.isFinite(value)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     result[key] = value
+    if (absolute && value !== undefined) {
+      const count = acc.numeric![key]!, bound = sumBound(count, absolute[key]!, !fractional![key])
+      // Average divides the sum (and its bound) by the count, which adds one more rounding of its own.
+      bounds[key] = fn === VALUE_FN.average && bound > 0 ? bound / count + ROUNDOFF * Math.abs(value) : bound
+    }
   }
-  return { ok: true, value: result }
+  return { ok: true, value: { values: result, bounds } }
 }
 
 function subtotalFunction(type: PivotItemType, fallback: PivotDataFunction): PivotDataFunction {

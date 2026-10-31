@@ -41,13 +41,13 @@
  * the last, unmeasured mixed-type/custom-list sort order, unsupported showAll value-sort empty-item placements, and
  * unmeasured group boundaries. Dynamic date filters use the dedicated feature refusal.
  */
-import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDiagnostic, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition, type PivotValue } from '../model'
+import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDiagnostic, type PivotFilter, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition, type PivotValue } from '../model'
 import type { PivotLine } from '../savedLayout'
 import type { RecordStore } from './records'
 import type { FieldState, PivotViewState } from './view'
 import { sortItemOrder, itemValuesByPivotIndex } from './sort'
 import { groupColumn, NO_GROUP } from './groups'
-import { isDateFilter, isDynamicDateFilter, isLabelFilter, isTop10Filter, isValueFilter, compileLabelFilter, matchesDateFilter, matchesValueFilter } from './filters'
+import { isDateFilter, isDynamicDateFilter, isLabelFilter, isTop10Filter, isValueFilter, compileLabelFilter, matchesDateFilter, matchesValueFilter, valueFilterCuts } from './filters'
 import { aggregateByKey } from './values'
 
 export interface PivotAxes { rows: PivotLine[]; cols: PivotLine[]; rowKey: Uint32Array; colKey: Uint32Array }   // per record: its leaf line, or NO_LINE
@@ -63,21 +63,67 @@ const unmeasured = (message: string) => fail('unsupported', 'pivot-engine-unmeas
 /** A worksheet's rows and columns: the most lines an axis can place. */
 const SHEET_ROWS = 1_048_576, SHEET_COLS = 16_384
 
-function selectTopPercent(ranked: readonly { item: number; value: number }[], percent: number): Set<number> | undefined {
-  if (ranked.some(entry => entry.value < 0)) return undefined
-  const total = ranked.reduce((sum, entry) => sum + entry.value, 0)
-  if (!(total > 0) || !Number.isFinite(total)) return undefined
-  const threshold = total * percent / 100
-  let accumulated = 0, last: number | undefined
+/** Ruling S2-AJ: an item aggregate with its rounding bound (0 when exact), and the refusal for a decision closer to
+ * its cut than the bounds allow, since the displayed totals sum in another order. */
+interface Scored { item: number; value: number; bound: number }
+const TOO_CLOSE = 'too close to the cut for the summation order to be settled'
+const close = (what: string) => unmeasured(`${what} is ${TOO_CLOSE}`)
+/** Within the bound of the cut, and not settled exactly. */
+const near = (difference: number, bound: number) => bound > 0 && Math.abs(difference) <= bound
+
+function valueFilterDecision(filter: PivotFilter, value: number | undefined, bound: number): EngineResult<boolean> {
+  const decision = matchesValueFilter(filter, value)
+  if (decision === undefined) return unmeasured(`value filter ${filter.type} criteria are not measured`)
+  if (value !== undefined && valueFilterCuts(filter).some(cut => near(value - cut, bound))) return close(`value filter ${filter.id}'s item value`)
+  return { ok: true, value: decision }
+}
+
+/** Top-10 count, sum and percent over items ranked by value (descending, then item order). */
+function topTenSelection(filter: PivotFilter, val: number, ranked: readonly Scored[]): EngineResult<Set<number>> {
+  // A near tie between neighbours could swap them under another summation order; exact ties keep item order.
+  const swappable = (a: Scored, b: Scored) => !(a.value === b.value && a.bound === 0 && b.bound === 0) && Math.abs(a.value - b.value) <= a.bound + b.bound
+  if (filter.type === 'count') {
+    const count = Math.min(ranked.length, Math.max(1, Math.trunc(val)))
+    const threshold = ranked[count - 1]?.value
+    const kept = ranked.filter(entry => threshold !== undefined && entry.value >= threshold)
+    // The cut: the last kept and first dropped items, and inexact ties kept beyond the count.
+    const dropped = ranked[kept.length]
+    if (dropped && kept.length && swappable(kept[kept.length - 1]!, dropped)) return close(`top-10 filter ${filter.id}'s count cut`)
+    if (kept.length > count && kept.slice(count - 1).some(entry => entry.bound > 0)) return close(`top-10 filter ${filter.id}'s tie at the count cut`)
+    return { ok: true, value: new Set(kept.map(entry => entry.item)) }
+  }
+  let threshold = val, thresholdBound = 0
+  if (filter.type === 'percent') {
+    if (ranked.some(entry => entry.value < 0)) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
+    let total = 0, totalBound = 0
+    for (const entry of ranked) { total += entry.value; totalBound += entry.bound }
+    if (!Number.isFinite(total)) return fail('unsupported', 'pivot-values-limit', `top-percent filter ${filter.id}'s total overflows`)
+    if (!(total > 0)) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
+    // Bot round 9: percent / 100 first, so total × percent cannot overflow before the division.
+    threshold = total * (val / 100)
+    if (!Number.isFinite(threshold)) return fail('unsupported', 'pivot-values-limit', `top-percent filter ${filter.id}'s threshold overflows`)
+    thresholdBound = totalBound * (val / 100)
+  }
+  let accumulated = 0, accumulatedBound = 0, previous = 0, previousBound = 0
   const selected = new Set<number>()
-  for (const entry of ranked) {
-    selected.add(entry.item); accumulated += entry.value; last = entry.value
+  let index = 0
+  for (; index < ranked.length; index++) {
+    const entry = ranked[index]!
+    previous = accumulated; previousBound = accumulatedBound
+    selected.add(entry.item); accumulated += entry.value; accumulatedBound += entry.bound
     if (accumulated >= threshold) break
   }
-  const count = selected.size
-  if (count === 0) return undefined
-  if (count < ranked.length && ranked[count]!.value === last) return undefined
-  return selected
+  if (!Number.isFinite(accumulated)) return fail('unsupported', 'pivot-values-limit', `top-10 filter ${filter.id}'s running total overflows`)
+  // The cut: the running total where it stopped, and the one before it, against the threshold.
+  if (near(accumulated - threshold, accumulatedBound + thresholdBound) || (selected.size > 1 && near(threshold - previous, previousBound + thresholdBound)))
+    return close(`top-10 filter ${filter.id}'s ${filter.type} cut`)
+  const last = ranked[Math.min(index, ranked.length - 1)], next = ranked[index + 1]
+  if (filter.type === 'percent') {
+    if (selected.size === 0) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
+    if (next && last && next.value === last.value) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
+  }
+  if (next && last && index < ranked.length && swappable(last, next)) return close(`top-10 filter ${filter.id}'s ${filter.type} cut`)
+  return { ok: true, value: selected }
 }
 
 /** The subtotal lines a field's items get: its named functions, else the default subtotal, else none. */
@@ -264,40 +310,32 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         }
         const aggregate = aggregateByKey(store, cache, view, dataIndex, groupedKeys, pairToKey.size, eligible)
         if (!aggregate.ok) return aggregate
-        if (aggregate.value.some((value, key) => keyToPair[key] !== undefined && value === undefined))
+        const { values, bounds } = aggregate.value
+        if (values.some((value, key) => keyToPair[key] !== undefined && value === undefined))
           return unmeasured(`filter ${filter.type} has a blank aggregate for an item with records; its treatment is not measured`)
-        const entries = new Map<string, Array<{ item: number; value: number | undefined }>>()
+        const entries = new Map<string, Array<{ item: number; value: number | undefined; bound: number }>>()
         for (let key = 0; key < keyToPair.length; key++) {
           const pair = keyToPair[key]!, list = entries.get(pair.parent) ?? []
-          list.push({ item: pair.item, value: aggregate.value[key] }); entries.set(pair.parent, list)
+          list.push({ item: pair.item, value: values[key], bound: bounds[key]! }); entries.set(pair.parent, list)
         }
         const selected = new Map<string, Set<number>>()
         for (const [parent, group] of entries) {
           let keep = new Set<number>()
           if (isValueFilter(filter)) {
             for (const entry of group) {
-              const decision = matchesValueFilter(filter, entry.value)
-              if (decision === undefined) return unmeasured(`value filter ${filter.type} criteria are not measured`)
-              if (decision) keep.add(entry.item)
+              const decision = valueFilterDecision(filter, entry.value, entry.bound)
+              if (!decision.ok) return decision
+              if (decision.value) keep.add(entry.item)
             }
           } else {
             const top10 = filter.autoFilter.columns[0]?.top10
             if (!top10) return unmeasured(`missing top-10 criteria for filter ${filter.id} are not measured`)
-            const ranked = group.filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
+            const ranked = group.filter((entry): entry is Scored => entry.value !== undefined)
               .sort((a, b) => b.value - a.value || a.item - b.item)
             if (!Number.isFinite(top10.val) || top10.val <= 0) return invalid(`top-10 threshold for filter ${filter.id} is outside its valid range`)
-            if (filter.type === 'percent') {
-              const percentItems = selectTopPercent(ranked, top10.val)
-              if (!percentItems) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
-              keep = percentItems
-            } else if (filter.type === 'sum') {
-              let sum = 0
-              for (const entry of ranked) { keep.add(entry.item); sum += entry.value; if (sum >= top10.val) break }
-            } else {
-              const count = Math.min(ranked.length, Math.max(1, Math.trunc(top10.val)))
-              const threshold = ranked[count - 1]?.value
-              keep = new Set(ranked.filter(entry => threshold !== undefined && (top10.top ? entry.value >= threshold : entry.value <= threshold)).map(entry => entry.item))
-            }
+            const chosen = topTenSelection(filter, top10.val, ranked)
+            if (!chosen.ok) return chosen
+            keep = chosen.value
           }
           selected.set(parent, keep)
         }
@@ -314,44 +352,31 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
       }
       const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, map.size, passes)
       if (!aggregate.ok) return aggregate
+      const { values, bounds } = aggregate.value
       const hasRecords = new Uint8Array(map.size)
       for (let r = 0; r < store.count; r++) if (passes[r] && keys[r] !== NO_LINE) hasRecords[keys[r]!] = 1
-      if (hasRecords.some((present, item) => present && aggregate.value[item] === undefined))
+      if (hasRecords.some((present, item) => present && values[item] === undefined))
         return unmeasured(`filter ${filter.type} has a blank aggregate for an item with records; its treatment is not measured`)
       if (axisFields.includes(filter.fld) && view.fields[filter.fld]?.showAll &&
-        map.order.some(item => !view.fields[filter.fld]!.hidden[item] && aggregate.value[item] === undefined))
+        map.order.some(item => !view.fields[filter.fld]!.hidden[item] && values[item] === undefined))
         return unmeasured(`showAll with ${filter.type} filter on field ${filter.fld} has visible items without aggregates`)
       let allowed: Set<number>
       if (isValueFilter(filter)) {
         allowed = new Set()
         for (let item = 0; item < map.size; item++) {
-          const decision = matchesValueFilter(filter, aggregate.value[item])
-          if (decision === undefined) return unmeasured(`value filter ${filter.type} criteria are not measured`)
-          if (decision) allowed.add(item)
+          const decision = valueFilterDecision(filter, values[item], bounds[item]!)
+          if (!decision.ok) return decision
+          if (decision.value) allowed.add(item)
         }
       } else {
         const column = filter.autoFilter.columns[0], top10 = column?.top10
         if (!top10) return unmeasured(`missing top-10 criteria for filter ${filter.id} are not measured`)
-        const ranked = map.order.map(item => ({ item, value: aggregate.value[item] })).filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
+        const ranked = map.order.map(item => ({ item, value: values[item], bound: bounds[item]! })).filter((entry): entry is Scored => entry.value !== undefined)
           .sort((a, b) => b.value - a.value || a.item - b.item)
         if (!Number.isFinite(top10.val) || top10.val <= 0) return invalid(`top-10 threshold for filter ${filter.id} is outside its valid range`)
-        if (filter.type === 'sum') {
-          let total = 0
-          const selected = new Set<number>()
-          for (const entry of ranked) {
-            selected.add(entry.item); total += entry.value
-            if (total >= top10.val) break
-          }
-          allowed = selected
-        } else if (filter.type === 'percent') {
-          const percentItems = selectTopPercent(ranked, top10.val)
-          if (!percentItems) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
-          allowed = percentItems
-        } else {
-          const count = Math.min(ranked.length, Math.max(1, Math.trunc(top10.val)))
-          const threshold = ranked[count - 1]?.value
-          allowed = new Set(ranked.filter(entry => threshold !== undefined && (top10.top ? entry.value >= threshold : entry.value <= threshold)).map(entry => entry.item))
-        }
+        const chosen = topTenSelection(filter, top10.val, ranked)
+        if (!chosen.ok) return chosen
+        allowed = chosen.value
       }
       constrainItems(filter.fld, allowed)
       for (let r = 0; r < store.count; r++) if (passes[r] && !allowed.has(keys[r]!)) passes[r] = 0
@@ -400,16 +425,23 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         if (key === undefined) { key = pairToKey.size; pairToKey.set(pair, key) }
         keys[record] = key
       }
-      const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, level === 0 ? map.size : pairToKey.size, eligible)
-      if (!aggregate.ok) return aggregate
+      const aggregated = aggregateByKey(store, cache, view, dataIndex, keys, level === 0 ? map.size : pairToKey.size, eligible)
+      if (!aggregated.ok) return aggregated
+      const aggregate = { value: aggregated.value.values }, bounds = aggregated.value.bounds
+      // S2-AJ: neighbours whose values another summation order could swap refuse; exact ties keep item order.
+      const settled = (scored: readonly Scored[]) => scored.every((entry, k) => {
+        const next = scored[k + 1]
+        return !next || (entry.value === next.value && entry.bound === 0 && next.bound === 0) || Math.abs(entry.value - next.value) > entry.bound + next.bound
+      })
       if (level === 0) {
         const hasRecords = new Uint8Array(map.size)
         for (let record = 0; record < store.count; record++) if (eligible[record] && keys[record] !== NO_LINE) hasRecords[keys[record]!] = 1
         if (hasRecords.some((present, item) => present && aggregate.value[item] === undefined))
           return unmeasured(`value sort for field ${field} has a blank aggregate for an item with records; its placement is not measured`)
-        const scored = map.order.map(item => ({ item, value: aggregate.value[item] }))
-          .filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
+        const scored = map.order.map(item => ({ item, value: aggregate.value[item], bound: bounds[item]! }))
+          .filter((entry): entry is Scored => entry.value !== undefined)
           .sort((a, b) => (state.sortType === 'descending' ? b.value - a.value : a.value - b.value) || a.item - b.item)
+        if (!settled(scored)) return close(`value sort for field ${field}`)
         const rankedItems = scored.map(entry => entry.item)
         const missing = map.order.filter(item => !state.hidden[item] && aggregate.value[item] === undefined)
         if (state.showAll && missing.length) return unmeasured(`showAll value sort for top-level field ${field} has no-data items whose placement is not measured`)
@@ -448,8 +480,9 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             return unmeasured(`showAll value sort for field ${field} has multiple no-data items under parent ${parent}, whose tie order is not measured`)
           const scores = items.map(item => {
             const key = pairToKey.get(`${parent}/${item}`)!
-            return { item, value: aggregate.value[key] }
+            return { item, value: aggregate.value[key], bound: bounds[key]! }
           }).sort((a, b) => ((state.sortType === 'descending' ? (b.value ?? -Infinity) - (a.value ?? -Infinity) : (a.value ?? Infinity) - (b.value ?? Infinity))) || a.item - b.item)
+          if (!settled(scores.filter((entry): entry is Scored => entry.value !== undefined))) return close(`value sort for field ${field} under parent ${parent}`)
           const ordered = scores.map(entry => entry.item)
           if (state.showAll) ordered.push(...missing)
           byParent.set(parent, ordered)

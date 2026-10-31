@@ -199,6 +199,11 @@ function asNumber(value: PivotValue | undefined): number | undefined {
   }
   return undefined
 }
+/** A value filter's numeric cuts (one, or two for between and not between). */
+export function valueFilterCuts(filter: PivotFilter): number[] {
+  const a = Number(criterion(filter, filter.autoFilter.columns[0], 1)), bRaw = criterion(filter, filter.autoFilter.columns[0], 2)
+  return bRaw === undefined ? [a] : [a, Number(bRaw)]
+}
 export function matchesValueFilter(filter: PivotFilter, value: number | undefined): boolean | undefined {
   if (!isValueFilter(filter)) return undefined
   const a = Number(criterion(filter, filter.autoFilter.columns[0], 1)), bRaw = criterion(filter, filter.autoFilter.columns[0], 2), b = bRaw === undefined ? undefined : Number(bRaw)
