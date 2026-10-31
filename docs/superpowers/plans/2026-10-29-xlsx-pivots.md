@@ -947,7 +947,13 @@ export function captionRule(def: PivotTableDefinition, saved: CellReader, layout
 export function resolveCaptions(layout: PivotLayout, rule: CaptionRule): EngineResult<PivotLayout>   // refuses pivot-caption-locale
 
 // session.ts
-export interface PivotSessionInput { def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; date1904: boolean; saved: CellReader; occupied: (row: number, col: number) => boolean }
+export interface PivotSessionInput {
+  def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; date1904: boolean; saved: CellReader
+  occupied: (row: number, col: number) => boolean
+  linkedCharts: readonly ChartModel[]   // charts whose c:pivotSource names this pivot (the client collects them)
+  chartGate?: ChartGate                 // Task 30; absent → a pivot with linked charts refuses pivot-chart-mapping at open
+}
+export type ChartGate = (charts: readonly ChartModel[], layout: PivotLayout, def: PivotTableDefinition) => EngineResult<readonly ChartModel[]>
 export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[] }
 export interface PivotSession {
   readonly revision: number; readonly view: PivotViewState; readonly def: PivotTableDefinition; readonly layout: PivotLayout
@@ -955,12 +961,13 @@ export interface PivotSession {
   commit(result: PivotApplyResult): boolean                   // false when result.revision !== revision + 1
   reset(): PivotApplyResult                                    // back to the saved state, as the next revision
 }
-export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSession>   // eligibility, check, captions
+export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSession>   // eligibility, check, captions, chart gate
 
 // runtime.ts — what the lazy chunk keeps per loaded workbook (never structured-cloned)
 export interface PivotRuntime { cache(def: PivotTableDefinition): PivotCacheDefinition | undefined; records(cache: PivotCacheDefinition, signal: AbortSignal): Promise<RecordResult> }
 export function pivotRuntimeFor(doc: object): PivotRuntime | undefined   // WeakMap keyed by the document
 ```
+- Open runs the chart gate on the saved layout, and every apply runs it on the new layout. A pivot with linked charts and no gate refuses at open with `pivot-chart-mapping`, so it is never interactive before Task 30's gate exists. `PivotApplyResult` gains `charts: readonly ChartModel[]`, the gate's refilled charts.
 - `apply` refuses each of these as a typed result:
   - an interaction kind whose Task 24 oracle did not pass;
   - captions with no rule;
@@ -984,6 +991,7 @@ export function pivotRuntimeFor(doc: object): PivotRuntime | undefined   // Weak
   - `captions: zh-TW table from the file`, `a pivot with no matching table uses its own patterns`, `a needed kind with no pattern refuses pivot-caption-locale`.
   - `apply is pure; commit rejects a skipped revision; reset returns the saved layout as the next revision`.
   - `vacated covers the cells a collapse frees`.
+  - `a pivot with a linked chart and no chart gate refuses pivot-chart-mapping at open, before any apply`. With a gate that refuses on a later layout, that apply refuses and the session stays at its revision.
   - `runtime retains caches and streams records on resident load`. `records()` charges nothing until called, and gives the same store as `decodeRecords` on the part bytes.
 - [ ] **Step 2: Run them; they fail.**
 - [ ] **Step 3: Implement.**
@@ -1065,7 +1073,7 @@ export function invalidateRegionStyles(sheet: XlsxSheet): void
 { kind: 'pivotRelease'; docId; sheetId; pivot: number }
 // results
 { kind: 'pivotOpen'; revision: number; def: PivotTableDefinition } | refusal with its diagnostic
-{ kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: SheetRect[]; valueGen: number } | refusal
+{ kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: SheetRect[]; merges: SheetRect[]; usedRows: number; usedCols: number; valueGen: number; charts: ChartModel[] } | refusal
 // main side
 export class RemotePivotSessions {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<RemotePivotOpen>
@@ -1074,7 +1082,12 @@ export class RemotePivotSessions {
 }
 ```
 - The worker runs Task 25's session. Records stream: `openPart` → `recordEvents(cache, RECORD_LIMITS[profile], date1904)` via `tokenizeBytes`, never `RangePackage.bytes`, which caps whole parts and refuses as a side effect.
-- The committed apply sets the worker store's overlay (Task 26). The reply carries only the live definition and the rectangles, and the main thread refetches rows with the new `valueGen`.
+- The committed apply sets the worker store's overlay (Task 26). The reply carries the live definition, the rectangles, the overlay's merges and its used extent, and the refilled charts. On commit the main side:
+  1. publishes the merges through `RemoteWorkbook.merges(sheetId)`, bumping its `gen` (the viewer's `structureGen`) when they change;
+  2. extends `remote.geometry(sheetId)`'s extent to `usedRows`/`usedCols`;
+  3. refetches rows with the new `valueGen`.
+
+  The paged geometry (`pagedSheetGeometry`) takes its merges and axes from those two APIs, so refetching rows alone would leave them stale.
 
 - [ ] **Step 1: Write the failing tests.**
   - `open streams records under the profile cap and charges the worker pool`.
@@ -1083,6 +1096,7 @@ export class RemotePivotSessions {
   - `pivots on one cache share one store until the last release` (§7.4).
   - `release on every exit`: close, sheet switch, abort and owner change.
   - `paged layout equals resident layout` for every interaction oracle case, through the paged shell.
+  - `a paged apply that changes a merge and grows the extent updates the main-thread geometry`: after the commit, `remote.merges(sheetId)` holds the new merges with a bumped `gen`, the extent covers the grown rows, and hit-testing a cell in the grown area resolves.
 - [ ] **Step 2: Run them; they fail.**
 - [ ] **Step 3: Implement,** following `RemoteSparklineCache` (`src/worker/viewerRemoteSparklines.ts`): leases, seq/abort per entry, quota release, and commit on reply never on send.
 - [ ] **Step 4: Run them; they pass.** Then the full gates, including `tests/xlsx-viewer-worker-races.test.ts`.
@@ -1113,7 +1127,7 @@ export interface PivotClient {
   release(sheetId: number, pivot: number): void
 }
 ```
-  It has a resident implementation over Task 25's session (main thread) and a paged one over Task 27.
+  It has a resident implementation over Task 25's session (main thread) and a paged one over Task 27. The resident client collects `linkedCharts` from the sheets' drawings, matching `ChartModel.pivot.name` to the pivot's name. The paged worker does the same from its drawing reader (Task 27).
 - The commit wiring:
   1. replace the sheet's live definition;
   2. call `invalidateRegionStyles`;
@@ -1183,7 +1197,8 @@ export function pivotChartSeries(chart: ChartModel, layout: PivotLayout, def: Pi
 // measured mapping (Task 24 chart cases); a layout shape no case covers refuses pivot-chart-mapping
 ```
 - The result goes through `succeedChartModel`. `ChartModel.pivot` (`c:pivotSource`) links the chart to its pivot by name.
-- A pivot whose chart's mapping refuses is not interactive (CODEX-3), so this check also runs at session open (Task 25's open checks).
+- A pivot whose chart's mapping refuses is not interactive (CODEX-3). This task supplies Task 25's `ChartGate`, built from `pivotChartSeries` over every linked chart, and passes it in both clients (`pivotClient.ts`, and the worker session in `viewerSession.ts`). Before this task, Task 25's default keeps chart-linked pivots non-interactive.
+- **Files (added):** `src/components/xlsx/pivot/pivotClient.ts` and `src/worker/viewerSession.ts`, to pass the gate.
 
 - [ ] **Step 1: Write the failing tests.**
   - `series, categories and caches equal Excel's saved chart for every chart oracle case`.
