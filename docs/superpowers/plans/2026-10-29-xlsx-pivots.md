@@ -1090,6 +1090,12 @@ export class RemotePivotSessions {
   - The main thread sends `pivotCommit` only for the reply it accepts: the latest apply for an open session. The worker installs that candidate's overlay and bumps the store's `valueGen` in one step, then replies with the new `valueGen`.
   - A `pivotCommit` whose revision is not the staged candidate's refuses as `stale`.
   - Release and close drop any candidate.
+- **Charges in the worker pool (caps ruling).** Each overlay is charged at `PAGED_CELL_BYTES_ESTIMATE` per cell.
+  - **Stage:** the candidate's bytes are charged against the apply's grant.
+  - **Replace:** the superseded candidate's charge is released and its grant refunded.
+  - **Commit:** the candidate's charge transfers to the committed overlay, and the previous committed overlay's charge is released, in the same step as the install. At any time the pool holds at most one committed overlay plus one candidate per pivot.
+  - **Stale commit:** nothing changes. The staged candidate keeps its charge until it is committed, replaced or released.
+  - **Release, close or owner change:** the candidate's charge, the committed overlay's charge and the session's store lease are all released. The store's charge goes when the last lease on it does (§7.4).
 - The staged reply carries the live definition, the rectangles, the overlay's merges and its used extent, and the refilled charts. On the commit reply the main side:
   1. publishes the merges through `RemoteWorkbook.merges(sheetId)`, bumping its `gen` (the viewer's `structureGen`) when they change;
   2. extends `remote.geometry(sheetId)`'s extent to `usedRows`/`usedCols`;
@@ -1103,6 +1109,7 @@ export class RemotePivotSessions {
   - `stale apply reply is dropped and refunded`: a second apply sent before the first's reply arrives; the first reply is discarded, its grant refunded, `valueGen` unchanged.
   - `a staged candidate is never readable`. Apply A is staged, then superseded by B. A row read after A is rejected but before B commits returns the committed (base) values and the old `valueGen`. After B's commit it returns B's values.
   - `pivotCommit with a revision that is not staged refuses as stale`.
+  - `worker pool charges follow the overlay lifecycle`. The pool's pivot bytes are asserted after each step: open (store), stage A (store + A), replace with B (store + B, A refunded), stale commit (unchanged), commit B (store + B as committed), stage C then commit C (store + C, B released), release (0). The same is asserted for two pivots sharing one store, where the store is charged once.
   - `pivots on one cache share one store until the last release` (§7.4).
   - `release on every exit`: close, sheet switch, abort and owner change.
   - `paged layout equals resident layout` for every interaction oracle case, through the paged shell.
