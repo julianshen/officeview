@@ -1,0 +1,240 @@
+/**
+ * The refreshOnLoad refresh path (plan Task 32, spec §7.7): Excel refreshes a `refreshOnLoad="1"` pivot from its
+ * source when the file opens, so its saved records and cells may both be out of date. Display always shows the saved
+ * cells; on the first interaction a session rebuilds the cache and records from the source range, as Excel's
+ * refresh does, then applies the change. Lazy chunk `pivots`.
+ *
+ * Measured against Task 24's refresh oracle (recipes/refresh-seed*.xlsx refreshed and saved by Excel 16.114 as
+ * interaction/refresh-on-load*.xlsx; docs/validation/xlsx-pivots.md "refreshOnLoad"), plus the Stage 2 caches:
+ * - a field keeps whether it lists shared items (axis fields) or stores its values inline (the others);
+ * - a listed field's shared items are rebuilt in first-appearance order over the source rows: after Data!A2 became
+ *   North, Region's items are North, East, South, West, Central (they were East, North, …). The definition's pivot
+ *   items keep their order and are re-pointed at the new indices (`refreshDefinition`);
+ * - the type flags are recomputed from the values: `containsString` (text and errors, engine/quirk-error-value),
+ *   `containsBlank`, `containsNumber`, `containsInteger` (every number whole), `containsDate`, `containsNonDate` (any
+ *   text or number), `containsSemiMixedTypes` (any text or blank), `containsMixedTypes` (more than one of text,
+ *   number and date), `longText` (text over 255 characters), `minValue`/`maxValue` over the numbers and
+ *   `minDate`/`maxDate` over the dates. `maxDate` is the latest date's next day when that date has no time of day
+ *   (Date: latest 2024-12-20, saved 2024-12-21T00:00:00), else the latest date-time itself (Stamp: 2023-03-15T06:00:00);
+ * - the cell values carry no number format here, so a field whose cache held dates only reads its numbers as dates and
+ *   any other field reads them as numbers;
+ * - text is one value whatever its ASCII case, spelled as first seen: Code's "AB" records are saved as "ab", which
+ *   comes first (an inline field). Case folding beyond ASCII is not measured: texts that only it would merge refuse.
+ * Refused as `pivot-refresh-on-load` (not measured, or not readable): a source that is a defined name or table, a
+ * header row or column count that no longer matches the cache's database fields, grouped fields, booleans, texts
+ * that only non-ASCII case folding would merge, a non-date value in a dates-only field, a field mixing dates and
+ * numbers, an incomplete source read, and a definition whose listed fields gained or lost items. The record limits
+ * refuse as `pivot-records-limit`.
+ */
+import type { SheetRect } from '../../tableStyles/model'
+import type { PivotCacheDefinition, PivotCacheField, PivotCacheItem, PivotDiagnostic, PivotSharedItems, PivotTableDefinition, PivotValue } from '../model'
+import type { EngineResult } from '../engine/axes'
+import type { CellReader } from '../engine/faithful'
+import { recordEvents, type RecordLimits, type RecordStore } from '../engine/records'
+
+const refuse = (message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-refresh-on-load', message } satisfies PivotDiagnostic })
+const limit = (message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-records-limit', message } satisfies PivotDiagnostic })
+
+const CELL = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,6})$/
+const cellOf = (ref: string) => {
+  const m = CELL.exec(ref)
+  return m ? { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1 } : undefined
+}
+/** A worksheet range source's sheet and rectangle; undefined for a defined name or table, another workbook or no ref. */
+export function worksheetSourceRange(cache: PivotCacheDefinition): { sheet: string; ref: SheetRect } | undefined {
+  const source = cache.source.worksheet
+  if (cache.source.type !== 'worksheet' || !source || source.relId !== undefined || source.name !== undefined || !source.ref || !source.sheet) return undefined
+  const [a, b = a] = source.ref.split(':')
+  const from = cellOf(a!), to = cellOf(b!)
+  if (!from || !to) return undefined
+  return { sheet: source.sheet, ref: { minRow: Math.min(from.row, to.row), minCol: Math.min(from.col, to.col), maxRow: Math.max(from.row, to.row), maxCol: Math.max(from.col, to.col) } }
+}
+
+const DAY_MS = 86_400_000
+/** Excel serial → the ISO dateTime the cache writes (uniform epoch, Ruling S2-H; records.ts `isoToSerial` inverts it). */
+function serialToIso(serial: number, date1904: boolean): string {
+  const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30)
+  const iso = new Date(epoch + Math.round(serial * DAY_MS)).toISOString()
+  return iso.endsWith('.000Z') ? iso.slice(0, 19) : iso.slice(0, 23)
+}
+const isDatesOnly = (field: PivotCacheField) => Boolean(field.sharedItems?.containsDate && !field.sharedItems.containsNonDate)
+const isMixedDates = (field: PivotCacheField) => Boolean(field.sharedItems?.containsDate && field.sharedItems.containsNonDate)
+const asciiLower = (text: string) => text.replace(/[A-Z]+/g, run => run.toLowerCase())
+/** Each text's first-seen spelling under ASCII case folding; undefined when full case folding would merge it with
+ * another text that ASCII folding keeps apart (not measured). */
+function spellings() {
+  const first = new Map<string, string>(), full = new Map<string, string>()
+  return {
+    of(text: string): string | undefined {
+      const key = asciiLower(text), wide = text.toLowerCase()
+      const known = full.get(wide)
+      if (known !== undefined && known !== key) return undefined
+      full.set(wide, key)
+      let spelled = first.get(key)
+      if (spelled === undefined) first.set(key, spelled = text)
+      return spelled
+    },
+  }
+}
+const itemKey = (value: PivotValue) => value.type === 'missing' ? 'm' : `${value.type}:${String(value.value)}`
+
+/** The rebuilt shared items of one field from its column's values. */
+function sharedItemsOf(old: PivotSharedItems, values: readonly PivotValue[], listed: boolean, date1904: boolean, name: string): EngineResult<PivotSharedItems> {
+  let hasString = false, hasBlank = false, hasNumber = false, hasDate = false, longText = false, integers = true
+  let minValue = Infinity, maxValue = -Infinity, minDate = Infinity, maxDate = -Infinity
+  const items: PivotCacheItem[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    switch (value.type) {
+      case 'missing': hasBlank = true; break
+      case 'string': case 'error':
+        hasString = true
+        if (value.value.length > 255) longText = true
+        break
+      case 'number':
+        hasNumber = true
+        if (!Number.isInteger(value.value)) integers = false
+        minValue = Math.min(minValue, value.value); maxValue = Math.max(maxValue, value.value)
+        break
+      case 'date': {
+        hasDate = true
+        const serial = dateSerial(value.value, date1904)
+        minDate = Math.min(minDate, serial); maxDate = Math.max(maxDate, serial)
+        break
+      }
+      case 'boolean': return refuse(`field ${name} has a boolean value, whose refresh is not measured`)
+    }
+    if (!listed) continue
+    const key = itemKey(value)
+    if (seen.has(key)) continue
+    seen.add(key)
+    items.push({ ...value })
+  }
+  const types = Number(hasString) + Number(hasNumber) + Number(hasDate)
+  const { minValue: _a, maxValue: _b, minDate: _c, maxDate: _d, ...rest } = old
+  return {
+    ok: true,
+    value: {
+      ...rest,
+      containsSemiMixedTypes: hasString || hasBlank,
+      containsNonDate: hasString || hasNumber,
+      containsDate: hasDate,
+      containsString: hasString,
+      containsBlank: hasBlank,
+      containsMixedTypes: types > 1,
+      containsNumber: hasNumber,
+      containsInteger: hasNumber && integers,
+      ...(hasNumber ? { minValue, maxValue } : {}),
+      ...(hasDate ? { minDate: serialToIso(minDate, date1904), maxDate: serialToIso(Number.isInteger(maxDate) ? maxDate + 1 : maxDate, date1904) } : {}),
+      longText,
+      inline: !listed,
+      items,
+    },
+  }
+}
+function dateSerial(iso: string, date1904: boolean): number {
+  const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30)
+  return (Date.parse(`${iso}Z`) - epoch) / DAY_MS
+}
+
+/**
+ * The cache and record store Excel's refresh builds from `ref` (header row, then one record per row) of the source
+ * sheet that `cells` reads. Pure: `cache` is not modified.
+ */
+export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader, ref: SheetRect, date1904: boolean, limits: RecordLimits): EngineResult<{ cache: PivotCacheDefinition; store: RecordStore }> {
+  if (cells.incomplete) return refuse(`the source range could not be read (${cells.incomplete})`)
+  const database = cache.fields.flatMap((field, index) => field.databaseField ? [index] : [])
+  if (ref.maxCol - ref.minCol + 1 !== database.length) return refuse(`the source range has ${ref.maxCol - ref.minCol + 1} columns for ${database.length} cache fields`)
+  if (cache.fields.some(field => field.fieldGroup)) return refuse('refreshing grouped fields is not measured')
+  for (let k = 0; k < database.length; k++) {
+    const header = cells(ref.minRow, ref.minCol + k), field = cache.fields[database[k]!]!
+    if (header?.kind !== 'text' || header.value !== field.name) return refuse(`source column ${k + 1} is headed ${header ? JSON.stringify(header.value) : 'blank'}, not ${JSON.stringify(field.name)}`)
+    if (!field.sharedItems) return refuse(`field ${field.name} has no shared items description`)
+    if (isMixedDates(field)) return refuse(`field ${field.name} mixes dates and numbers; their cells cannot be told apart without formats`)
+  }
+  const count = ref.maxRow - ref.minRow
+  if (count > limits.maxRecords) return limit(`the source range has ${count} records, more than the ${limits.maxRecords} allowed`)
+
+  // Column values.
+  const columns: PivotValue[][] = database.map(() => [])
+  const spelling = database.map(() => spellings())
+  for (let row = ref.minRow + 1; row <= ref.maxRow; row++) {
+    for (let k = 0; k < database.length; k++) {
+      const field = cache.fields[database[k]!]!, cell = cells(row, ref.minCol + k)
+      let value: PivotValue
+      if (!cell) value = { type: 'missing' }
+      else if (cell.kind === 'text') value = { type: 'string', value: cell.value }
+      else if (cell.kind === 'error') value = { type: 'error', value: cell.value }
+      else if (cell.kind === 'bool') value = { type: 'boolean', value: cell.value }
+      else value = isDatesOnly(field) ? { type: 'date', value: serialToIso(cell.value, date1904) } : { type: 'number', value: cell.value }
+      if (isDatesOnly(field) && value.type !== 'date' && value.type !== 'missing') return refuse(`field ${field.name} held dates only and now has ${value.type} values`)
+      if (value.type === 'string') {
+        const spelled = spelling[k]!.of(value.value)
+        if (spelled === undefined) return refuse(`field ${field.name} has texts that differ only in non-ASCII case, whose item identity is not measured`)
+        value = { type: 'string', value: spelled }
+      }
+      columns[k]!.push(value)
+    }
+  }
+  // Fields.
+  const fields = [...cache.fields]
+  for (let k = 0; k < database.length; k++) {
+    const index = database[k]!, field = cache.fields[index]!
+    const shared = sharedItemsOf(field.sharedItems!, columns[k]!, field.sharedItems!.inline === false, date1904, field.name)
+    if (!shared.ok) return shared
+    fields[index] = { ...field, sharedItems: shared.value }
+  }
+  const rebuilt: PivotCacheDefinition = { ...cache, fields, recordCount: count }
+
+  // Records, through the records part's own decoder (same layout, limits and byte accounting).
+  const decoder = recordEvents(rebuilt, limits, date1904)
+  const lookup = database.map(index => {
+    const items = fields[index]!.sharedItems!
+    return items.inline ? undefined : new Map(items.items.map((item, at) => [itemKey(item), at]))
+  })
+  const NONE: readonly string[] = []
+  try {
+    decoder.events.open('pivotCacheRecords', ['count'], [String(count)], 1, false)
+    for (let r = 0; r < count; r++) {
+      decoder.events.open('r', NONE, NONE, 0, false)
+      for (let k = 0; k < database.length; k++) {
+        const value = columns[k]![r]!, shared = lookup[k]
+        if (shared) decoder.events.open('x', ['v'], [String(shared.get(itemKey(value))!)], 1, true)
+        else if (value.type === 'missing') decoder.events.open('m', NONE, NONE, 0, true)
+        else {
+          const tag = value.type === 'number' ? 'n' : value.type === 'string' ? 's' : value.type === 'error' ? 'e' : value.type === 'date' ? 'd' : 'b'
+          const raw = value.type === 'boolean' ? (value.value ? '1' : '0') : String(value.value)
+          decoder.events.open(tag, ['v'], [raw], 1, true)
+        }
+      }
+      decoder.events.close('r')
+    }
+    decoder.events.close('pivotCacheRecords')
+  } catch { /* the decoder stopped on a refusal: finish() reports it */ }
+  const result = decoder.finish()
+  if (!result.ok) return result
+  return { ok: true, value: { cache: rebuilt, store: result.store } }
+}
+
+/**
+ * The definition with each listed field's pivot items re-pointed at the rebuilt shared items, keeping their order
+ * (refresh-on-load: Region's items x=0,1 became x=1,0). A field whose values gained or lost an item refuses: where
+ * Excel puts a new item, and what it does with a vanished one, is not measured.
+ */
+export function refreshDefinition(def: PivotTableDefinition, before: PivotCacheDefinition, after: PivotCacheDefinition): EngineResult<PivotTableDefinition> {
+  const fields = def.fields.map(field => field)
+  for (let index = 0; index < def.fields.length; index++) {
+    const field = def.fields[index]!, old = before.fields[index]?.sharedItems, next = after.fields[index]?.sharedItems
+    if (!old || !next || old.inline || next.inline) continue
+    const at = new Map(next.items.map((item, k) => [itemKey(item), k]))
+    const oldKeys = new Set(old.items.map(itemKey))
+    if (old.items.length !== next.items.length || next.items.some(item => !oldKeys.has(itemKey(item))))
+      return refuse(`field ${after.fields[index]!.name} gained or lost items on refresh, whose placement is not measured`)
+    if (!field.items) {
+      if (old.items.some((item, k) => at.get(itemKey(item)) !== k)) return refuse(`field ${after.fields[index]!.name} has no item list and its shared items moved`)
+      continue
+    }
+    fields[index] = { ...field, items: field.items.map(item => item.x === undefined ? item : { ...item, x: at.get(itemKey(old.items[item.x]!))! }) }
+  }
+  return { ok: true, value: { ...def, fields } }
+}
