@@ -258,7 +258,8 @@ it('shows the current PivotTable refusal from the real guard without changing th
   fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
   await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
   fireEvent.click(ui.getByRole('button', { name: 'OK' }))
-  await waitFor(() => expect(ui.getByRole('status').textContent).toContain("Operation refused: This change can't be made to a PivotTable."))
+  // Ruling S3-W/S3-X: Excel's alert for a change over a pivot, in English.
+  await waitFor(() => expect(ui.getByRole('status').textContent).toContain("Operation refused: We can't make this change for the selected cells because it will affect a PivotTable."))
   expect(f.publications).toBe(0)
   expect(f.snapshot.filter).toBeNull()
 })

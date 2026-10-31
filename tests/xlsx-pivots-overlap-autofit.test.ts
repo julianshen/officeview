@@ -17,6 +17,13 @@ import { sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { loadPivotParts } from './helpers/xlsx-pivots-load'
 import JSZip from 'jszip'
+import { StructuralIndex } from '../src/xlsx/view/structure'
+import { guardFilter, guardSort, PIVOT_SHEET_CHANGE_MESSAGE } from '../src/xlsx/view/operationGuard'
+import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import { createIdentityOrder } from '../src/xlsx/view/order'
+import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { ViewerKernel } from '../src/worker/viewerKernel'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
@@ -154,5 +161,37 @@ describe('S3-U / S3-V on the paged worker store', () => {
     const grown = await pagedApply(await withA23('<c r="A23" s="1"/>'))
     expect(grown).toMatchObject({ kind: 'complete', result: { kind: 'pivotApply' } })
     if (grown.kind === 'complete' && grown.result.kind === 'pivotApply') expect(grown.result.def.location.ref).toBe('A3:I24')
+  })
+})
+
+describe('S3-W / S3-X: sheet sort and filter around a pivot (owner-sheet-sort, owner-sheet-filter)', () => {
+  // Pivot A3:I24 (rows 2–23, columns 0–8); K5:L10 is the data Excel filtered beside it (rows 4–9, columns 10–11).
+  const pivot = { r0: 2, r1: 23, c0: 0, c1: 8 }
+  const structure = new StructuralIndex({ stamp: { docId: 'd', sheetId: 's', valueGen: 0 }, completeness: 'complete', missing: [], merges: [], tables: [], spills: [], drawings: [], pivots: [pivot] } as never)
+  const range = (r0: number, r1: number, c0: number, c1: number) => ({ r0, r1, c0, c1, headerRows: 1 as const, totalsRows: 0 as const })
+  const empty = { iterate: async () => ({ items: [], completeness: 'complete', missing: [] }) } as never
+  const axes = { rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }) }
+  const filterOver = (target: ReturnType<typeof range>, hidden: Array<{ r0: number; r1: number }>) => {
+    const before = visibilityFromHidden(createIntervalSet([])), after = visibilityFromHidden(createIntervalSet(hidden))
+    return guardFilter({ range: target, candidateVisibility: after, currentVisibility: before, structure,
+      projectionBefore: createSheetMetrics({ ...axes, order: createIdentityOrder(), visibility: before }), projectionAfter: createSheetMetrics({ ...axes, order: createIdentityOrder(), visibility: after }) })
+  }
+
+  it('S3-W: a sort touching a pivot, or inside it, refuses with Excel\'s alert (in English)', async () => {
+    expect(PIVOT_SHEET_CHANGE_MESSAGE).toBe("We can't make this change for the selected cells because it will affect a PivotTable. Use the field list to change the report. If you are trying to insert or delete cells, move the PivotTable and try again.")
+    for (const target of [range(0, 29, 0, 10), range(5, 9, 1, 1)]) {
+      expect(await guardSort(target, structure, empty)).toMatchObject({ ok: false, refusal: { reason: 'pivot', message: PIVOT_SHEET_CHANGE_MESSAGE } })
+    }
+    // The viewer's sort permutes whole display rows: one beside the pivot in its rows would scramble it, and refuses too.
+    expect(await guardSort(range(4, 9, 10, 11), structure, empty)).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+    expect(await guardSort(range(30, 40, 0, 3), structure, empty)).toEqual({ ok: true })
+  })
+
+  it('S3-X: a filter beside a pivot in its rows is allowed and may hide its rows; one intersecting it refuses', async () => {
+    // Excel: autoFilter K5:L10, Key = "a" hides sheet rows 6, 8 and 10 (pivot lines East and North included).
+    expect(await filterOver(range(4, 9, 10, 11), [{ r0: 5, r1: 5 }, { r0: 7, r1: 7 }, { r0: 9, r1: 9 }])).toEqual({ ok: true })
+    for (const target of [range(4, 23, 0, 8), range(4, 9, 8, 11)]) {
+      expect(await filterOver(target, [{ r0: 5, r1: 5 }])).toMatchObject({ ok: false, refusal: { reason: 'pivot', message: PIVOT_SHEET_CHANGE_MESSAGE } })
+    }
   })
 })
