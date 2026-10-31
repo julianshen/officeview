@@ -313,14 +313,18 @@ const encode = (lines: PivotLine[]): PivotAxisItem[] => lines.map(line => ({
  * and `formats` matching then run unchanged on it: this is the bridge for style roles and button placements (Task 26 consumes it). */
 export function liveDefinition(def: PivotTableDefinition, view: PivotViewState, axes: PivotAxes, layout: PivotLayout): PivotTableDefinition {
   const geo = geometry(def, view, axes)
+  // Perf audit item 9: per-field lookups through Sets and Maps built once, not array scans per field or item.
+  const rowSet = new Set(view.rows), colSet = new Set(view.cols), dataSet = new Set(view.data.map(data => data.field))
+  const pageOf = new Map<number, PivotViewState['pages'][number]>()
+  for (const page of view.pages) if (!pageOf.has(page.field)) pageOf.set(page.field, page)
   const axisOf = (field: number): PivotField['axis'] =>
-    view.rows.includes(field) ? 'axisRow' : view.cols.includes(field) ? 'axisCol' : view.pages.some(page => page.field === field) ? 'axisPage' : undefined
+    rowSet.has(field) ? 'axisRow' : colSet.has(field) ? 'axisCol' : pageOf.has(field) ? 'axisPage' : undefined
   const fillDefault = def.x14?.fillDownLabelsDefault ?? false
   const fields = def.fields.map((field, index): PivotField => {
     const state = view.fields[index]
     if (!state) return field
-    const page = view.pages.find(candidate => candidate.field === index)
-    const multi = page && page.selected !== 'all' && page.selected.length > 1 ? page.selected : undefined
+    const page = pageOf.get(index)
+    const multi = page && page.selected !== 'all' && page.selected.length > 1 ? new Set(page.selected) : undefined
     const subtotalsChanged = state.defaultSubtotal !== field.defaultSubtotal || !sameList(state.subtotals, field.subtotals)
     // A field saved without an items list (other writers) has the cache's shared-item order as its pivot items, one
     // state slot per shared item (initialViewState); an edit to it materializes that list so the edit is saved.
@@ -329,7 +333,7 @@ export function liveDefinition(def: PivotTableDefinition, view: PivotViewState, 
       ...state.hidden.map((_, x) => fieldItem('data', x)),
       ...subtotalTypes(state).map(type => fieldItem(type)),
     ] : undefined)
-    let items = source?.map((item, k) => ({ ...item, hidden: multi ? item.type === 'data' && !multi.includes(k) : state.hidden[k] ?? item.hidden, showDetails: !(state.collapsed[k] ?? !item.showDetails) }))
+    let items = source?.map((item, k) => ({ ...item, hidden: multi ? item.type === 'data' && !multi.has(k) : state.hidden[k] ?? item.hidden, showDetails: !(state.collapsed[k] ?? !item.showDetails) }))
     if (items && field.items && subtotalsChanged) items = [...items.filter(item => item.type === 'data'), ...subtotalTypes(state).map(type => fieldItem(type))]
     const { axis: _axis, x14: _x14, autoSortScope: _scope, ...rest } = field
     const axis = axisOf(index) ?? (field.axis === 'axisValues' ? field.axis : undefined)
@@ -337,7 +341,7 @@ export function liveDefinition(def: PivotTableDefinition, view: PivotViewState, 
     return {
       ...rest,
       ...(axis ? { axis } : {}),
-      dataField: view.data.some(data => data.field === index),
+      dataField: dataSet.has(index),
       ...(items ? { items } : {}),
       sortType: state.sortType,
       ...(state.autoSortScope ? { autoSortScope: state.autoSortScope } : {}),
@@ -365,8 +369,10 @@ export function liveDefinition(def: PivotTableDefinition, view: PivotViewState, 
       ...(x14 ? { x14: { pivotShowAs: data.showAs as PivotShowAsX14 } } : {}),
     }
   })
+  const savedPages = new Map<number, PivotPageField>()
+  for (const candidate of def.pageFields) if (!savedPages.has(candidate.fld)) savedPages.set(candidate.fld, candidate)
   const pageFields = view.pages.map((page): PivotPageField => {
-    const old = def.pageFields.find(candidate => candidate.fld === page.field)
+    const old = savedPages.get(page.field)
     const item = page.selected !== 'all' && page.selected.length === 1 ? page.selected[0] : undefined
     const { item: _item, ...rest } = old ?? { fld: page.field }
     return { ...rest, fld: page.field, ...(item !== undefined ? { item } : {}) }

@@ -355,7 +355,8 @@ function isNamedSubtotal(type: PivotItemType): boolean {
 
 interface LineTargets { offsets: Int32Array; indices: Int32Array }
 interface Targets { rows: LineTargets[]; cols: LineTargets[] }
-interface PrefixNode { children: Map<number, PrefixNode>; lines: number[] }
+/** `byData`: the node's lines per data index, in display order (perf audit item 3: a Values-axis slot reads only its own). */
+interface PrefixNode { children: Map<number, PrefixNode>; lines: number[]; byData: Map<number, number[]> }
 interface LineIndex { root: PrefixNode; grand: number[]; grandByData: Map<number, number[]>; nodes: Array<PrefixNode | undefined> }
 /** Leaf lines: value-carrying data lines with no value-carrying line beneath them (their prefix-trie node has no
  * children). Values-field items sit in `items`, so lines of different data fields never share a node below it. */
@@ -542,7 +543,7 @@ function sumTotalsFromLeaves(grid: Accumulator, gridPresent: Uint8Array, rowTota
 }
 
 function makePrefixIndex(lines: readonly PivotLine[], view: PivotViewState, axis: 'rows' | 'cols'): LineIndex {
-  const root: PrefixNode = { children: new Map(), lines: [] }, grand: number[] = [], grandByData = new Map<number, number[]>()
+  const root: PrefixNode = { children: new Map(), lines: [], byData: new Map() }, grand: number[] = [], grandByData = new Map<number, number[]>()
   const nodes = new Array<PrefixNode | undefined>(lines.length)
   lines.forEach((line, index) => {
     if (line.type === 'grand') {
@@ -556,10 +557,13 @@ function makePrefixIndex(lines: readonly PivotLine[], view: PivotViewState, axis
     let node = root
     for (const item of line.items) {
       let child = node.children.get(item)
-      if (!child) node.children.set(item, child = { children: new Map(), lines: [] })
+      if (!child) node.children.set(item, child = { children: new Map(), lines: [], byData: new Map() })
       node = child
     }
     node.lines.push(index)
+    let byData = node.byData.get(line.data)
+    if (!byData) node.byData.set(line.data, byData = [])
+    byData.push(index)
     nodes[index] = node
   })
   return { root, grand, grandByData, nodes }
@@ -579,22 +583,21 @@ function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes, 
     const offsets = new Int32Array(lines.length + 1), values: number[] = []
     const fields = axis === 'rows' ? view.rows : view.cols
     const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
-    const append = (bucket: readonly number[]) => {
-      for (const target of bucket) {
-        if (valuesLevel < 0 || lines[target]!.data === data) values.push(target)
-      }
+    const append = (node: PrefixNode) => {
+      const bucket = valuesLevel < 0 ? node.lines : node.byData.get(data)
+      if (bucket) for (const target of bucket) values.push(target)
     }
     for (let line = 0; line < lines.length; line++) {
       const leaf = lines[line]!
       let node: PrefixNode | undefined = index.root
-      append(node.lines)
+      append(node)
       for (let level = 0; level < leaf.items.length; level++) {
         const item = valuesLevel === level ? data : leaf.items[level]!
         node = node.children.get(item)
         if (!node) break
-        append(node.lines)
+        append(node)
       }
-      append(valuesLevel < 0 ? index.grand : index.grandByData.get(data) ?? [])
+      for (const target of valuesLevel < 0 ? index.grand : index.grandByData.get(data) ?? []) values.push(target)
       offsets[line + 1] = values.length
     }
     return { offsets, indices: Int32Array.from(values) }
@@ -672,9 +675,13 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
   const referenced = [...new Set(compiled.flatMap(field => field?.fields ?? []))]
   // S2-AA (final review R2-I1): no case measures a calculated field over error-valued records; never read an
   // error sum as 0.
-  for (let d = 0; d < compiled.length; d++) for (const field of compiled[d]?.fields ?? []) {
+  // Each referenced field is scanned once (perf audit item 4), then reported for the first slot that sums it.
+  const errorFields = new Set(referenced.filter(field => {
     const column = store.columns[field], items = cache.fields[field]?.sharedItems?.items
-    if (items?.some(item => item.type === 'error') || (column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error)))
+    return items?.some(item => item.type === 'error') || (column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))
+  }))
+  if (errorFields.size) for (let d = 0; d < compiled.length; d++) for (const field of compiled[d]?.fields ?? []) {
+    if (errorFields.has(field))
       return unmeasured(`calculated data field ${d} sums field ${field}, which has error-valued records; the formula over an error is not measured`)
   }
   for (const field of referenced) {
@@ -692,12 +699,25 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
   const anyRecordField = cache.fields.findIndex((field, index) => field.databaseField && store.columns[index] !== undefined)
   const base = computeSourceValues(store, cache, def, { ...view, data: view.data.map((data, d) => compiled[d] ? sumOf(data, compiled[d]!.fields[0] ?? anyRecordField) : data) }, axes)
   if (!base.ok) return base
-  const sums = new Map<number, PivotValueGrid>()
-  for (const field of referenced) {
-    const grid = computeSourceValues(store, cache, def, { ...view, data: view.data.map(data => sumOf(data, field)) }, sumAxes)
+  // Perf audit item 4: a slot sums one field per pass, so pass j gives every slot its j-th referenced field. That is
+  // max(fields per formula) passes (usually one), not one D-slot pass per referenced field; a slot without a j-th field
+  // reads no records in that pass.
+  let passCount = 1
+  for (let d = 0; d < view.data.length; d++) passCount = Math.max(passCount, compiled[d]?.fields.length ?? 0)   // `compiled` is sparse
+  const passes: PivotValueGrid[] = []
+  for (let j = 0; j < passCount; j++) {
+    const active = new Uint8Array(view.data.length)
+    const data = view.data.map((slot, d) => {
+      const source = compiled[d]?.fields[j]
+      if (source === undefined) return sumOf(slot, compiled[d]?.fields[0] ?? anyRecordField)
+      active[d] = 1
+      return sumOf(slot, source)
+    })
+    const grid = computeSourceValues(store, cache, def, { ...view, data }, sumAxes, active)
     if (!grid.ok) return grid
-    sums.set(field, grid.value)
+    passes.push(grid.value)
   }
+  const sumOfField = (d: number, source: number, row: number, col: number) => passes[compiled[d]!.fields.indexOf(source)]!.get(row, col, d)
 
   const rowCount = axes.rows.length, colCount = axes.cols.length, dataCount = view.data.length
   const values = new Float64Array(gridSize), present = new Uint8Array(gridSize), errors = new Map<number, string>()
@@ -714,7 +734,7 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
       // B2 rule: a cell without records is the formula over zero sums (calc-cell-without-records).
       let errorOperand = false
       const value = calculatedValue(field, source => {
-        const sum = sums.get(source)!.get(row, col, d)
+        const sum = sumOfField(d, source, row, col)
         if (sum.kind === 'error') errorOperand = true
         return sum.kind === 'number' ? sum.value : 0
       })
@@ -763,8 +783,10 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
   }
 }
 
+/** `activeSlots` (calculated-field sum passes): with the Values field on an axis only the marked slots read
+ * records, the others stay empty; without it every slot shares the record pass, and unmarked slots are not read. */
 function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _def: PivotTableDefinition,
-  view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid> {
+  view: PivotViewState, axes: PivotAxes, activeSlots?: Uint8Array): EngineResult<PivotValueGrid> {
   if (!view.data.length) return { ok: true, value: { get: () => ({ kind: 'empty' }) } }
   if (cache.olap || cache.source.type !== 'worksheet') return fail('pivot-engine-pending', 'OLAP and non-worksheet sources are not computed')
   if (axes.rowKey.length !== store.count || axes.colKey.length !== store.count) return invalid('record leaf-line arrays do not match the record store')
@@ -825,14 +847,21 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
 
   const sourceColumns = view.data.map(data => store.columns[data.field])
   const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
-  const hasErrorValues = sourceItems.some(items => items?.some(item => item.type === 'error'))
-    || sourceColumns.some(column => column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))
+  // Each source field is scanned for error values once, however many slots read it (perf audit low note 6).
+  const fieldErrors = new Map<number, boolean>()
+  const slotErrors = view.data.map((data, d) => {
+    let errors = fieldErrors.get(data.field)
+    if (errors === undefined) {
+      const items = sourceItems[d], column = sourceColumns[d]
+      fieldErrors.set(data.field, errors = !!(items?.some(item => item.type === 'error') || (column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))))
+    }
+    return errors
+  })
+  const hasErrorValues = slotErrors.includes(true)
   // S2-AA (final review I1): over error records only Sum (quirk-error-value) and Count (quirk-error-value-count) are
   // measured, as the data function and as every subtotal function of the slot, and only without show-as.
   for (let d = 0; d < dataCount; d++) {
-    const items = sourceItems[d], column = sourceColumns[d]
-    const errors = items?.some(item => item.type === 'error') || (column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))
-    if (!errors) continue
+    if (!slotErrors[d]) continue
     const codes = new Set([...gridCodes[d]!, ...rowCodes[d]!, ...colCodes[d]!])
     if ([...codes].some(code => code !== VALUE_FN.sum && code !== VALUE_FN.count) || view.data[d]!.showAs !== 'normal')
       return unmeasured(`data field ${d} has error-valued records: only Sum and Count over them, without show-as, are measured`)
@@ -906,6 +935,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
         const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
         if (rowLine === NO_LINE || colLine === NO_LINE) continue
         for (let d = 0; d < dataCount; d++) {
+          if (activeSlots && !activeSlots[d]) continue
           const field = view.data[d]!.field
           if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
           if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
@@ -1111,6 +1141,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
     return dataLine
   }
 
+  let scanWork = 0
   for (let d = 0; d < dataCount; d++) {
     const data = view.data[d]!, mode = data.showAs
     // S2-AA (final review I2): % of parent total is measured with its base field on the rows only
@@ -1124,10 +1155,11 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
         : mode === 'difference' || mode === 'percent' || mode === 'percentDiff' || mode === 'runTotal'
           || mode === 'percentOfRunningTotal' || mode === 'rankAscending' || mode === 'rankDescending'
           ? (rowFields.includes(data.baseField) ? 'rows' : 'cols') : undefined
+    // The cap is one total across the data fields (perf audit footnote), not one per field.
     if (scanAxis) {
-      const work = rowCount * colCount * (scanAxis === 'rows' ? rowCount : colCount)
-      if (work > SHOW_AS_SCAN_CAP)
-        return fail('pivot-values-limit', `show-as ${mode} on data field ${d} would scan ${work} sibling lines, above the ${SHOW_AS_SCAN_CAP} work cap`)
+      scanWork += rowCount * colCount * (scanAxis === 'rows' ? rowCount : colCount)
+      if (scanWork > SHOW_AS_SCAN_CAP)
+        return fail('pivot-values-limit', `show-as ${mode} on data field ${d} would bring the sibling scans to ${scanWork} sibling lines, above the ${SHOW_AS_SCAN_CAP} work cap`)
     }
   }
 

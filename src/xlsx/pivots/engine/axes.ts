@@ -47,7 +47,7 @@ import type { RecordStore } from './records'
 import type { FieldState, PivotViewState } from './view'
 import { sortItemOrder, itemValuesByPivotIndex } from './sort'
 import { groupColumn, NO_GROUP } from './groups'
-import { isDateFilter, isDynamicDateFilter, isLabelFilter, isTop10Filter, isValueFilter, matchesDateFilter, matchesLabelFilter, matchesValueFilter } from './filters'
+import { isDateFilter, isDynamicDateFilter, isLabelFilter, isTop10Filter, isValueFilter, compileLabelFilter, matchesDateFilter, matchesValueFilter } from './filters'
 import { aggregateByKey } from './values'
 
 export interface PivotAxes { rows: PivotLine[]; cols: PivotLine[]; rowKey: Uint32Array; colKey: Uint32Array }   // per record: its leaf line, or NO_LINE
@@ -166,13 +166,13 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   for (const field of used) {
     const state = view.fields[field], cacheField = cache.fields[field]
     if (!state || !cacheField || !def.fields[field]) return invalid(`field ${field} does not exist`)
-    // Sorting changes the layout only on rows and columns (a page field's order is its dropdown's).
-    if (!axisFields.includes(field)) continue
   }
 
   // Record filter: the hidden items of every row, column and page field, and each page's selection.
   const maps = new Map<number, ItemMap>()
   const filters: Array<{ field: number; map: ItemMap; selected: ReadonlySet<number> | 'all'; state: FieldState }> = []
+  const pageSelection = new Map<number, PivotViewState['pages'][number]['selected']>()
+  for (const page of view.pages) if (!pageSelection.has(page.field)) pageSelection.set(page.field, page.selected)
   for (const field of used) {
     const column = store.columns[field]
     const map = fieldItemMap(store, def, cache, field)
@@ -180,7 +180,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     if (!column && !cache.fields[field]?.fieldGroup) return invalid(`field ${field} has no record column`)
     maps.set(field, map.value)
     const state = view.fields[field]!
-    const selected = view.pages.find(page => page.field === field)?.selected ?? 'all'
+    const selected = pageSelection.get(field) ?? 'all'
     if (selected === 'all' && !state.hidden.includes(true)) continue
     if (column && column.kind !== 'shared' && !cache.fields[field]?.fieldGroup) return unmeasured(`inline field ${field} on an axis needs a measured item map`)
     filters.push({ field, map: map.value, selected: selected === 'all' ? 'all' : new Set(selected), state })
@@ -204,14 +204,25 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
 
   // Apply pivot filters in their declared evaluation order. Each accepted filter narrows
   // the input to the next filter, while the field map provides the aggregate bucket.
+  // Perf audit item 6: each filter costs a pass over the records. Excel's UI keeps at most one label or date filter
+  // and one value or top-10 filter per field, and every case has that shape; more refuse.
+  const filterKinds = new Set<string>()
+  for (const filter of view.filters) {
+    const kind = `${filter.fld}:${isLabelFilter(filter) || isDateFilter(filter) ? 'label' : 'value'}`
+    if (filterKinds.has(kind)) return unmeasured(`field ${filter.fld} has more than one ${kind.endsWith('label') ? 'label or date' : 'value or top-10'} filter`)
+    filterKinds.add(kind)
+  }
   for (const filter of [...view.filters].sort((a, b) => a.evalOrder - b.evalOrder)) {
     const map = maps.get(filter.fld)
     if (!map) return invalid(`filter field ${filter.fld} does not exist`)
-    const labels = itemValuesByPivotIndex(fieldValues(cache, filter.fld), def.fields[filter.fld]?.items)
     if (isLabelFilter(filter) || isDateFilter(filter)) {
+      const labels = itemValuesByPivotIndex(fieldValues(cache, filter.fld), def.fields[filter.fld]?.items)
       const allowed = new Set<number>()
+      // Perf audit item 1: the filter is compiled once, with one wildcard work budget for all its items.
+      const label = isLabelFilter(filter) ? compileLabelFilter(filter) : undefined
       for (const item of map.order) {
-        const decision = isLabelFilter(filter) ? matchesLabelFilter(filter, labels[item]) : matchesDateFilter(filter, labels[item])
+        const decision = label ? label.match(labels[item]) : matchesDateFilter(filter, labels[item])
+        if (decision === 'limit') return fail('unsupported', 'pivot-values-limit', `${filter.type} filter on field ${filter.fld} exceeds its wildcard work budget`)
         if (decision === undefined) return unmeasured(`${filter.type} criteria or item type for field ${filter.fld} are not measured`)
         if (decision) allowed.add(item)
       }
@@ -414,12 +425,22 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
           entries.push(item); orders.set(parent!, entries)
         }
         const byParent = new Map<string, readonly number[]>()
+        // Perf audit item 8: the visible items once; under each parent the no-data items are the visible ones it
+        // lacks, counted (and, when there is one, identified by the id sums) without scanning the whole order.
+        const visible = state.showAll ? map.order.filter(item => !state.hidden[item]) : []
+        let visibleSum = 0
+        for (const item of visible) visibleSum += item
         for (const [parent, items] of orders) {
-          // Built only when showAll lists no-data items: a scan of the whole order per parent was quadratic.
           let missing: number[] = []
           if (state.showAll) {
-            const present = new Set(items)
-            missing = map.order.filter(item => !state.hidden[item] && !present.has(item))
+            let itemSum = 0, shown = 0
+            for (const item of items) if (!state.hidden[item]) { itemSum += item; shown++ }
+            const count = visible.length - shown
+            if (shown !== items.length) {
+              const present = new Set(items)
+              missing = visible.filter(item => !present.has(item))
+            } else if (count === 1) missing = [visibleSum - itemSum]
+            else if (count > 1) missing = new Array(count)   // refused below; only its length is read
           }
           if (state.showAll && state.sortType === 'ascending' && missing.length)
             return unmeasured(`showAll ascending value sort for field ${field} has no-data items under parent ${parent}, whose placement is not measured`)
@@ -617,8 +638,10 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     }
     const state = view.fields[field]!
     const deeper = hasFieldAfter(fields, level), last = level === fields.length - 1
-    const parentPath = fields.slice(0, level).flatMap((parentField, index) => parentField === PIVOT_VALUES_FIELD ? [] : [path[index]!]).join(',')
-    const nestedOrder = nestedSortOrders.get(field)?.get(parentPath)
+    // The parent path string only for a field with a nested value sort (perf audit low note 1).
+    const nestedOrder = nestedSortOrders.has(field)
+      ? nestedSortOrders.get(field)!.get(fields.slice(0, level).flatMap((parentField, index) => parentField === PIVOT_VALUES_FIELD ? [] : [path[index]!]).join(','))
+      : undefined
     const rank = nestedOrder ?? sortedOrders.get(field)
     const rankOf = nestedOrder ? nestedRankOf(nestedOrder) : ranks.get(field)
     // With no node (an item shown by showAll with no records above), the field's visible items show
@@ -634,14 +657,13 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
       }
       // Final review R2-M1: a value or top-10 filter may have removed the listed items; the measured listing
       // (filter-label-cross-field-showall) is under a label filter only.
-      if (!node && view.filters.some(filter => isValueFilter(filter) || isTop10Filter(filter))) {
+      if (!node && valueFiltered) {
         refusal ??= `a record-less showAll item under a value or top-10 filter lists field ${field}; that listing is not measured`
         return
       }
-      children = (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item] && (!node || (allowedByField.get(field)?.has(item) ?? true)))
+      children = listedChildren(field, rank ?? maps.get(field)!.order, !!node)
       if (!node && !state.showAll) {
-        const present = itemsWithRecords(field)
-        const missing = children.find(item => !present.has(item))
+        const missing = missingListed(field, children)
         if (missing !== undefined) { refusal ??= `an item without records under showAll lists field ${field} item ${missing}, which no passing record has`; return }
       }
     }
@@ -688,6 +710,31 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
       }
       if (deeper && which === 'rows' && state.insertBlankRow) push('blank', items, data)
     }
+  }
+  // Perf audit item 5: the listed children depend only on the field, the order list and whether the parent has
+  // records, so each list is filtered once per axis, not once per parent (the per-parent nested orders are sized by
+  // that parent's records). The lists are never mutated.
+  const valueFiltered = view.filters.some(filter => isValueFilter(filter) || isTop10Filter(filter))
+  const listed = new Map<number, WeakMap<readonly number[], [number[] | undefined, number[] | undefined]>>()
+  const listedChildren = (field: number, order: readonly number[], withNode: boolean): number[] => {
+    let byList = listed.get(field)
+    if (!byList) listed.set(field, byList = new WeakMap())
+    let entry = byList.get(order)
+    if (!entry) byList.set(order, entry = [undefined, undefined])
+    const slot = withNode ? 0 : 1
+    if (!entry[slot]) {
+      const state = view.fields[field]!, allowed = allowedByField.get(field)
+      entry[slot] = order.filter(item => !state.hidden[item] && (!withNode || (allowed?.has(item) ?? true)))
+    }
+    return entry[slot]!
+  }
+  const missingByList = new WeakMap<readonly number[], number | undefined>()
+  const missingListed = (field: number, children: readonly number[]): number | undefined => {
+    if (!missingByList.has(children)) {
+      const present = itemsWithRecords(field)
+      missingByList.set(children, children.find(item => !present.has(item)))
+    }
+    return missingByList.get(children)
   }
   // Pivot items with at least one record passing the hidden items and page selections, per field (built on first use:
   // only under a record-less showAll item).

@@ -131,16 +131,37 @@ export function checkSavedLayout(store: RecordStore, cache: PivotCacheDefinition
     if (isValue(row, col) || isBlank(at.get(`${row},${col}`))) continue
     if (saved(row, col) === undefined) return unverified('cells-missing', `no saved cell at R${row + 1}C${col + 1}`)
   }
-  // 4. Every cell, row-major over the location and page fields; then anything placed outside them.
-  const bounds = rects.reduce((box, area) => ({ minRow: Math.min(box.minRow, area.minRow), minCol: Math.min(box.minCol, area.minCol), maxRow: Math.max(box.maxRow, area.maxRow), maxCol: Math.max(box.maxCol, area.maxCol) }))
-  for (let row = bounds.minRow; row <= bounds.maxRow; row++) for (let col = bounds.minCol; col <= bounds.maxCol; col++) {
-    if (!rects.some(area => inRect(area, row, col))) continue
+  // 4. Every cell, row-major over the location and page fields; then anything placed outside them. The rects are
+  // disjoint (rects[0] is the location, the rest are page label/value pairs), so walk them directly and merge the
+  // page cells into the location's row-major order (perf audit item 2: no bounding box × rects scan).
+  const location = rects[0]!
+  const pageCells: Array<{ row: number; col: number }> = []
+  const pageKeys = new Set<string>()
+  for (let k = 1; k < rects.length; k++) {
+    const area = rects[k]!
+    for (let row = area.minRow; row <= area.maxRow; row++) for (let col = area.minCol; col <= area.maxCol; col++) {
+      if (inRect(location, row, col) || pageKeys.has(`${row},${col}`)) continue
+      pageKeys.add(`${row},${col}`); pageCells.push({ row, col })
+    }
+  }
+  pageCells.sort((a, b) => a.row - b.row || a.col - b.col)
+  const check = (row: number, col: number) => {
     const cell = at.get(`${row},${col}`), expected = saved(row, col)
     const reason = differs(cell, expected)
-    if (reason) return mismatch({ row, col, ...(expected ? { expected } : {}), actual: cell?.value ?? { kind: 'empty' }, reason })
+    return reason ? mismatch({ row, col, ...(expected ? { expected } : {}), actual: cell?.value ?? { kind: 'empty' }, reason }) : undefined
   }
+  let next = 0
+  for (let row = location.minRow; row <= location.maxRow; row++) {
+    for (; next < pageCells.length && pageCells[next]!.row < row; next++) { const diff = check(pageCells[next]!.row, pageCells[next]!.col); if (diff) return diff }
+    for (let col = location.minCol; col <= location.maxCol; col++) {
+      for (; next < pageCells.length && pageCells[next]!.row === row && pageCells[next]!.col < col; next++) { const diff = check(row, pageCells[next]!.col); if (diff) return diff }
+      const diff = check(row, col)
+      if (diff) return diff
+    }
+  }
+  for (; next < pageCells.length; next++) { const diff = check(pageCells[next]!.row, pageCells[next]!.col); if (diff) return diff }
   for (const cell of layout.cells) {
-    if (isBlank(cell) || rects.some(area => inRect(area, cell.row, cell.col))) continue
+    if (isBlank(cell) || inRect(location, cell.row, cell.col) || pageKeys.has(`${cell.row},${cell.col}`)) continue
     return mismatch({ row: cell.row, col: cell.col, actual: cell.value, reason: 'the engine places a cell outside the saved location and page fields' })
   }
   return { status: 'ok' }

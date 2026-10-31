@@ -8,11 +8,42 @@ const fail = (message: string): EngineResult<never> => ({
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 /** Task 21 measured ASCII letters/digits/spaces, apostrophes and hyphens in words, and these leading code symbols. */
 export function hasMeasuredEnglishOrder(value: string): boolean {
-  return [...value].every((character, index) => /^[A-Za-z0-9 '_-]$/u.test(character) || (index === 0 && /^[#$@~]$/u.test(character)))
+  // One pass over the code units (a surrogate fails both classes, as the code point would).
+  for (let index = 0; index < value.length; index++) {
+    const c = value.charCodeAt(index)
+    const word = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 32 || c === 39 || c === 95 || c === 45
+    if (word) continue
+    if (index === 0 && (c === 35 || c === 36 || c === 64 || c === 126)) continue
+    return false
+  }
+  return true
+}
+
+/** A label's collation key, computed once: primary weights (apostrophes and hyphens left out) and the punctuation
+ * sequence that breaks ties. */
+export interface EnglishLabelKey { weights: Int32Array; punctuation: Uint8Array }
+export function englishLabelKey(value: string): EnglishLabelKey {
+  const weights: number[] = [], punctuation: number[] = []
+  for (const character of value.toLowerCase()) {
+    if (character === "'") { punctuation.push(1); continue }
+    if (character === '-') { punctuation.push(2); continue }
+    weights.push(excelCharacterWeight(character))
+  }
+  return { weights: Int32Array.from(weights), punctuation: Uint8Array.from(punctuation) }
+}
+export function compareEnglishLabelKeys(left: EnglishLabelKey, right: EnglishLabelKey): number {
+  const a = left.weights, b = right.weights, count = Math.min(a.length, b.length)
+  for (let index = 0; index < count; index++) if (a[index] !== b[index]) return a[index]! - b[index]!
+  if (a.length !== b.length) return a.length - b.length
+  // Excel puts a spelling with inserted punctuation after the otherwise equal plain spelling;
+  // when both have punctuation, apostrophe precedes hyphen (Task 15 Code oracle).
+  const p = left.punctuation, q = right.punctuation
+  for (let index = 0; index < Math.min(p.length, q.length); index++) if (p[index] !== q[index]) return p[index]! - q[index]!
+  return p.length - q.length
 }
 
 export function compareEnglishLabels(left: string, right: string): number {
-  return compareMeasuredCodeLabels(left, right)
+  return compareEnglishLabelKeys(englishLabelKey(left), englishLabelKey(right))
 }
 function category(value: PivotValue): string {
   if (value.type === 'error') return 'error'
@@ -44,24 +75,6 @@ function excelCharacterWeight(character: string): number {
   if (lower >= 'a' && lower <= 'z') return 30 + lower.charCodeAt(0) - 97
   return 100 + lower.charCodeAt(0)
 }
-function compareMeasuredCodeLabels(left: string, right: string): number {
-  const primary = (value: string) => [...value.toLowerCase()].filter(character => character !== "'" && character !== '-')
-  const aText = primary(left), bText = primary(right)
-  const count = Math.min(aText.length, bText.length)
-  for (let index = 0; index < count; index++) {
-    const a = excelCharacterWeight(aText[index]!), b = excelCharacterWeight(bText[index]!)
-    if (a !== b) return a - b
-  }
-  if (aText.length !== bText.length) return aText.length - bText.length
-  // Excel puts a spelling with inserted punctuation after the otherwise equal plain spelling;
-  // when both have punctuation, apostrophe precedes hyphen (Task 15 Code oracle).
-  const punctuation = (value: string) => [...value.toLowerCase()].filter(character => character === "'" || character === '-').map(character => character === "'" ? 1 : 2)
-  const aPunctuation = punctuation(left), bPunctuation = punctuation(right)
-  for (let index = 0; index < Math.min(aPunctuation.length, bPunctuation.length); index++) {
-    if (aPunctuation[index] !== bPunctuation[index]) return aPunctuation[index]! - bPunctuation[index]!
-  }
-  return aPunctuation.length - bPunctuation.length
-}
 function customListIndex(value: string): { kind: 'month' | 'weekday'; index: number } | undefined {
   const month = MONTHS.indexOf(value.trim().toLocaleLowerCase())
   if (month >= 0) return { kind: 'month', index: month }
@@ -74,13 +87,6 @@ function customListIndex(value: string): { kind: 'month' | 'weekday'; index: num
   const shortWeekdays = ['sun','mon','tue','wed','thu','fri','sat']
   const shortWeekday = shortWeekdays.indexOf(value.trim().toLocaleLowerCase())
   return shortWeekday >= 0 ? { kind: 'weekday', index: shortWeekday } : undefined
-}
-function compareExcelLabels(left: string, right: string, customListSort: boolean): number {
-  if (customListSort) {
-    const a = customListIndex(left), b = customListIndex(right)
-    if (a && b && a.kind === b.kind) return a.index - b.index
-  }
-  return compareMeasuredCodeLabels(left, right)
 }
 
 function hasUnmeasuredEqualWeightPair(values: readonly (PivotValue | undefined)[]): boolean {
@@ -125,13 +131,23 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
   }
   const rank: Record<string, number> = { number: 0, date: 0, boolean: 1, string: 2, missing: 3, blank: 3, error: 4 }
   const direction = sortType === 'descending' ? -1 : 1
+  // Collation keys and custom-list positions once per item, not per comparison (perf audit low note 5).
+  const keys = new Map<number, EnglishLabelKey>(), lists = new Map<number, ReturnType<typeof customListIndex>>()
+  for (const item of current) {
+    const value = valuesByItem[item]
+    if (value?.type !== 'string') continue
+    keys.set(item, englishLabelKey(value.value))
+    if (customListSort) lists.set(item, customListIndex(value.value))
+  }
   const sorted = [...current].sort((left, right) => {
     const a = valuesByItem[left], b = valuesByItem[right]
     if (!a || !b) return left - right
     const categoryOrder = (rank[category(a)] ?? 2) - (rank[category(b)] ?? 2)
-    const compared = categoryOrder || (a.type === 'string' && b.type === 'string'
-      ? compareExcelLabels(a.value, b.value, customListSort)
-      : compare(a, b) ?? 0)
+    let compared = categoryOrder
+    if (!compared && a.type === 'string' && b.type === 'string') {
+      const listA = lists.get(left), listB = lists.get(right)
+      compared = listA && listB && listA.kind === listB.kind ? listA.index - listB.index : compareEnglishLabelKeys(keys.get(left)!, keys.get(right)!)
+    } else if (!compared) compared = compare(a, b) ?? 0
     return direction * compared || left - right
   })
   return { ok: true, value: sorted }
