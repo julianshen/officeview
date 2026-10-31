@@ -1502,7 +1502,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
         if (memory && !memory.set(0)) return undefined
       }
       if (store.stamp.valueGen !== generation || signal.aborted) return undefined
-      const { pagedCellReader } = await import('../pivots/engine/faithful')
+      const { pagedCellReader, pagedRangeReader } = await import('../pivots/engine/faithful')
       const { RECORD_LIMITS } = await import('../pivots/engine/records')
       const metadataBytes = 512 + count * 32 + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts })
       const previousKey = currentPivotAssets.get(sheetId)
@@ -1554,6 +1554,16 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
         cache: def => runtime.cache(def),
         records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),
         saved: (def, readSignal) => pagedCellReader(store, def, { signal: readSignal, stamp: store.stamp }, profile),
+        // Task 32: a refreshOnLoad cache's source range, read page by page through that sheet's store (capped as the
+        // saved cells are; an incomplete read marks the reader, and the refresh refuses).
+        source: async (cache, readSignal) => {
+          const { worksheetSourceRange } = await import('../pivots/session/refresh')
+          const range = worksheetSourceRange(cache)
+          const target = range ? workbook.sheets.find(candidate => candidate.name === range.sheet) : undefined
+          if (!range || !target) return undefined
+          const sourceStore = storeFor(target.sheetId)
+          return pagedRangeReader(sourceStore, range.ref, { signal: readSignal, stamp: sourceStore.stamp }, profile)
+        },
         occupied: (row, col) => occupied.has(row * MAX_COLS + col),
         store: storeFor,
       }

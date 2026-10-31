@@ -924,3 +924,48 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 })
+
+describe('worker refreshOnLoad route (Task 32)', () => {
+  async function refreshKernel(route: 'object' | 'paged', name: string) {
+    const bytes = new Uint8Array(readFileSync(resolve(FIXTURE_ROOT, `${name}.xlsx`)))
+    const docId = id()
+    if (route === 'object') {
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+      const kernel = new ViewerKernel({ parse: async input => parseXlsx(await OfficePackage.load(input)) }, quiet)
+      await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+      return { kernel, docId, sheetId: sheet.sheetId ?? '1' }
+    }
+    const imported = await openImportSession({ kind: 'blob', blob: new Blob([bytes]) }, { docId, profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported)
+    const kernel = new ViewerKernel({ parse: async input => parseXlsx(await OfficePackage.load(input)), openSource: async () => source }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' })
+    return { kernel, docId, sheetId: source.sheets.find(candidate => candidate.name === 'Pivot')!.sheetId }
+  }
+  const caseCells = async (name: string) => sheetCellReader((await loadPivotParts(resolve(FIXTURE_ROOT, `${name}.xlsx`)))[0]!.sheet)
+
+  it.each([
+    ['object', 'recipes/refresh-seed'], ['object', 'recipes/refresh-seed-nodata'],
+    ['paged', 'recipes/refresh-seed'], ['paged', 'recipes/refresh-seed-nodata'],
+  ] as const)('%s %s: rebuilt from the source through the worker on the first change, with one notice', async (route, name) => {
+    const { kernel, docId, sheetId } = await refreshKernel(route, name)
+    const session = kernel.session(docId)!
+    const pivotSlots = () => [...((session as unknown as { memory: { slots: Map<string, unknown> } }).memory.slots.keys())].filter(key => key.startsWith('pivot-'))
+    expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen', revision: 0 })
+    expect(pivotSlots().some(key => key.startsWith('pivot-refresh-store:'))).toBe(true)
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'collapse', field: 0, item: 0, collapsed: true }, grantBytes: 16 * 1024 * 1024 })) as unknown as { revision: number; notice?: string; cells: Array<{ row: number; col: number; value: { value: unknown } | null }> }
+    expect(staged.notice).toMatch(/refreshed from the workbook's data/)
+    // Excel's refresh-then-collapse (interaction/refresh-on-load-collapse), cell by cell.
+    const saved = await caseCells('interaction/refresh-on-load-collapse')
+    for (const cell of staged.cells) expect(cell.value?.value ?? undefined, `R${cell.row + 1}C${cell.col + 1}`).toEqual(saved(cell.row, cell.col)?.value)
+    expect(completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision }))).toMatchObject({ kind: 'pivotCommit' })
+    const next = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: staged.revision, revision: 2,
+      delta: { kind: 'collapse', field: 0, item: 0, collapsed: false }, grantBytes: 16 * 1024 * 1024 })) as unknown as { notice?: string }
+    expect(next.notice).toBeUndefined()
+    expect(completed(await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 }))).toMatchObject({ kind: 'pivotRelease', released: true })
+    expect(pivotSlots()).toEqual([])
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+})

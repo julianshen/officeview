@@ -239,6 +239,9 @@ export interface WorkerPivotAssets {
   cache(def: PivotTableDefinition): PivotCacheDefinition | undefined
   records(cache: PivotCacheDefinition, signal: AbortSignal, limits: RecordLimits): Promise<RecordResult>
   saved(def: PivotTableDefinition, signal: AbortSignal): Promise<CellReader>
+  /** Task 32: the cells of a refreshOnLoad cache's worksheet source range, read through the worker's store for that
+   * sheet; undefined when the source is not a sheet of this workbook. */
+  source?(cache: PivotCacheDefinition, signal: AbortSignal): Promise<CellReader | undefined>
   occupied(row: number, col: number): boolean
   store(sheetId: string): SourceStore
 }
@@ -285,7 +288,7 @@ interface WorkerPivotHandle {
 }
 export type WorkerPivotOutcome =
   | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
-  | { kind: 'apply'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
+  | { kind: 'apply'; revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
   | { kind: 'commit'; revision: number; valueGen: number }
   | { kind: 'stale' }
   | { kind: 'release'; released: boolean; valueGen?: number }
@@ -1316,64 +1319,77 @@ export class DocumentSession {
     const { RECORD_LIMITS } = await import('../xlsx/pivots/engine/records')
     const profile = this.options.profile ?? 'D'
     const limits = { ...RECORD_LIMITS[profile], maxBytes: Math.min(RECORD_LIMITS[profile].maxBytes, grantBytes) }
-    const cacheKey = JSON.stringify([cache.cacheId, cache.partPath, cache.recordsPartPath ?? ''])
-    share = this.pivotStores.get(cacheKey)
-    if (share && !share.pending && (!share.store || !share.entry?.live)) {
-      if (this.pivotStores.get(cacheKey) === share) this.pivotStores.delete(cacheKey)
-      share = undefined
+    // Task 32 (§7.7): a refreshOnLoad pivot whose source range is a sheet of this workbook is rebuilt from that sheet's
+    // cells, read through the worker's store; its saved records (stale, or absent with saveData="0") are not decoded.
+    let refreshSource: CellReader | undefined
+    if (cache.refreshOnLoad && assets.source) {
+      try { refreshSource = await assets.source(cache, signal) } catch { refreshSource = undefined }
+      if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     }
-    if (!share) {
-      share = { key: cacheKey, refs: 0, controller: new AbortController() }
-      const current = share
-      current.pending = (async () => {
-        const decode = this.memory.charge()
-        try {
-          const decodeLimits = { ...limits, admitBytes: (bytes: number) => decode.set(bytes) }
-          const records = await assets!.records(cache, current.controller!.signal, decodeLimits)
-          if (current.controller!.signal.aborted || this.closed || this.pivotStores.get(cacheKey) !== current || current.refs === 0) return undefined
-          if (!records.ok) { current.quota = records.quota ? { ...records.quota, limitBytes: this.memory.limitBytes } : undefined; return undefined }
-          const key = `pivot-record-store:${this.docId}:${this.pivotSerial++}`
-          const entry = this.memory.retain(key, { tier: 'source', owner: sheetId, bytes: records.store.bytes, evictable: false })
-          if (!entry) { current.quota = { requiredBytes: records.store.bytes, limitBytes: this.memory.limitBytes }; return undefined }
-          current.store = records.store
-          current.entry = entry
-          return current
-        } finally { decode.release() }
-      })().catch(() => {
-        if (this.pivotStores.get(cacheKey) === current) this.pivotStores.delete(cacheKey)
-        return undefined
-      }).finally(() => { current.pending = undefined })
-      this.pivotStores.set(cacheKey, current)
-    }
-    // Count this open before any await. It protects a shared decode/store from a failing sibling.
-    share.refs++
-    shareHeld = true
-    if (share.pending) {
-      let abortListener: (() => void) | undefined
-      const reservedShare = share, pending = share.pending
-      const result = await Promise.race([
-        pending.then(value => ({ value })),
-        new Promise<{ aborted: true }>(resolve => {
-          abortListener = () => resolve({ aborted: true })
-          signal.addEventListener('abort', abortListener, { once: true })
-        }),
-      ])
-      if (abortListener) signal.removeEventListener('abort', abortListener)
-      if ('aborted' in result) { releaseShare(); return { kind: 'cancelled' } }
-      share = result.value ?? reservedShare
-      // A decode failure removes the shared slot; this opener still releases its reservation.
-      if (!result.value) {
+    if (refreshSource) {
+      // A private share: the rebuilt store is admitted (and charged) by the session's admitStore below.
+      share = { key: `pivot-refresh:${this.docId}:${this.pivotSerial++}`, refs: 1 }
+      shareHeld = true
+    } else {
+      const cacheKey = JSON.stringify([cache.cacheId, cache.partPath, cache.recordsPartPath ?? ''])
+      share = this.pivotStores.get(cacheKey)
+      if (share && !share.pending && (!share.store || !share.entry?.live)) {
+        if (this.pivotStores.get(cacheKey) === share) this.pivotStores.delete(cacheKey)
+        share = undefined
+      }
+      if (!share) {
+        share = { key: cacheKey, refs: 0, controller: new AbortController() }
+        const current = share
+        current.pending = (async () => {
+          const decode = this.memory.charge()
+          try {
+            const decodeLimits = { ...limits, admitBytes: (bytes: number) => decode.set(bytes) }
+            const records = await assets!.records(cache, current.controller!.signal, decodeLimits)
+            if (current.controller!.signal.aborted || this.closed || this.pivotStores.get(cacheKey) !== current || current.refs === 0) return undefined
+            if (!records.ok) { current.quota = records.quota ? { ...records.quota, limitBytes: this.memory.limitBytes } : undefined; return undefined }
+            const key = `pivot-record-store:${this.docId}:${this.pivotSerial++}`
+            const entry = this.memory.retain(key, { tier: 'source', owner: sheetId, bytes: records.store.bytes, evictable: false })
+            if (!entry) { current.quota = { requiredBytes: records.store.bytes, limitBytes: this.memory.limitBytes }; return undefined }
+            current.store = records.store
+            current.entry = entry
+            return current
+          } finally { decode.release() }
+        })().catch(() => {
+          if (this.pivotStores.get(cacheKey) === current) this.pivotStores.delete(cacheKey)
+          return undefined
+        }).finally(() => { current.pending = undefined })
+        this.pivotStores.set(cacheKey, current)
+      }
+      // Count this open before any await. It protects a shared decode/store from a failing sibling.
+      share.refs++
+      shareHeld = true
+      if (share.pending) {
+        let abortListener: (() => void) | undefined
+        const reservedShare = share, pending = share.pending
+        const result = await Promise.race([
+          pending.then(value => ({ value })),
+          new Promise<{ aborted: true }>(resolve => {
+            abortListener = () => resolve({ aborted: true })
+            signal.addEventListener('abort', abortListener, { once: true })
+          }),
+        ])
+        if (abortListener) signal.removeEventListener('abort', abortListener)
+        if ('aborted' in result) { releaseShare(); return { kind: 'cancelled' } }
+        share = result.value ?? reservedShare
+        // A decode failure removes the shared slot; this opener still releases its reservation.
+        if (!result.value) {
+          const quota = share.quota
+          releaseShare()
+          return signal.aborted || this.closed ? { kind: 'cancelled' } : quota ? { kind: 'quota', ...quota }
+            : { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
+        }
+      }
+      if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
+      if (!share.store || !share.entry?.live) {
         const quota = share.quota
         releaseShare()
-        return signal.aborted || this.closed ? { kind: 'cancelled' } : quota ? { kind: 'quota', ...quota }
-          : { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
+        return quota ? { kind: 'quota', ...quota } : { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
       }
-    }
-    if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
-    if (!share.store || !share.entry?.live) {
-      const quota = share.quota
-      releaseShare()
-      return quota ? { kind: 'quota', ...quota } : { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
     }
     let saved: CellReader
     try { saved = await assets.saved(def, signal) }
@@ -1389,8 +1405,19 @@ export class DocumentSession {
     const linked = links.charts
     const linkedCharts = linked.map(item => item.chart)
     const chartGate = linkedCharts.length ? (await import('../xlsx/pivots/session/charts')).pivotChartGate : undefined
-    const opened = openPivotSession({ def, cache, store: share.store, date1904: assets.date1904, saved,
-      occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}) })
+    const held = share
+    const opened = openPivotSession({ def, cache, ...(held.store ? { store: held.store } : {}), date1904: assets.date1904, saved,
+      occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
+      ...(refreshSource ? {
+        source: refreshSource, limits,
+        admitStore: (store: import('../xlsx/pivots/engine/records').RecordStore) => {
+          const entry = this.memory.retain(`pivot-refresh-store:${this.docId}:${this.pivotSerial++}`, { tier: 'source', owner: sheetId, bytes: store.bytes, evictable: false })
+          if (!entry) return undefined
+          held.store = store
+          held.entry = entry
+          return { release: () => {} }   // the share's release frees the entry (handle release or a failed open)
+        },
+      } : {}) })
     if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
     const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, share, runtimeHeld,
       linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),
@@ -1431,7 +1458,7 @@ export class DocumentSession {
     handle.staged = { wireRevision: revision, requestRevision, result: applied.value, overlay, entry }
     const cells = applied.value.layout.cells.map(cell => ({ row: cell.row, col: cell.col, value: overlay.cell(cell.row, cell.col) ?? null }))
     // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
-    return { kind: 'apply', revision, def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
+    return { kind: 'apply', revision, ...(applied.value.notice ? { notice: applied.value.notice } : {}), def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), cells,
       protectedRects: overlay.protectedRects }
   }

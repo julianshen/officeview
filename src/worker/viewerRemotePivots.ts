@@ -10,7 +10,7 @@ import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
 
 export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition; /** The menus' model (Task 28). */ readonly menu: PivotMenuModel }
 export type RemotePivotApply =
-  | { readonly kind: 'committed'; readonly revision: number; readonly def: PivotTableDefinition; readonly menu: PivotMenuModel; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
+  | { readonly kind: 'committed'; readonly revision: number; readonly notice?: string; readonly def: PivotTableDefinition; readonly menu: PivotMenuModel; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
   | { readonly kind: 'stale' | 'cancelled' }
   | { readonly kind: 'refused'; readonly message: string }
 

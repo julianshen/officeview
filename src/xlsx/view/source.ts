@@ -1020,6 +1020,12 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
         cache: def => runtime.cache(def),
         records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),
         saved: async () => sheetCellReader(sheet),
+        source: async cache => {
+          const { worksheetSourceRange } = await import('../pivots/session/refresh')
+          const range = worksheetSourceRange(cache)
+          const sourceSheet = range ? doc.sheets.find(candidate => candidate.name === range.sheet) : undefined
+          return sourceSheet ? sheetCellReader(sourceSheet) : undefined
+        },
         occupied: (row, col) => cells.has(row * MAX_COLS + col),
         store: storeFor,
       }

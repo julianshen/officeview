@@ -226,7 +226,12 @@ export const PAGED_CELL_LIMITS: Readonly<Record<ProfileId, number>> = Object.fre
  */
 export async function pagedCellReader(store: Pick<SourceStore, 'readRows'>, def: PivotTableDefinition, options: ReadOptions, profile: ProfileId,
   maxBytes: number = PAGED_CELL_LIMITS[profile]): Promise<CellReader> {
-  const area = cellArea(def)
+  return pagedRangeReader(store, cellArea(def), options, profile, maxBytes)
+}
+
+/** `pagedCellReader` over any area (Task 32: a refreshOnLoad pivot's source range), with the same caps and marks. */
+export async function pagedRangeReader(store: Pick<SourceStore, 'readRows'>, area: SheetRect | undefined, options: ReadOptions, profile: ProfileId,
+  maxBytes: number = PAGED_CELL_LIMITS[profile]): Promise<CellReader> {
   let cells = new Map<number, SavedCell>()
   let incomplete: CellReader['incomplete']
   let bytes = 0
