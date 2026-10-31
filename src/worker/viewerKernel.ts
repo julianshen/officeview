@@ -524,8 +524,8 @@ export class ViewerKernel {
         if (outcome.kind === 'cancelled') return reply(command as never, owner, { kind: 'cancelled' } as never)
         if (outcome.kind === 'quota') return reply(command as never, owner, { kind: 'quota', resource: 'memory', limitBytes: outcome.limitBytes, ...(outcome.requiredBytes === undefined ? {} : { requiredBytes: outcome.requiredBytes }) } as never)
         if (outcome.kind === 'refused') return errorReply(command as never, owner, 'operation-refused', false, [{ code: outcome.feature, message: outcome.message }])
-        const result = outcome.kind === 'open' ? { kind: 'pivotOpen', revision: outcome.revision, def: outcome.def }
-          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, def: outcome.def, rects: outcome.rects, protectedRects: outcome.protectedRects, overlayExtent: outcome.overlayExtent, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, cells: outcome.cells }
+        const result = outcome.kind === 'open' ? { kind: 'pivotOpen', revision: outcome.revision, def: outcome.def, menu: outcome.menu }
+          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, def: outcome.def, menu: outcome.menu, rects: outcome.rects, protectedRects: outcome.protectedRects, overlayExtent: outcome.overlayExtent, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, cells: outcome.cells }
           : outcome.kind === 'commit' ? { kind: 'pivotCommit', revision: outcome.revision, valueGen: outcome.valueGen }
           : outcome.kind === 'stale' ? (command.kind === 'pivotCommit' ? { kind: 'pivotCommit', refused: 'stale' } : undefined)
           : { kind: 'pivotRelease', released: outcome.released, ...(outcome.valueGen === undefined ? {} : { valueGen: outcome.valueGen }) }

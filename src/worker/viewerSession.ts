@@ -267,6 +267,8 @@ interface WorkerPivotHandle {
   linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string }[]
   releaseAssets?: () => void
   session: import('../xlsx/pivots/session/session').PivotSession
+  /** The menus' model builder (Task 28), loaded with the session. */
+  menu: typeof import('../xlsx/pivots/session/menu').pivotMenuModel
   share: PivotStoreShare
   runtimeHeld: boolean
   committed?: WorkerPivotStage
@@ -277,8 +279,8 @@ interface WorkerPivotHandle {
   serial: number
 }
 export type WorkerPivotOutcome =
-  | { kind: 'open'; revision: number; def: PivotTableDefinition; created?: boolean }
-  | { kind: 'apply'; revision: number; def: PivotTableDefinition; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
+  | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; created?: boolean }
+  | { kind: 'apply'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
   | { kind: 'commit'; revision: number; valueGen: number }
   | { kind: 'stale' }
   | { kind: 'release'; released: boolean; valueGen?: number }
@@ -1267,7 +1269,7 @@ export class DocumentSession {
     if (!cache) return { kind: 'refused', feature: 'pivot-cache-unreadable', message: `Pivot ${def.name} has no readable cache definition.` }
     const handleKey = pivotHandleKey(sheetId, pivot)
     const prior = this.pivotHandles.get(handleKey)
-    if (prior) return { kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, created: false }
+    if (prior) return { kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), created: false }
     const runtimeKey = assets.runtimeKey
     const runtimeBytes = assets.retainedBytes + assets.metadataBytes
     let runtimeHeld = false
@@ -1370,8 +1372,8 @@ export class DocumentSession {
     catch (cause) { releaseShare(); return signal.aborted ? { kind: 'cancelled' } : { kind: 'refused', feature: 'pivot-saved-cells-unavailable', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Saved pivot cells could not be read.' } }
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     const existing = this.pivotHandles.get(handleKey)
-    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, created: false } }
-    const { openPivotSession } = await import('../xlsx/pivots/session/session')
+    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), created: false } }
+    const [{ openPivotSession }, { pivotMenuModel }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu')])
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     const linked = assets.linkedCharts.filter(item => {
       const name = item.chart.pivot?.name ?? ''
@@ -1382,7 +1384,7 @@ export class DocumentSession {
     const opened = openPivotSession({ def, cache, store: share.store, date1904: assets.date1904, saved,
       occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}) })
     if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
-    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, share, runtimeHeld,
+    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, menu: pivotMenuModel, share, runtimeHeld,
       linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),
       releaseAssets,
       highestWireRevision: 0, committedWireRevision: 0, requestRevision: 0, serial: 0 }
@@ -1390,7 +1392,7 @@ export class DocumentSession {
     shareHeld = false
     runtimeTransferred = true
     assetsTransferred = true
-    return { kind: 'open', revision: 0, def: opened.value.def, created: true }
+    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), created: true }
     } finally {
       releaseShare()
       releaseRuntime()
@@ -1421,7 +1423,7 @@ export class DocumentSession {
     handle.staged = { wireRevision: revision, requestRevision, result: applied.value, overlay, entry }
     const cells = applied.value.layout.cells.map(cell => ({ row: cell.row, col: cell.col, value: overlay.cell(cell.row, cell.col) ?? null }))
     // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
-    return { kind: 'apply', revision, def: applied.value.def, rects: overlay.rects, merges: overlay.merges,
+    return { kind: 'apply', revision, def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), cells,
       protectedRects: overlay.protectedRects }
   }
@@ -1438,6 +1440,13 @@ export class DocumentSession {
     this.publishValues(sheetId)
     if (previous && previous !== staged && previous.entry !== staged.entry) previous.entry.release()
     return { kind: 'commit', revision, valueGen: store.stamp.valueGen }
+  }
+  /** The display parts with each committed pivot's live definition (Task 28): its buttons, regions and styles
+   * follow the committed layout, matched by part path. */
+  private livePivotDisplay<T extends { pivotTables: readonly PivotTableDefinition[] }>(sheetId: string, payload: T): T {
+    const live = new Map<string, PivotTableDefinition>()
+    for (const handle of this.pivotHandles.values()) if (handle.sheetId === sheetId && handle.committed) live.set(handle.def.partPath, handle.def)
+    return live.size ? { ...payload, pivotTables: payload.pivotTables.map(def => live.get(def.partPath) ?? def) } : payload
   }
   pivotRelease(sheetId: string, pivot: number): WorkerPivotOutcome {
     const key = pivotHandleKey(sheetId, pivot), handle = this.pivotHandles.get(key)
@@ -2905,7 +2914,7 @@ export class DocumentSession {
           raw = work
           void work.then(() => { drained = true }, () => { drained = true })
           const payload = await work
-          result = { op: 'pivotDisplay', result: payload }
+          result = { op: 'pivotDisplay', result: this.livePivotDisplay(owner.sheetId, payload) }
         } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }

@@ -193,6 +193,33 @@ describe('worker pivot protocol', () => {
     }
   }, 60_000)
 
+  it('Task 28: open and apply replies carry the menus\' model; a paged pivotDisplay read serves the committed definition', async () => {
+    const blob = new Blob([new Uint8Array(readFileSync(FIXTURE))])
+    const docId = id()
+    const imported = await openImportSession({ kind: 'blob', blob }, { docId, profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported)
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' })
+    const sheetId = source.sheets.find(sheet => sheet.name === 'Pivot')!.sheetId
+    const pivot = (await pivotAssets(source, sheetId))!.tables.findIndex(def => def.name === '樞紐分析表2')
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot, grantBytes: 16 * 1024 * 1024 })) as Extract<WorkerReply<'pivotOpen'>, { kind: 'complete' }>['result']
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const region = opened.menu.fields.find(field => field.name === 'Region')!
+    expect(region.items.map(item => item.label)).toEqual(['East', 'North', 'South', 'West', 'Central'])
+    expect(region.items[0]!.collapsed).toBe(false)
+    expect(opened.menu.data.map(entry => entry.name)).toEqual(['Sum of Sales', 'Sum of Units'])
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot, baseRevision: 0, revision: 1, delta: { kind: 'collapse', field: region.index, item: 0, collapsed: true }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    expect(staged.menu.fields.find(field => field.name === 'Region')!.items[0]!.collapsed).toBe(true)
+    const commit = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot, revision: staged.revision }))
+    if (commit.kind !== 'pivotCommit' || 'refused' in commit) throw new Error(JSON.stringify(commit))
+    const read = completed(await run(kernel, { kind: 'read', requestId: id(), owner: { docId, sheetId, valueGen: commit.valueGen, fontGen: 0, viewGen: 0 }, query: { op: 'pivotDisplay', grantBytes: 4 * 1024 * 1024 } }))
+    if (read.kind !== 'read' || read.result.op !== 'pivotDisplay') throw new Error(JSON.stringify(read))
+    expect(read.result.result.pivotTables.find(def => def.name === '樞紐分析表2')!.location.ref).toBe('A3:I21')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('apply commits only the current revision', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
