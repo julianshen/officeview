@@ -771,6 +771,8 @@ add('quirk-cross-hidden-item-showall', 'data-quirks', 17, ['hidden-item', 'cross
 add('quirk-off-axis-hidden-item', 'data-quirks', 17, ['hidden-item', 'off-axis-hidden-item'], S({
   // Measured: when a field leaves every axis Excel drops its hidden items and its shared items, so Excel never writes
   // an off-axis hidden item. The case records that clearing; axes.ts keeps refusing the state for other writers.
+  // That the hide itself is applied was checked by saving in between: with Channel on rows, Excel writes
+  // `<item h="1" x="1"/>` for Retail; the next save, with Channel off every axis, has a bare pivotField (validation doc).
   route: 'applescript', lines: t => [toRows(t, 'Channel'), hideItem(t, 'Channel', 'Retail'), hide(t, 'Channel')],
   markers: [fieldHas(F.Channel, String.raw`(?![^>]*\saxis=)[^>]*\/>`)], absent: [fieldItem(F.Channel, '[^>]*h="1"'), rowField(F.Channel)],
   measures: 'Excel clears the hidden items of a field that leaves every axis (records unfiltered)',

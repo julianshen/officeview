@@ -562,7 +562,9 @@ Status is `pass` (compared within tolerance) or `*unverified*`, with the reason 
 ### What Excel writes (measured from the saved parts)
 - **Dates in the cache (ruling S2-H).** The ISO value is 1899-12-30 + serial, applied uniformly: serials 0.5, 1, 59, 60 and 61 are saved as `1899-12-30T12:00:00`, `1899-12-31T00:00:00`, `1900-02-27`, `1900-02-28` and `1900-03-01`. There is no 1900 leap-year correction in the cache. The fictitious 1900-02-29 is serial 60, written as `1900-02-28`.
 - **Fields on no axis.** Their text stays inline in `pivotCacheRecords` (`<s v="…"/>`), and the definition keeps an empty `<sharedItems/>`.
-  - When a field leaves every axis, Excel drops its hidden items and its shared items. An off-axis hidden item is therefore never written by Excel (`quirk-off-axis-hidden-item`).
+  - When a field leaves every axis, Excel drops its hidden items and its shared items. An off-axis hidden item is therefore never written by Excel (`quirk-off-axis-hidden-item`). This was checked in two saves:
+    - with Channel on rows and Retail hidden, Excel saved `<item h="1" x="1"/>` and four Channel shared items;
+    - after Channel was taken off the axis, the same file saved as `<pivotField showAll="0"/>` with an empty `sharedItems`.
   - The engine still refuses that state in files from other writers.
 - **`showAll`.** True is written by omitting the attribute (the schema default); false is `showAll="0"`.
 - **Data field captions.** Setting a data field's function, even to Sum, renames it with Excel's localised default (`加總 - Sales`). Captions Excel wrote earlier stay as they are. The engine takes captions from the saved `name`.
