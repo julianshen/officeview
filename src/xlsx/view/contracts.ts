@@ -84,9 +84,12 @@ export type CellRead =
 export interface SourceStamp { docId: string; sheetId: string; valueGen: number }
 /** Committed pivot values. `undefined` means the coordinate is not owned;
  * `null` explicitly clears a cell inside an owned rectangle. */
-export interface ValueOverlayCell { value: XlsxCell['value']; numFmtId?: number }
+export interface ValueOverlayCell { value: XlsxCell['value']; valueIsError?: boolean; numFmtId?: number }
 export interface ValueOverlay {
+  /** Cells the overlay replaces, including explicit null blanks. */
   readonly rects: readonly SourceRect[]
+  /** Current pivot output bounds. When omitted, `rects` are also the protected bounds. */
+  readonly protectedRects?: readonly SourceRect[]
   cell(row: number, col: number): ValueOverlayCell | null | undefined
   readonly merges: readonly SourceRect[]
   readonly usedRows: number

@@ -370,7 +370,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
         if (!cells) cellsByRow.set(row, cells = [])
         const existing = cells.findIndex(cell => cell.row === row && cell.col === col)
         if (existing >= 0) cells.splice(existing, 1)
-        if (value !== null) cells.push({ ref: `R${row}C${col}`, row, col, value: value.value, styleIndex: 0, ...(value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}), hasCachedValue: true } as XlsxCell)
+        if (value !== null) cells.push({ ref: `R${row}C${col}`, row, col, value: value.value, styleIndex: 0, ...(value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}), hasCachedValue: true, valueIsError: value.valueIsError } as XlsxCell)
       }
     }
   }

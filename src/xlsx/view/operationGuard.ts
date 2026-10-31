@@ -243,6 +243,8 @@ export async function guardSort(
   for (const covered of mergeBands([band, ...changed])) {
     if (due()) await cooperate!.pause()
     const coveredBand: SourceRect = { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 }
+    // Conservative while the Excel case is unmeasured: filters in adjacent
+    // columns can still remove pivot rows, so protect every column in the row band.
     const pivot = structure.firstWhere(coveredBand, hit => hit.kind === 'pivot')
     if (pivot?.kind === 'pivot') return { ok: false, refusal: pivotRefusal(pivot.record) }
     const merge = structure.firstWhere(coveredBand, hit => hit.kind === 'merge')

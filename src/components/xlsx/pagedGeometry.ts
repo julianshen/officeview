@@ -91,9 +91,13 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     .map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range }))
   if (overlay) for (const merge of overlay.merges) mergeEntries.push({ rect: { ...merge }, value: { minRow: merge.r0, maxRow: merge.r1, minCol: merge.c0, maxCol: merge.c1 } })
   const mergeIndex = RectangleIndex.build(mergeEntries)
+  const overlaidRows = new Map<number, readonly import('../../xlsx/types').XlsxCell[] | undefined>()
   const cellsOf = (sourceRow: number): readonly import('../../xlsx/types').XlsxCell[] | undefined => {
     const base = store.cellsOf(sourceRow)
     if (!overlay) return base
+    const cached = overlaidRows.get(sourceRow)
+    if (cached !== undefined || overlaidRows.has(sourceRow)) return cached
+    if (!overlay.rects.some(rect => rect.r0 <= sourceRow && sourceRow <= rect.r1)) return base
     const cells = [...(base ?? [])]
     for (const rect of overlay.rects) {
       if (sourceRow < rect.r0 || sourceRow > rect.r1) continue
@@ -102,10 +106,12 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
         if (value === undefined) continue
         const existing = cells.findIndex(cell => cell.row === sourceRow && cell.col === col)
         if (existing >= 0) cells.splice(existing, 1)
-        if (value !== null) cells.push({ id: cellId(sourceRow, col), ref: `R${sourceRow}C${col}`, row: sourceRow, col, value: value.value, styleIndex: 0, ...(value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}), hasCachedValue: true, valueProvenance: 'cached' })
+        if (value !== null) cells.push({ id: cellId(sourceRow, col), ref: `R${sourceRow}C${col}`, row: sourceRow, col, value: value.value, styleIndex: 0, ...(value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}), hasCachedValue: true, valueIsError: value.valueIsError, valueProvenance: 'cached' })
       }
     }
-    return cells.length ? cells.sort((a, b) => a.col - b.col) : undefined
+    const result = cells.length ? cells.sort((a, b) => a.col - b.col) : undefined
+    overlaidRows.set(sourceRow, result)
+    return result
   }
   const geometry = Object.freeze({
     kind: 'ready' as const,

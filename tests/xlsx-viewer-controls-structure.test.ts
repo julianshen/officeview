@@ -81,4 +81,20 @@ describe('viewer controls structural snapshot', () => {
     expect(resolved).toMatchObject({ kind: 'complete', range: { r0: 0, r1: 3, c0: 0, c1: 2, headerRows: 1 } })
     controls.dispose()
   })
+
+  it('refreshes the resident structural snapshot after a pivot overlay is published', async () => {
+    const source = createObjectWorkbookSource(doc, 'doc-live-pivot')
+    const store: any = source.store('1')
+    let owner = { docId: 'doc-live-pivot', sheetId: '1', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const view: SheetView = { sheetId: '1', revision: 0, order: createIdentityOrder(), baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([]),), sort: null, filter: null, selection: emptyGridSelection() }
+    const snapshot = () => ({ owner, filter: null, sort: null, records: { visible: 3, total: 3, completeness: 'complete' as const } })
+    const controls = await viewerControls({ doc, source, sheetId: '1', snapshot, view: () => view, publish: snapshot }, new AbortController().signal)
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], usedRows: 3, usedCols: 1,
+      cell: (row: number, col: number) => col === 0 && row < 3 ? { value: row } : undefined })
+    owner = { ...owner, valueGen: store.stamp.valueGen }
+    const result = await controls.client.sort(owner, { range: { r0: 0, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'desc' }], caseSensitive: false }, new AbortController().signal)
+    expect(result).toMatchObject({ kind: 'refused', refusal: { reason: 'pivot' } })
+    controls.dispose()
+    await source.release()
+  })
 })

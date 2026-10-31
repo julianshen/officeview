@@ -168,11 +168,21 @@ function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly Sou
   if (a === b) return true
   const left = a ?? [], right = b ?? []
   if (left.length !== right.length) return false
-  for (let i = 0; i < left.length; i++) {
-    const x = left[i], y = right[i]
-    if (x.r0 !== y.r0 || x.r1 !== y.r1 || x.c0 !== y.c0 || x.c1 !== y.c1) return false
+  const key = (rect: SourceRect) => `${rect.r0},${rect.c0},${rect.r1},${rect.c1}`
+  const xOrder = [...left].map(key).sort(), yOrder = [...right].map(key).sort()
+  for (let i = 0; i < xOrder.length; i++) {
+    if (xOrder[i] !== yOrder[i]) return false
   }
   return true
+}
+function uniqueRects(rects: readonly SourceRect[]): SourceRect[] {
+  const seen = new Set<string>()
+  return rects.filter(rect => {
+    const key = `${rect.r0},${rect.c0},${rect.r1},${rect.c1}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 interface OverlayState { overlay?: ValueOverlay; structureGen: number }
 // Keep sheets that never publish a pivot overlay free of per-store overlay
@@ -244,9 +254,8 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const overlay = this.valueOverlay
     const base = this.baseExtent.used
     if (!overlay) return this.baseExtent
-    const used = overlay.usedRows > 0 && overlay.usedCols > 0
-      ? { r0: 0, r1: overlay.usedRows - 1, c0: 0, c1: overlay.usedCols - 1 }
-      : undefined
+    const bounds = overlay.protectedRects ?? overlay.rects
+    const used = bounds.length ? bounds.reduce((all, rect) => ({ r0: Math.min(all.r0, rect.r0), r1: Math.max(all.r1, rect.r1), c0: Math.min(all.c0, rect.c0), c1: Math.max(all.c1, rect.c1) }), { ...bounds[0] }) : undefined
     if (!used && !base) return { rows: MAX_ROWS, cols: MAX_COLS }
     return { rows: MAX_ROWS, cols: MAX_COLS, used: base && used
       ? { r0: Math.min(base.r0, used.r0), r1: Math.max(base.r1, used.r1), c0: Math.min(base.c0, used.c0), c1: Math.max(base.c1, used.c1) }
@@ -324,30 +333,13 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   }
   private overlayPayload(row: number, col: number, value: NonNullable<ReturnType<ValueOverlay['cell']>>): SingleCellPayload {
     if (value === null) throw new RangeError('Blank overlay has no cell payload')
-    return { id: cellId(row, col), row, col, value: value.value, styleIndex: 0, hasCachedValue: true, valueIsError: false, valueProvenance: 'engine' }
-  }
-  private overlayRows(range: SourceRect, beforeRow = range.r1 + 1): Map<number, AuthoritativeCell[]> {
-    const out = new Map<number, AuthoritativeCell[]>()
-    const overlay = this.valueOverlay
-    if (!overlay) return out
-    for (const rect of overlay.rects) {
-      const r0 = Math.max(range.r0, rect.r0), r1 = Math.min(range.r1, rect.r1, beforeRow - 1)
-      const c0 = Math.max(range.c0, rect.c0), c1 = Math.min(range.c1, rect.c1)
-      for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) {
-        const value = overlay.cell(row, col)
-        if (value === undefined || value === null) continue
-        let cells = out.get(row)
-        if (!cells) out.set(row, cells = [])
-        cells.push({ ...this.overlayPayload(row, col, value) })
-      }
-    }
-    return out
+    return { id: cellId(row, col), row, col, value: value.value, styleIndex: 0, hasCachedValue: true, valueIsError: value.valueIsError ?? false, valueProvenance: 'engine' }
   }
   displayText(cell: AuthoritativeCell, allocation?: FormatAllocation): string {
     const k = lowerBound(this.rowIndexes, cell.row)
     const original = this.rowIndexes[k] === cell.row ? this.cellIn(this.rows[k], cell.col) : undefined
     const overlay = this.valueOverlay ? this.overlayCell(cell.row, cell.col) : undefined
-    const style = overlay && overlay !== null && overlay.numFmtId !== undefined ? { numFmtId: overlay.numFmtId } : original?.style
+    const style = overlay && overlay !== null ? (overlay.numFmtId !== undefined ? { numFmtId: overlay.numFmtId } : undefined) : original?.style
     return cellDisplayText(this.sheet, { value: cell.value, style }, allocation)
   }
   async readCell(at: { row: number; col: number }, options: ReadOptions): Promise<CellRead> {
@@ -366,6 +358,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
     if (!isValidSourceRect(range)) return failedPage(this.stamp, failure('invalid-source-rect', 'Invalid range'))
+    if (this.valueOverlay) return this.readRowsWithOverlay(range, cursor, options)
     const key = `objrows:${range.r0}:${range.r1}:${range.c0}:${range.c1}:`
     let at = lowerBound(this.rowIndexes, range.r0)
     if (cursor !== undefined) {
@@ -401,26 +394,72 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       if (cells.length) items.push({ row: row.index, cells: cells.sort((a, b) => a.col - b.col) })
     }
     const more = at < this.rows.length && this.rowIndexes[at] <= range.r1
-    const overlayRows = this.overlayRows(range, more ? this.rowIndexes[at] : range.r1 + 1)
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      const over = overlayRows.get(item.row)
-      const cells = item.cells.filter(cell => this.overlayCell(cell.row, cell.col) === undefined)
-      if (over) cells.push(...over)
-      cells.sort((a, b) => a.col - b.col)
-      items[i] = { row: item.row, cells }
-    }
-    for (let i = items.length - 1; i >= 0; i--) if (items[i].cells.length === 0) items.splice(i, 1)
-    const present = new Set(items.map(item => item.row))
-    for (const [row, cells] of overlayRows) if (!present.has(row)) items.push({ row, cells: cells.sort((a, b) => a.col - b.col) })
-    items.sort((a, b) => a.row - b.row)
-    if (items.reduce((sum, item) => sum + item.cells.length, 0) > this.maxCells) {
-      return failedPage(this.stamp, failure('resource-limit', 'Pivot overlay row exceeds the source page limit'))
-    }
     await budget.finish()
     const page = { items, completeness: 'complete' as const, stamp: this.stamp, ...(more ? { nextCursor: `${key}${at}` } : {}) }
     if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
     return page
+    } catch (stop) {
+      if (stop instanceof SourceStop) return failedPage(this.stamp, stop.failure)
+      throw stop
+    } finally { account?.release(); budget.dispose() }
+  }
+  private async readRowsWithOverlay(range: SourceRect, cursor: string | undefined, options: ReadOptions & SourceAllocationOptions): Promise<Page<SparseRowPage>> {
+    const key = `objrows-overlay:${range.r0}:${range.r1}:${range.c0}:${range.c1}:`
+    let row = range.r0
+    if (cursor !== undefined) {
+      const next = cursor.startsWith(key) ? Number(cursor.slice(key.length)) : NaN
+      if (!Number.isSafeInteger(next) || next < range.r0 || next > range.r1 + 1) return failedPage(this.stamp, failure('invalid-cursor', 'Invalid row cursor'))
+      row = next
+    }
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    const budget = requestBudget(() => this.guard(options), this.pacing)
+    try {
+      const items: SparseRowPage[] = []
+      let visited = 0, cellCount = 0
+      while (row <= range.r1 && visited < READ_ROWS_PAGE_ROWS) {
+        const baseAt = lowerBound(this.rowIndexes, row)
+        let candidate = baseAt < this.rowIndexes.length && this.rowIndexes[baseAt] <= range.r1 ? this.rowIndexes[baseAt] : range.r1 + 1
+        for (const rect of this.valueOverlay!.rects) {
+          if (rect.r1 < row || rect.c1 < range.c0 || rect.c0 > range.c1) continue
+          candidate = Math.min(candidate, Math.max(row, rect.r0))
+        }
+        if (candidate > range.r1) break
+        row = candidate
+        if (budget.spend(1)) await budget.pause()
+        const baseIndex = lowerBound(this.rowIndexes, row)
+        const base = baseIndex < this.rowIndexes.length && this.rowIndexes[baseIndex] === row ? this.rows[baseIndex] : undefined
+        const cells = new Map<number, AuthoritativeCell>()
+        if (base) for (const cell of base.cells) if (cell.row === row && cell.col >= range.c0 && cell.col <= range.c1) {
+          account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
+          cells.set(cell.col, toRowCell(cell, this.valuePolicy))
+        }
+        const overlay = this.valueOverlay!
+        for (const rect of overlay.rects) {
+          if (row < rect.r0 || row > rect.r1) continue
+          for (let col = Math.max(range.c0, rect.c0); col <= Math.min(range.c1, rect.c1); col++) {
+            const value = overlay.cell(row, col)
+            if (value === undefined) continue
+            cells.delete(col)
+            if (value !== null) {
+              account?.charge(384)
+              cells.set(col, this.overlayPayload(row, col, value))
+            }
+          }
+        }
+        const rowCells = [...cells.values()].sort((a, b) => a.col - b.col)
+        if (rowCells.length > this.maxCells) return failedPage(this.stamp, failure('resource-limit', 'A source row exceeds the page cell limit'))
+        if (items.length && cellCount + rowCells.length > this.maxCells) break
+        visited++; cellCount += rowCells.length
+        if (rowCells.length) items.push({ row, cells: rowCells })
+        row++
+      }
+      const more = row <= range.r1 && this.valueOverlay!.rects.some(rect => rect.r1 >= row && rect.r0 <= range.r1 && rect.c1 >= range.c0 && rect.c0 <= range.c1)
+        || row <= range.r1 && lowerBound(this.rowIndexes, row) < this.rowIndexes.length && this.rowIndexes[lowerBound(this.rowIndexes, row)] <= range.r1
+      await budget.finish()
+      const page = { items, completeness: 'complete' as const, stamp: this.stamp, ...(more ? { nextCursor: `${key}${row}` } : {}) }
+      if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+      return page
     } catch (stop) {
       if (stop instanceof SourceStop) return failedPage(this.stamp, stop.failure)
       throw stop
@@ -450,11 +489,12 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       at = i; row = r
     }
     const startAt = at, startRow = row
+    const overlay = this.valueOverlay
     const account = options[SOURCE_ALLOCATION]?.reserve()
     account?.charge(96)
     try {
     const finish = (page: Page<ColumnEntry>) => { if (account) adoptAllocation(account, page, account.bytes, [this.stamp]); return page }
-    if (request.encoding === 'lanes') return finish(this.valueOverlay
+    if (request.encoding === 'lanes') return finish(overlay
       ? this.overlayLanesPage(request, intervals, at, row, prefix, account)
       : this.lanesPage(request, intervals, at, row, prefix, account))
     const items: ColumnEntry[] = []
@@ -487,11 +527,12 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       row = found.row + 1
       if (row > r1) { at++; if (at < intervals.length) row = intervals[at].r0 }
     }
-    return finish(this.overlayColumnPage({ items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) }, request, intervals, startAt, startRow, prefix))
+    const page: Page<ColumnEntry> = { items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) }
+    return finish(overlay ? this.overlayColumnPage(page, request, intervals, startAt, startRow, prefix, overlay) : page)
     } finally { account?.release() }
   }
-  async *scanPopulated(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions): AsyncIterable<Page<AuthoritativeCell>> {
-    if (this.valueOverlay) {
+  async *scanPopulated(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions, checkOverlay = true): AsyncIterable<Page<AuthoritativeCell>> {
+    if (checkOverlay && this.valueOverlay) {
       yield* this.scanOverlayRows(request, options, false) as AsyncIterable<Page<AuthoritativeCell>>
       return
     }
@@ -545,29 +586,42 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     }
     let cursor: string | undefined
     let items: Array<AuthoritativeCell | SourceCell> = []
-    for (;;) {
+    let account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    const publish = (page: Page<AuthoritativeCell | SourceCell>) => {
+      if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+      account?.release()
+      account = undefined
+      return page
+    }
+    try { for (;;) {
       const page = await this.readRows(request.range, cursor, options)
       for (const row of page.items) for (const cell of row.cells) {
-        if (!occupiedOnly && !(cell.value !== null || cell.formula !== undefined)) continue
+        if (!(cell.value !== null || cell.formula !== undefined)) continue
+        account?.charge(occupiedOnly ? 16 : 384 + (cell.valueIsError ? 288 : 0))
         items.push(occupiedOnly ? { row: cell.row, col: cell.col } : cell)
         if (items.length === request.limit) {
-          yield { items, completeness: 'complete', stamp: this.stamp }
+          yield publish({ items, completeness: 'complete', stamp: this.stamp })
           items = []
+          account = options[SOURCE_ALLOCATION]?.reserve()
+          account?.charge(96)
         }
       }
-      if (page.error) { yield { items, completeness: 'incomplete', stamp: this.stamp, error: page.error }; return }
-      if (page.completeness !== 'complete') { yield { items, completeness: page.completeness, stamp: this.stamp, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) }; return }
+      if (page.error) { yield publish({ items, completeness: 'incomplete', stamp: this.stamp, error: page.error }); return }
+      if (page.completeness !== 'complete') { yield publish({ items, completeness: page.completeness, stamp: this.stamp, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) }); return }
       if (!page.nextCursor) break
       cursor = page.nextCursor
     }
-    yield { items, completeness: 'complete', stamp: this.stamp }
+    yield publish({ items, completeness: 'complete', stamp: this.stamp })
+    } finally { account?.release() }
   }
   async *scanOccupied(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions): AsyncIterable<Page<SourceCell>> {
-    if (this.valueOverlay) {
+    const overlay = this.valueOverlay
+    if (overlay) {
       yield* this.scanOverlayRows(request, options, true) as unknown as AsyncIterable<Page<SourceCell>>
       return
     }
-    for await (const page of this.scanPopulated(request, options)) yield { ...page, items: page.items.map(cell => ({ row: cell.row, col: cell.col })) }
+    for await (const page of this.scanPopulated(request, options, false)) yield { ...page, items: page.items.map(cell => ({ row: cell.row, col: cell.col })) }
   }
   async queryStructural(rect: SourceRect, options: ReadOptions & SourceAllocationOptions): Promise<StructuralResult> {
     const base = { stamp: this.stamp, merges: [], tables: [], spills: [], drawings: [] }
@@ -640,7 +694,10 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       finally { cacheAccount.release() }
     } else cached = this.drawings()
     const drawings = cached.filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
-    const pivots = overlay?.rects.filter(pivot => intersects(pivot, rect))
+    const saved = uniqueRects([...(this.sheet.pivotRegions ?? []).map(region => parseRange(region.ref)), ...(this.sheet.pivotTables ?? []).map(pivot => parseRange(pivot.location.ref))]
+      .filter((value): value is SourceRect => Boolean(value)))
+      .filter(pivot => !overlay?.rects.some(owned => intersects(pivot, owned)))
+    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? overlay?.rects ?? [])]).filter(pivot => intersects(pivot, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
     return result
@@ -688,7 +745,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
         const sourceRow = this.rowIndexes[rowIndex] === current ? this.rows[rowIndex] : undefined
         const cell = overlay === undefined && sourceRow ? this.cellIn(sourceRow, request.col) : undefined
         if (overlay === null) continue
-        if (overlay !== undefined) lanes.add(current, overlay.value, false, 0, false)
+        if (overlay !== undefined) lanes.add(current, overlay.value, overlay.valueIsError, 0, false)
         else if (cell) lanes.add(current, cell.value, cell.valueIsError, cell.styleIndex, isUnavailable(cell, this.valuePolicy))
       }
       items.push(lanes.build(row, r1))
@@ -698,9 +755,38 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     }
     return { items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) }
   }
-  private overlayColumnPage(page: Page<ColumnEntry>, request: ColumnQuery, intervals: readonly SourceRowInterval[], startAt: number, startRow: number, prefix: string): Page<ColumnEntry> {
-    const overlay = this.valueOverlay
-    if (!overlay || page.completeness !== 'complete' || page.items.some(item => item.kind === 'lanes' || item.kind === 'unknown' || item.kind === 'error')) return page
+  private overlayColumnPage(page: Page<ColumnEntry>, request: ColumnQuery, intervals: readonly SourceRowInterval[], startAt: number, startRow: number, prefix: string, overlay: ValueOverlay): Page<ColumnEntry> {
+    if (!overlay || page.items.some(item => item.kind === 'lanes')) return page
+    if (page.completeness !== 'complete') {
+      const output: ColumnEntry[] = []
+      for (const item of page.items) {
+        if (item.kind === 'unknown' || item.kind === 'error') { output.push(item); continue }
+        if (item.kind === 'cell' || item.kind === 'unavailable') {
+          const value = this.overlayCell(item.row, request.col)
+          if (value === undefined) output.push(item)
+          else if (value === null) output.push({ kind: 'blank', r0: item.row, r1: item.row })
+          else output.push({ kind: 'cell', row: item.row, cell: this.overlayPayload(item.row, request.col, value) })
+          continue
+        }
+        const replacements: Array<{ row: number; value: NonNullable<ReturnType<ValueOverlay['cell']>> }> = []
+        for (const rect of overlay.rects) if (request.col >= rect.c0 && request.col <= rect.c1) {
+          for (let row = Math.max(item.r0, rect.r0); row <= Math.min(item.r1, rect.r1); row++) {
+            const value = overlay.cell(row, request.col)
+            if (value !== undefined && value !== null) replacements.push({ row, value })
+          }
+        }
+        replacements.sort((a, b) => a.row - b.row)
+        let at = item.r0
+        for (const replacement of replacements) {
+          if (replacement.row < at) continue
+          if (replacement.row > at) output.push({ kind: 'blank', r0: at, r1: replacement.row - 1 })
+          output.push({ kind: 'cell', row: replacement.row, cell: this.overlayPayload(replacement.row, request.col, replacement.value) })
+          at = replacement.row + 1
+        }
+        if (at <= item.r1) output.push({ kind: 'blank', r0: at, r1: item.r1 })
+      }
+      return { ...page, items: output }
+    }
     let endAt = intervals.length - 1, endRow = intervals[endAt]?.r1 ?? -1
     if (page.nextCursor) {
       const parts = page.nextCursor.split(':')

@@ -10,7 +10,12 @@ let pending: Promise<void> | undefined
 
 export function registerTableStyleEngine(value: RegionFactory): void { factory = value }
 /** Drop a cached table/pivot region layer after the caller replaces live pivot definitions. */
-export function invalidateRegionStyles(sheet: XlsxSheet): void {
+export function invalidateRegionStyles(sheet: XlsxSheet | { invalidateRegionStyles(sheetId: string): void }, sheetId?: string): void {
+  if (sheetId !== undefined) {
+    if ('invalidateRegionStyles' in sheet) sheet.invalidateRegionStyles(sheetId)
+    return
+  }
+  if ('invalidateRegionStyles' in sheet) return
   sheet.regionStyles = undefined
   sheet.regionStylesResolved = false
 }

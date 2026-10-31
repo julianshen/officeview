@@ -36,6 +36,8 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
     get stamp() { return store.stamp },
     get extent() { return store.extent },
     get valuePolicy() { return store.valuePolicy },
+    ...(store.structureGen !== undefined ? { get structureGen() { return store.structureGen } } : {}),
+    ...(store.setValueOverlay ? { setValueOverlay: (overlay: Parameters<NonNullable<SourceStore['setValueOverlay']>>[0]) => store.setValueOverlay!(overlay) } : {}),
     readCell: (at, options) => read(() => store.readCell(at, options), options.signal, () => ({ kind: 'error', code: 'cancelled', retryable: true })),
     readRows: (range, cursor, options) => read(() => store.readRows(range, cursor, options), options.signal, page),
     ...(draw ? {

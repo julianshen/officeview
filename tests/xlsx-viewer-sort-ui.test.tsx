@@ -70,7 +70,7 @@ describe('S9 atomic sort modal', () => {
     expect(f.fixture.publications).toBe(0)
     expect(f.applied).not.toHaveBeenCalled()
   })
-  it('preserves the measured PivotTable refusal punctuation', async () => {
+  it('preserves the current PivotTable refusal punctuation', async () => {
     const f = setup(), client = createControlsClient({ ...f.fixture.options, stageSort: async () => ({ kind: 'refused', refusal: { reason: 'pivot', range: f.fixture.range, message: "This change can't be made to a PivotTable." } }) })
     const ui = render(<SortDialog {...f.props} client={client} />)
     await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())

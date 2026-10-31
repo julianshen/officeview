@@ -3,6 +3,13 @@ import { controlsFixture } from './helpers/xlsx-controls-fixture'
 import { createControlsClient, filterWithColumn } from '../src/components/xlsx/controlsClient'
 import { compileValuesMembership } from '../src/xlsx/view/valueIndex'
 import { ValueIndexError } from '../src/xlsx/view/valueRuns'
+import { guardFilter } from '../src/xlsx/view/operationGuard'
+import { StructuralIndex } from '../src/xlsx/view/structure'
+import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import { createIdentityOrder } from '../src/xlsx/view/order'
+import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 
 const signal = () => new AbortController().signal
 
@@ -232,8 +239,20 @@ it('shows incomplete progress, disables Apply, permits cancel and releases a ref
   expect(f.runs.refCount).toBe(0)
 })
 
-it('shows the measured PivotTable refusal without changing the filter', async () => {
-  const f = controlsFixture(6), client = createControlsClient({ ...f.options, stageFilter: async () => ({ kind: 'refused', refusal: { reason: 'pivot', range: f.range, message: "This change can't be made to a PivotTable." } }) })
+it('shows the current PivotTable refusal from the real guard without changing the filter', async () => {
+  const f = controlsFixture(6)
+  const structure = new StructuralIndex({ stamp: f.store.stamp, completeness: 'complete', missing: [], merges: [], tables: [], spills: [], drawings: [],
+    pivots: [{ r0: 0, r1: 6, c0: 0, c1: 9 }] })
+  const order = createIdentityOrder(), currentVisibility = visibilityFromHidden(createIntervalSet([]))
+  const candidateVisibility = visibilityFromHidden(createIntervalSet([{ r0: 2, r1: 2 }]))
+  const axes = { rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }) }
+  const projectionBefore = createSheetMetrics({ ...axes, order, visibility: currentVisibility })
+  const projectionAfter = createSheetMetrics({ ...axes, order, visibility: candidateVisibility })
+  const client = createControlsClient({ ...f.options, async stageFilter(filter) {
+    const outcome = await guardFilter({ range: filter?.range ?? f.range, candidateVisibility, currentVisibility: null, projectionBefore, projectionAfter, structure })
+    if (!outcome.ok) return { kind: 'refused', refusal: outcome.refusal }
+    return { kind: 'ready', publish: () => f.snapshot }
+  } })
   const ui = render(<FilterHarness fixture={f} client={client} />)
   await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
   fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
