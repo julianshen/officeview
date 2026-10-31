@@ -138,9 +138,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private get valueOverlay(): ValueOverlay | undefined { return overlayStates.get(this)?.overlay }
   get structureGen(): number { return overlayStates.get(this)?.structureGen ?? 0 }
   setValueOverlay(overlay: ValueOverlay | undefined): void {
-    if (overlay) assertOverlayCellsProtected(overlay)
     const previous = overlayStates.get(this)
+    // The overlay already installed is a no-op, checked before the (deferred T26 m1) assertion (Task 33 perf).
     if (previous?.overlay === overlay || (!previous && overlay === undefined)) return
+    if (overlay) assertOverlayCellsProtected(overlay)
     const structureGen = (previous?.structureGen ?? 0) + (sameOverlayMerges(previous?.overlay?.merges, overlay?.merges) ? 0 : 1)
     overlayStates.set(this, { overlay, structureGen })
     this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 })

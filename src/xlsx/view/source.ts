@@ -1,3 +1,4 @@
+import { RectCover } from './rectIndex'
 import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type SourceAllocationOptions } from './allocationAccount'
 import type { FormatAllocation } from '../formula/format'
 /**
@@ -204,6 +205,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   private readonly rows: readonly XlsxRow[]
   private readonly rowIndexes: readonly number[]
   private readonly dynamicAnchors: readonly { row: number; col: number }[]
+  private readonly savedPivots: readonly SourceRect[]
   private drawingCache?: DrawingAnchor[]
   private released = false
   /** `tables` undefined means the workbook table inventory is unavailable (the
@@ -254,6 +256,16 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       c0 = Math.min(c0, merge.minCol); c1 = Math.max(c1, merge.maxCol)
     }
     this.dynamicAnchors = dynamic
+    // The saved pivots' guarded rectangles, taken once from the file's definitions (T26 m2, Task 33 perf): a commit
+    // replaces the live definitions with moved locations, and a structural query reparses nothing.
+    const groups = [
+      ...(sheet.pivotRegions ?? []).map(region => { const table = parseRange(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] }),
+      ...(sheet.pivotTables ?? []).map(pivot => {
+        const table = parseRange(pivot.location.ref), pages = pivot.pageFields?.length ?? 0
+        return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
+      }),
+    ]
+    this.savedPivots = Object.freeze(uniqueRects(groups.flat()).map(rect => Object.freeze(rect)))
     this.baseExtent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
   }
   get stamp(): SourceStamp { return this.currentStamp }
@@ -271,9 +283,10 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       : used ?? base }
   }
   setValueOverlay(overlay: ValueOverlay | undefined): void {
-    if (overlay) assertOverlayCellsProtected(overlay)
     const previous = overlayStates.get(this)
+    // The overlay already installed is a no-op, checked before the (deferred T26 m1) assertion (Task 33 perf).
     if (previous?.overlay === overlay || (!previous && overlay === undefined)) return
+    if (overlay) assertOverlayCellsProtected(overlay)
     const structureGen = (previous?.structureGen ?? 0) + (sameOverlayMerges(previous?.overlay?.merges, overlay?.merges) ? 0 : 1)
     overlayStates.set(this, { overlay, structureGen })
     this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 })
@@ -710,15 +723,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     // Every saved pivot is guarded with its page-field cells, overlay or not (S3-G). Vacated cells read
     // empty but stay guarded inside a saved area (S3-L): the guard is saved ∪ the overlay's protected
     // bounds, whatever the producer names, never the overlay alone.
-    const groups = [
-      ...(this.sheet.pivotRegions ?? []).map(region => { const table = parseRange(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] }),
-      ...(this.sheet.pivotTables ?? []).map(pivot => {
-        const table = parseRange(pivot.location.ref), pages = pivot.pageFields?.length ?? 0
-        return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
-      }),
-    ]
-    const saved = uniqueRects(groups.flat())
-    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
+    const pivots = uniqueRects([...this.savedPivots, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
     return result
@@ -1123,11 +1128,12 @@ export function overlayIncompleteColumnPage(page: Page<ColumnEntry>, request: Co
  * anything is published. Owned rectangles inside one protected rectangle are accepted without a scan; only
  * the parts outside (vacated cells, which must be null) are read. */
 export function assertOverlayCellsProtected(overlay: ValueOverlay): void {
-  const inside = (row: number, col: number) => overlay.protectedRects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)
+  // Indexed (Task 33 perf): a rectangle's containment and a cell's cover are point queries, not scans of every bound.
+  const bounds = new RectCover(overlay.protectedRects)
   for (const rect of overlay.rects) {
-    if (overlay.protectedRects.some(bound => bound.r0 <= rect.r0 && bound.r1 >= rect.r1 && bound.c0 <= rect.c0 && bound.c1 >= rect.c1)) continue
+    if (bounds.contains(rect)) continue
     for (let row = rect.r0; row <= rect.r1; row++) for (let col = rect.c0; col <= rect.c1; col++) {
-      if (inside(row, col)) continue
+      if (bounds.has(row, col)) continue
       const value = overlay.cell(row, col)
       if (value !== undefined && value !== null) throw new TypeError(`ValueOverlay cell R${row}C${col} (${formatA1({ row, col })}) has a value outside protectedRects`)
     }
