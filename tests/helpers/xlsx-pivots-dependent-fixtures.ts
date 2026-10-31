@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { OfficePackage } from '../../src/core/zip'
 import { parseXlsx } from '../../src/xlsx/parse'
 import { loadAll } from './xlsx-pivots-load'
@@ -10,7 +11,7 @@ import type { XlsxDocument, XlsxCell } from '../../src/xlsx/types'
 import type { EvaluationValue } from '../../src/xlsx/formula/types'
 import type { LivePivotDataContext } from '../../src/xlsx/pivots/session/getpivotdata'
 
-export const F = '/Users/julianshen/prj/officeview/.worktrees/pivots/tests/fixtures/xlsx-pivots/'
+export const F = `${resolve(__dirname, '../fixtures/xlsx-pivots')}/`
 export const SEED = F + 'recipes/getpivotdata-seed.xlsx'
 export async function load(file = SEED): Promise<XlsxDocument> { return parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file)))) }
 export function cellAt(doc: XlsxDocument, sheet: string, ref: string): XlsxCell | undefined {

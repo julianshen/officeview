@@ -1,8 +1,8 @@
 import JSZip from 'jszip'
 import { readFileSync } from 'node:fs'
-import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
-import { SEED } from './xlsx-pivots-dependent-r2-helpers'
+import { OfficePackage } from '../../src/core/zip'
+import { parseXlsx } from '../../src/xlsx/parse'
+import { SEED } from './xlsx-pivots-dependent-fixtures'
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 /** The seed with extra Formulas!K<row> cells (formula + cached value) and workbook defined names, as Excel would save them. */
 export async function patchedSeedBytes(cells: Array<{ row: number; formula: string; cached: number | string; col?: string }>, names: Array<[string, string]> = [], pivotCells: Array<{ row: number; formula: string; cached: number | string }> = []): Promise<Uint8Array> {

@@ -1,5 +1,6 @@
 // Mounted: the real viewer wiring (InteractiveSheetDoc installPivot) on the GETPIVOTDATA seed.
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
@@ -8,7 +9,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
 
-const SEED = '/Users/julianshen/prj/officeview/.worktrees/pivots/tests/fixtures/xlsx-pivots/recipes/getpivotdata-seed.xlsx'
+const SEED = resolve(__dirname, 'fixtures/xlsx-pivots/recipes/getpivotdata-seed.xlsx')
 const load = async () => parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEED))))
 const value = (doc: XlsxDocument, ref: string) => doc.sheets.find(s => s.name === 'Formulas')!.rows.flatMap(r => r.cells).find(c => c.ref === ref)!.value
 afterEach(cleanup)

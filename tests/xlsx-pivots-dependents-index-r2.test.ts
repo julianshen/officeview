@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import { recomputeDependents } from '../src/xlsx/formula/workbook'
 import { registerGetPivotData, getPivotData } from '../src/xlsx/pivots/session/getpivotdata'
-import { cellAt, liveContext, changedOf } from './xlsx-pivots-dependent-r2-helpers'
-import { patchedSeed } from './xlsx-pivots-dependent-r2-patched'
+import { cellAt, liveContext, changedOf } from './helpers/xlsx-pivots-dependent-fixtures'
+import { patchedSeed } from './helpers/xlsx-pivots-dependent-patched'
 
 registerGetPivotData()
 

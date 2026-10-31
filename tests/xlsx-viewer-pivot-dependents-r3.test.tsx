@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import type { XlsxDocument } from '../src/xlsx/types'
-import { patchedSeed } from './xlsx-pivots-dependent-r2-patched'
+import { patchedSeed } from './helpers/xlsx-pivots-dependent-patched'
 
 const value = (doc: XlsxDocument, ref: string) => doc.sheets.find(s => s.name === 'Formulas')!.rows.flatMap(r => r.cells).find(c => c.ref === ref)!.value
 afterEach(cleanup)
