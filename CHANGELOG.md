@@ -37,6 +37,17 @@ in git history.
   compares the viewer with Excel for Mac 16.114 captures of every built-in table, pivot, slicer and timeline style
   and of the pivot layouts; 237 of 239 cases pass. Per-case tolerances and the known differences are in
   `docs/validation/xlsx-pivots.md`.
+- **Pivot recomputation engine (library only; no visible change yet).** Pivots can be recomputed from the cache
+  records saved in the file: layout forms, subtotals and grand totals, every summary function and "show values
+  as" mode, sorting, label/value/top-10/date filters, date and number grouping, and calculated fields. A
+  faithfulness check compares the result with the file's saved cells. Nothing calls the engine yet; pivot
+  interaction (Stage 3) will use it, and only when a pivot is proven faithful.
+  - The engine is checked against 126 Excel-saved cases built by driving Excel for Mac 16.114; 119 match Excel
+    cell for cell, and the other 7 are refused with a named reason: variance and standard-deviation totals, two
+    sort cases and calculated items. No case mismatches. Behaviours Excel was not measured on are refused, not
+    guessed.
+  - 1,000,000 records compute in about 140 ms (axes and values). The code is in the lazy pivots chunk; the eager
+    bundle is unchanged.
 
 ## [0.10.0] - 2026-10-28
 
