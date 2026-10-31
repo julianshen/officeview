@@ -266,6 +266,34 @@ describe('Task 21 sort, filters and group mapping', () => {
     expect(elapsed).toBeLessThan(1500)
   })
 
+  it('numeric range groups parse their captions once, not per record (PR #56 review)', () => {
+    const n = 6000
+    const cache = {
+      source: { type: 'worksheet' }, olap: false,
+      fields: [
+        { databaseField: true, sharedItems: { inline: false, items: Array.from({ length: n }, (_, i) => ({ type: 'number', value: i })) } },
+        { databaseField: false, fieldGroup: { base: 0, rangePr: { autoStart: false, autoEnd: false, groupBy: 'range', startNum: 0, endNum: n, groupInterval: 1 },
+          groupItems: [{ type: 'string', value: '<0' }, ...Array.from({ length: n }, (_, i) => ({ type: 'string', value: `${i}-${i}` })), { type: 'string', value: `>${n}` }] } },
+      ],
+    } as unknown as PivotCacheDefinition
+    const store: RecordStore = { count: n, bytes: 0, columns: [{ kind: 'shared', index: Uint32Array.from({ length: n }, (_, i) => i) }] }
+    const started = performance.now()
+    const grouped = groupColumn(store, cache, 1)
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(grouped).toMatchObject({ ok: true, value: Uint32Array.from({ length: n }, (_, i) => i + 1) })
+  })
+
+  it('a value filter by a calculated field naming no field (=1) computes (PR #56 review)', async () => {
+    const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/calc-constant.xlsx'))
+    const view = initialViewState(p!.def, p!.cache)
+    const dataIndex = view.data.findIndex(data => p!.cache.fields[data.field]?.formula === '1')
+    expect(dataIndex).toBeGreaterThanOrEqual(0)
+    view.filters = [filter({ fld: view.rows[0]!, type: 'valueGreaterThan', iMeasureFld: dataIndex, stringValue1: '0' })]
+    const axes = computeAxes(p!.store, p!.cache, p!.def, view)
+    expect(axes.ok, axes.ok ? '' : axes.diagnostic.message).toBe(true)
+    if (axes.ok) expect(axes.value.rows.some(line => line.type === 'data')).toBe(true)
+  })
+
   it('wildcard label filters are bounded: repeated stars on a non-matching label finish fast (PR #56 review)', () => {
     const pattern = '*a'.repeat(20) + 'b'
     const started = performance.now()

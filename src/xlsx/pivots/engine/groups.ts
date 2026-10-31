@@ -34,15 +34,13 @@ function missingGroup(groupItems: readonly PivotValue[]): number {
 function caption(item: PivotValue): string | undefined {
   return item.type === 'string' || item.type === 'number' ? String(item.value) : undefined
 }
-function rangeBucket(groupItems: readonly PivotValue[], start: number, end: number, interval: number, value: number): number {
-  const buckets: Array<{ index: number; start: number; end: number }> = []
-  const lower = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
-  const upper = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
-  if (value < start && lower >= 0) return lower
-  if (value < start) return -1
-  const count = Math.ceil((end - start) / interval)
-  const expectedUpper = start + count * interval
-  if (value > expectedUpper) return upper >= 0 ? upper : -1
+interface RangeLayout { lower: number; upper: number; buckets: Array<{ index: number; start: number; end: number }> }
+/** A range group's captions parsed once per group-item list (parsing per record was quadratic in the groups). */
+const RANGE_LAYOUTS = new WeakMap<readonly PivotValue[], RangeLayout>()
+function rangeLayout(groupItems: readonly PivotValue[]): RangeLayout {
+  const cached = RANGE_LAYOUTS.get(groupItems)
+  if (cached) return cached
+  const buckets: RangeLayout['buckets'] = []
   for (let i = 0; i < groupItems.length; i++) {
     const text = caption(groupItems[i]!)
     if (!text) continue
@@ -50,6 +48,21 @@ function rangeBucket(groupItems: readonly PivotValue[], start: number, end: numb
     if (match) buckets.push({ index: i, start: Number(match[1]), end: Number(match[2]) })
   }
   buckets.sort((a, b) => a.start - b.start)
+  const layout = {
+    lower: groupItems.findIndex(item => caption(item)?.trim().startsWith('<')),
+    upper: groupItems.findIndex(item => caption(item)?.trim().startsWith('>')),
+    buckets,
+  }
+  RANGE_LAYOUTS.set(groupItems, layout)
+  return layout
+}
+function rangeBucket(groupItems: readonly PivotValue[], start: number, end: number, interval: number, value: number): number {
+  const { lower, upper, buckets } = rangeLayout(groupItems)
+  if (value < start && lower >= 0) return lower
+  if (value < start) return -1
+  const count = Math.ceil((end - start) / interval)
+  const expectedUpper = start + count * interval
+  if (value > expectedUpper) return upper >= 0 ? upper : -1
   if (buckets.length !== count) return -1
   const decimalPlaces = (n: number) => Math.min(12, (String(n).split('.')[1] ?? '').length)
   const scale = 10 ** Math.max(decimalPlaces(start), decimalPlaces(end), decimalPlaces(interval), decimalPlaces(value))
