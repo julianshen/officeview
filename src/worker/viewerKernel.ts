@@ -517,8 +517,8 @@ export class ViewerKernel {
         }
         let outcome
         switch (command.kind) {
-          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); if (outcome.kind === 'open' && outcome.created && outcome.handle) onPivotOpenCreated?.(outcome.handle); break
-          case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.baseRevision, command.revision, command.delta, command.grantBytes); break
+          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal, command.fitGrantBytes); if (outcome.kind === 'open' && outcome.created && outcome.handle) onPivotOpenCreated?.(outcome.handle); break
+          case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.baseRevision, command.revision, command.delta, command.grantBytes, command.fitGrantBytes); break
           case 'pivotCommit': outcome = await session.pivotCommit(command.sheetId, command.pivot, command.revision, signal); break
           case 'pivotRelease': outcome = session.pivotRelease(command.sheetId, command.pivot); break
         }

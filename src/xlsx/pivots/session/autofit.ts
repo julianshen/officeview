@@ -19,6 +19,7 @@ import type { PivotTableDefinition } from '../model'
 import { compactLabelIndents, pivotButtons } from '../buttons'
 import { savedPivotLayout } from '../savedLayout'
 import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS } from '../../view/axisSizes'
+import { PIVOT_FIT_REPLY_BYTES } from '../../view/contracts'
 
 /** Excel's padding around a fitted cell's content, in 72-dpi pixels (points). */
 export const PIVOT_FIT_PADDING_PT = 10
@@ -60,8 +61,8 @@ export function* pivotAreaCells(def: PivotTableDefinition): Generator<{ row: num
 }
 /** Value cells a worker reply carries for the main thread's fit, at most (codex review T29-3: the payload is bounded). */
 export const PIVOT_FIT_PAYLOAD_CELLS = 32_768
-/** The estimated bytes of those cells, at most (long texts): 4 MiB. */
-export const PIVOT_FIT_PAYLOAD_BYTES = 4 * 1024 * 1024
+/** The estimated bytes of those cells, at most (long texts): the main thread's grant for them. */
+export const PIVOT_FIT_PAYLOAD_BYTES = PIVOT_FIT_REPLY_BYTES
 /** A carried cell's estimated bytes: the records (row, col, value object) and its text. */
 const payloadCellBytes = (value: unknown): number => {
   const shown = (value as { value?: unknown } | null)?.value

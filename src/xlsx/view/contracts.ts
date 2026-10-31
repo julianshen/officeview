@@ -11,6 +11,9 @@ import type { PivotDelta } from '../pivots/session/delta'
 import type { ChartModel } from '../../charts/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
+/** The main-ledger grant a pivot open or apply reserves for its reply's fit cells (Task 29): the worker stops the
+ * cells within it (none when the grant is 0). */
+export const PIVOT_FIT_REPLY_BYTES = 4 * 1024 * 1024
 export const MAX_REGION_STYLE_TABLES = 512
 /** Largest built-in table-style descriptor measured across all 144 table/pivot
  * names: 25,154 B excluding the shared workbook theme; 32 KiB leaves 1.3x headroom. */
@@ -681,8 +684,8 @@ export type WorkerCommand =
   | { kind: 'valueQuery'; requestId: string; owner: CacheIdentity; query: ColumnQuery }
   | { kind: 'search'; requestId: string; owner: WorkbookOwner; query: SearchQuery; cursor?: string }
   | { kind: 'read'; requestId: string; owner: CacheIdentity; query: SourceReadQuery }
-  | { kind: 'pivotOpen'; requestId: string; docId: string; sheetId: string; pivot: number; grantBytes: number }
-  | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; /** Latest revision the receiver has committed. */ baseRevision: number; /** Unique receiver request sequence, used only to cancel its stage. */ revision: number; delta: PivotDelta | 'reset'; grantBytes: number }
+  | { kind: 'pivotOpen'; requestId: string; docId: string; sheetId: string; pivot: number; grantBytes: number; /** Main's grant for the fit cells (Task 29 r2; absent: PIVOT_FIT_REPLY_BYTES, 0: none). */ fitGrantBytes?: number }
+  | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; /** Latest revision the receiver has committed. */ baseRevision: number; /** Unique receiver request sequence, used only to cancel its stage. */ revision: number; delta: PivotDelta | 'reset'; grantBytes: number; /** As pivotOpen's. */ fitGrantBytes?: number }
   | { kind: 'pivotCommit'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number }
   | { kind: 'pivotRelease'; requestId: string; docId: string; sheetId: string; pivot: number }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }

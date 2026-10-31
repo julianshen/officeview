@@ -62,7 +62,7 @@ import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
-import { PAGED_CELL_BYTES_ESTIMATE, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
+import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
@@ -829,14 +829,17 @@ function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotAppl
 }
 /** A layout's value cells as the replies carry them for the main thread's fit (Task 29): only the cells the fit reads
  * that hold a value, and none past the payload cap (codex review T29-3: the payload is bounded; no autofit then). */
-function layoutCells(fitPayload: WorkerPivotHandle['fitPayload'], def: PivotTableDefinition, layout: import('../xlsx/pivots/engine/place').PivotLayout): { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[] | undefined {
+function layoutCells(fitPayload: WorkerPivotHandle['fitPayload'], def: PivotTableDefinition, layout: import('../xlsx/pivots/engine/place').PivotLayout, fitBytes: number): { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[] | undefined {
+  if (fitBytes <= 0) return undefined
   const byCell = new Map(layout.cells.map(cell => [pivotCellKey(cell.row, cell.col), cell]))
   return fitPayload(def, (row, col) => {
     const cell = byCell.get(pivotCellKey(row, col))
     return !cell || cell.value.kind === 'empty' ? null
       : { value: cell.value.value, ...(cell.value.kind === 'error' ? { valueIsError: true } : {}), ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }) }
-  })
+  }, undefined, fitBytes)
 }
+/** Main's fit-cell grant: absent (a direct protocol client) is the full reply budget; malformed is none. */
+const fitGrant = (bytes: number | undefined): number => bytes === undefined ? PIVOT_FIT_REPLY_BYTES : Number.isSafeInteger(bytes) && bytes > 0 ? Math.min(bytes, PIVOT_FIT_REPLY_BYTES) : 0
 function pivotOverlayBytes(overlay: import('../xlsx/view/contracts').ValueOverlay, layout: import('../xlsx/pivots/engine/place').PivotLayout): number {
   const area = overlay.rects.reduce((sum, rect) => sum + (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1), 0)
   if (!Number.isSafeInteger(area)) return Number.POSITIVE_INFINITY
@@ -1273,7 +1276,9 @@ export class DocumentSession {
       this.pivotRuntimeEntries.delete(key)
     }
   }
-  async pivotOpen(sheetId: string, pivot: number, grantBytes: number, signal: AbortSignal): Promise<WorkerPivotOutcome> {
+  /** `fitGrantBytes`: main's grant for the reply's fit cells (Task 29 r2): the cells stop within it, none at 0. */
+  async pivotOpen(sheetId: string, pivot: number, grantBytes: number, signal: AbortSignal, fitGrantBytes?: number): Promise<WorkerPivotOutcome> {
+    const fitBytes = fitGrant(fitGrantBytes)
     if (this.closed || signal.aborted) return { kind: 'cancelled' }
     if (!Number.isSafeInteger(pivot) || pivot < 0 || !Number.isSafeInteger(grantBytes) || grantBytes <= 0) return { kind: 'refused', feature: 'pivot-protocol-invalid', message: 'The pivot session request is invalid.' }
     let assets: WorkerPivotAssets | undefined
@@ -1300,7 +1305,7 @@ export class DocumentSession {
     if (!cache) return early({ kind: 'refused', feature: 'pivot-cache-unreadable', message: `Pivot ${def.name} has no readable cache definition.` })
     const handleKey = pivotHandleKey(sheetId, pivot)
     const prior = this.pivotHandles.get(handleKey)
-    if (prior) return early({ kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), ...withCells(layoutCells(prior.fitPayload, prior.session.def, prior.session.layout)), created: false })
+    if (prior) return early({ kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), ...withCells(layoutCells(prior.fitPayload, prior.session.def, prior.session.layout, fitBytes)), created: false })
     const runtimeKey = assets.runtimeKey
     const runtimeBytes = assets.retainedBytes + assets.metadataBytes
     let runtimeHeld = false
@@ -1414,7 +1419,7 @@ export class DocumentSession {
     catch (cause) { releaseShare(); return signal.aborted ? { kind: 'cancelled' } : { kind: 'refused', feature: 'pivot-saved-cells-unavailable', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Saved pivot cells could not be read.' } }
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     const existing = this.pivotHandles.get(handleKey)
-    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), ...withCells(layoutCells(existing.fitPayload, existing.session.def, existing.session.layout)), created: false } }
+    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), ...withCells(layoutCells(existing.fitPayload, existing.session.def, existing.session.layout, fitBytes)), created: false } }
     const [{ openPivotSession }, { pivotMenuModel }, { savedPivotLayout }, { pivotFitPayload }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu'), import('../xlsx/pivots/savedLayout'), import('../xlsx/pivots/session/autofit')])
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     // By sheet and name (R2-4); an unqualified source naming same-named pivots on several sheets links none (S3-Q).
@@ -1461,14 +1466,14 @@ export class DocumentSession {
     shareHeld = false
     runtimeTransferred = true
     assetsTransferred = true
-    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), ...withCells(layoutCells(pivotFitPayload, opened.value.def, opened.value.layout)), created: true, handle }
+    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), ...withCells(layoutCells(pivotFitPayload, opened.value.def, opened.value.layout, fitBytes)), created: true, handle }
     } finally {
       releaseShare()
       releaseRuntime()
       if (!assetsTransferred) releaseAssets?.()
     }
   }
-  pivotApply(sheetId: string, pivot: number, baseRevision: number, requestRevision: number, delta: import('../xlsx/pivots/session/delta').PivotDelta | 'reset', grantBytes: number): WorkerPivotOutcome {
+  pivotApply(sheetId: string, pivot: number, baseRevision: number, requestRevision: number, delta: import('../xlsx/pivots/session/delta').PivotDelta | 'reset', grantBytes: number, fitGrantBytes?: number): WorkerPivotOutcome {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot))
     if (!handle || this.closed) return { kind: 'refused', feature: 'pivot-session-released', message: 'The pivot session is not open.' }
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0 || baseRevision > handle.committedWireRevision
@@ -1490,7 +1495,8 @@ export class DocumentSession {
     if (!entry) return { kind: 'quota', requiredBytes: bytes, limitBytes: this.memory.limitBytes }
     handle.highestWireRevision = revision
     handle.staged = { wireRevision: revision, requestRevision, result: applied.value, overlay, entry }
-    const cells = handle.fitPayload(applied.value.def, (row, col) => overlay.cell(row, col))
+    const fitBytes = fitGrant(fitGrantBytes)
+    const cells = fitBytes > 0 ? handle.fitPayload(applied.value.def, (row, col) => overlay.cell(row, col), undefined, fitBytes) : undefined
     // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
     return { kind: 'apply', revision, ...(applied.value.notice ? { notice: applied.value.notice } : {}), def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), ...withCells(cells),

@@ -3,7 +3,7 @@ import type { PivotDelta } from '../xlsx/pivots/session/delta'
 import type { PivotTableDefinition } from '../xlsx/pivots/model'
 import type { PivotMenuModel } from '../xlsx/pivots/session/menu'
 import type { ChartModel } from '../charts/model'
-import type { ValueOverlayCell, WorkerReply } from '../xlsx/view/contracts'
+import { PIVOT_FIT_REPLY_BYTES, type ValueOverlayCell, type WorkerReply } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
 import type { ViewerClient } from './viewerClient'
 import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
@@ -35,6 +35,10 @@ export interface RemotePivotHost {
   readonly client: ViewerClient
   isClosed(): boolean
   /** Invoked only after the worker acknowledges the matching commit. */
+  /** Main-ledger receiving grants (Task 29 r2), as `RemoteWorkbook.request` grants its replies: `reserve` admits the
+   * fit cells' grant before a command is posted (false: none, the reply carries no cells); `settle` charges the
+   * arrived reply's stamped size from arrival, adopting the grant. Absent: no grant is sent (the worker's default). */
+  readonly replyGrant?: { reserve(owner: string, bytes: number): boolean; settle(owner: string, reply: WorkerReply): void; release(owner: string): void }
   committed?(sheetId: number, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void
   released?(sheetId: number, pivot: number, valueGen?: number): void
 }
@@ -52,6 +56,18 @@ export class RemotePivotSessions {
   private closed = false
   constructor(private readonly host: RemotePivotHost) {}
 
+  /** Sends a pivot open or apply under a main-ledger grant for its fit cells (see `RemotePivotHost.replyGrant`). */
+  private sendGranted<K extends 'pivotOpen' | 'pivotApply'>(command: Extract<import('../xlsx/view/contracts').WorkerCommand, { kind: 'pivotOpen' | 'pivotApply' }> & { kind: K }): Promise<WorkerReply<K>> {
+    const grant = this.host.replyGrant
+    const send = (sent: typeof command) => this.host.client.send(sent as never) as Promise<WorkerReply<K>>
+    if (!grant) return send(command)
+    const owner = `pivot-reply:${command.requestId}`
+    const fitGrantBytes = grant.reserve(owner, PIVOT_FIT_REPLY_BYTES) ? PIVOT_FIT_REPLY_BYTES : 0
+    return send({ ...command, fitGrantBytes }).then(
+      reply => { grant.settle(owner, reply); return reply },
+      error => { grant.release(owner); throw error })
+  }
+
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<RemotePivotOpen | { kind: 'refused'; message: string }> {
     const key = keyOf(sheetId, pivot)
     let entry = this.entries.get(key)
@@ -61,7 +77,7 @@ export class RemotePivotSessions {
     const requestId = this.host.client.nextRequestId()
     const generation = entry.generation
     entry.openRequest = requestId
-    const request = this.host.client.send({ kind: 'pivotOpen', requestId, docId: this.host.docId, sheetId: String(sheetId), pivot, grantBytes: WORKER_BUDGETS[this.host.profile] / 4 })
+    const request = this.sendGranted<'pivotOpen'>({ kind: 'pivotOpen', requestId, docId: this.host.docId, sheetId: String(sheetId), pivot, grantBytes: WORKER_BUDGETS[this.host.profile] / 4 })
     entry.open = this.awaitRequest(request, requestId, signal).then(reply => {
       if (generation !== entry!.generation || this.entries.get(key) !== entry) return { kind: 'refused' as const, message: 'The pivot session was released while opening.' }
       if (reply.kind === 'cancelled') return { kind: 'refused' as const, message: messageOf(reply) }
@@ -81,7 +97,7 @@ export class RemotePivotSessions {
     entry.applyRequest = requestId
     let staged: RemotePivotApplyPayload | undefined
     try {
-      const reply = await this.host.client.send({ kind: 'pivotApply', requestId, docId: this.host.docId, sheetId: String(sheetId), pivot, baseRevision, revision: requestRevision, delta, grantBytes: WORKER_BUDGETS[this.host.profile] / 4 })
+      const reply = await this.sendGranted<'pivotApply'>({ kind: 'pivotApply', requestId, docId: this.host.docId, sheetId: String(sheetId), pivot, baseRevision, revision: requestRevision, delta, grantBytes: WORKER_BUDGETS[this.host.profile] / 4 })
       if (generation !== entry.generation) return { kind: 'stale' }
       if (reply.kind !== 'complete' || reply.result.kind !== 'pivotApply') return reply.kind === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', message: messageOf(reply) }
       staged = reply.result

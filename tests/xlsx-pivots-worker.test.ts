@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { overlayUsedCounts, overlayUsedExtent, type WorkerCommand, type WorkerReply } from '../src/xlsx/view/contracts'
+import { overlayUsedCounts, overlayUsedExtent, PIVOT_FIT_REPLY_BYTES, type WorkerCommand, type WorkerReply } from '../src/xlsx/view/contracts'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { ViewerKernel } from '../src/worker/viewerKernel'
@@ -803,6 +803,43 @@ describe('worker pivot protocol', () => {
       if (read.kind === 'cell') expect(read.cell.value).toEqual(changed.value?.value)
       const workerGen = kernel.session(docId)!.source.store(remoteSheetId).stamp.valueGen
       expect(remote.identity(remoteSheetId).valueGen).toBe(workerGen)
+    } finally {
+      await remote.close()
+      await port.idle()
+    }
+  })
+
+  it('Task 29 r2: a pivot reply\'s fit cells are granted on the main ledger before it is sent and charged from arrival', async () => {
+    const blob = new Blob([new Uint8Array(readFileSync(FIXTURE))])
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    const port = connectInProcess(kernel), client = new ViewerClient(port)
+    const docId = id(), sheetId = Number(sheet.sheetId ?? '1')
+    const opened = await openRemoteWorkbook(client, docId, blob, 'D')
+    if ('kind' in opened) throw new Error(`Open refused: ${JSON.stringify(opened)}`)
+    const remote = new RemoteWorkbook(client, opened)
+    const sent: Array<{ kind: string; fitGrantBytes?: number; reserved: number; requestId: string }> = []
+    const send = client.send.bind(client)
+    ;(client as any).send = (command: WorkerCommand) => {
+      if (command.kind === 'pivotOpen' || command.kind === 'pivotApply') sent.push({ kind: command.kind, fitGrantBytes: command.fitGrantBytes, requestId: command.requestId, reserved: remote.mainLedger.ownerBytes('replies', `pivot-reply:${command.requestId}`) })
+      return send(command)
+    }
+    try {
+      const result = await remote.pivots.open(sheetId, 0, new AbortController().signal)
+      if (result.kind !== 'open') throw new Error(JSON.stringify(result))
+      expect(sent[0]).toMatchObject({ kind: 'pivotOpen', fitGrantBytes: PIVOT_FIT_REPLY_BYTES, reserved: PIVOT_FIT_REPLY_BYTES })
+      // Arrived: the grant became the reply's charge, for as long as any of it (its cells) is kept.
+      expect(remote.mainLedger.ownerBytes('replies', `pivot-reply:${sent[0]!.requestId}`)).toBe(0)
+      expect(result.cells?.length).toBeGreaterThan(0)
+      expect(remote.mainLedger.hasLifetime(result.cells!)).toBe(true)
+      // No room for the grant: the change still applies, without cells (that change is not autofitted).
+      remote.mainLedger.set('copy', 'filler', 64 * 1024 * 1024)
+      const applied = await remote.pivots.apply(sheetId, 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+      expect(applied.kind).toBe('committed')
+      expect(sent.at(-1)).toMatchObject({ kind: 'pivotApply', fitGrantBytes: 0, reserved: 0 })
+      if (applied.kind === 'committed') expect(applied.cells).toBeUndefined()
+      remote.mainLedger.set('copy', 'filler', 0)
     } finally {
       await remote.close()
       await port.idle()

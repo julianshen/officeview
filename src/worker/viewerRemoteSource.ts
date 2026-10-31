@@ -310,6 +310,23 @@ export class RemoteWorkbook implements WorkbookSource {
     this.pivotDisplayCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4, 'pivotDisplay')
     this.pivots = new RemotePivotSessions({
       docId: this.docId, profile: this.profile, client: this.client, isClosed: () => this.closed,
+      // The fit cells' receiving grant (Task 29 r2): reserved before posting, then the reply is charged from arrival
+      // with its stamped size, as `request` charges replies (the grant adopted, any excess on top).
+      replyGrant: {
+        reserve: (owner, bytes) => {
+          if (this.closed || this.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.profile]) return false
+          this.mainLedger.set('replies', owner, bytes)
+          return true
+        },
+        settle: (owner, reply) => {
+          const targets = leaseTargets(reply), bytes = stampedBytes(reply, MAIN_THREAD_BUDGETS[this.profile])
+          const moved = Math.min(bytes, this.mainLedger.ownerBytes('replies', owner))
+          if (moved > 0) this.mainLedger.adoptWhileReachable('replies', owner, 'replies', targets, moved)
+          this.mainLedger.release('replies', owner)
+          if (bytes > moved) this.mainLedger.chargeWhileReachable('replies', targets, bytes - moved)
+        },
+        release: owner => this.mainLedger.release('replies', owner),
+      },
       committed: (sheetId, pivot, result, valueGen) => this.publishPivotCommit(String(sheetId), pivot, result, valueGen),
       released: (sheetId, pivot, valueGen) => this.withdrawPivotCommit(String(sheetId), pivot, valueGen),
     })
