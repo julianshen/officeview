@@ -14,10 +14,10 @@
  *   field with a level below it on its axis (Task 24 interaction-collapse-all-*: Region on rows, Year above Values on
  *   columns); the innermost field of each axis is left alone.
  * - `filter`: a filter of the same family on the field (label or date; value or top-10, the engine's two kinds,
- *   axes.ts) is replaced in place. A filter of the other family on a field that already has one refuses with the
- *   engine's "more than one filter" feature, `pivot-engine-unmeasured`, whatever `multipleFieldFilters` says: no
- *   oracle case combines the two families on one field, so neither Excel's replace (one filter per field) nor its
- *   combined evaluation (multiple filters allowed) is measured (§9).
+ *   axes.ts) is replaced in place. A filter of the other family on a field that already has one replaces it when
+ *   the pivot allows one filter per field (`multipleFieldFilters="0"`, Ruling S3-Y: Excel's filter panel resets the
+ *   other family, owner-filter-two-families); with several filters allowed it still refuses with the engine's "more
+ *   than one filter" feature, `pivot-engine-unmeasured` (the combined evaluation is not measured, §9).
  * - `clearFilters` drops the field's pivot filters and shows its hidden items, and a page field goes back to (All):
  *   Excel's "Clear Filter From" (Task 24 interaction-clear-*, -clear-filters-hidden-items, -filter-date-clear).
  * - Item indices stay those of the start file's `items` list across a delta sequence, a sort included: the view never
@@ -120,8 +120,11 @@ export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTa
       const kind = family(delta.filter)
       const same = view.filters.findIndex(filter => filter.fld === field && family(filter) === kind)
       if (same >= 0) return { ok: true, value: { ...view, filters: view.filters.map((filter, k) => k === same ? delta.filter : filter) } }
-      if (view.filters.some(filter => filter.fld === field))
+      if (view.filters.some(filter => filter.fld === field)) {
+        // S3-Y: one filter per field replaces the other family's, keeping its place in the evaluation order.
+        if (!def.multipleFieldFilters) return { ok: true, value: { ...view, filters: view.filters.flatMap(filter => filter.fld !== field ? [filter] : filter === view.filters.find(other => other.fld === field) ? [delta.filter] : []) } }
         return refuse('pivot-engine-unmeasured', `field ${field} would have a label or date filter and a value or top-10 filter; combining them is not measured`)
+      }
       return { ok: true, value: { ...view, filters: [...view.filters, delta.filter] } }
     }
     case 'clearFilters': {

@@ -135,7 +135,7 @@ describe('applyDelta maps each kind onto the view', () => {
     expect(refusal(apply(p, view, { kind: 'page', field: REGION, selected: 'all' }))).toBe('pivot-delta-invalid')
   })
 
-  it('filter replaces that field\'s filter of the same family; another family refuses as the engine does', async () => {
+  it('filter replaces that field\'s filter of the same family; another family replaces it with one filter per field (S3-Y), else refuses', async () => {
     const p = await baseline()
     const view = initialViewState(p.def, p.cache)
     const first = ok(apply(p, view, { kind: 'filter', field: PRODUCT, filter: labelFilter(PRODUCT, 'B') }))
@@ -147,11 +147,11 @@ describe('applyDelta maps each kind onto the view', () => {
     expect(ok(apply(p, value, { kind: 'filter', field: REGION, filter: topFilter(REGION, 2) })).filters).toEqual([topFilter(REGION, 2)])
     // Other fields keep their filters.
     expect(ok(apply(p, first, { kind: 'filter', field: REGION, filter: valueFilter(REGION, 50000) })).filters).toEqual([labelFilter(PRODUCT, 'B'), valueFilter(REGION, 50000)])
-    // A second filter of the other family on one field is the engine's "more than one filter" refusal
-    // (pivot-engine-unmeasured), never a silent replace or an unmeasured combination: the seed saves
-    // multipleFieldFilters="0", and allowing multiple filters does not change it.
+    // Ruling S3-Y: the seed saves multipleFieldFilters="0", so a filter of the other family replaces the field's
+    // filter (Excel's panel resets the label filter; owner-filter-two-families). With several filters allowed the
+    // combination is unmeasured: the engine's "more than one filter" refusal (pivot-engine-unmeasured).
     expect(p.def.multipleFieldFilters).toBe(false)
-    expect(refusal(apply(p, first, { kind: 'filter', field: PRODUCT, filter: valueFilter(PRODUCT, 1000) }))).toBe('pivot-engine-unmeasured')
+    expect(ok(apply(p, first, { kind: 'filter', field: PRODUCT, filter: valueFilter(PRODUCT, 1000) })).filters).toEqual([valueFilter(PRODUCT, 1000)])
     const multi = { ...p, def: { ...p.def, multipleFieldFilters: true } }
     expect(refusal(apply(multi, first, { kind: 'filter', field: PRODUCT, filter: valueFilter(PRODUCT, 1000) }))).toBe('pivot-engine-unmeasured')
     // The filter must name the delta's field.
