@@ -16,8 +16,11 @@
  * Rulings recorded here (Task 25):
  * - Overlap (§7.1): a cell the new rectangle or page cells cover is "this pivot's" when it lies in the pivot's SAVED
  *   area (the overlay replaces those saved cells) or its current area; any other cell for which `occupied` is true
- *   refuses the change with `pivot-overlap`. `occupied` answers for the sheet as loaded (non-empty cells; Task 29 adds
- *   formatting-only cells if Task 24 measures that Excel counts them).
+ *   refuses the change with `pivot-overlap`. `occupied` answers for the sheet as loaded: a cell with a value, or a
+ *   cell of another pivot. A formatting-only cell is not occupied: the pivot grows over it and its format replaces
+ *   the cell's (Ruling S3-V, owner-overlap-format). Excel 16.114 turns an overlapping pivot into a #SPILL! anchor
+ *   with no alert (owner-overlap-value, -pivot); the viewer keeps §7.1's refusal, the pivot unchanged, with its own
+ *   message naming the blocking cell (Ruling S3-U, `pivotOverlapMessage`).
  * - `vacated` is the current area (rectangle and page cells) minus the new one, as disjoint row-band rectangles.
  * - Revision 0 and `reset()` carry the saved definition object itself and the saved state's layout, its implicit
  *   captions filled with the saved text; `reset()` is pure like `apply` (the caller commits it, as Task 27 stages it).
@@ -92,8 +95,13 @@ export interface PivotSession {
  */
 export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
 
-/** Excel's message for a change that would overlap existing data (§7.1; spec text, until Task 24 measures it). */
-export const PIVOT_OVERLAP_MESSAGE = 'A PivotTable report cannot overlap another PivotTable report.'
+/** The refusal of a change that would overlap a cell outside the pivot (Ruling S3-U: Excel shows no alert, it turns
+ * the pivot into a #SPILL! anchor; the viewer refuses and names the blocking cell). */
+export function pivotOverlapMessage(row: number, col: number, sheet: string): string {
+  let letters = ''
+  for (let n = col + 1; n > 0; n = Math.floor((n - 1) / 26)) letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters
+  return `This change would overlap cell ${letters}${row + 1} on ${sheet}.`
+}
 
 const refuse = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
 const cellName = (row: number, col: number) => `R${row + 1}C${col + 1}`
@@ -249,7 +257,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       const own = [...savedArea, ...current]
       for (const rect of area) for (let row = rect.minRow; row <= rect.maxRow; row++) {
         for (const [c0, c1] of uncovered(row, rect.minCol, rect.maxCol, own)) for (let col = c0; col <= c1; col++) {
-          if (occupied(row, col)) return refuse('pivot-overlap', `${PIVOT_OVERLAP_MESSAGE} (${cellName(row, col)})`)
+          if (occupied(row, col)) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
         }
       }
       const live = liveDefinition(def, view.value, next.value.axes, layout.value)
