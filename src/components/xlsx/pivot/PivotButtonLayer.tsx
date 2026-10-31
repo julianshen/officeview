@@ -5,13 +5,16 @@
  * (so grid selection never sees its clicks, `isViewerUiTarget`) and named by its field and action, or by the pivot's
  * refusal reason once the pivot is known not to be interactive (§7.6; the buttons stay painted).
  *
- * The layer is one roving-tabindex toolbar: Tab reaches its one stop, arrows, Home and End move between its buttons,
- * Escape returns to the grid. On a coarse pointer each target is at least 44 × 44 px, centred on its painted box.
+ * Ruling S3-J: the grid keeps ONE Tab stop. The buttons are for the pointer only (tabIndex -1, still named); the
+ * keyboard reaches each control from its gridcell: Alt+↓ opens the cell's filter or page menu, Alt+→ expands and
+ * Alt+← collapses its item (`controlsAt`), and the gridcell's accessible description announces the control
+ * (`cellControlDescription`). On a coarse pointer a target is 44 px wide and as tall as 44 px within its own row band,
+ * so a ± on the next row never swallows this one.
  *
  * Lazy: this module is the pivot-controls chunk the viewer imports on a sheet with pivots; it carries the client
  * (and through it the `pivots` chunk) and the menus.
  */
-import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
 import type { CacheIdentity } from '../../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../../xlsx/view/projection'
 import { logicalToViewport, type ViewportSize } from '../../../xlsx/view/scrollWindow'
@@ -30,7 +33,8 @@ export type PivotUiState =
   | { status: 'opening' }
   | { status: 'open'; revision: number; verified: ReadonlySet<PivotDeltaKind>; model: PivotMenuModel }
   | { status: 'refused'; diagnostic: PivotDiagnostic }
-export interface PivotMenuRequest { sheet: number; pivot: number; field: number; kind: 'field' | 'page'; invoker: HTMLElement }
+/** `invoker` gets focus back (the grid, for a keyboard route); `anchor` places the menu (the pointer button). */
+export interface PivotMenuRequest { sheet: number; pivot: number; field: number; kind: 'field' | 'page'; invoker: HTMLElement; anchor?: HTMLElement }
 export interface PivotControllerHost {
   client: PivotClient
   announce(message: string): void
@@ -89,7 +93,7 @@ export class PivotController {
     return next
   }
   /** A button's use: opens the pivot if needed, then applies a ± change or opens the button's menu. */
-  async activate(sheet: number, pivot: number, button: ButtonPlacement, invoker: HTMLElement): Promise<void> {
+  async activate(sheet: number, pivot: number, button: ButtonPlacement, invoker: HTMLElement, anchor?: HTMLElement): Promise<void> {
     const state = await this.open(sheet, pivot)
     if (state.status !== 'open') return
     if (button.kind === 'expand' || button.kind === 'collapse') {
@@ -97,7 +101,7 @@ export class PivotController {
       await this.apply(sheet, pivot, { kind: 'collapse', field: button.field, item: button.item, collapsed: button.kind === 'collapse' })
       return
     }
-    this.host.openMenu({ sheet, pivot, field: button.field, kind: button.kind === 'page' ? 'page' : 'field', invoker })
+    this.host.openMenu({ sheet, pivot, field: button.field, kind: button.kind === 'page' ? 'page' : 'field', invoker, ...(anchor ? { anchor } : {}) })
   }
   /** Applies (and, through the client, commits and installs) one change; refusals are announced (S2-AJ and the rest). */
   apply(sheet: number, pivot: number, delta: PivotDelta | 'reset'): Promise<boolean> {
@@ -140,6 +144,36 @@ function drillsOf(def: PivotTableDefinition): Map<number, boolean> {
   }
   return map
 }
+// Every control by cell, per definition: the keyboard route and the gridcell descriptions ask per cell.
+const controls = new WeakMap<PivotTableDefinition, Map<number, ButtonPlacement[]>>()
+function controlsOf(def: PivotTableDefinition): Map<number, ButtonPlacement[]> {
+  let map = controls.get(def)
+  if (!map) {
+    map = new Map()
+    for (const button of placementsOf(def)) { const key = button.row * CELL_KEY + button.col; const list = map.get(key); if (list) list.push(button); else map.set(key, [button]) }
+    controls.set(def, map)
+  }
+  return map
+}
+/** The pivot controls a cell carries (usually one), with their pivot index. */
+export function controlsAt(defs: readonly PivotTableDefinition[] | undefined, row: number, col: number): Array<{ pivot: number; button: ButtonPlacement }> {
+  const out: Array<{ pivot: number; button: ButtonPlacement }> = []
+  defs?.forEach((def, pivot) => { for (const button of controlsOf(def).get(row * CELL_KEY + col) ?? []) out.push({ pivot, button }) })
+  return out
+}
+/** What a gridcell with a pivot control announces in its accessible description (Ruling S3-J). */
+export function cellControlDescription(controller: PivotController, sheet: number, defs: readonly PivotTableDefinition[] | undefined, row: number, col: number, cellText?: (row: number, col: number) => string): string | undefined {
+  const found = controlsAt(defs, row, col)
+  if (!found.length) return undefined
+  const parts = found.map(({ pivot, button }) => {
+    const labels = controller.client.labels?.(sheet, pivot)
+    const field = labels?.field(button.field) ?? cellText?.(row, col) ?? `Field ${button.field + 1}`
+    return button.kind === 'filter' ? `Filter: ${field}, Alt+Down to open` : button.kind === 'page' ? `Report filter: ${field}, Alt+Down to open`
+      : button.kind === 'collapse' ? 'Expanded, Alt+Left to collapse' : 'Collapsed, Alt+Right to expand'
+  })
+  const state = controller.state(sheet, found[0]!.pivot)
+  return state.status === 'refused' ? `${parts.join('; ')}; not available: ${state.diagnostic.message}` : parts.join('; ')
+}
 /** aria-expanded for a pivot cell carrying a ± button (§8: expanded/collapsed state on row headers). */
 export function expandedAt(defs: readonly PivotTableDefinition[] | undefined, row: number, col: number): boolean | undefined {
   for (const def of defs ?? []) { const expanded = drillsOf(def).get(row * CELL_KEY + col); if (expanded !== undefined) return expanded }
@@ -156,8 +190,6 @@ export interface PivotButtonLayerProps {
   touch: boolean
   /** The cell's shown text: names a button when the client has no labels. */
   cellText?(row: number, col: number): string
-  /** Escape: focus goes back to the grid. */
-  onEscape(): void
 }
 interface Target { key: string; pivot: number; button: ButtonPlacement; box: { x: number; y: number; width: number; height: number }; action: string; refused?: string }
 
@@ -188,44 +220,28 @@ export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | n
       if (cell.x >= viewport.width || cell.y >= viewport.height || cell.x + cell.width <= 0 || cell.y + cell.height <= 0) continue
       let box = button.kind === 'expand' || button.kind === 'collapse' ? drillBox(cell, ppt) : dropdownBox(cell, ppt)
       if (touch) {
-        const width = Math.max(TOUCH, box.width), height = Math.max(TOUCH, box.height)
-        box = { x: box.x + box.width / 2 - width / 2, y: box.y + box.height / 2 - height / 2, width, height }
+        // 44 px wide; as tall as 44 px within the cell's own row band, so the next row's target never covers it.
+        const width = Math.max(TOUCH, box.width)
+        const top = Math.max(cell.y, box.y + box.height / 2 - TOUCH / 2), bottom = Math.min(cell.y + cell.height, box.y + box.height / 2 + TOUCH / 2)
+        box = { x: box.x + box.width / 2 - width / 2, y: Math.min(top, box.y), width, height: Math.max(bottom, box.y + box.height) - Math.min(top, box.y) }
       }
       targets.push({ key: `${pivot}:${button.row}:${button.col}`, pivot, button, box, action: actionName(controller, sheet, pivot, button, props.cellText),
         ...(state.status === 'refused' ? { refused: state.diagnostic.message } : {}) })
     }
   })
-  const [focusKey, setFocusKey] = useState<string | null>(null)
-  const stop = targets.find(target => target.key === focusKey) ?? targets[0]
-  const layer = useMemo(() => ({ current: null as HTMLDivElement | null }), [])
   if (!targets.length) return null
-  const move = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    let next: number | undefined
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = Math.min(targets.length - 1, index + 1)
-    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = Math.max(0, index - 1)
-    else if (event.key === 'Home') next = 0
-    else if (event.key === 'End') next = targets.length - 1
-    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onEscape(); return }
-    if (next === undefined) return
-    event.preventDefault(); event.stopPropagation()
-    const target = targets[next]!
-    setFocusKey(target.key)
-    layer.current?.querySelector<HTMLButtonElement>(`[data-pivot-key="${target.key}"]`)?.focus()
-  }
   const style: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, overflow: 'hidden', pointerEvents: 'none' }
-  return <div ref={node => { layer.current = node }} role="toolbar" aria-label="Pivot table controls" aria-orientation="horizontal" data-officeview-ui="pivot-layer" style={style}>
-    {targets.map((target, index) => {
+  return <div data-officeview-ui="pivot-layer" style={style}>
+    {targets.map(target => {
       const { button } = target
       const drill = button.kind === 'expand' || button.kind === 'collapse'
       const name = target.refused ?? target.action
+      // Pointer only (Ruling S3-J): never a Tab stop; the keyboard uses the gridcell's Alt+arrow route.
       return <button key={target.key} type="button" data-officeview-ui="pivot-button" data-pivot-key={target.key} data-pivot={target.pivot} data-row={button.row} data-col={button.col}
-        tabIndex={target === stop ? 0 : -1} aria-label={name} title={name} {...(target.refused ? { 'aria-disabled': 'true', 'aria-description': target.action } : {})}
+        tabIndex={-1} aria-label={name} title={name} {...(target.refused ? { 'aria-disabled': 'true', 'aria-description': target.action } : {})}
         {...(drill ? { 'aria-expanded': button.kind === 'collapse' } : { 'aria-haspopup': 'dialog' as const })}
-        onFocus={() => setFocusKey(target.key)} onKeyDown={event => move(event, index)}
         onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-        onClick={event => { event.stopPropagation(); setFocusKey(target.key); void controller.activate(sheet, target.pivot, button, event.currentTarget) }}
-        // Transparent over the painted button; the focus ring is the one visible part.
-        className="ov:rounded-control ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent"
+        onClick={event => { event.stopPropagation(); void controller.activate(sheet, target.pivot, button, event.currentTarget) }}
         style={{ position: 'absolute', left: target.box.x, top: target.box.y, width: target.box.width, height: target.box.height, padding: 0, margin: 0, border: 0, background: 'transparent', cursor: target.refused ? 'default' : 'pointer', pointerEvents: 'auto' }} />
     })}
   </div>

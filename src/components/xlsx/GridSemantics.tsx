@@ -15,13 +15,16 @@ import { ResizeHandles, type ResizeRequest } from './sheetResize'
 import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
 import { fade, Pop, Presence } from '../motion/presets'
 
-/** `expanded`: the cell carries a pivot ± button (spec §8: expanded/collapsed state on row headers). */
-export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable'; expanded?: boolean }
+/** `expanded`: the cell carries a pivot ± button (spec §8: expanded/collapsed state on row headers). `control`: the
+ * cell's control and its key, announced in the cell's description (a pivot button, Ruling S3-J). */
+export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable'; expanded?: boolean; control?: string }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
 export interface GridPopup {
   content: ReactNode; invoker: HTMLElement | null; close: () => void; /** Accessible name of the popup (default "Column filter"). */ label?: string
   /** Where it opens: under the invoking column header (default), or under the invoker itself (a pivot button over a cell). */
   anchor?: 'header' | 'invoker'
+  /** The element an invoker anchor opens under, when focus returns elsewhere (a keyboard route returns to the grid). */
+  anchorElement?: HTMLElement
 }
 export interface GridSemanticsProps {
   owner: CacheIdentity
@@ -59,6 +62,9 @@ export interface GridSemanticsProps {
   /** Controls over the cell area that are not grid content (pivot buttons): outside the grid's ARIA tree and its
    * pointer selection, positioned over the cells (left: gutter, top: header). */
   cellControls?: ReactNode
+  /** A cell control's keyboard route from the focused grid (Ruling S3-J): Alt+↓ opens, Alt+→ expands, Alt+← collapses
+   * the active cell's control. True when the cell has such a control (the key is then the grid's). */
+  onCellControl?: (at: SourceCell, action: 'open' | 'expand' | 'collapse', grid: HTMLElement) => boolean
 }
 const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
   ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
@@ -70,6 +76,7 @@ export const STATUS_BAR_HEIGHT = 24
 const POPUP_MAX_WIDTH = 420
 /** An invoker-anchored popup opens no lower than this many px above the cell area's bottom. */
 const POPUP_MIN_ROOM = 240
+const cellControlKeys: Record<string, 'open' | 'expand' | 'collapse' | undefined> = { ArrowDown: 'open', ArrowRight: 'expand', ArrowLeft: 'collapse' }
 const navigationKeys = new Set<string>(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'PageUp', 'PageDown'])
 /** The parent commits viewport and selection together, so the new descendant
  * is represented in the same React publication as its ID. */
@@ -196,14 +203,15 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   useLayoutEffect(() => {
     const wrapper = wrapperRef.current, invoker = props.popup?.invoker
     if (!props.popup || !wrapper) return
-    const below = props.popup.anchor === 'invoker' && invoker && invoker !== gridRef.current
-    const header = invoker && invoker !== gridRef.current ? below ? invoker : invoker.closest('[role=columnheader]') ?? invoker : null
+    const anchor = props.popup.anchorElement ?? invoker
+    const below = props.popup.anchor === 'invoker' && anchor && anchor !== gridRef.current ? anchor : null
+    const header = below ?? (invoker && invoker !== gridRef.current ? invoker.closest('[role=columnheader]') ?? invoker : null)
     const width = Math.min(POPUP_MAX_WIDTH, wrapper.clientWidth)
     const bounds = wrapper.getBoundingClientRect()
     const x = header ? header.getBoundingClientRect().left - bounds.left : gutter
     setPopupLeft(Math.max(0, Math.min(x, wrapper.clientWidth - width)))
     if (below) {
-      const bottom = invoker.getBoundingClientRect().bottom - bounds.top
+      const bottom = below.getBoundingClientRect().bottom - bounds.top
       setPopupTop(Math.max(headerHeight, Math.min(bottom, headerHeight + Math.max(0, viewport.height - POPUP_MIN_ROOM))))
     } else setPopupTop(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,6 +320,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
       const buttons = [...grid.querySelectorAll<HTMLButtonElement>('[data-header-column]')]
       const button = buttons.find(button => Number(button.dataset.headerColumn) === active?.col) ?? buttons[0]
       if (button) { event.preventDefault(); event.stopPropagation(); setControlMode(true); button.focus() }
+    } else if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey && active && props.onCellControl && cellControlKeys[event.key]
+      && props.onCellControl(active, cellControlKeys[event.key]!, grid!)) {
+      event.preventDefault(); event.stopPropagation()
     } else if (event.altKey && event.key === 'ArrowDown' && active && props.onFilter) {
       event.preventDefault(); event.stopPropagation(); props.onFilter(active.col, grid)
     } else if (navigationKeys.has(event.key) && !event.altKey) {
@@ -413,7 +424,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             // Name from contents: the visually hidden text IS the name, so VoiceOver
             // reads the value once (no label + contents) and never "blank" (S13 V1/V5).
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
-              aria-selected={isSelected} aria-expanded={value.expanded} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
+              aria-selected={isSelected} aria-expanded={value.expanded} aria-description={[value.state, multiSelected && isSelected ? 'selected' : '', value.control].filter(Boolean).join(', ') || undefined}
               style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
           })}
         </div>

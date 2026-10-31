@@ -283,41 +283,58 @@ describe('the interactive viewer', () => {
     expect(within(full).queryByRole('option', { name: /Bottom/ })).toBeNull()
   })
 
-  it('keyboard: roving focus, Escape, 44 px targets; coarse pointer uses the bottom sheet', async () => {
+  it('keyboard (Ruling S3-J): one Tab stop; Alt+arrows from the gridcell; described controls; 44 px targets; coarse pointer uses the bottom sheet', async () => {
     const doc = await load(BASELINE)
     const ui = render(<InteractiveSheetDoc doc={doc} />)
-    const first = await ui.findByRole('button', { name: 'Filter and sort Year' }, { timeout: 10_000 })
-    const layer = first.closest('[role=toolbar]') as HTMLElement
-    expect(layer.getAttribute('aria-label')).toBe('Pivot table controls')
-    const buttons = within(layer).getAllByRole('button')
-    expect(buttons.filter(button => button.tabIndex === 0)).toHaveLength(1)
-    act(() => first.focus())
-    fireEvent.keyDown(first, { key: 'ArrowRight' })
-    expect(document.activeElement).toBe(buttons[1])
-    expect(buttons[1]!.tabIndex).toBe(0)
-    expect(first.tabIndex).toBe(-1)
-    fireEvent.keyDown(buttons[1]!, { key: 'End' })
-    expect(document.activeElement).toBe(buttons.at(-1))
-    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
-    expect(document.activeElement?.getAttribute('role')).toBe('grid')
-    // Menu controls are 44 px targets; Escape closes the menu.
-    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    // The buttons are pointer targets only: none is a Tab stop, and there is no toolbar.
+    const buttons = [...ui.container.querySelectorAll<HTMLButtonElement>('button[data-officeview-ui="pivot-button"]')]
+    expect(buttons.length).toBeGreaterThan(1)
+    for (const button of buttons) expect(button.tabIndex).toBe(-1)
+    expect(ui.queryByRole('toolbar', { name: 'Pivot table controls' })).toBeNull()
+    // Each gridcell with a control describes it.
+    const cell = (row: number, col: number) => ui.container.querySelector(`[role=row][aria-rowindex="${row + 2}"] [role=gridcell][aria-colindex="${col + 2}"]`)!
+    await waitFor(() => expect(cell(5, 0).getAttribute('aria-description')).toContain('Expanded, Alt+Left to collapse'))
+    expect(cell(4, 0).getAttribute('aria-description')).toContain('Filter: Region, Alt+Down to open')
+    // From the grid: go to A6 (East), Alt+Left collapses, Alt+Right expands.
+    const grid = ui.getByRole('grid')
+    act(() => grid.focus())
+    fireEvent.keyDown(grid, { key: 'Home', ctrlKey: true })
+    for (let k = 0; k < 5; k++) fireEvent.keyDown(grid, { key: 'ArrowDown' })
+    fireEvent.keyDown(grid, { key: 'ArrowLeft', altKey: true })
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(cell(5, 0).getAttribute('aria-description')).toContain('Collapsed, Alt+Right to expand'))
+    expect(document.activeElement).toBe(grid)
+    fireEvent.keyDown(grid, { key: 'ArrowRight', altKey: true })
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    // Alt+Down on the Row Labels cell (A5) opens the field menu; Escape closes it and focus is the grid's again.
+    fireEvent.keyDown(grid, { key: 'ArrowUp' })
+    fireEvent.keyDown(grid, { key: 'ArrowDown', altKey: true })
     const menu = await ui.findByRole('dialog', { name: 'Region' })
     for (const button of within(menu).getAllByRole('button')) expect(Number.parseFloat(button.style.minHeight), button.textContent ?? '').toBeGreaterThanOrEqual(44)
     expect(menu.querySelector('[data-pivot-menu]')?.getAttribute('data-pivot-menu')).toBe('dropdown')
     fireEvent.keyDown(within(menu).getByRole('button', { name: 'Sort ascending' }), { key: 'Escape' })
     await waitFor(() => expect(ui.queryByRole('dialog', { name: 'Region' })).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(grid))
     cleanup()
 
-    // Coarse pointer: the menu is a bottom sheet and the buttons are 44 px targets.
+    // Coarse pointer: the menu is a bottom sheet; a target is 44 px wide and stays within its own row band, so the
+    // ± targets of consecutive rows never overlap.
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: /coarse|max-width/.test(query), media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }))
     const touch = render(<InteractiveSheetDoc doc={await load(BASELINE)} />)
     const button = await touch.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 })
     expect(Number.parseFloat(button.style.width)).toBeGreaterThanOrEqual(44)
-    expect(Number.parseFloat(button.style.height)).toBeGreaterThanOrEqual(44)
     fireEvent.click(button)
     const sheetMenu = await touch.findByRole('dialog', { name: 'Region' })
     expect(sheetMenu.querySelector('[data-pivot-menu]')?.getAttribute('data-pivot-menu')).toBe('bottom-sheet')
+    cleanup()
+    // Every Region item collapsed: ± buttons on consecutive rows (6–10).
+    const collapsed = render(<InteractiveSheetDoc doc={await load(`${FIXTURES}interaction/interaction-collapse-all-compact-top.xlsx`)} />)
+    await collapsed.findByRole('button', { name: /^Expand East/ }, { timeout: 10_000 })
+    const box = (key: string) => { const el = collapsed.container.querySelector<HTMLElement>(`[data-pivot-key="${key}"]`)!; return { top: Number.parseFloat(el.style.top), height: Number.parseFloat(el.style.height), width: Number.parseFloat(el.style.width) } }
+    const first = box('0:5:0'), second = box('0:6:0')
+    expect(first.width).toBeGreaterThanOrEqual(44)
+    expect(first.top + first.height).toBeLessThanOrEqual(second.top)
   })
 
   it('reset returns the saved view', async () => {

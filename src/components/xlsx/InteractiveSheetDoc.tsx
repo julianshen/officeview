@@ -1426,6 +1426,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Pivots on the active sheet (Task 28): load-time pivot-* diagnostics, and one notice per pivot not interactive.
   const activeIndex = sheetIds.indexOf(activeSheetId)
   const activePivots = entry?.sheet.pivotTables
+  const pivotCellText = (row: number, col: number): string => { if (!entry) return ''; const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }
   const pivotNotices = entry ? [...new Set([
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
     ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
@@ -1623,6 +1624,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Every publication re-checks its request token, permission and mount (§10.1).
   const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; scale: number; refusedImages: number }> | null>(null)
   const printLease = useRef<PaintableArray | null>(null)
+  const [printPivotNote, setPrintPivotNote] = useState('')
   const printToken = useRef(0)
   const allowPrintRef = useRef(allowPrint)
   allowPrintRef.current = allowPrint
@@ -1636,6 +1638,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let pages: Awaited<ReturnType<typeof loader>>
     // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
     const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
+    setPrintPivotNote(changed ? 'Printing shows the pivot as saved.' : '')
     const printed = changed ? { ...doc, sheets: doc.sheets.map((sheet, index) => sheet.pivotTables === savedPivotDefs[index] ? sheet : { ...sheet, pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false }) } : doc
     try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
@@ -1972,16 +1975,29 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: pivotMenuLabel(pivotController, popup.request), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
+              popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
                 : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
               cellControls={pivotUi && pivotController && activePivots?.length && scroll ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
-                cellText={(row, col) => { const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }} onEscape={() => (rootRef.current?.querySelector<HTMLElement>('[data-officeview-grid]'))?.focus()} /> : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+                cellText={pivotCellText} /> : undefined}
+              onCellControl={pivotUi && pivotController && activePivots?.length ? (at, action, grid) => {
+                // Ruling S3-J: the keyboard route to a cell's pivot control (focus returns to the grid).
+                const found = pivotUi.controlsAt(activePivots, at.row, at.col)
+                const drill = found.find(entry => entry.button.kind === 'expand' || entry.button.kind === 'collapse')
+                const target = action === 'open' ? found.find(entry => entry.button.kind === 'filter' || entry.button.kind === 'page') : drill
+                if (!target) return false
+                if (action !== 'open' && target.button.kind !== action) { setAnnouncement(action === 'expand' ? 'Already expanded.' : 'Already collapsed.'); return true }
+                const anchor = rootRef.current?.querySelector<HTMLElement>(`[data-pivot-key="${target.pivot}:${at.row}:${at.col}"]`) ?? undefined
+                void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
+                return true
+              } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
                 const shown = cell ? presentCell(cell) : { text: '' }
-                const expanded = pivotUi && activePivots?.length ? pivotUi.expandedAt(activePivots, at.row, at.col) : undefined
-                return expanded === undefined ? shown : { ...shown, expanded }
+                if (!pivotUi || !pivotController || !activePivots?.length) return shown
+                const expanded = pivotUi.expandedAt(activePivots, at.row, at.col)
+                const control = pivotUi.cellControlDescription(pivotController, activeIndex, activePivots, at.row, at.col, pivotCellText)
+                return { ...shown, ...(expanded !== undefined ? { expanded } : {}), ...(control ? { control } : {}) }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
@@ -2000,6 +2016,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           <div data-officeview-sheet-print="" aria-hidden="true">
             {!printPages && <p data-testid="officeview-sheet-print-notice">{remote ? PAGED_PRINT_MESSAGE : 'To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.'}</p>}
             <div data-testid="officeview-sheet-print-pages">
+              {printPages && printPivotNote && <p>{printPivotNote}</p>}
               {printPages?.map((unit, index) => unit.page
                 ? <div key={index} style={index > 0 ? { breakBefore: 'page', pageBreakBefore: 'always' } : undefined}>
                     <h2 data-officeview-print-sheet-title="">{unit.name}</h2>

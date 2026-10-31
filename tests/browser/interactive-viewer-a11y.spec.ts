@@ -11,6 +11,8 @@
  * reader is not driven here (see docs/validation/interactive-viewer.md).
  */
 import { expect, test, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { activeCell, ensureFixtures, goTo, openViewer, status } from './viewer-e2e'
 
 test.use({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
@@ -104,6 +106,47 @@ test.describe('S10.3 keyboard and focus (real viewer)', () => {
     await expect.poll(() => selectedCells(page)).toBe(0)
     await expect(status(page)).toContainText('Selection cleared.')
     expect(await grid(page).getAttribute('aria-activedescendant')).toBeNull()
+    expect(await focusedLabel(page)).toBe('grid')
+  })
+
+  test('pivot sheet (Ruling S3-J): one Tab stop; Alt+arrows reach the cell controls; buttons are pointer-only', async ({ page }) => {
+    // The Excel-saved engine seed (pivot A3:I24: a "Row Labels" dropdown in A5, a ± per Region item from A6).
+    const bytes = readFileSync(fileURLToPath(new URL('../fixtures/xlsx-pivots/engine/baseline.xlsx', import.meta.url)))
+    await page.route(url => url.pathname === '/__fixtures/pivot-baseline.xlsx', route => route.fulfill({ body: bytes, contentType: 'application/octet-stream' }))
+    await page.goto(`/src/debug/viewer-e2e.html?${new URLSearchParams({ src: '/__fixtures/pivot-baseline.xlsx' })}`)
+    await expect(grid(page)).toBeVisible({ timeout: 60_000 })
+    const collapse = page.getByRole('button', { name: 'Collapse East (Region)' })
+    await expect(collapse).toBeAttached({ timeout: 30_000 })
+    expect(await page.locator('button[data-officeview-ui="pivot-button"]:not([tabindex="-1"])').count()).toBe(0)
+    // One grid Tab entry, as on any sheet: search → grid → out of the grid, never onto a pivot button.
+    await page.getByRole('searchbox', { name: 'Search document' }).focus()
+    await page.keyboard.press('Tab')
+    expect(await focusedLabel(page)).toBe('grid')
+    await page.keyboard.press('Tab')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-officeview-ui'))).not.toBe('pivot-button')
+    expect(await page.evaluate(() => { const g = document.querySelector('[role=grid]')!; return g === document.activeElement || g.contains(document.activeElement) })).toBe(false)
+    await page.keyboard.press('Shift+Tab')
+    expect(await focusedLabel(page)).toBe('grid')
+    // A6 (East) describes its control; Alt+Left collapses, Alt+Right expands; focus stays on the grid.
+    await goTo(page, 'A6')
+    await grid(page).focus()
+    const description = () => page.evaluate(() => { const g = document.querySelector('[role=grid]')!; return document.getElementById(g.getAttribute('aria-activedescendant') ?? '')?.getAttribute('aria-description') ?? '' })
+    await expect.poll(description).toContain('Expanded, Alt+Left to collapse')
+    await page.keyboard.press('Alt+ArrowLeft')
+    await expect(page.getByRole('button', { name: 'Expand East (Region)' })).toBeAttached({ timeout: 30_000 })
+    await expect.poll(description).toContain('Collapsed, Alt+Right to expand')
+    expect(await focusedLabel(page)).toBe('grid')
+    await page.keyboard.press('Alt+ArrowRight')
+    await expect(collapse).toBeAttached({ timeout: 30_000 })
+    // A5 (Row Labels): Alt+Down opens the field menu, focus inside it; Escape returns focus to the grid.
+    await page.keyboard.press('ArrowUp')
+    await expect.poll(description).toContain('Filter: Region, Alt+Down to open')
+    await page.keyboard.press('Alt+ArrowDown')
+    const menu = page.getByRole('dialog', { name: 'Region' })
+    await expect(menu).toBeVisible()
+    await expect.poll(() => menu.evaluate(d => d.contains(document.activeElement))).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(menu).toBeHidden()
     expect(await focusedLabel(page)).toBe('grid')
   })
 
