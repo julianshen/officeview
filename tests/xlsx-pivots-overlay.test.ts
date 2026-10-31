@@ -542,3 +542,39 @@ describe('pivot value overlay', () => {
     expect(remoteCalls).toEqual(['paged-sheet'])
   })
 })
+
+describe('pivot value overlay (fix round 4)', () => {
+  /** An allocation context that records each adoption (pages it charges and adopts). */
+  const recordingAllocation = () => {
+    const seen = { adopted: 0, adopts: 0 }
+    const allocation: any = {
+      limitBytes: 1e12, usedBytes: 0, canReserve: () => true, owns: () => false, settle: () => {},
+      reserve() {
+        let held = 0
+        return { owner: 'scan', get bytes() { return held }, trySet(bytes: number) { held = bytes; return true }, charge(bytes: number) { held += bytes }, release(bytes = held) { held -= bytes },
+          adopt(_targets: object[], bytes = held) { seen.adopted += bytes; seen.adopts++; held -= bytes } }
+      },
+    }
+    return { allocation, seen }
+  }
+
+  it('N2: a resident overlay scan charges each cell once, through its own output pages only', async () => {
+    const N = 1_000
+    const scan = async (withOverlay: boolean) => {
+      const cells = withOverlay ? [{ row: 5_000, col: 5, value: 1 }] : Array.from({ length: N }, (_, row) => ({ row, col: 0, value: row }))
+      const source = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells }]), `n2-${withOverlay}`)
+      const store: any = source.store('s')
+      if (withOverlay) store.setValueOverlay({ rects: [{ r0: 0, r1: N - 1, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: N - 1, c0: 0, c1: 0 }], merges: [], usedRows: N, usedCols: 1, cell: (row: number) => ({ value: row }) })
+      const { allocation, seen } = recordingAllocation()
+      let count = 0, pages = 0
+      for await (const page of store.scanPopulated({ range: { r0: 0, r1: N - 1, c0: 0, c1: 0 }, limit: 10_000 }, { ...options(store), [SOURCE_ALLOCATION]: allocation })) { count += page.items.length; pages++ }
+      await source.release()
+      return { count, pages, ...seen }
+    }
+    const base = await scan(false), overlaid = await scan(true)
+    expect(overlaid.count).toBe(N)
+    // One adoption per published page, as on the base path; no inner readRows page is charged or adopted.
+    expect(overlaid.adopts).toBe(overlaid.pages)
+    expect(overlaid.adopted).toBeLessThanOrEqual(base.adopted * 1.2)
+  })
+})

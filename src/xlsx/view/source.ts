@@ -594,8 +594,11 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       account = undefined
       return page
     }
+    // The inner row pages are not this scan's output: read them uncharged (the
+    // published pages charge each cell once) so the caller never pays twice.
+    const { [SOURCE_ALLOCATION]: _allocation, ...readOptions } = options
     try { for (;;) {
-      const page = await this.readRows(request.range, cursor, options)
+      const page = await this.readRows(request.range, cursor, readOptions)
       for (const row of page.items) for (const cell of row.cells) {
         if (!(cell.value !== null || cell.formula !== undefined)) continue
         account?.charge(occupiedOnly ? 16 : 384 + (cell.valueIsError ? 288 : 0))
