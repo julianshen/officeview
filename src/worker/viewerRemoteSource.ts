@@ -335,7 +335,8 @@ export class RemoteWorkbook implements WorkbookSource {
         else this.pivotFormulaNoticeSheets.delete(String(sheetId))
         this.notify()
       },
-      released: (sheetId, pivot, valueGen) => this.withdrawPivotCommit(String(sheetId), pivot, valueGen),
+      released: (sheetId, pivot) => this.withdrawPivotCommit(String(sheetId), pivot),
+      releaseAcknowledged: (sheetId, valueGen) => this.adoptPivotReleaseValueGen(String(sheetId), valueGen),
     })
   }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
@@ -590,7 +591,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.invalidateRegionStyles(sheetId)
     this.notify()
   }
-  private withdrawPivotCommit(sheetId: string, pivot: number, valueGen?: number): void {
+  private withdrawPivotCommit(sheetId: string, pivot: number): void {
     if (this.closed) return
     const hadExtent = this.pivotUsedExtents.has(sheetId)
     const pivots = this.pivotMerges.get(sheetId)
@@ -612,12 +613,20 @@ export class RemoteWorkbook implements WorkbookSource {
     const entry = this.merges(sheetId)
     this.refreshPivotMerges(sheetId, entry)
     entry.gen++
-    const old = this.identity(sheetId)
-    if (valueGen !== undefined && valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
-    this.owner = { ...this.owner, workbookValueGen: this.owner.workbookValueGen + (valueGen === undefined ? 0 : 1), sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId && valueGen !== undefined ? { ...item, valueGen } : item) }
     this.stores.get(sheetId)?.clear()
     this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), [])
     this.invalidateRegionStyles(sheetId)
+    this.notify()
+  }
+  /** The worker's release reinstalled the sheet's overlay without the pivot: its values moved to `valueGen`. Only the
+   * value generation follows (the display was withdrawn when the release was sent, `withdrawPivotCommit`). */
+  private adoptPivotReleaseValueGen(sheetId: string, valueGen: number): void {
+    if (this.closed || !this.sheets.some(sheet => sheet.sheetId === sheetId)) return
+    const old = this.identity(sheetId)
+    if (valueGen <= old.valueGen) return
+    this.identities.set(sheetId, { ...old, valueGen })
+    this.owner = { ...this.owner, workbookValueGen: this.owner.workbookValueGen + 1, sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
+    this.stores.get(sheetId)?.clear()
     this.notify()
   }
   private refreshPivotMerges(sheetId: string, entry: { merges: readonly XlsxMergeRange[]; sourceMerges?: readonly XlsxMergeRange[] }): void {

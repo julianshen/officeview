@@ -705,6 +705,31 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
     await waitFor(() => expect(h.posted.some(command => command.kind === 'pivotRelease')).toBe(true))
   }, 60_000)
 
+  it('Ruling S3-AK: a change stays shown after switching to another sheet and back, and its menu still says so', async () => {
+    const h = workerHarness()
+    const ui = await renderPaged(h, BASELINE)
+    fireEvent.click(await ui.findByRole('button', { name: /^Collapse East/ }, FIRST_PAINT_WAIT))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, FIRST_PAINT_WAIT)
+    await waitFor(() => expect(cellText(ui.container, 6, 0)).toContain('North'), FIRST_PAINT_WAIT)
+    const picker = ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement
+    const pivotSheetId = picker.value, other = [...picker.options].find(option => option.value !== pivotSheetId)!.value
+    fireEvent.change(picker, { target: { value: other } })
+    await waitFor(() => expect(ui.queryByRole('button', { name: 'Expand East (Region)' })).toBeNull(), FIRST_PAINT_WAIT)
+    fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: pivotSheetId } })
+    // The worker kept the committed overlay: the collapsed layout shows again, with its controls.
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, FIRST_PAINT_WAIT)
+    await waitFor(() => expect(cellText(ui.container, 6, 0)).toContain('North'), FIRST_PAINT_WAIT)
+    expect(h.posted.some(command => command.kind === 'pivotRelease')).toBe(false)
+    // The menu and the worker agree: the next change applies to the kept session (no reopen), and the reset is real.
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Reset to saved view' }))
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, FIRST_PAINT_WAIT)
+    await waitFor(() => expect(cellText(ui.container, 6, 0)).toContain('Apples'), FIRST_PAINT_WAIT)
+    expect(h.posted.filter(command => command.kind === 'pivotOpen')).toHaveLength(1)
+    ui.unmount()
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'pivotRelease')).toBe(true))
+  }, 60_000)
+
   it('a chart sheet whose drawings changed while inactive drops its cached tiles when shown again', async () => {
     const { TileCache } = await import('../src/xlsx/view/tileCache')
     const h = workerHarness()

@@ -10,12 +10,14 @@ import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
 
 export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition; /** The menus' model (Task 28). */ readonly menu: PivotMenuModel; /** The session's value cells a fit reads (Task 29 autofit; absent past the payload cap). */ readonly cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
 export type RemotePivotApply =
-  | { readonly kind: 'committed'; readonly revision: number; readonly notice?: string; readonly def: PivotTableDefinition; readonly menu: PivotMenuModel; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
+  | { readonly kind: 'committed'; readonly revision: number; readonly notice?: string; readonly atSaved?: true; readonly def: PivotTableDefinition; readonly menu: PivotMenuModel; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
   | { readonly kind: 'stale' | 'cancelled' }
   | { readonly kind: 'refused'; readonly message: string }
 
 export interface RemotePivotApplyPayload {
   readonly revision: number
+  /** The committed candidate is the pivot's saved view (Ruling S3-AK). */
+  readonly atSaved?: true
   readonly def: PivotTableDefinition
   readonly menu: PivotMenuModel
   readonly rects: readonly SourceRect[]
@@ -41,9 +43,15 @@ export interface RemotePivotHost {
   readonly replyGrant?: { reserve(owner: string, bytes: number): boolean; settle(owner: string, reply: WorkerReply): void; release(owner: string): void }
   committed?(sheetId: number, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void
   formulaFlagChanged?(sheetId: number, hasFormulaCellsOutsidePivots: boolean): void
-  released?(sheetId: number, pivot: number, valueGen?: number): void
+  /** The pivot's committed display is withdrawn on this thread, once, when its release is sent. */
+  released?(sheetId: number, pivot: number): void
+  /** The worker acknowledged the release: its sheet's values moved to `valueGen` (final review minor 3: the value
+   * generation only; the display was withdrawn when the release was sent). */
+  releaseAcknowledged?(sheetId: number, valueGen: number): void
 }
-interface Entry { generation: number; revision: number; requestRevision: number; opened: boolean; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }> }
+interface Entry { generation: number; revision: number; requestRevision: number; opened: boolean; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }>
+  /** Its last published commit shows a change (not the saved view): a sheet switch keeps it (Ruling S3-AK). */
+  changed?: boolean }
 const keyOf = (sheetId: number, pivot: number) => JSON.stringify([sheetId, pivot])
 const messageOf = (reply: WorkerReply): string => reply.kind === 'error'
   ? reply.diagnostics[0]?.message ?? `Pivot request failed (${reply.code})`
@@ -115,6 +123,7 @@ export class RemotePivotSessions {
       const publish = registered && revision > entry.revision
       if (publish) {
         entry.revision = revision
+        entry.changed = !staged.atSaved
         staged = { ...staged, ...(committed.result.hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots: committed.result.hasFormulaCellsOutsidePivots }) }
         this.host.committed?.(sheetId, pivot, staged, committed.result.valueGen)
         if (committed.result.hasFormulaCellsOutsidePivots === undefined) this.followFormulaFlag(sheetId)
@@ -150,14 +159,17 @@ export class RemotePivotSessions {
     if (entry.applyRequest) void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: entry.applyRequest }).catch(() => {})
     this.host.released?.(sheetId, pivot)
     if (!this.closed && !this.host.isClosed()) void this.host.client.send({ kind: 'pivotRelease', requestId: this.host.client.nextRequestId(), docId: this.host.docId, sheetId: String(sheetId), pivot }).then(reply => {
-      if (reply.kind === 'complete' && reply.result.kind === 'pivotRelease') this.host.released?.(sheetId, pivot, reply.result.valueGen)
+      if (reply.kind === 'complete' && reply.result.kind === 'pivotRelease' && reply.result.valueGen !== undefined) this.host.releaseAcknowledged?.(sheetId, reply.result.valueGen)
     }).catch(() => {})
   }
 
+  /** A sheet switch (Ruling S3-AK): the other sheets' pivots at their saved view are released; a pivot showing a
+   * committed change keeps its session (the worker keeps its overlay, charged) until it is reset or the workbook
+   * closes, as on the resident path, so the menus, the autofit's "before" and the fitted widths stay true. */
   releaseExcept(sheetId: number): void {
-    for (const [key] of [...this.entries]) {
+    for (const [key, entry] of [...this.entries]) {
       const [candidate, pivot] = JSON.parse(key) as [number, number]
-      if (candidate !== sheetId) this.release(candidate, pivot)
+      if (candidate !== sheetId && !entry.changed) this.release(candidate, pivot)
     }
   }
 

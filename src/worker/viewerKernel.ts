@@ -533,7 +533,7 @@ export class ViewerKernel {
         if (outcome.kind === 'quota') return reply(command as never, owner, { kind: 'quota', resource: 'memory', limitBytes: outcome.limitBytes, ...(outcome.requiredBytes === undefined ? {} : { requiredBytes: outcome.requiredBytes }) } as never)
         if (outcome.kind === 'refused') return errorReply(command as never, owner, 'operation-refused', false, [{ code: outcome.feature, message: outcome.message }])
         const result = outcome.kind === 'open' ? { kind: 'pivotOpen', revision: outcome.revision, def: outcome.def, menu: outcome.menu, ...(outcome.cells ? { cells: outcome.cells } : {}) }
-          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, ...(outcome.notice ? { notice: outcome.notice } : {}), def: outcome.def, menu: outcome.menu, rects: outcome.rects, protectedRects: outcome.protectedRects, overlayExtent: outcome.overlayExtent, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, ...(outcome.cells ? { cells: outcome.cells } : {}) }
+          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, ...(outcome.notice ? { notice: outcome.notice } : {}), ...(outcome.atSaved ? { atSaved: true } : {}), def: outcome.def, menu: outcome.menu, rects: outcome.rects, protectedRects: outcome.protectedRects, overlayExtent: outcome.overlayExtent, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, ...(outcome.cells ? { cells: outcome.cells } : {}) }
           : outcome.kind === 'commit' ? { kind: 'pivotCommit', revision: outcome.revision, valueGen: outcome.valueGen, ...(outcome.hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots: outcome.hasFormulaCellsOutsidePivots }) }
           : outcome.kind === 'stale' ? (command.kind === 'pivotCommit' ? { kind: 'pivotCommit', refused: 'stale' } : undefined)
           : { kind: 'pivotRelease', released: outcome.released, ...(outcome.valueGen === undefined ? {} : { valueGen: outcome.valueGen }) }
@@ -553,7 +553,8 @@ export class ViewerKernel {
         switch (resident.kind) {
           case 'resident':
             if (session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
-            session.releasePivotsExcept(command.sheetId)
+            // Ruling S3-AK: a changed pivot on another sheet keeps its session and overlay (only saved views are released).
+            session.releasePivotsExcept(command.sheetId, true)
             for (const other of this.inflight.values()) if ((other.kind === 'pivotOpen' || other.kind === 'pivotApply')
               && other.command.kind !== 'cancel' && 'sheetId' in other.command && other.command.sheetId !== command.sheetId
               && other.owner.docId === command.owner.docId) this.abort(other, 'superseded')

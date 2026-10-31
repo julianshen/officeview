@@ -529,7 +529,7 @@ describe('worker pivot protocol', () => {
     expect(session.source.store(sheetId).stamp.valueGen).toBe(before)
   })
 
-  it('release on every exit: close, sheet switch, abort, and owner change', async () => {
+  it('release on every exit: close, a sheet switch (of a pivot at its saved view), abort, and owner change', async () => {
     let resume: (() => void) | undefined, entered!: () => void
     const applyEntered = new Promise<void>(resolve => { entered = resolve })
     const { doc, kernel, docId, sheetId, session } = await openObjectPivot({ afterDispatch: command => {
@@ -608,7 +608,9 @@ describe('worker pivot protocol', () => {
     const stagedC = completed(await sendApply(3, 2, 2))
     expect(stagedC.kind).toBe('pivotApply')
     if (stagedB.kind === 'pivotApply' && stagedC.kind === 'pivotApply') {
-      expect(stagedC.protectedRects).toEqual(expect.arrayContaining([...stagedB.protectedRects]))
+      // Saved ∪ current, as on the resident path: the saved area (A3:I24) stays protected; B's own area does not carry over.
+      expect(stagedC.protectedRects).toEqual(expect.arrayContaining([{ r0: 2, r1: 23, c0: 0, c1: 8 }]))
+      expect(stagedB.protectedRects).toEqual(expect.arrayContaining([{ r0: 2, r1: 23, c0: 0, c1: 8 }]))
       expect(stagedC.overlayExtent).toEqual(overlayUsedExtent(stagedC.protectedRects))
     }
     const stageC = session.memoryStats().sourceBytes
@@ -1012,6 +1014,125 @@ describe('worker pivot protocol', () => {
     await session.pivotRelease(sheetId, 1)
     expect(session.memoryStats().sourceBytes).toBe(baseline)
     await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+})
+
+/** The worker-parsed object route (`?worker=1`): a RemoteWorkbook over an in-process kernel. */
+async function remoteWorkbook(file = FIXTURE) {
+  const bytes = new Uint8Array(readFileSync(file))
+  const kernel = new ViewerKernel({ parse: async data => parseXlsx(await OfficePackage.load(data)) }, quiet)
+  const port = connectInProcess(kernel), client = new ViewerClient(port)
+  const docId = id()
+  const opened = await openRemoteWorkbook(client, docId, new Blob([bytes]), 'D')
+  if ('kind' in opened) throw new Error(JSON.stringify(opened))
+  const remote = new RemoteWorkbook(client, opened)
+  const local = await parseXlsx(await OfficePackage.load(bytes))
+  const sid = String(local.sheets.find(sheet => sheet.pivotTables?.length)!.sheetId ?? '1')
+  const other = remote.sheets.find(sheet => sheet.sheetId !== sid)!.sheetId
+  const store = () => kernel.session(docId)!.source.store(sid)
+  const read = (row: number, col: number) => store().readCell({ row, col }, { signal: new AbortController().signal, stamp: store().stamp })
+  return { kernel, port, remote, docId, sid, other, read, session: () => kernel.session(docId)! }
+}
+
+describe('a sheet switch on the worker paths (Ruling S3-AK)', () => {
+  it('a committed change survives switching to another sheet and back, charged; its memory is returned at close', async () => {
+    const { kernel, port, remote, sid, other, read, session } = await remoteWorkbook()
+    try {
+      const saved = await read(21, 4)
+      const beforeOpen = session().memoryStats().sourceBytes
+      expect((await remote.pivots.open(Number(sid), 0, new AbortController().signal)).kind).toBe('open')
+      const applied = await remote.pivots.apply(Number(sid), 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+      expect(applied).toMatchObject({ kind: 'committed' })
+      expect(applied.kind === 'committed' && applied.atSaved).toBeFalsy()
+      const live = await read(21, 4)
+      expect(live).not.toEqual(saved)
+      const held = session().memoryStats().sourceBytes
+      expect(held).toBeGreaterThan(beforeOpen)
+      const valueGen = remote.identity(sid).valueGen
+      remote.activate(other); await port.idle()
+      remote.activate(sid); await port.idle()
+      // The worker kept the session and its overlay, still charged; the main thread kept its display and value generation.
+      expect(await read(21, 4)).toEqual(live)
+      expect(session().memoryStats().sourceBytes).toBe(held)
+      expect(remote.identity(sid).valueGen).toBe(valueGen)
+      // The session is the one that made the change: the next change applies to it (no reopen at revision 0).
+      const next = await remote.pivots.apply(Number(sid), 0, 'reset')
+      expect(next).toMatchObject({ kind: 'committed', atSaved: true })
+      expect(await read(21, 4)).toEqual(saved)
+    } finally {
+      await remote.close()
+      await port.idle()
+    }
+    expect(kernel.lifecycleStats().retainedBytes).toBe(0)
+  })
+
+  it('a pivot back at its saved view is released by a switch; a changed one kept across the switch is released at close', async () => {
+    const { kernel, port, remote, sid, other, session } = await remoteWorkbook()
+    const posted: string[] = []
+    const send = (remote as any).client.send.bind((remote as any).client)
+    ;(remote as any).client.send = (command: WorkerCommand) => { posted.push(command.kind); return send(command) }
+    try {
+      const baseline = session().memoryStats().sourceBytes
+      await remote.pivots.open(Number(sid), 0, new AbortController().signal)
+      await remote.pivots.apply(Number(sid), 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+      expect(await remote.pivots.apply(Number(sid), 0, 'reset')).toMatchObject({ kind: 'committed', atSaved: true })
+      remote.activate(other); await port.idle()
+      expect(posted).toContain('pivotRelease')
+      expect(session().memoryStats().sourceBytes).toBe(baseline)
+      // Changed again, then switched away: kept until close, which releases it.
+      remote.activate(sid); await port.idle()
+      await remote.pivots.open(Number(sid), 0, new AbortController().signal)
+      await remote.pivots.apply(Number(sid), 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+      posted.length = 0
+      remote.activate(other); await port.idle()
+      expect(posted).not.toContain('pivotRelease')
+      expect(session().memoryStats().sourceBytes).toBeGreaterThan(baseline)
+    } finally {
+      await remote.close()
+      await port.idle()
+    }
+    expect(kernel.lifecycleStats().retainedBytes).toBe(0)
+  })
+
+  it('a release withdraws the commit on the main thread once; the worker\'s reply only moves the value generation', async () => {
+    const { port, remote, sid } = await remoteWorkbook()
+    try {
+      await remote.pivots.open(Number(sid), 0, new AbortController().signal)
+      await remote.pivots.apply(Number(sid), 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+      const withdraw = vi.spyOn(remote as any, 'withdrawPivotCommit'), regions = vi.spyOn(remote, 'invalidateRegionStyles')
+      const mergeGen = remote.merges(sid).gen, valueGen = remote.identity(sid).valueGen
+      remote.pivots.release(Number(sid), 0)
+      await port.idle()
+      expect(withdraw).toHaveBeenCalledTimes(1)
+      expect(regions).toHaveBeenCalledTimes(1)
+      expect(remote.merges(sid).gen).toBe(mergeGen + 1)
+      expect(remote.identity(sid).valueGen).toBeGreaterThan(valueGen)
+    } finally {
+      await remote.close()
+      await port.idle()
+    }
+  })
+
+  it('the worker overlay is saved ∪ current: after a grow and a shrink the extent shrinks back; at the saved view no overlay is installed', async () => {
+    const { port, remote, sid, read, session } = await remoteWorkbook(resolve(FIXTURE_ROOT, 'engine/layout-collapsed-item.xlsx'))
+    try {
+      await remote.pivots.open(Number(sid), 0, new AbortController().signal)
+      const grown = await remote.pivots.apply(Number(sid), 0, { kind: 'collapse', field: 0, item: 0, collapsed: false })
+      const shrunk = await remote.pivots.apply(Number(sid), 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+      if (grown.kind !== 'committed' || shrunk.kind !== 'committed') throw new Error(JSON.stringify([grown, shrunk]))
+      expect(grown.overlayExtent!.r1).toBeGreaterThan(shrunk.overlayExtent!.r1)
+      expect(shrunk.overlayExtent).toEqual(overlayUsedExtent(shrunk.protectedRects))
+      expect(remote.layout(sid).used!.r1).toBeLessThan(grown.overlayExtent!.r1)
+      // A cell only the grown layout covered reads the sheet's own (empty) cell again, not an owned blank.
+      const below = { row: grown.overlayExtent!.r1, col: grown.overlayExtent!.c0 }
+      expect((await read(below.row, below.col)).kind).not.toBe('cell')
+      const reset = await remote.pivots.apply(Number(sid), 0, 'reset')
+      expect(reset).toMatchObject({ kind: 'committed', atSaved: true, rects: [], protectedRects: [], overlayExtent: null })
+      expect((session().source.store(sid) as any).valueOverlay).toBeUndefined()
+    } finally {
+      await remote.close()
+      await port.idle()
+    }
   })
 })
 

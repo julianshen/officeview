@@ -62,7 +62,7 @@ import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
-import { OwnedRects } from '../xlsx/view/rectIndex'
+import { OwnedRects, uniqueRectList } from '../xlsx/view/rectIndex'
 import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
@@ -277,6 +277,8 @@ interface WorkerPivotHandle {
   linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string }[]
   releaseAssets?: () => void
   session: import('../xlsx/pivots/session/session').PivotSession
+  /** The file's definition: a commit whose definition is this object shows the saved view (Ruling S3-AK). */
+  savedDef: PivotTableDefinition
   /** The saved area (the revision-0 layout's rectangle and page cells): protected by every overlay (S3-L). */
   savedRects: readonly SourceRect[]
   /** The menus' model builder (Task 28), loaded with the session. */
@@ -294,7 +296,7 @@ interface WorkerPivotHandle {
 }
 export type WorkerPivotOutcome =
   | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; /** The value cells a fit reads (absent past the payload cap: no autofit). */ cells?: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[]; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
-  | { kind: 'apply'; revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells?: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[] }
+  | { kind: 'apply'; revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; /** The candidate shows the saved view (a reset): it installs no overlay (Ruling S3-AK). */ atSaved?: true; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells?: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[] }
   | { kind: 'commit'; revision: number; valueGen: number; hasFormulaCellsOutsidePivots?: boolean }
   | { kind: 'stale' }
   | { kind: 'release'; released: boolean; valueGen?: number }
@@ -823,14 +825,18 @@ export function combinePivotOverlays(overlays: readonly import('../xlsx/view/con
     },
   })
 }
-/** `saved`: the session's saved area (rectangle and page cells): protected from the first commit on (Ruling S3-L). */
-function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotApplyResult, saved: readonly SourceRect[], previous?: import('../xlsx/view/contracts').ValueOverlay): import('../xlsx/view/contracts').ValueOverlay {
-  const currentRects = pivotOutputRects(result.layout)
-  const candidates = [...(previous?.rects ?? []), ...currentRects, ...result.vacated.map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))]
-  const unique = [...new Map(candidates.map(rect => [JSON.stringify([rect.r0, rect.r1, rect.c0, rect.c1]), rect])).values()]
-  // A common move nests the new rectangle in the saved area. Do not charge or
-  // scan that same coverage twice; partial overlaps remain conservatively held.
-  const rects = unique.filter((rect, index) => !unique.some((other, otherIndex) => otherIndex !== index
+/** No overlay: a pivot back at its saved view shows the sheet's own cells, their styles included (final review minor 2). */
+const SAVED_VIEW_OVERLAY: import('../xlsx/view/contracts').ValueOverlay = Object.freeze({ rects: Object.freeze([]), protectedRects: Object.freeze([]), merges: Object.freeze([]), cell: () => undefined })
+/** A committed pivot's overlay, as the resident path's (final review minor 2): it owns its saved area (page cells
+ * included) and its current one, and nothing an earlier change showed. A cell of the current layout reads its value,
+ * any other owned cell reads blank; the extent shrinks with the pivot, and a cell it grew over and left (a
+ * formatting-only one, S3-V) shows its own content again. Protection is the same saved ∪ current (S3-G, S3-L). At the
+ * saved view (`atSaved`) the pivot installs no overlay. */
+function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotApplyResult, saved: readonly SourceRect[], atSaved: boolean): import('../xlsx/view/contracts').ValueOverlay {
+  if (atSaved) return SAVED_VIEW_OVERLAY
+  const owned = uniqueRectList([...saved, ...pivotOutputRects(result.layout)])
+  // A common change nests the new rectangle in the saved area: do not charge or scan that coverage twice.
+  const rects = owned.filter((rect, index) => !owned.some((other, otherIndex) => otherIndex !== index
     && other.r0 <= rect.r0 && other.r1 >= rect.r1 && other.c0 <= rect.c0 && other.c1 >= rect.c1))
   const cells = new Map<string, import('../xlsx/view/contracts').ValueOverlayCell | null>()
   for (const cell of result.layout.cells) {
@@ -841,10 +847,8 @@ function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotAppl
           : { value: value.value, valueIsError: true, ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }) })
   }
   const merges = result.layout.merges.map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))
-  const protectedRects = [...saved, ...(previous?.protectedRects ?? []), ...currentRects]
-  const protectedUnique = [...new Map(protectedRects.map(rect => [JSON.stringify([rect.r0, rect.r1, rect.c0, rect.c1]), rect])).values()]
   return Object.freeze({
-    rects: Object.freeze(rects), protectedRects: Object.freeze(protectedUnique), merges: Object.freeze(merges),
+    rects: Object.freeze(rects), protectedRects: Object.freeze(owned), merges: Object.freeze(merges),
     cell: (row: number, col: number) => cells.get(pivotCellKey(row, col)) ?? null,
   })
 }
@@ -1475,7 +1479,7 @@ export class DocumentSession {
       } : {}) })
     building?.release()
     if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
-    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, fitPayload: pivotFitPayload, share, runtimeHeld,
+    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, savedDef: def, cache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, fitPayload: pivotFitPayload, share, runtimeHeld,
       linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),
       releaseAssets,
       highestWireRevision: 0, committedWireRevision: 0, requestRevision: 0, serial: 0 }
@@ -1506,8 +1510,8 @@ export class DocumentSession {
       throw error
     }
     if (!applied.ok) return { kind: 'refused', feature: applied.diagnostic.feature, message: applied.diagnostic.message }
-    const previous = handle.committed?.overlay
-    const overlay = pivotOverlay(applied.value, handle.savedRects, previous)
+    const atSaved = applied.value.def === handle.savedDef
+    const overlay = pivotOverlay(applied.value, handle.savedRects, atSaved)
     // Plus its share of the sheet's composite overlay index, built when it commits (perf round 2).
     const bytes = pivotOverlayBytes(overlay, applied.value.layout) + OwnedRects.upperBytesFor(overlay.rects.length)
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes) return { kind: 'quota', requiredBytes: bytes, limitBytes: grantBytes }
@@ -1521,7 +1525,7 @@ export class DocumentSession {
     const fitBytes = fitGrant(fitGrantBytes)
     const cells = fitBytes > 0 ? handle.fitPayload(applied.value.def, (row, col) => overlay.cell(row, col), undefined, fitBytes) : undefined
     // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
-    return { kind: 'apply', revision, ...(applied.value.notice ? { notice: applied.value.notice } : {}), def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
+    return { kind: 'apply', revision, ...(applied.value.notice ? { notice: applied.value.notice } : {}), ...(atSaved ? { atSaved: true as const } : {}), def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), ...withCells(cells),
       protectedRects: overlay.protectedRects }
   }
@@ -1613,14 +1617,23 @@ export class DocumentSession {
     handle.staged.entry.release()
     handle.staged = undefined
   }
-  releasePivotsExcept(sheetId?: string): void {
-    for (const handle of [...this.pivotHandles.values()]) if (sheetId === undefined || handle.sheetId !== sheetId) this.pivotRelease(handle.sheetId, handle.pivot)
+  /** Releases every pivot session (close), or those of the other sheets. With `keepChanged` (a sheet switch, Ruling
+   * S3-AK) a pivot showing a committed change keeps its session and overlay, charged, until it is reset or the document
+   * closes, as on the resident path; only its staged candidate goes. */
+  releasePivotsExcept(sheetId?: string, keepChanged = false): void {
+    for (const handle of [...this.pivotHandles.values()]) {
+      if (sheetId !== undefined && handle.sheetId === sheetId) continue
+      if (keepChanged && handle.committed && handle.committed.result.def !== handle.savedDef) {
+        handle.staged?.entry.release()
+        handle.staged = undefined
+      } else this.pivotRelease(handle.sheetId, handle.pivot)
+    }
   }
   /** The sheet's committed overlays combined (called on every commit and release, so the sheet's blocker index, which
    * reads the commits, is rebuilt with it). */
   private combinedPivotOverlay(sheetId: string): import('../xlsx/view/contracts').ValueOverlay | undefined {
     this.dropPivotBlockers(sheetId)
-    return combinePivotOverlays([...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed).map(handle => handle.committed!.overlay))
+    return combinePivotOverlays([...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed?.overlay.rects.length).map(handle => handle.committed!.overlay))
   }
   private readonly pivotBlockerIndexes = new Map<string, { index: OwnedRects<number>; entry: PoolEntry }>()
   private pivotBlockerSerial = 0
