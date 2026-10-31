@@ -219,6 +219,16 @@ describe('interaction xml edits', async () => {
   it('adds the edit on an Excel-saved start file for the cases whose base exists', () => {
     expect(rows.filter(r => r[3]).map(r => r[0])).toEqual(expect.arrayContaining(['interaction-page-all', 'interaction-page-multi', 'caption-defaults', 'chart-value-filter']))
   })
+  it('collapses and expands a field the way Excel saves it (default subtotal item included)', async () => {
+    const saved = fixture('interaction/interaction-collapse-field-compact-top')
+    if (!existsSync(saved)) return
+    const regionItems = (pivot: string) => /<pivotField [^>]*axis="axisRow"[^>]*><items[^>]*>([\s\S]*?)<\/items>/.exec(pivot)![1]
+    const excel = await parts(saved)
+    const ours = INTERACTION_CASES.find(c => c.id === 'interaction-collapse-field-compact-top')!.xmlEdit!(await parts(fixture('recipes/engine-seed')))
+    expect(regionItems(ours.pivot)).toBe(regionItems(excel.pivot))
+    const expanded = INTERACTION_CASES.find(c => c.id === 'interaction-expand-field')!.xmlEdit!(excel)
+    expect(expanded.pivot).not.toMatch(/\bsd="0"/)
+  })
   it('summarises the page-all edit as the removed selection', () => {
     const row = rows.find(r => r[0] === 'interaction-page-all')!
     const { removed } = xmlDiffSummary(row[2].pivot, row[1].xmlEdit!({ ...row[2] }).pivot)

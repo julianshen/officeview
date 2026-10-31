@@ -251,12 +251,14 @@ const clearAll = (t: Target, name: string) => `clear all filters (${pivotField(t
 const currentPage = (t: Target, name: string, item: string) => `set current page of ${pivotField(t, name)} to ${str(item)}`
 
 // XML building blocks.
-/** sd="0" (or, with `on`, sd removed) on every data item of a field. */
+/** sd="0" on every item of a field, the default subtotal item included (or, with `on`, sd removed from every item):
+ * Excel's own field-level collapse writes `<item sd="0" x="0"/>` … `<item t="default" sd="0"/>`
+ * (interaction/interaction-collapse-field-compact-top.xlsx). */
 function setFieldDetail(pivot: string, index: number, on: boolean): string {
   return setFieldItems(pivot, index, fieldItems(pivot, index).map(item => {
-    if (!/\sx="/.test(item)) return item
     const bare = item.replace(/\ssd="[01]"/, '')
-    return on ? bare : bare.replace('<item ', '<item sd="0" ')
+    if (on) return bare
+    return /\sx="/.test(bare) ? bare.replace('<item ', '<item sd="0" ') : bare.replace(/\s*\/>$/, ' sd="0"/>')
   }))
 }
 /** sd="0" on the item of `fld` that points at shared item `value`. */
