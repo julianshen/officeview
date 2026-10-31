@@ -77,6 +77,34 @@ describe('applyDelta maps each kind onto the view', () => {
     expect(refusal(apply(p, view, { kind: 'collapse', field: REGION, item: 5, collapsed: true }))).toBe('pivot-delta-invalid')
     expect(refusal(apply(p, view, { kind: 'collapse', field: REGION, item: 9, collapsed: true }))).toBe('pivot-delta-invalid')
     expect(refusal(apply(p, view, { kind: 'collapse', field: 99, item: 0, collapsed: true }))).toBe('pivot-delta-invalid')
+    // A field on no row or column axis cannot be collapsed (Sales is on none; Product is a page field there).
+    expect(refusal(apply(p, view, { kind: 'collapse', field: 3, item: 0, collapsed: true }))).toBe('pivot-delta-invalid')
+    expect(refusal(apply(p, view, { kind: 'collapseField', field: 3, collapsed: true }))).toBe('pivot-delta-invalid')
+  })
+
+  it('collapse refuses a page field', async () => {
+    const p = (await load('quirk-page-single'))[0]!
+    const view = initialViewState(p.def, p.cache)
+    expect(refusal(apply(p, view, { kind: 'collapse', field: PRODUCT, item: 0, collapsed: true }))).toBe('pivot-delta-invalid')
+    expect(refusal(apply(p, view, { kind: 'collapseField', field: PRODUCT, collapsed: true }))).toBe('pivot-delta-invalid')
+    // collapseAll touches axis fields only: the page field keeps its state.
+    expect(ok(apply(p, view, { kind: 'collapseAll', collapsed: true })).fields[PRODUCT]).toBe(view.fields[PRODUCT])
+  })
+
+  it('a nested value sort with an exact tie refuses in both directions (only a top-level tie is measured)', async () => {
+    const p = await baseline()
+    const view = initialViewState(p.def, p.cache)
+    // Sum of Units under East: Apples 248, Cherries 248 (the reviewer's counter-example shape).
+    for (const order of ['descending', 'ascending'] as const) {
+      const sorted = ok(apply(p, view, { kind: 'sort', field: PRODUCT, order, byData: 1 }))
+      const result = computePivot(p.store, p.cache, p.def, sorted, { date1904: false })
+      expect(result.ok ? 'ok' : result.diagnostic.feature, order).toBe('pivot-engine-unmeasured')
+    }
+    // Top level keeps its measured rules (North and South tie on Units): both directions compute.
+    for (const order of ['descending', 'ascending'] as const)
+      expect(computePivot(p.store, p.cache, p.def, ok(apply(p, view, { kind: 'sort', field: REGION, order, byData: 1 })), { date1904: false }).ok, order).toBe(true)
+    // Nested without a tie (Sum of Sales) still computes.
+    expect(computePivot(p.store, p.cache, p.def, ok(apply(p, view, { kind: 'sort', field: PRODUCT, order: 'descending', byData: 0 })), { date1904: false }).ok).toBe(true)
   })
 
   it('items sets hidden, and refuses hiding every item', async () => {

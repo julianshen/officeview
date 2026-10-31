@@ -485,9 +485,10 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             return { item, value: aggregate.value[key], bound: bounds[key]! }
           }).sort((a, b) => ((state.sortType === 'descending' ? (b.value ?? -Infinity) - (a.value ?? -Infinity) : (a.value ?? Infinity) - (b.value ?? Infinity))) || a.item - b.item)
           if (!settled(scores.filter((entry): entry is Scored => entry.value !== undefined))) return close(`value sort for field ${field} under parent ${parent}`)
-          // Task 24 measured an ascending exact tie at the top level only (reversed item order); nested, it is not.
-          if (state.sortType === 'ascending' && scores.some((entry, k) => k > 0 && entry.value !== undefined && entry.value === scores[k - 1]!.value))
-            return unmeasured(`ascending value sort for field ${field} has an exact tie under parent ${parent}, whose order is not measured`)
+          // Task 24 measured exact ties at the top level only (descending keeps item order, ascending reverses it);
+          // under a parent neither direction is measured, so a nested exact tie refuses.
+          if (scores.some((entry, k) => k > 0 && entry.value !== undefined && entry.value === scores[k - 1]!.value))
+            return unmeasured(`${state.sortType} value sort for field ${field} has an exact tie under parent ${parent}, whose order is not measured`)
           const ordered = scores.map(entry => entry.item)
           if (state.showAll) ordered.push(...missing)
           byParent.set(parent, ordered)

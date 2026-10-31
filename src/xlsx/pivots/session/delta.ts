@@ -10,7 +10,7 @@
  * - Only a field's DATA items can be hidden, collapsed or selected; an index past the field's items, or naming a
  *   subtotal item, is `pivot-delta-invalid`. Hiding every data item is refused the same way (Excel's filter list
  *   cannot be confirmed with nothing selected).
- * - `collapseField` and `collapseAll` mark data items only. `collapseAll` is Excel's "collapse entire field" on every
+ * - `collapse` and `collapseField` refuse a field on no row or column axis. They and `collapseAll` mark data items only. `collapseAll` is Excel's "collapse entire field" on every
  *   field with a level below it on its axis (Task 24 interaction-collapse-all-*: Region on rows, Year above Values on
  *   columns); the innermost field of each axis is left alone.
  * - `filter`: a filter of the same family on the field (label or date; value or top-10, the engine's two kinds,
@@ -90,9 +90,11 @@ export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTa
   const onAxis = view.rows.includes(field) || view.cols.includes(field)
   switch (delta.kind) {
     case 'collapse':
+      if (!onAxis) return invalid(`field ${field} is not on the row or column axis`)
       if (!isData.has(delta.item)) return invalid(`item ${delta.item} is not a data item of field ${field}`)
       return { ok: true, value: withField(view, field, { collapsed: setFlags(state.collapsed, [delta.item], delta.collapsed) }) }
     case 'collapseField':
+      if (!onAxis) return invalid(`field ${field} is not on the row or column axis`)
       return { ok: true, value: withField(view, field, { collapsed: setFlags(state.collapsed, data, delta.collapsed) }) }
     case 'items': {
       const bad = badItem(delta.hidden)
