@@ -539,8 +539,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // and published only if it fits; the sizes are never user-set.
     const { sizes: prospective, kept } = sizes.previewMany('col', [...widths].map(([col, chars]) => [col, columnWidthPx(chars, mdw)] as const))
     if (!kept.size) return undefined
-    const candidate = admitCandidate(sheetId, prospective, 'The pivot table\'s column width', shown => [...kept].every(([col, px]) => shown.cols.size(col) === px), 'the fitted widths cannot be represented beside this sheet\'s sizes', true)
-    if (!candidate) return PIVOT_FIT_REFUSED
+    // A hidden column keeps its fitted size for when it is shown; while hidden it projects to 0, which is not a refusal.
+    const hiddenBefore = entries.get(sheetId)!.metrics.cols
+    let unrepresentable = false
+    const candidate = admitCandidate(sheetId, prospective, 'The pivot table\'s column width', shown => {
+      const ok = [...kept].every(([col, px]) => { const size = shown.cols.size(col); return size === px || (size === 0 && hiddenBefore.size(col) === 0) })
+      unrepresentable = !ok
+      return ok
+    }, '', true)
+    if (!candidate) return unrepresentable ? PIVOT_FIT_UNREPRESENTABLE : PIVOT_FIT_REFUSED
     for (const col of kept.keys()) if (sizes.set('col', col, kept.get(col)!, 'autofit')) fitted.set(col, widths.get(col)!)
     publishEntry(candidate, sizes.gen)
     return undefined
@@ -2450,6 +2457,7 @@ function pivotShownReader(sheet: XlsxSheet, overlay: ValueOverlay | undefined): 
   }
 }
 const PIVOT_FIT_REFUSED = 'Its columns were not fitted: not enough memory to measure them or lay the sheet out again (main memory budget).'
+const PIVOT_FIT_UNREPRESENTABLE = 'Its columns were not fitted: the fitted widths cannot be represented beside this sheet\'s sizes.'
 /** A region style layer's resolution for screen, as a pivot autofit reads it. */
 function pivotStyleAt(layer: ReturnType<typeof regionStylesFor>): ((row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) | undefined {
   return layer ? (row, col, own) => layer.styleAt(row, col, own, 'screen') ?? own : undefined

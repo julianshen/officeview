@@ -326,6 +326,9 @@ describe('§7.8 the fit cells a paged reply carries are bounded (Task 29 fix rou
     expect(pivotFitPayload(def, () => 1, nonblank)).toBeUndefined()
     expect(pivotFitPayload(def, (row, col) => read(row, col)?.value ?? null, nonblank)).toHaveLength(nonblank)
     expect(PIVOT_FIT_PAYLOAD_CELLS).toBe(32_768)
+    // Long texts are bounded by bytes too.
+    expect(pivotFitPayload(def, () => ({ value: 'x'.repeat(32_767) }))).toBeUndefined()
+    expect(pivotFitPayload(def, () => ({ value: 'x' }), nonblank + 1, 160 * 4)).toBeUndefined()
   })
 })
 

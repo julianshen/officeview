@@ -526,6 +526,32 @@ describe('the interactive viewer', () => {
     ui.unmount()
   })
 
+  it('Task 29 r1: a hidden column whose fit changed stays hidden and does not refuse the others\' autofit', async () => {
+    const doc = await load(BASELINE)
+    const sheet = doc.sheets[pivotSheet(doc)]!
+    // Column F hidden: keeping one Region moves the year columns, and F's fit changes (so does G's).
+    // F and G at the default width (no saved size to keep): a changed fit resizes them.
+    sheet.cols = [...sheet.cols.filter(spec => spec.min !== 5 && spec.min !== 6), { min: 5, max: 5, hidden: true }]
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    await ui.findByRole('button', { name: /^Collapse East/ }, { timeout: 10_000 })
+    const columnF = () => ui.container.querySelector('[role=columnheader][aria-label^="Column F"]')
+    const columnG = () => ui.container.querySelector<HTMLElement>('[role=columnheader][aria-label^="Column G"]')
+    await waitFor(() => expect(columnG()).not.toBeNull())
+    expect(columnF()).toBeNull()
+    const savedG = Number.parseFloat(columnG()!.style.width)
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    const list = await ui.findByRole('dialog', { name: 'Region' })
+    const boxes = within(list).getAllByRole('checkbox').filter(box => ['East', 'North', 'South', 'West', 'Central'].includes(box.getAttribute('aria-label') ?? ''))
+    for (const box of boxes.slice(0, -1)) fireEvent.click(box)
+    fireEvent.click(within(list).getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(ui.container.textContent).toContain('Pivot table changed (view only; the file is unchanged).'), { timeout: 10_000 })
+    expect(ui.container.textContent).not.toMatch(/not fitted/)
+    expect(columnF()).toBeNull()
+    // G's fit changed and its width was its old fit: it is resized beside the hidden F.
+    await waitFor(() => expect(Number.parseFloat(columnG()!.style.width)).not.toBe(savedG))
+    ui.unmount()
+  }, 20_000)
+
   it('reset returns the saved view', async () => {
     const doc = await load(BASELINE)
     const saved = doc.sheets[pivotSheet(doc)]!.pivotTables![0]

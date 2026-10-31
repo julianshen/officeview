@@ -91,7 +91,7 @@ describe('S3-AC: another pivot\'s vacated saved area', () => {
     expect(reset.commit.overlay?.cell(52, 4) ?? null).toBeNull()
   })
 
-  it('worker: the same sequence refuses, and the lower pivot\'s current area always counts', async () => {
+  it('worker: the same sequence refuses at the vacated E53; the lower pivot then resets into it', async () => {
     const { doc, sheet } = await twoPivots()
     const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, { yield: async () => {} })
     let serial = 0
@@ -187,9 +187,10 @@ describe('S3-AC: merges, spill ranges and notes count as occupied (fail closed)'
 })
 
 /** layout-collapsed-item (expanding Apples grows A3:I21 to A3:I24) with merges after its sheetData, or a comments part. */
-async function injected(options: { merges?: string; comments?: string; threaded?: boolean }): Promise<Uint8Array> {
+async function injected(options: { merges?: string; comments?: string; threaded?: boolean; array?: string }): Promise<Uint8Array> {
   const zip = await JSZip.loadAsync(readFileSync(file('engine/layout-collapsed-item')))
   let xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+  if (options.array) xml = xml.replace('<sheetData>', `<sheetData><row r="1"><c r="A1"><f t="array" ref="${options.array}">1</f><v>1</v></c></row>`)
   if (options.merges) xml = xml.replace('</sheetData>', `</sheetData><mergeCells count="1"><mergeCell ref="${options.merges}"/></mergeCells>`)
   zip.file('xl/worksheets/sheet1.xml', xml)
   if (options.comments !== undefined) {
@@ -234,6 +235,7 @@ describe('S3-AC from the file, resident parse and paged import', () => {
   })
   const cases: Array<[string, Parameters<typeof injected>[0], string]> = [
     ['a merge of blank cells below the pivot (B23:C23)', { merges: 'B23:C23' }, 'B23'],
+    ['an array formula\'s blank cells below the pivot (A1 over A1:A30)', { array: 'A1:A30' }, 'A22'],
     ['a note on a blank cell (C23)', { comments: COMMENTS('C23') }, 'C23'],
     ['a threaded comment on a blank cell (D24)', { comments: THREADED('D24'), threaded: true }, 'D24'],
     ['a comments part that cannot be read (no closing tag): every cell counts', { comments: COMMENTS('Z99').slice(0, -20) }, 'A22'],

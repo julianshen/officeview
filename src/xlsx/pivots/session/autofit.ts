@@ -60,14 +60,23 @@ export function* pivotAreaCells(def: PivotTableDefinition): Generator<{ row: num
 }
 /** Value cells a worker reply carries for the main thread's fit, at most (codex review T29-3: the payload is bounded). */
 export const PIVOT_FIT_PAYLOAD_CELLS = 32_768
-/** The cells of `def`'s area a fit reads that hold a value, as a reply carries them; undefined past
- * `PIVOT_FIT_PAYLOAD_CELLS` (the change is then not autofitted). */
-export function pivotFitPayload<V>(def: PivotTableDefinition, value: (row: number, col: number) => V | null | undefined, cap = PIVOT_FIT_PAYLOAD_CELLS): { row: number; col: number; value: V }[] | undefined {
+/** The estimated bytes of those cells, at most (long texts): 4 MiB. */
+export const PIVOT_FIT_PAYLOAD_BYTES = 4 * 1024 * 1024
+/** A carried cell's estimated bytes: the records (row, col, value object) and its text. */
+const payloadCellBytes = (value: unknown): number => {
+  const shown = (value as { value?: unknown } | null)?.value
+  return 160 + (typeof shown === 'string' ? 2 * shown.length : 0)
+}
+/** The cells of `def`'s area a fit reads that hold a value, as a reply carries them; undefined past `cap` cells or
+ * `PIVOT_FIT_PAYLOAD_BYTES` (the change is then not autofitted). */
+export function pivotFitPayload<V>(def: PivotTableDefinition, value: (row: number, col: number) => V | null | undefined, cap = PIVOT_FIT_PAYLOAD_CELLS, byteCap = PIVOT_FIT_PAYLOAD_BYTES): { row: number; col: number; value: V }[] | undefined {
   const out: { row: number; col: number; value: V }[] = []
+  let bytes = 0
   for (const { row, col } of pivotFitCells(pivotAreaCells(def))) {
     const shown = value(row, col)
     if (shown === null || shown === undefined) continue
-    if (out.length >= cap) return undefined
+    bytes += payloadCellBytes(shown)
+    if (out.length >= cap || bytes > byteCap) return undefined
     out.push({ row, col, value: shown })
   }
   return out
