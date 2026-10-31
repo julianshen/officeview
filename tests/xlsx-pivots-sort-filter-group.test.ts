@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { computeAxes, NO_LINE } from '../src/xlsx/pivots/engine/axes'
+import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { groupColumn } from '../src/xlsx/pivots/engine/groups'
 import { matchesLabelFilter } from '../src/xlsx/pivots/engine/filters'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
@@ -292,6 +293,25 @@ describe('Task 21 sort, filters and group mapping', () => {
     const axes = computeAxes(p!.store, p!.cache, p!.def, view)
     expect(axes.ok, axes.ok ? '' : axes.diagnostic.message).toBe(true)
     if (axes.ok) expect(axes.value.rows.some(line => line.type === 'data')).toBe(true)
+  })
+
+  it('a value filter by a calculated field over a text-only field reads its absent sum as zero (PR #56 review)', async () => {
+    const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/calc-text-field.xlsx'))
+    const view = initialViewState(p!.def, p!.cache)
+    const dataIndex = view.data.findIndex(data => p!.cache.fields[data.field]?.formula === 'Channel*2')
+    expect(dataIndex).toBeGreaterThanOrEqual(0)
+    view.filters = [filter({ fld: view.rows[0]!, type: 'valueGreaterThan', iMeasureFld: dataIndex, stringValue1: '-1' })]
+    const axes = computeAxes(p!.store, p!.cache, p!.def, view)
+    expect(axes.ok, axes.ok ? '' : axes.diagnostic.message).toBe(true)
+  })
+
+  it('a layout that would extend past the sheet refuses (PR #56 review)', async () => {
+    const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/baseline.xlsx'))
+    const def = { ...p!.def, location: { ...p!.def.location, ref: 'A1048570:I1048576' } }
+    const view = initialViewState(def, p!.cache)
+    expect(computePivot(p!.store, p!.cache, p!.def, initialViewState(p!.def, p!.cache), { date1904: false }).ok).toBe(true)
+    const moved = computePivot(p!.store, p!.cache, def, view, { date1904: false })
+    expect(moved.ok ? undefined : moved.diagnostic).toMatchObject({ kind: 'unsupported', feature: 'pivot-values-limit' })
   })
 
   it('wildcard label filters are bounded: repeated stars on a non-matching label finish fast (PR #56 review)', () => {

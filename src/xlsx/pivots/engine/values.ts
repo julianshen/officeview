@@ -302,16 +302,13 @@ export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, 
       if (!sum.ok) return sum
       sums.set(field, sum.value)
     }
-    // A formula naming no field (`=1`) has no sums to tell an empty item from one with records: it fills every item
-    // that has a passing record, as it fills every displayed cell (calc-constant).
-    let withRecords: Uint8Array | undefined
-    if (!compiled.value.fields.length) {
-      withRecords = new Uint8Array(keyCount)
-      for (let record = 0; record < store.count; record++) if (passes[record] && keys[record]! < keyCount) withRecords[keys[record]!] = 1
-    }
+    // Every item with a passing record gets the formula over its sums, an absent (blank or text-only) sum reading as
+    // zero, as the displayed cells do (calc-constant, calc-text-field); an item without records has no value.
+    const withRecords = new Uint8Array(keyCount)
+    for (let record = 0; record < store.count; record++) if (passes[record] && keys[record]! < keyCount) withRecords[keys[record]!] = 1
     const out = new Array<number | undefined>(keyCount)
     for (let key = 0; key < keyCount; key++) {
-      if (withRecords ? !withRecords[key] : compiled.value.fields.every(field => sums.get(field)![key] === undefined)) continue
+      if (!withRecords[key]) continue
       const value = calculatedValue(compiled.value, field => sums.get(field)![key] ?? 0)
       if (value === 'unsupported' || value.kind !== 'number') return unmeasured(`a filter or sort by calculated data field ${dataIndex} with a non-number item value is not measured`)
       out[key] = value.value

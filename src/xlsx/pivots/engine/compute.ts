@@ -7,6 +7,9 @@ import { computeValues } from './values'
 import type { RecordStore } from './records'
 import type { PivotViewState } from './view'
 
+/** A worksheet's rows and columns (zero-based rect bounds must stay below these). */
+const SHEET_ROWS = 1_048_576, SHEET_COLS = 16_384
+
 const unsupported = (feature: string, message: string): EngineResult<never> => ({
   ok: false, diagnostic: { kind: 'unsupported', feature, message } satisfies PivotDiagnostic,
 })
@@ -23,5 +26,9 @@ export function computePivot(store: RecordStore, cache: PivotCacheDefinition, de
   if (!axes.ok) return axes
   const values = computeValues(store, cache, def, view, axes.value)
   if (!values.ok) return values
-  return { ok: true, value: placeCells(def, view, cache, axes.value, values.value, options) }
+  const layout = placeCells(def, view, cache, axes.value, values.value, options)
+  // The axis caps don't count the anchor or the header rows: a pivot near the sheet's edge can still outgrow it.
+  if (layout.rect.minRow < 0 || layout.rect.minCol < 0 || layout.rect.maxRow >= SHEET_ROWS || layout.rect.maxCol >= SHEET_COLS)
+    return unsupported('pivot-values-limit', 'the pivot layout would extend beyond the worksheet')
+  return { ok: true, value: layout }
 }
