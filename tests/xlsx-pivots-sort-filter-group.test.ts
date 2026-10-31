@@ -7,7 +7,7 @@ import { groupColumn } from '../src/xlsx/pivots/engine/groups'
 import { matchesLabelFilter } from '../src/xlsx/pivots/engine/filters'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
 import type { FieldState } from '../src/xlsx/pivots/engine/view'
-import type { PivotCacheDefinition, PivotFilter, PivotTableDefinition, PivotValue } from '../src/xlsx/pivots/model'
+import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotFilter, type PivotTableDefinition, type PivotValue } from '../src/xlsx/pivots/model'
 import { VALUE_TAG, type RecordStore } from '../src/xlsx/pivots/engine/records'
 import { loadAll } from './helpers/xlsx-pivots-load'
 import { checkSavedLayout, sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
@@ -199,6 +199,70 @@ describe('Task 21 sort, filters and group mapping', () => {
     if (!manual.ok || !sorted.ok) return
     expect(sorted.value.rows.map(line => line.items.join(','))).toEqual(manual.value.rows.map(line => line.items.join(',')))
     // Quadratic rebuilding took seconds at this size; linear work is tens of milliseconds.
+    expect(elapsed).toBeLessThan(1500)
+  })
+
+  it('axis lines stop at the sheet limit: a showAll cross product refuses before allocating it (PR #56 review)', () => {
+    const n = 1100 // 1100 × 1100 showAll lines exceed the 1,048,576 rows a sheet holds
+    const items = (prefix: string) => Array.from({ length: n }, (_, i) => ({ type: 'string', value: `${prefix}${String(i).padStart(5, '0')}` }) as PivotValue)
+    const cache = {
+      source: { type: 'worksheet' }, olap: false,
+      fields: [
+        { databaseField: true, sharedItems: { inline: false, items: items('P') } },
+        { databaseField: true, sharedItems: { inline: false, items: items('C') } },
+        { databaseField: true, sharedItems: { inline: true, items: [] } },
+      ],
+    } as unknown as PivotCacheDefinition
+    const pivotItems = Array.from({ length: n }, (_, x) => ({ type: 'data', x, hidden: false, showDetails: true }))
+    const def = { rowGrandTotals: false, colGrandTotals: false, fields: [{ items: pivotItems }, { items: pivotItems }, {}] } as unknown as PivotTableDefinition
+    const index = Uint32Array.from({ length: n }, (_, i) => i)
+    const store: RecordStore = {
+      count: n, bytes: 0,
+      columns: [
+        { kind: 'shared', index }, { kind: 'shared', index },
+        { kind: 'inline', tag: new Uint8Array(n).fill(VALUE_TAG.number), num: new Float64Array(n).fill(1), text: [], textIndex: new Uint32Array(n) },
+      ],
+    }
+    const view = {
+      rows: [0, 1], cols: [], pages: [], filters: [], data: [{ field: 2, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Sum' }],
+      fields: [field(n), { ...field(n), showAll: true }, field(0)],
+    } as ReturnType<typeof initialViewState>
+    const started = performance.now()
+    const result = computeAxes(store, cache, def, view)
+    expect(result.ok ? undefined : result.diagnostic).toMatchObject({ kind: 'unsupported', feature: 'pivot-values-limit' })
+    expect(performance.now() - started).toBeLessThan(3000)
+  })
+
+  it('a nested value sort under many parents stays linear when showAll is off (PR #56 review)', () => {
+    const n = 20000
+    const items = (prefix: string) => Array.from({ length: n }, (_, i) => ({ type: 'string', value: `${prefix}${String(i).padStart(5, '0')}` }) as PivotValue)
+    const cache = {
+      source: { type: 'worksheet' }, olap: false,
+      fields: [
+        { databaseField: true, sharedItems: { inline: false, items: items('P') } },
+        { databaseField: true, sharedItems: { inline: false, items: items('C') } },
+        { databaseField: true, sharedItems: { inline: true, items: [] } },
+      ],
+    } as unknown as PivotCacheDefinition
+    const pivotItems = Array.from({ length: n }, (_, x) => ({ type: 'data', x, hidden: false, showDetails: true }))
+    const def = { rowGrandTotals: false, colGrandTotals: false, fields: [{ items: pivotItems }, { items: pivotItems }, {}] } as unknown as PivotTableDefinition
+    const index = Uint32Array.from({ length: n }, (_, i) => i)
+    const store: RecordStore = {
+      count: n, bytes: 0,
+      columns: [
+        { kind: 'shared', index }, { kind: 'shared', index },
+        { kind: 'inline', tag: new Uint8Array(n).fill(VALUE_TAG.number), num: Float64Array.from({ length: n }, (_, i) => i), text: [], textIndex: new Uint32Array(n) },
+      ],
+    }
+    const view = (sortType: FieldState['sortType'], scoped: boolean) => ({
+      rows: [0, 1], cols: [], pages: [], filters: [], data: [{ field: 2, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Sum' }],
+      fields: [field(n), { ...field(n), sortType, ...(scoped ? { autoSortScope: { references: [{ field: PIVOT_VALUES_FIELD, x: [0] }] } } : {}) }, field(0)],
+    }) as unknown as ReturnType<typeof initialViewState>
+    const started = performance.now()
+    const sorted = computeAxes(store, cache, def, view('descending', true))
+    const elapsed = performance.now() - started
+    expect(sorted.ok, sorted.ok ? '' : sorted.diagnostic.message).toBe(true)
+    if (sorted.ok) expect(sorted.value.rows.length).toBe(2 * n)
     expect(elapsed).toBeLessThan(1500)
   })
 

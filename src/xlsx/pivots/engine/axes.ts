@@ -60,6 +60,8 @@ const pending = (message: string) => fail('unsupported', 'pivot-engine-pending',
 const invalid = (message: string) => fail('parse', 'pivot-definition-invalid', message)
 /** Behaviour Excel has not been measured on yet (Task 15 adds the cases); the pivot stays display-only. */
 const unmeasured = (message: string) => fail('unsupported', 'pivot-engine-unmeasured', message)
+/** A worksheet's rows and columns: the most lines an axis can place. */
+const SHEET_ROWS = 1_048_576, SHEET_COLS = 16_384
 
 function selectTopPercent(ranked: readonly { item: number; value: number }[], percent: number): Set<number> | undefined {
   if (ranked.some(entry => entry.value < 0)) return undefined
@@ -413,7 +415,12 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         }
         const byParent = new Map<string, readonly number[]>()
         for (const [parent, items] of orders) {
-          const missing = map.order.filter(item => !state.hidden[item] && !items.includes(item))
+          // Built only when showAll lists no-data items: a scan of the whole order per parent was quadratic.
+          let missing: number[] = []
+          if (state.showAll) {
+            const present = new Set(items)
+            missing = map.order.filter(item => !state.hidden[item] && !present.has(item))
+          }
           if (state.showAll && state.sortType === 'ascending' && missing.length)
             return unmeasured(`showAll ascending value sort for field ${field} has no-data items under parent ${parent}, whose placement is not measured`)
           if (state.showAll && missing.length > 1)
@@ -567,7 +574,12 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
 
   const lines: PivotLine[] = []
   let previous: number[] = []
+  // No pivot outgrows the sheet: past its rows or columns (a showAll cross product can square the records) the axis
+  // stops growing and refuses, before the lines are allocated.
+  const lineCap = which === 'rows' ? SHEET_ROWS : SHEET_COLS
+  let overCap = false
   const push = (type: PivotItemType, items: number[], data: number) => {
+    if (lines.length >= lineCap) { overCap = true; return lines.length - 1 }
     let shared = 0
     // An unfilled level (-1, under a collapsed item above Values) counts as shared: Excel writes r past it.
     while (shared < previous.length && shared < items.length && previous[shared] === items[shared]) shared++
@@ -588,6 +600,7 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
   }
 
   const visit = (level: number, path: number[], node: Node | undefined, data: number): void => {
+    if (overCap) return
     if (level === fields.length) {
       const line = push('data', path, data)
       if (node && node.leaf === NO_LINE) node.leaf = line
@@ -695,11 +708,12 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     return present
   }
   visit(0, [], root, -1)
-  if (refusal !== undefined) return unmeasured(refusal)
+  if (refusal !== undefined && !overCap) return unmeasured(refusal)
   if (real.length && (which === 'rows' ? def.rowGrandTotals : def.colGrandTotals)) {
     if (valuesLevel >= 0) for (let d = 0; d < dataCount; d++) push('grand', [], d)
     else push('grand', [], 0)
   }
+  if (overCap) return fail('unsupported', 'pivot-values-limit', `the ${which} axis would have more than ${lineCap} lines, more than a sheet holds`)
 
   for (let r = 0; r < store.count; r++) if (recordKey[r] !== NO_LINE) recordKey[r] = nodes[recordKey[r]!]!.leaf
   return { ok: true, value: { lines, key: recordKey } }
