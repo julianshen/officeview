@@ -1406,7 +1406,7 @@ export class DocumentSession {
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     const existing = this.pivotHandles.get(handleKey)
     if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), cells: layoutCells(existing.session.layout), created: false } }
-    const [{ openPivotSession }, { pivotMenuModel }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu')])
+    const [{ openPivotSession }, { pivotMenuModel }, { savedPivotLayout }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu'), import('../xlsx/pivots/savedLayout')])
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     // By sheet and name (R2-4); an unqualified source naming same-named pivots on several sheets links none (S3-Q).
     const links = linkPivotCharts(assets.linkedCharts.map(item => ({ ...item, pivot: item.chart.pivot })), { sheet: def.sheet, name: String(def.name ?? '') }, assets.pivots ?? [{ sheet: def.sheet, name: String(def.name ?? '') }])
@@ -1418,8 +1418,19 @@ export class DocumentSession {
     // A refresh's construction is admitted to the pool as it grows (codex review T32-1); the store's own entry takes
     // over once admitted, and this charge ends with the open.
     const building = refreshSource ? this.memory.charge() : undefined
+    // Ruling S3-AC: the other pivots' saved areas (vacated cells included: each protects its own) and the areas their
+    // commits show, read at each apply; then the sheet's own cells.
+    const otherSaved = assets.tables.flatMap((table, index) => index === pivot ? [] : (savedPivotLayout(table)?.rects ?? []).map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol })))
+    const inRects = (rects: readonly SourceRect[], row: number, col: number) => rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)
+    const occupied = (row: number, col: number): boolean => {
+      if (inRects(otherSaved, row, col)) return true
+      for (const other of this.pivotHandles.values()) {
+        if (other.sheetId === sheetId && other.pivot !== pivot && other.committed && inRects(other.committed.overlay.protectedRects, row, col)) return true
+      }
+      return assets.occupied(row, col)
+    }
     const opened = openPivotSession({ def, cache, ...(held.store ? { store: held.store } : {}), date1904: assets.date1904, saved,
-      occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
+      occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
       ...(refreshSource ? {
         source: refreshSource, limits: { ...limits, admitBytes: (bytes: number) => building!.set(bytes) },
         admitStore: (store: import('../xlsx/pivots/engine/records').RecordStore, metadataBytes: number) => {

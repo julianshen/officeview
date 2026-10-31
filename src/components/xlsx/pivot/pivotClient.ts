@@ -354,13 +354,13 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     const saved = sheetCellReader(sheet)
     const others = savedDefs[sheetId]!.map((def, index) => ({ index, def })).filter(entry => entry.index !== pivot)
     const savedRects = new Map(others.map(entry => [entry.index, (savedPivotLayout(entry.def)?.rects ?? []).map(toSource)]))
+    // Ruling S3-AC: another pivot's current area always counts, and so does its saved area — vacated cells too, which
+    // it protects while it is open (the composite overlay's protected rectangles) and gets back on a reset.
     return (row: number, col: number): boolean => {
       for (const { index } of others) {
+        if (within(savedRects.get(index)!, row, col)) return true
         const live = open.get(key(sheetId, index))
-        if (live && shows(live)) {
-          if (within(live.current, row, col)) return true
-          if (within(live.saved, row, col)) return false
-        } else if (within(savedRects.get(index)!, row, col)) return true
+        if (live && shows(live) && within(live.current, row, col)) return true
       }
       return saved(row, col) !== undefined
     }
