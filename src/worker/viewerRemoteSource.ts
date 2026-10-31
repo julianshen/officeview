@@ -28,7 +28,7 @@ import type {
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
 import type { OverflowCache } from '../xlsx/view/overflowCache'
-import { MainMemoryLedger, axisBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -555,6 +555,8 @@ export class RemoteWorkbook implements WorkbookSource {
     if (valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
     this.owner = { ...this.owner, workbookValueGen: Math.max(this.owner.workbookValueGen + 1, valueGen), sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
     this.stores.get(sheetId)?.clear()
+    // The replacement chart models live as long as the drawing cache shows them: charged to its pool (R2-4).
+    for (const { chart } of result.charts) if (!this.mainLedger.hasLifetime(chart)) this.mainLedger.chargeWhileReachable('drawings', [chart], estimatePayloadBytes(chart))
     this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), result.charts)
     entry.gen++
     this.invalidateRegionStyles(sheetId)

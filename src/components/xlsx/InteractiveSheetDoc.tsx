@@ -61,6 +61,7 @@ import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
 import { SheetImageCache, imageBudgetFor, installPivotCharts, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { ChartModel } from '../../charts/model'
+import { chartLinksPivot } from '../../xlsx/pivotChartLink'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -294,6 +295,8 @@ interface SheetEntry {
   structureGen: number
   /** The source store's value generation the geometry holds (a committed pivot overlay, spec §7.9). */
   valueGen: number
+  /** Worker-backed sheets: the drawing generation the entry's sheet holds (a pivot chart swap changes only this). */
+  drawingGen: number
   /** View-only session size generation the geometry holds (spec §5.6). */
   resizeGen: number
   /** The view input this entry shows (rebuilt with it when only sizes change). */
@@ -482,7 +485,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
-  const savedPivotCharts = useRef(new Map<string, ChartModel[]>()).current
+  const savedPivotCharts = useRef(new Map<string, { sheet: string; name: string; charts: ChartModel[] }>()).current
   /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
    * outlives the sessions that made it (unmount, or a new client). */
   const restorePivots = () => {
@@ -494,7 +497,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
     for (const sheetId of pivotOverlays.keys()) { try { source.store(sheetId).setValueOverlay?.(undefined) } catch { /* released with the viewer */ } }
     pivotOverlays.clear()
-    for (const [name, charts] of savedPivotCharts) for (const index of installPivotCharts(doc, name, charts)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+    for (const { sheet, name, charts } of savedPivotCharts.values()) for (const index of installPivotCharts(doc, name, charts, sheet)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
     savedPivotCharts.clear()
   }
 
@@ -527,7 +530,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   /** A sheet entry built off to the side: nothing is charged, held or published. */
   interface Candidate {
-    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; valueGen: number; previous: SheetEntry | undefined
+    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; valueGen: number; drawingGen: number; previous: SheetEntry | undefined
     order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
     built: SheetGeometry & { readonly chargeBytes?: number }
     /** Exactly what publishing charges (the entry charge functions). */
@@ -554,8 +557,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // A resident pivot overlay (Task 28) moves the store's value and merge generations: the geometry is rebuilt over it.
     const structureGen = remote ? remote.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
     const valueGen = remote ? 0 : source.store(sheetId).stamp.valueGen
+    const drawingGen = remote ? remote.drawings(sheetId).gen : 0
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
-    const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
+    const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.drawingGen === drawingGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
     if (!override && previous && previous.revision === input.revision && same(previous)) return { entry: previous }
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
@@ -583,12 +587,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
     const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
-    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, previous, order, baseHidden, visibility, built, bytes } }
+    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, drawingGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
    * retires the previous entry on the next display commit. */
   const publishEntry = (candidate: Candidate, resizeGen: number): SheetEntry => {
-    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, previous, order, baseHidden, visibility, built } = candidate
+    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, drawingGen, previous, order, baseHidden, visibility, built } = candidate
     bindOverflowCache(built, overflowFor())
     // A resident geometry is charged for its lifetime: the row projection (it
     // keeps its own copied segments; the build's row axis is dropped), the
@@ -607,7 +611,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, drawingGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
@@ -1270,9 +1274,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     regionStylesFor(sheet)
     // Task 30: the refilled pivot charts replace their saved models (charts may sit on other sheets: their tiles go too).
     if (commit.charts?.length) {
-      const name = String(commit.def.name ?? '')
-      if (!savedPivotCharts.has(name)) savedPivotCharts.set(name, linkedPivotCharts(doc, name))
-      for (const index of installPivotCharts(doc, name, commit.charts)) { const id = sheetIds[index]; if (id !== undefined && id !== sheetId) dropTiles(id, null) }
+      const name = String(commit.def.name ?? ''), key = JSON.stringify([commit.def.sheet, name])
+      if (!savedPivotCharts.has(key)) savedPivotCharts.set(key, { sheet: commit.def.sheet, name, charts: linkedPivotCharts(doc, commit.def.sheet, name) })
+      for (const index of installPivotCharts(doc, name, commit.charts, commit.def.sheet)) { const id = sheetIds[index]; if (id !== undefined && id !== sheetId) dropTiles(id, null) }
     }
     if (!remote && commit.overlay !== undefined) {
       if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
@@ -1665,7 +1669,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setPrintPivotNote(changed ? 'Printing shows the pivot as saved.' : '')
     // Its linked charts print as saved too: each live chart model maps back to the saved one it replaced.
     const savedChart = new Map<ChartModel, ChartModel>()
-    for (const [name, charts] of savedPivotCharts) linkedPivotCharts(doc, name).forEach((live, k) => { const saved = charts[k]; if (saved && saved !== live) savedChart.set(live, saved) })
+    for (const { sheet, name, charts } of savedPivotCharts.values()) linkedPivotCharts(doc, sheet, name).forEach((live, k) => { const saved = charts[k]; if (saved && saved !== live) savedChart.set(live, saved) })
     const printed = changed || savedChart.size ? { ...doc, sheets: doc.sheets.map((sheet, index) => {
       const drawings = savedChart.size ? withSavedCharts(sheet.drawings, savedChart) : sheet.drawings
       if (sheet.pivotTables === savedPivotDefs[index] && drawings === sheet.drawings) return sheet
@@ -2184,8 +2188,8 @@ function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.Pi
 }
 
 /** A pivot's linked charts in `installPivotCharts`' order (sheets, then drawing order), by the name after the last `!`. */
-function linkedPivotCharts(doc: XlsxDocument, name: string): ChartModel[] {
-  return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => { const source = chart.pivot?.name ?? ''; return Boolean(chart.pivot) && source.slice(source.lastIndexOf('!') + 1) === name })
+function linkedPivotCharts(doc: XlsxDocument, sheetName: string, name: string): ChartModel[] {
+  return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chartLinksPivot(chart, sheetName, name))
 }
 
 /** Drawing nodes with the given chart models swapped back (copies only along the changed paths; print of a changed pivot). */

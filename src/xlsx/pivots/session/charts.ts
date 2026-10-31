@@ -35,6 +35,7 @@
  * entries or a title (an automatic title would follow the series), or under a single-colour style column (colours
  * shade by the series count); an empty chart.
  */
+import { chartLinksPivot } from '../../pivotChartLink'
 import type { ChartCategoryLevel, ChartModel, ChartRange, ChartSeries } from '../../../charts/model'
 import { PointWriter, pointBytes, stringBytes } from '../../../charts/points'
 import { refillChartModel } from '../../../charts/fill'
@@ -48,8 +49,6 @@ export const PIVOT_CHART_MAPPING = 'pivot-chart-mapping'
 const refuse = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
 const unmapped = (def: PivotTableDefinition, why: string) => refuse(PIVOT_CHART_MAPPING, `The pivot chart of pivot table ${def.name} cannot follow its changes: ${why}`)
 
-/** The chart's pivot name: `[book]Sheet!Name` → `Name` (the client links charts by it). */
-const linkedName = (chart: ChartModel) => { const name = chart.pivot?.name ?? ''; return name.slice(name.lastIndexOf('!') + 1) }
 const n15 = (v: number) => Number(v.toPrecision(15))
 
 /** The measured field layouts: Values last on columns over one column field (rows [a] or [a, b]), or Values last on
@@ -155,7 +154,7 @@ const perPoint = (s: ChartSeries) => Boolean(s.dPt?.size || s.pointFills?.length
  * axis's leaf lines, categories from the row axis's leaf lines, per the mapping above. Pure: the chart is not changed.
  */
 export function pivotChartSeries(chart: ChartModel, layout: PivotLayout, def: PivotTableDefinition): EngineResult<ChartModel> {
-  if (!chart.pivot || linkedName(chart) !== def.name) return unmapped(def, 'the chart is not linked to this pivot table')
+  if (!chartLinksPivot(chart, def.sheet, String(def.name ?? ''))) return unmapped(def, 'the chart is not linked to this pivot table')
   if (chart.unsupported || chart.refused) return unmapped(def, 'the chart is shown as a placeholder')
   const group = chart.groups[0]
   if (chart.groups.length !== 1 || !group || group.kind || group.family !== 'bar' || group.grouping !== 'clustered' || group.varyColors) return unmapped(def, 'only a clustered column or bar chart has a measured mapping')

@@ -15,6 +15,7 @@
  * (they are read again when shown). What could not be shown is a diagnostic
  * the viewer displays, never an empty drawing layer.
  */
+import { samePivotSource } from '../xlsx/pivotChartLink'
 import type { CacheIdentity, SheetDrawings, WorkerDiagnostic, WorkerReply } from '../xlsx/view/contracts'
 import type { XlsxDocument, XlsxDrawing, XlsxImage, XlsxSheet } from '../xlsx/types'
 import type { ChartModel } from '../charts/model'
@@ -82,7 +83,6 @@ interface Entry {
 const none: SheetGeometry['drawingsIn'] = () => []
 const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
 const chartKey = (sheetId: string, partPath: string, treePath: string) => JSON.stringify([sheetId, partPath, treePath])
-const pivotName = (chart: ChartModel) => { const name = chart.pivot?.name ?? ''; return name.slice(name.lastIndexOf('!') + 1) }
 
 export class RemoteDrawingCache {
   private readonly entries = new Map<string, Entry>()
@@ -149,6 +149,7 @@ export class RemoteDrawingCache {
     else this.pivotChartOverrides.delete(ownerKey)
     for (const [sheetId, entry] of this.entries) {
       if (entry.state !== 'ready' || !this.applyPivotCharts(sheetId, entry)) continue
+      entry.drawingsIn = drawingQuery(entry.drawings)
       entry.gen++
       entry.shells = undefined
       this.host.changed(sheetId)
@@ -220,7 +221,7 @@ export class RemoteDrawingCache {
     entry.theme = result.theme
     entry.diagnostics = result.diagnostics
     entry.bytes = result.bytes
-    entry.drawingsIn = drawingQuery(result.drawings)
+    entry.drawingsIn = drawingQuery(entry.drawings)
     entry.shells = undefined
     entry.pendingSheets = result.pendingSheets?.length ? [...result.pendingSheets] : undefined
     entry.gen++
@@ -235,6 +236,8 @@ export class RemoteDrawingCache {
     this.host.changed(sheetId)
   }
 
+  /** Swaps the pivot chart overrides into the sheet's drawings, copying the nodes along each changed path into a
+   * new list (R2-4): a geometry or lease keyed on the old list never sees its nodes change under it. */
   private applyPivotCharts(sheetId: string, entry: Entry): boolean {
     let changed = false
     const replacementFor = (key: string) => {
@@ -244,24 +247,32 @@ export class RemoteDrawingCache {
       }
       return undefined
     }
-    const visit = (nodes: readonly XlsxDrawing[]) => {
-      for (const node of nodes) {
+    const visit = (nodes: readonly XlsxDrawing[]): readonly XlsxDrawing[] => {
+      let out: XlsxDrawing[] | undefined
+      nodes.forEach((node, index) => {
+        let next = node
         if (node.content?.kind === 'xlsxChart') {
           const key = chartKey(sheetId, node.source.partPath, node.source.treePath)
           const original = entry.baseCharts.get(key) ?? node.content.chart
           const replacement = replacementFor(key)
-          if (replacement && pivotName(replacement) !== pivotName(original)) continue
-          const next = replacement ?? original
-          if (node.content.chart !== next) {
-            entry.baseCharts.set(key, original)
-            node.content = { ...node.content, chart: next }
-            changed = true
-          } else if (replacement) entry.baseCharts.set(key, original)
+          if (!(replacement && !samePivotSource(replacement, original))) {
+            const chart = replacement ?? original
+            if (node.content.chart !== chart) {
+              entry.baseCharts.set(key, original)
+              next = { ...node, content: { ...node.content, chart } }
+            } else if (replacement) entry.baseCharts.set(key, original)
+          }
         }
-        if (node.children) visit(node.children)
-      }
+        if (next.children?.length) {
+          const children = visit(next.children)
+          if (children !== next.children) next = { ...next, children: children as XlsxDrawing[] }
+        }
+        if (next !== node) { out ??= [...nodes]; out[index] = next }
+      })
+      return out ?? nodes
     }
-    visit(entry.drawings)
+    const drawings = visit(entry.drawings)
+    if (drawings !== entry.drawings) { entry.drawings = drawings as typeof entry.drawings; changed = true }
     return changed
   }
 }

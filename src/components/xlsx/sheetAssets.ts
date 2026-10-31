@@ -15,6 +15,7 @@
  * leases need is decoded once. Refused pictures paint as the renderer's blank
  * placeholder and are counted.
  */
+import { chartLinksPivot, pivotSourceRef } from '../../xlsx/pivotChartLink'
 import type { XlsxDocument, XlsxDrawing } from '../../xlsx/types'
 import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
@@ -285,8 +286,10 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
  * drops their tiles, and each new model object re-keys the chart renders. A count that does not match the linked
  * charts installs nothing (the commit was built for other charts). Main thread only; walks drawing trees, no chart code.
  */
-export function installPivotCharts(doc: Pick<XlsxDocument, 'sheets'>, name: string, charts: readonly ChartModel[]): number[] {
-  const linked = (chart: ChartModel) => { const source = chart.pivot?.name ?? ''; return Boolean(chart.pivot) && source.slice(source.lastIndexOf('!') + 1) === name }
+export function installPivotCharts(doc: Pick<XlsxDocument, 'sheets'>, name: string, charts: readonly ChartModel[], sheetName?: string): number[] {
+  // By sheet and name when the pivot's sheet is given (Task 27 r2 R2-4: pivot names repeat across sheets).
+  const linked = (chart: ChartModel) => sheetName !== undefined ? chartLinksPivot(chart, sheetName, name)
+    : Boolean(chart.pivot) && pivotSourceRef(chart.pivot!.name).pivot === name
   const found: Array<{ sheet: number; content: { chart: ChartModel } }> = []
   const walk = (nodes: readonly XlsxDrawing[] | undefined, sheet: number) => {
     for (const node of nodes ?? []) {

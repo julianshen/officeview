@@ -24,8 +24,8 @@
  * - Overlap (`occupied`, §7.1, refined by Task 29): a cell inside another pivot's current area (or, for a pivot never
  *   opened, its saved rectangles) is occupied; a cell another pivot vacated is free; anything else is occupied when
  *   the sheet as loaded has a value there (`sheetCellReader`, as the oracle does).
- * - Linked charts: every chart on any sheet whose `c:pivotSource` names this pivot (the name after the last `!`),
- *   whatever sheet it names: over-linking only makes a pivot display-only, never stale (fail closed, §6.6). They go
+ * - Linked charts: every chart on any sheet whose `c:pivotSource` names this pivot by its sheet and name
+ *   (`chartLinksPivot`; pivot names repeat across sheets, Task 27 r2 R2-4). They go
  *   through Task 30's `pivotChartGate` (lazily loaded); a commit carries the refilled models, in the same order as
  *   `installPivotCharts` walks them.
  */
@@ -44,6 +44,7 @@ import {
   type ChartGate, type PivotDelta, type PivotDeltaKind, type PivotLayout, type PivotSession, type PivotViewState,
 } from '../../../xlsx/pivots/index'
 import { sheetCharts } from '../sheetCharts'
+import { chartLinksPivot } from '../../../xlsx/pivotChartLink'
 import { pivotFieldName, pivotMenuItemLabel, pivotMenuModel, type PivotMenuField, type PivotMenuItem, type PivotMenuModel } from '../../../xlsx/pivots/session/menu'
 
 export type { PivotDelta, PivotDeltaKind }
@@ -302,8 +303,6 @@ export interface ResidentPivotClientOptions {
 }
 interface OpenPivot { session: PivotSession; savedDef: PivotTableDefinition; cache: PivotCacheDefinition; saved: SourceRect[]; current: SourceRect[]; date1904: boolean; style: ReturnType<typeof savedStyles> }
 
-/** The chart's pivot name: `[book]Sheet!Name` → `Name`. */
-const linkedName = (chart: ChartModel) => { const name = chart.pivot?.name ?? ''; return name.slice(name.lastIndexOf('!') + 1) }
 
 export function createResidentPivotClient(options: ResidentPivotClientOptions): PivotClient {
   const { doc, ledger } = options
@@ -344,10 +343,8 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       return saved(row, col) !== undefined
     }
   }
-  const linkedCharts = (def: PivotTableDefinition): ChartModel[] => {
-    const name = String(def.name ?? '')
-    return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chart.pivot && linkedName(chart) === name)
-  }
+  const linkedCharts = (def: PivotTableDefinition): ChartModel[] =>
+    doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chartLinksPivot(chart, def.sheet, String(def.name ?? '')))
   const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.cache, entry.session.view, entry.date1904)
 
   const client: PivotClient = {

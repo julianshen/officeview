@@ -1,3 +1,4 @@
+import { chartLinksPivot } from '../xlsx/pivotChartLink'
 import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import type { XlsxFrozenPane } from '../xlsx/frozenPane'
 import type { XlsxCellStyle } from '../xlsx/types'
@@ -1380,10 +1381,8 @@ export class DocumentSession {
     if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), created: false } }
     const [{ openPivotSession }, { pivotMenuModel }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu')])
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
-    const linked = assets.linkedCharts.filter(item => {
-      const name = item.chart.pivot?.name ?? ''
-      return name.slice(name.lastIndexOf('!') + 1) === def.name
-    })
+    // By sheet and name (R2-4): pivot names repeat across sheets.
+    const linked = assets.linkedCharts.filter(item => chartLinksPivot(item.chart, def.sheet, String(def.name ?? '')))
     const linkedCharts = linked.map(item => item.chart)
     const chartGate = linkedCharts.length ? (await import('../xlsx/pivots/session/charts')).pivotChartGate : undefined
     const opened = openPivotSession({ def, cache, store: share.store, date1904: assets.date1904, saved,

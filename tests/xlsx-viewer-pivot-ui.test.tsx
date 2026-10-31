@@ -189,6 +189,26 @@ describe('resident pivot client (headless)', () => {
     expect(chartData(commits[1].charts[0])).toEqual(chartData(saved[0]!))
   })
 
+  it('R2-4: a chart links its pivot by sheet and name (pivot names repeat across sheets)', async () => {
+    const { pivotSourceRef } = await import('../src/xlsx/pivotChartLink')
+    expect(pivotSourceRef('[chart-baseline.xlsx]Pivot!樞紐分析表2')).toEqual({ sheet: 'Pivot', pivot: '樞紐分析表2' })
+    expect(pivotSourceRef("'[book.xlsx]My ''Q'' Sheet'!PivotTable1")).toEqual({ sheet: "My 'Q' Sheet", pivot: 'PivotTable1' })
+    expect(pivotSourceRef('PivotTable1')).toEqual({ pivot: 'PivotTable1' })
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const { installPivotCharts } = await import('../src/components/xlsx/sheetAssets')
+    const doc = await load(CHART_LINKED), sheet = pivotSheet(doc)
+    const chart = linkedCharts(doc)[0]!
+    // The same pivot name on another sheet: this chart is not the Pivot sheet's pivot's chart.
+    chart.pivot = { ...chart.pivot!, name: '[chart-baseline.xlsx]Other!樞紐分析表2' }
+    const commits: any[] = []
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: commit => commits.push(commit) })
+    expect((await client.open(sheet, 0, signal())).ok).toBe(true)
+    expect((await client.apply(sheet, 0, { kind: 'items', field: 0, hidden: [3] })).ok).toBe(true)
+    expect(commits[0].charts).toBeUndefined()
+    expect(installPivotCharts(doc, '樞紐分析表2', [chart], 'Pivot')).toEqual([])
+    expect(linkedCharts(doc)[0]).toBe(chart)
+  })
+
   it('a pivot whose records cannot be leased, or whose linked chart is not covered, refuses at open with its feature', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await lineChartDoc(), sheet = pivotSheet(doc)

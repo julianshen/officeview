@@ -141,6 +141,43 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
+  it('R2-4: the worker collects only pivot charts and links them by sheet and name', async () => {
+    const file = resolve(FIXTURE_ROOT, 'interaction/chart-hide-item.xlsx')
+    const imported = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(readFileSync(file))]) }, { docId: id(), profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported), sheetId = source.sheets[0]!.sheetId
+    const assets = (await pivotAssets(source, sheetId))!
+    expect(assets.linkedCharts.length).toBeGreaterThan(0)
+    expect(assets.linkedCharts.every(item => Boolean(item.chart.pivot))).toBe(true)
+    // The same pivot name on another sheet: the charts are not this pivot's, so the session opens without them.
+    source.pivotAssets = async () => ({ ...assets, linkedCharts: assets.linkedCharts.map(item => ({ ...item, chart: { ...item.chart, pivot: { ...item.chart.pivot!, name: '[x.xlsx]Other!樞紐分析表2' } } })) })
+    const docId = id(), kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' })
+    const pivot = assets.tables.findIndex(def => def.name === '樞紐分析表2')
+    expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen' })
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot, baseRevision: 0, revision: 1, delta: { kind: 'items', field: 0, hidden: [3] }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    expect(staged.charts).toEqual([])
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('R2-4: concurrent pivot-asset misses for one sheet and generation build once', async () => {
+    const imported = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(readFileSync(FIXTURE))]) }, { docId: id(), profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported)
+    const pool = new MemoryPool({ limitBytes: 64 * 1024 * 1024 })
+    source.bindMemory?.(pool)
+    const sheetId = (source.sheets.find(sheet => sheet.name === 'Pivot') ?? source.sheets[0]!).sheetId
+    const [a, b] = await Promise.all([pivotAssets(source, sheetId), pivotAssets(source, sheetId)])
+    expect(a).toBeDefined()
+    expect(b).toBe(a)
+    // The one entry is still charged and still serves a later caller (no retain-under-the-same-key release).
+    expect(await pivotAssets(source, sheetId)).toBe(a)
+    const release = a!.retain!()
+    release()
+    await source.release()
+  })
+
   it('a paged pivot apply publishes rebuilt linked charts into the main drawing cache', async () => {
     const file = resolve(FIXTURE_ROOT, 'interaction/chart-hide-item.xlsx')
     const blob = new Blob([new Uint8Array(readFileSync(file))])
@@ -175,6 +212,10 @@ describe('worker pivot protocol', () => {
         await vi.waitFor(() => expect(remote.drawings(sheetId).state).toBe('ready'), { timeout: 15_000 })
       }
       const beforeGen = new Map([...new Set(linked.map(item => item.sheetId))].map(sheetId => [sheetId, remote.drawings(sheetId).gen]))
+      const beforeLists = new Map([...beforeGen.keys()].map(sheetId => [sheetId, remote.drawings(sheetId).drawings]))
+      const mergeGen = remote.merges(pivotSheetId).gen
+      const findIn = (nodes: readonly any[], item: { partPath: string; treePath: string }): any => nodes.flatMap(node => [node, ...(node.children ?? [])]).find(node => node.source?.partPath === item.partPath && node.source?.treePath === item.treePath)
+      const savedCharts = linked.map(item => findIn(remote.drawings(item.sheetId).drawings, item)?.content?.chart)
       expect(await remote.pivots.open(Number(pivotSheetId), defIndex, new AbortController().signal)).toMatchObject({ kind: 'open' })
       const committed = await remote.pivots.apply(Number(pivotSheetId), defIndex, delta)
       expect(committed.kind).toBe('committed')
@@ -186,7 +227,24 @@ describe('worker pivot protocol', () => {
         expect(drawings.gen).toBeGreaterThan(beforeGen.get(item.sheetId) ?? -1)
         const find = (nodes: readonly any[]): any => nodes.flatMap(node => [node, ...(node.children ?? [])]).find(node => node.source?.partPath === item.partPath && node.source?.treePath === item.treePath)
         expect(find(drawings.drawings)?.content?.chart).toEqual(item.chart)
+        // R2-4: a new drawing list (copied along the changed path), never the old nodes mutated in place.
+        expect(drawings.drawings).not.toBe(beforeLists.get(item.sheetId))
+        expect(findIn(beforeLists.get(item.sheetId)!, item)?.content?.chart).toBe(savedCharts[committed.charts.indexOf(item)])
       }
+      expect(remote.merges(pivotSheetId).gen).toBeGreaterThan(mergeGen)
+      // R2-4: the replacement models are charged to the main ledger's drawings pool while they live.
+      for (const item of committed.charts) {
+        const installed = findIn(remote.drawings(item.sheetId).drawings, item)?.content?.chart
+        expect(remote.mainLedger.hasLifetime(installed)).toBe(true)
+      }
+      // Release restores the saved models (the same objects) in yet another list, with a newer generation.
+      const committedGen = new Map([...beforeGen.keys()].map(sheetId => [sheetId, remote.drawings(sheetId).gen]))
+      remote.pivots.release(Number(pivotSheetId), defIndex)
+      await port.idle()
+      linked.forEach((item, k) => {
+        expect(findIn(remote.drawings(item.sheetId).drawings, item)?.content?.chart).toBe(savedCharts[k])
+        expect(remote.drawings(item.sheetId).gen).toBeGreaterThan(committedGen.get(item.sheetId)!)
+      })
     } finally {
       await remote.close()
       await port.idle()
@@ -442,6 +500,32 @@ describe('worker pivot protocol', () => {
     resume?.()
     expect((await apply).kind).toBe('cancelled')
     expect(session.memoryStats().sourceBytes).toBe(openBytes)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+    expect(kernel.lifecycleStats().retainedBytes).toBe(0)
+  })
+
+  it('M5: an owner change (the document closed and opened again under its id) ends the old sessions and their charges', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
+    const sheetId = doc.sheets.find(candidate => candidate.pivotTables?.length)!.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    const docId = id()
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const first = kernel.session(docId)!
+    expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen', revision: 0 })
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1, delta: { kind: 'collapse', field: 0, item: 0, collapsed: true }, grantBytes: 16 * 1024 * 1024 }))
+    expect(staged).toMatchObject({ kind: 'pivotApply', revision: 1 })
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+    expect(kernel.lifecycleStats().retainedBytes).toBe(0)
+    // The old owner's session holds nothing: its staged candidate and handle went with the close.
+    expect(first.pivotApply(sheetId, 0, 0, 2, { kind: 'collapse', field: 0, item: 0, collapsed: true }, 16 * 1024 * 1024)).toMatchObject({ kind: 'refused', feature: 'pivot-session-released' })
+    // The same id, a new owner: the old revision is not committable and nothing of the old session is open here.
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const second = kernel.session(docId)!
+    expect(second).not.toBe(first)
+    const stale = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: 1 }))
+    expect(stale).toMatchObject({ kind: 'pivotCommit', refused: 'stale' })
+    expect(second.pivotApply(sheetId, 0, 0, 1, { kind: 'collapse', field: 0, item: 0, collapsed: true }, 16 * 1024 * 1024)).toMatchObject({ kind: 'refused', feature: 'pivot-session-released' })
+    expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen', revision: 0 })
     await run(kernel, { kind: 'close', requestId: id(), docId })
     expect(kernel.lifecycleStats().retainedBytes).toBe(0)
   })

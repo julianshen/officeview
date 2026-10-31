@@ -54,7 +54,8 @@ export interface ObjectSourceOptions {
 export type StorePacing = Pick<CooperativeOptions, 'now' | 'yield'>
 function collectObjectPivotCharts(sheetId: string, drawings: readonly XlsxDrawing[] | undefined, out: Array<{ sheetId: string; partPath: string; treePath: string; chart: import('../../charts/model').ChartModel }>): void {
   for (const node of drawings ?? []) {
-    if (node.content?.kind === 'xlsxChart') out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
+    // Only pivot charts (R2-4): the others are never linked, and would be held and charged with the assets.
+    if (node.content?.kind === 'xlsxChart' && node.content.chart.pivot) out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
     if (node.children) collectObjectPivotCharts(sheetId, node.children, out)
   }
 }

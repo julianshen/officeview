@@ -1410,7 +1410,8 @@ function forEachChart(drawings: readonly XlsxDrawing[], visit: (chart: ChartMode
 }
 function collectPivotChartRefs(sheetId: string, drawings: readonly XlsxDrawing[], out: Array<{ sheetId: string; partPath: string; treePath: string; chart: ChartModel }>): void {
   for (const node of drawings) {
-    if (node.content?.kind === 'xlsxChart') out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
+    // Only pivot charts (R2-4): the others are never linked, and would be held and charged with the assets.
+    if (node.content?.kind === 'xlsxChart' && node.content.chart.pivot) out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
     if (node.children) collectPivotChartRefs(sheetId, node.children, out)
   }
 }
@@ -1431,6 +1432,8 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
   const geometries = new Map<string, SheetGeometry>()
   const pivotAssetCache = new Map<string, { assets: WorkerPivotAssets; entry?: PoolEntry; refs: number; retired: boolean }>()
   const currentPivotAssets = new Map<string, string>()
+  // One build per sheet and generation (R2-4): a concurrent miss waits for it instead of retaining the same pool key.
+  const pivotAssetBuilds = new Map<string, Promise<WorkerPivotAssets | undefined>>()
   const drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger(), ...(options.drawingPayloadBytes !== undefined ? { payloadBytes: options.drawingPayloadBytes } : {}) }
   const find = (sheetId: string) => {
     const found = workbook.sheets.find(s => s.sheetId === sheetId)
@@ -1445,24 +1448,8 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     }
     return store
   }
-  return {
-    valuePolicy: 'cached',
-    // The formula count is only final once the import completed; until then
-    // the status carries the spec's count-free wording.
-    valueStatus: () => valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined),
-    // A getter, not a snapshot: read after the import completed it carries the
-    // counted wording; read at open (import still running) the spec wording.
-    get openDiagnostics() {
-      const status = valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined)
-      return Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message ?? SAVED_VALUES_STATUS }])
-    },
-    sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
-    hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
-    hasRegionStyles(sheetId) { return Boolean(find(sheetId).tables?.some(table => table.styleInfo?.name)) },
-    regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
-    hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
-    pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
-    async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
+  /** Builds a sheet's pivot assets for its current generation (`pivotAssets` runs one build per key). */
+  const buildPivotAssets = async (sheetId: string, signal: AbortSignal, profile: ProfileId, memory: Parameters<NonNullable<WorkbookSource['pivotAssets']>>[3]): Promise<WorkerPivotAssets | undefined> => {
       const sheet = find(sheetId)
       if (signal.aborted || sheet.state !== 'complete' || !sheet.metadata.pivotRegions?.length) return undefined
       const store = storeFor(sheetId)
@@ -1571,6 +1558,37 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       }
       pivotAssetCache.set(cacheKey, { assets, ...(entry ? { entry } : {}), refs: 0, retired: false })
       return assets
+  }
+  return {
+    valuePolicy: 'cached',
+    // The formula count is only final once the import completed; until then
+    // the status carries the spec's count-free wording.
+    valueStatus: () => valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined),
+    // A getter, not a snapshot: read after the import completed it carries the
+    // counted wording; read at open (import still running) the spec wording.
+    get openDiagnostics() {
+      const status = valueStatus('cached', workbook.completeness === 'complete' ? workbook.loadEvaluatedFormulas : undefined)
+      return Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message ?? SAVED_VALUES_STATUS }])
+    },
+    sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
+    hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
+    hasRegionStyles(sheetId) { return Boolean(find(sheetId).tables?.some(table => table.styleInfo?.name)) },
+    regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
+    hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
+    pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
+    async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
+      const sheet = find(sheetId)
+      if (signal.aborted || sheet.state !== 'complete' || !sheet.metadata.pivotRegions?.length) return undefined
+      const key = JSON.stringify([sheetId, storeFor(sheetId).stamp.valueGen])
+      const building = pivotAssetBuilds.get(key)
+      if (building) {
+        const shared = await building
+        // A build its own caller abandoned (aborted) is retried by this one.
+        if (shared || signal.aborted) return shared
+      }
+      const build = buildPivotAssets(sheetId, signal, profile, memory)
+      pivotAssetBuilds.set(key, build)
+      try { return await build } finally { if (pivotAssetBuilds.get(key) === build) pivotAssetBuilds.delete(key) }
     },
     store: storeFor,
     geometry(sheetId) {
