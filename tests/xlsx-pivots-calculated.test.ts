@@ -246,8 +246,11 @@ describe('calculated fields in the pivot', () => {
 
   it('fails closed on the unmeasured calculated-field behaviour and follows the B2 measurements', () => {
     const f = fixture()
-    // Show-as on the calculated field: unmeasured.
-    expect(diagnostic(run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), showAs: 'percentOfTotal' }] }))).toEqual(UNMEASURED)
+    // Show-as on the calculated field: percent of total is measured (calc-show-as, the unrounded cell over the
+    // calculated grand total, here 30/45 ÷ 45/12 for East); other modes are unmeasured.
+    const share = run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), showAs: 'percentOfTotal' }] })
+    expect(share.ok && [share.cells['data:0/data:1'], share.cells['grand:/data:1']]).toEqual([(30 / 5) / (45 / 12), 1])
+    expect(diagnostic(run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), showAs: 'percentOfRow' }] }))).toEqual(UNMEASURED)
     // A text result: unmeasured.
     expect(diagnostic(run(fixture({ 3: 'IF(\'Unit Price\'>1,"big","small")' })))).toEqual(UNMEASURED)
     // The data field's function is ignored (calc-function-count).
@@ -333,7 +336,6 @@ describe.skipIf(!existsSync(CORPUS_FILE))('corpus calcfields.xlsx (Collabora-wri
  * the report gives the exact change. `kept` marks a gate Excel's file does not settle.
  */
 const TASK22_REFUSED: Record<string, { refusal: string; why: string }> = {
-  'calc-show-as': { refusal: 'pivot-engine-unmeasured: show-as on calculated data field 2 is not measured', why: 'kept: percent of the calculated grand total, but 10 of 76 cells differ at the 15th digit (the percent-of-total rounding lane A also refuses)' },
   'calc-item': { refusal: "pivot-calculated-item: field 1 has a calculated item; Excel's saved layout lists it under every parent and includes it in totals, which this engine does not reproduce", why: 'kept: the item is listed under every parent and counted in its totals (calc-item R6, R28); needs axes and values work outside this lane' },
 }
 

@@ -641,7 +641,8 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
     const data = view.data[d]!, formula = cache.fields[data.field]?.formula
     if (formula === undefined) continue
     // B2 rule: the function is ignored (calc-function-count).
-    if (data.showAs !== 'normal') return unmeasured(`show-as on calculated data field ${d} is not measured`)
+    // Percent of total is measured (calc-show-as): each unrounded calculated cell over the calculated grand total.
+    if (data.showAs !== 'normal' && data.showAs !== 'percentOfTotal') return unmeasured(`show-as on calculated data field ${d} is not measured`)
     const field = compileCalculatedField(formula, cache, data.field)
     if (!field.ok) return field
     compiled[d] = field.value
@@ -698,6 +699,27 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
       if (value.kind === 'error' && !def.showError) { errors.set(at, value.value); present[at] = 1; continue }
       if (value.kind !== 'number') return unmeasured(`calculated data field ${d} gives ${value.kind} ${value.kind === 'empty' ? '' : value.value}; its display is not measured`)
       values[at] = value.value; present[at] = 1
+    }
+  }
+  // calc-show-as: percent of total divides every calculated cell (unrounded) by the slot's grand × grand cell; all 76
+  // cells match, R6C7 included. Without both grand lines the denominator has no measured source.
+  for (let d = 0; d < dataCount; d++) {
+    if (!compiled[d] || view.data[d]!.showAs !== 'percentOfTotal') continue
+    // An axis without a field other than Values has a single line per slot, which is that axis's total.
+    const totalLine = (lines: readonly PivotLine[], fields: readonly number[], on: boolean) =>
+      fields.some(field => field !== PIVOT_VALUES_FIELD)
+        ? lines.findIndex(line => line.type === 'grand' && (!on || line.data === d))
+        : lines.findIndex(line => line.type === 'data' && (!on || line.data === d))
+    const grandRow = totalLine(axes.rows, view.rows, onRows), grandCol = totalLine(axes.cols, view.cols, onCols)
+    if (grandRow < 0 || grandCol < 0) return unmeasured(`percent of total on calculated data field ${d} without grand totals is not measured`)
+    const grandAt = cellIndex(grandRow, grandCol, d, colCount, dataCount)
+    if (errors.has(grandAt) || !present[grandAt]) return unmeasured(`percent of total on calculated data field ${d} with a non-number grand total is not measured`)
+    const grand = values[grandAt]!
+    for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) {
+      const at = cellIndex(row, col, d, colCount, dataCount)
+      if (!present[at] || errors.has(at)) continue
+      if (grand === 0) errors.set(at, '#DIV/0!')
+      else values[at] = values[at]! / grand
     }
   }
   return {

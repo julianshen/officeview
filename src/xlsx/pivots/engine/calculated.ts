@@ -20,7 +20,7 @@
  */
 import { tokenize } from '../../formula/lexer'
 import { parseFormula } from '../../formula/parser'
-import { evaluateFormula, formulaError, isFormulaError } from '../../formula/evaluator'
+import { evaluateFormulaInternal, formulaError, isFormulaError, publicFormulaValue } from '../../formula/evaluator'
 import { FUNCTIONS } from '../../formula/functions'
 import { DATETIME_FUNCTIONS } from '../../formula/functions/datetime'
 import type { AstNode, EvaluationContext, NameBinding, ReferenceServices } from '../../formula/types'
@@ -123,7 +123,11 @@ export function calculatedValue(field: CalculatedField, sums: (field: number) =>
   }
   // A fresh context per cell: the evaluator caches name bindings per evaluation memo.
   const ctx: EvaluationContext = { references, unsupportedFeatures: new Set() }
-  const value = evaluateFormula(field.ast, ctx)
+  // Unrounded: Excel saves calculated cells as full doubles (calc-show-as R6C7 holds 2 × 22019.200000000004, and 64
+  // of its 76 cells have more than 15 digits), and percent of total divides those unrounded results. The worksheet
+  // boundary's 15-digit rounding (evaluateFormula) is not applied to pivot cells.
+  const raw = evaluateFormulaInternal(field.ast, ctx)
+  const value = typeof raw === 'number' ? raw : publicFormulaValue(raw)
   if (ctx.unsupportedFeatures!.size) return 'unsupported'
   if (typeof value === 'number') return Number.isFinite(value) ? { kind: 'number', value } : { kind: 'error', value: '#NUM!' }
   if (isFormulaError(value)) return { kind: 'error', value }
