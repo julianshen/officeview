@@ -91,13 +91,18 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     .map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range }))
   if (overlay) for (const merge of overlay.merges) mergeEntries.push({ rect: { ...merge }, value: { minRow: merge.r0, maxRow: merge.r1, minCol: merge.c0, maxCol: merge.c1 } })
   const mergeIndex = RectangleIndex.build(mergeEntries)
-  const overlaidRows = new Map<number, readonly import('../../xlsx/types').XlsxCell[] | undefined>()
-  const cellsOf = (sourceRow: number): readonly import('../../xlsx/types').XlsxCell[] | undefined => {
+  // The row cache's arrays come and go (a page arrives, is evicted, is refetched): a merged row is
+  // memoized against the base array it was built from, held weakly so an evicted array is never
+  // pinned. Rows the cache does not know yet merge the overlay alone, keyed by row.
+  type Row = readonly import('../../xlsx/types').XlsxCell[] | undefined
+  const overlaidRows = new WeakMap<readonly import('../../xlsx/types').XlsxCell[], Row>()
+  const overlayOnlyRows = new Map<number, Row>()
+  const cellsOf = (sourceRow: number): Row => {
     const base = store.cellsOf(sourceRow)
     if (!overlay) return base
-    const cached = overlaidRows.get(sourceRow)
-    if (cached !== undefined || overlaidRows.has(sourceRow)) return cached
     if (!overlay.rects.some(rect => rect.r0 <= sourceRow && sourceRow <= rect.r1)) return base
+    const memo = base ? overlaidRows.get(base) : overlayOnlyRows.get(sourceRow)
+    if (memo !== undefined || (base ? overlaidRows.has(base) : overlayOnlyRows.has(sourceRow))) return memo
     const cells = [...(base ?? [])]
     for (const rect of overlay.rects) {
       if (sourceRow < rect.r0 || sourceRow > rect.r1) continue
@@ -110,7 +115,7 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
       }
     }
     const result = cells.length ? cells.sort((a, b) => a.col - b.col) : undefined
-    overlaidRows.set(sourceRow, result)
+    if (base) overlaidRows.set(base, result); else overlayOnlyRows.set(sourceRow, result)
     return result
   }
   const geometry = Object.freeze({

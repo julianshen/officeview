@@ -579,6 +579,30 @@ describe('pivot value overlay (fix round 4)', () => {
     expect(overlaid.adopted).toBeLessThanOrEqual(base.adopted * 1.2)
   })
 
+  it('N1: paged geometry re-merges a row whose base cells arrive, change or are evicted after it was painted', () => {
+    const axes = { rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }) }
+    const beside = { id: 9, ref: 'J1', row: 0, col: 9, value: 'beside', styleIndex: 0 }
+    let row0: any[] | undefined
+    const remote: any = {
+      geometry: () => axes,
+      store: () => ({ cellsOf: (row: number) => row === 0 ? row0 : undefined }),
+      merges: () => ({ merges: [] }),
+      drawings: () => ({ drawingsIn: () => [], drawings: [], diagnostics: [] }),
+      overflowFor: () => ({}), profile: 'D', mainLedger: { bytes: 0 },
+    }
+    const geometry = pagedSheetGeometry(remote, 's', createIdentityOrder(), visibilityFromHidden(createIntervalSet([])), {} as any, undefined, true, overlay)
+    const values = () => geometry.cellsOf(0)?.map(cell => cell.value)
+    expect(values()).toEqual([100])
+    row0 = [beside]
+    expect(values()).toEqual([100, 'beside'])
+    // A repeated read of the same base row is memoized (one merged array per base row).
+    expect(geometry.cellsOf(0)).toBe(geometry.cellsOf(0))
+    row0 = [{ ...beside, value: 'refetched' }]
+    expect(values()).toEqual([100, 'refetched'])
+    row0 = undefined
+    expect(values()).toEqual([100])
+  })
+
   it('N5: remote invalidation drops the pivot display layer too, and a remote call without a sheet id throws', () => {
     const invalidated: string[] = []
     const remote = Object.create(RemoteWorkbook.prototype)
