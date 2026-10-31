@@ -55,7 +55,8 @@ export function engineEligibility(cache: PivotCacheDefinition, def: PivotTableDe
   const name = `Pivot table ${def.name}`
   if (cache.olap) return refuse('pivot-source-unsupported', `${name} uses an OLAP or data-model cache`)
   if (cache.source.type !== 'worksheet') return refuse('pivot-source-unsupported', `${name} has a ${cache.source.type} source`)
-  if (cache.source.worksheet?.relId !== undefined) return refuse('pivot-source-unsupported', `${name} has a source in another workbook`)
+  // A refreshOnLoad pivot whose source is another workbook cannot take the §7.7 route (Task 32).
+  if (cache.source.worksheet?.relId !== undefined) return refuse(cache.refreshOnLoad ? 'pivot-refresh-on-load' : 'pivot-source-unsupported', `${name} has a source in another workbook`)
   const records = cache.saveData && cache.recordsPartPath !== undefined
   if (cache.refreshOnLoad && opts.sourceReadable) return { ok: true, refresh: true }
   if (!records) return refuse('pivot-records-absent', `${name} was saved without its records (saveData="0")`)

@@ -31,6 +31,9 @@ import type { PivotCacheDefinition, PivotCacheField, PivotCacheItem, PivotDiagno
 import type { EngineResult } from '../engine/axes'
 import type { CellReader } from '../engine/faithful'
 import { recordEvents, type RecordLimits, type RecordStore } from '../engine/records'
+import { placeCells, type PivotLayout } from '../engine/place'
+import { initialViewState } from '../engine/view'
+import { savedPivotLayout } from '../savedLayout'
 
 const refuse = (message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-refresh-on-load', message } satisfies PivotDiagnostic })
 const limit = (message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-records-limit', message } satisfies PivotDiagnostic })
@@ -237,4 +240,16 @@ export function refreshDefinition(def: PivotTableDefinition, before: PivotCacheD
     fields[index] = { ...field, items: field.items.map(item => item.x === undefined ? item : { ...item, x: at.get(itemKey(old.items[item.x]!))! }) }
   }
   return { ok: true, value: { ...def, fields } }
+}
+
+/**
+ * The saved state's layout laid out from the saved lines alone (`rowItems`/`colItems`), with no records: its labels and
+ * implicit captions sit where Excel saved them, so the caption rule can read the saved texts of a pivot whose records
+ * are stale or absent. Values are left empty. Undefined when the saved lines cannot be laid out.
+ */
+export function savedCaptionLayout(def: PivotTableDefinition, cache: PivotCacheDefinition, date1904: boolean): PivotLayout | undefined {
+  const saved = savedPivotLayout(def)
+  if (!saved) return undefined
+  const axes = { rows: saved.rows, cols: saved.cols, rowKey: new Uint32Array(0), colKey: new Uint32Array(0) }
+  return placeCells(def, initialViewState(def, cache), cache, axes, { get: () => ({ kind: 'empty' }) }, { date1904 })
 }
