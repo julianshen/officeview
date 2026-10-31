@@ -209,6 +209,29 @@ describe('resident pivot client (headless)', () => {
     expect(linkedCharts(doc)[0]).toBe(chart)
   })
 
+  it('S3-Q: a chart naming a pivot without its sheet links only a unique pivot; two sheets with that name both refuse', async () => {
+    const { linkPivotCharts } = await import('../src/xlsx/pivotChartLink')
+    const named = (name: string) => ({ pivot: { name } })
+    const both = [{ sheet: 'A', name: 'PivotTable1' }, { sheet: 'B', name: 'PivotTable1' }]
+    expect(linkPivotCharts([named('PivotTable1')], both[0]!, both)).toEqual({ charts: [], ambiguous: named('PivotTable1') })
+    expect(linkPivotCharts([named('[x]B!PivotTable1')], both[0]!, both)).toEqual({ charts: [] })
+    expect(linkPivotCharts([named('[x]A!PivotTable1')], both[0]!, both).charts).toHaveLength(1)
+    expect(linkPivotCharts([named('PivotTable1')], both[0]!, both.slice(0, 1)).charts).toHaveLength(1)
+    // The client: the Pivot sheet's 樞紐分析表2 and a copy of it on the other sheet; its chart names it without a sheet.
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const doc = await load(CHART_LINKED), sheet = pivotSheet(doc), other = doc.sheets.findIndex((_, k) => k !== sheet)
+    const chart = linkedCharts(doc)[0]!
+    chart.pivot = { ...chart.pivot!, name: '樞紐分析表2' }
+    const unique = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: () => {} })
+    expect((await unique.open(sheet, 0, signal())).ok).toBe(true)
+    const def = doc.sheets[sheet]!.pivotTables![0]!
+    doc.sheets[other]!.pivotTables = [{ ...def, sheet: doc.sheets[other]!.name, partPath: 'xl/pivotTables/copy.xml' }]
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: () => {} })
+    const opened = await client.open(sheet, 0, signal())
+    expect(opened.ok).toBe(false)
+    if (!opened.ok) expect(opened.diagnostic.feature).toBe('pivot-chart-mapping')
+  })
+
   it('a pivot whose records cannot be leased, or whose linked chart is not covered, refuses at open with its feature', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await lineChartDoc(), sheet = pivotSheet(doc)

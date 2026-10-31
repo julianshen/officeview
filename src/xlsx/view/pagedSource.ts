@@ -1533,6 +1533,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       const assets: WorkerPivotAssets = {
         tables: parsed.pivotTables, date1904: runtime.date1904, retainedBytes: 0, metadataBytes: chargedMetadataBytes,
         linkedCharts,
+        pivots: workbook.sheets.flatMap(candidate => (candidate.metadata.pivotRegions ?? []).map(region => ({ sheet: candidate.name, ...(region.name !== undefined ? { name: region.name } : {}) }))),
         runtimeKey: runtime,
         retain: () => {
           const cachedAssets = pivotAssetCache.get(cacheKey)

@@ -178,6 +178,24 @@ describe('worker pivot protocol', () => {
     await source.release()
   })
 
+  it('S3-Q: in the worker an unqualified chart source naming same-named pivots on two sheets refuses pivot-chart-mapping', async () => {
+    const file = resolve(FIXTURE_ROOT, 'interaction/chart-hide-item.xlsx')
+    const imported = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(readFileSync(file))]) }, { docId: id(), profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported), sheetId = source.sheets[0]!.sheetId
+    const assets = (await pivotAssets(source, sheetId))!
+    // The workbook's pivots, by sheet and name, travel with the assets.
+    expect(assets.pivots).toEqual([{ sheet: source.sheets[0]!.name, name: '樞紐分析表2' }])
+    const unqualified = assets.linkedCharts.map(item => ({ ...item, chart: { ...item.chart, pivot: { ...item.chart.pivot!, name: '樞紐分析表2' } } }))
+    source.pivotAssets = async () => ({ ...assets, linkedCharts: unqualified, pivots: [...assets.pivots!, { sheet: 'Other', name: '樞紐分析表2' }] })
+    const docId = id(), kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' })
+    const pivot = assets.tables.findIndex(def => def.name === '樞紐分析表2')
+    const refused = await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot, grantBytes: 16 * 1024 * 1024 })
+    expect(JSON.stringify(refused)).toContain('pivot-chart-mapping')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('a paged pivot apply publishes rebuilt linked charts into the main drawing cache', async () => {
     const file = resolve(FIXTURE_ROOT, 'interaction/chart-hide-item.xlsx')
     const blob = new Blob([new Uint8Array(readFileSync(file))])

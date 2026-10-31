@@ -1,4 +1,4 @@
-import { chartLinksPivot } from '../xlsx/pivotChartLink'
+import { linkPivotCharts } from '../xlsx/pivotChartLink'
 import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import type { XlsxFrozenPane } from '../xlsx/frozenPane'
 import type { XlsxCellStyle } from '../xlsx/types'
@@ -232,6 +232,8 @@ export interface WorkerPivotAssets {
   readonly metadataBytes: number
   readonly runtimeKey: object
   readonly linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]
+  /** Every pivot of the workbook by sheet and name (an unnamed one possibly any name): resolves a chart source without a sheet (S3-Q). */
+  readonly pivots?: readonly { readonly sheet: string; readonly name?: string }[]
   /** Pins source-owned per-generation metadata while a worker pivot handle references it. */
   retain?(): () => void
   cache(def: PivotTableDefinition): PivotCacheDefinition | undefined
@@ -1381,8 +1383,10 @@ export class DocumentSession {
     if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), created: false } }
     const [{ openPivotSession }, { pivotMenuModel }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu')])
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
-    // By sheet and name (R2-4): pivot names repeat across sheets.
-    const linked = assets.linkedCharts.filter(item => chartLinksPivot(item.chart, def.sheet, String(def.name ?? '')))
+    // By sheet and name (R2-4); an unqualified source naming same-named pivots on several sheets links none (S3-Q).
+    const links = linkPivotCharts(assets.linkedCharts.map(item => ({ ...item, pivot: item.chart.pivot })), { sheet: def.sheet, name: String(def.name ?? '') }, assets.pivots ?? [{ sheet: def.sheet, name: String(def.name ?? '') }])
+    if (links.ambiguous) { releaseShare(); return { kind: 'refused', feature: 'pivot-chart-mapping', message: `Pivot table ${def.name} cannot follow its charts: a chart names "${def.name}" without its sheet, and more than one sheet has a pivot table of that name.` } }
+    const linked = links.charts
     const linkedCharts = linked.map(item => item.chart)
     const chartGate = linkedCharts.length ? (await import('../xlsx/pivots/session/charts')).pivotChartGate : undefined
     const opened = openPivotSession({ def, cache, store: share.store, date1904: assets.date1904, saved,

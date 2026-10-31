@@ -44,7 +44,7 @@ import {
   type ChartGate, type PivotDelta, type PivotDeltaKind, type PivotLayout, type PivotSession, type PivotViewState,
 } from '../../../xlsx/pivots/index'
 import { sheetCharts } from '../sheetCharts'
-import { chartLinksPivot } from '../../../xlsx/pivotChartLink'
+import { linkPivotCharts } from '../../../xlsx/pivotChartLink'
 import { pivotFieldName, pivotMenuItemLabel, pivotMenuModel, type PivotMenuField, type PivotMenuItem, type PivotMenuModel } from '../../../xlsx/pivots/session/menu'
 
 export type { PivotDelta, PivotDeltaKind }
@@ -343,8 +343,9 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       return saved(row, col) !== undefined
     }
   }
-  const linkedCharts = (def: PivotTableDefinition): ChartModel[] =>
-    doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chartLinksPivot(chart, def.sheet, String(def.name ?? '')))
+  // Ruling S3-Q: an unqualified source naming same-named pivots on several sheets links none, and they refuse.
+  const linkedCharts = (def: PivotTableDefinition) => linkPivotCharts(doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)), { sheet: def.sheet, name: String(def.name ?? '') },
+    doc.sheets.flatMap(sheet => (sheet.pivotTables ?? []).map(table => ({ sheet: table.sheet, name: String(table.name ?? '') }))))
   const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.cache, entry.session.view, entry.date1904)
 
   const client: PivotClient = {
@@ -374,7 +375,9 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         if (!leased.ok) return { ok: false, diagnostic: leased.diagnostic }
         const date1904 = runtime.date1904
         // Task 30's chart gate, loaded only for a pivot with linked charts (its module statically imports the charts chunk).
-        const linked = linkedCharts(def)
+        const links = linkedCharts(def)
+        if (links.ambiguous) { leased.lease.release(); return refusal('pivot-chart-mapping', `${nameOf(def)} cannot follow its charts: a chart names "${String(def.name ?? '')}" without its sheet, and more than one sheet has a pivot table of that name.`) }
+        const linked = links.charts
         let chartGate = options.chartGate
         if (!chartGate && linked.length) {
           try { chartGate = (await import('../../../xlsx/pivots/session/charts')).pivotChartGate } catch { /* no gate: the session refuses pivot-chart-mapping */ }

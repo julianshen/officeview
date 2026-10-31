@@ -1015,6 +1015,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       const { RECORD_LIMITS } = await import('../pivots/engine/records')
       return {
         tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes, linkedCharts,
+        pivots: doc.sheets.flatMap(candidate => (candidate.pivotTables ?? []).map(table => ({ sheet: candidate.name, name: String(table.name ?? '') }))),
         metadataBytes, runtimeKey: runtime,
         cache: def => runtime.cache(def),
         records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),

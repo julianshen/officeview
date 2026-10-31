@@ -24,3 +24,24 @@ export function samePivotSource(a: { pivot?: { name: string } }, b: { pivot?: { 
   const x = pivotSourceRef(a.pivot?.name ?? ''), y = pivotSourceRef(b.pivot?.name ?? '')
   return x.pivot === y.pivot && (x.sheet ?? '').toLowerCase() === (y.sheet ?? '').toLowerCase()
 }
+
+export interface PivotKey { sheet: string; name?: string }
+/**
+ * The charts linked to `pivot` among `charts` (Ruling S3-Q). A sheet-qualified source links its sheet's pivot; a source
+ * without a sheet links the pivot only when no other sheet has a pivot of that name (an unnamed pivot counts as
+ * possibly that name). Otherwise it is `ambiguous`: it links to none, and every pivot it could name refuses
+ * `pivot-chart-mapping` (fail closed; a chart rebuilt from the wrong pivot would be a wrong picture).
+ */
+export function linkPivotCharts<C extends { pivot?: { name: string } }>(charts: readonly C[], pivot: { sheet: string; name: string }, pivots: readonly PivotKey[]): { charts: C[]; ambiguous?: C } {
+  const linked: C[] = []
+  for (const chart of charts) {
+    if (!chart.pivot) continue
+    const ref = pivotSourceRef(chart.pivot.name)
+    if (ref.pivot !== pivot.name) continue
+    if (ref.sheet !== undefined) { if (ref.sheet.toLowerCase() === pivot.sheet.toLowerCase()) linked.push(chart); continue }
+    const candidates = pivots.filter(entry => entry.name === undefined || entry.name === ref.pivot)
+    if (candidates.length > 1) return { charts: [], ambiguous: chart }
+    linked.push(chart)
+  }
+  return { charts: linked }
+}
