@@ -125,6 +125,8 @@ function itemMap(def: PivotTableDefinition, cache: PivotCacheDefinition, field: 
   return { toPivot, order, size: items ? items.length : shared.items.length }
 }
 
+/** Builds axes without a workbook date-system argument. For a 1904 workbook, call `computePivot`, which refuses
+ * date filters before delegating here; direct `computeAxes` callers must not use it to evaluate date filters. */
 export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState): EngineResult<PivotAxes> {
   if (view.filters.some(isDynamicDateFilter)) return fail('unsupported', 'pivot-filter-dynamic-date', 'dynamic date filters depend on the current date and are not implemented')
   // Classic layout with no column-axis field is measured for one data field with row fields
@@ -211,8 +213,12 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     if (isValueFilter(filter) || isTop10Filter(filter)) {
       const dataIndex = filter.iMeasureFld
       if (dataIndex === undefined || !view.data[dataIndex]) return invalid(`filter ${filter.id} names a missing data field`)
+      const top10Criteria = isTop10Filter(filter) ? filter.autoFilter.columns[0]?.top10 : undefined
+      if (isTop10Filter(filter) && !top10Criteria) return unmeasured(`missing top-10 criteria for filter ${filter.id} are not measured`)
+      if (top10Criteria && !top10Criteria.top) return unmeasured(`bottom top-10 filter ${filter.id} is not measured`)
       const targetAxis = view.rows.includes(filter.fld) ? view.rows : view.cols.includes(filter.fld) ? view.cols : undefined
       const parentFields = targetAxis ? targetAxis.slice(0, targetAxis.indexOf(filter.fld)).filter(field => field !== PIVOT_VALUES_FIELD) : []
+      if (parentFields.length > 0 && filter.type === 'percent') return unmeasured(`nested top-percent filter ${filter.id} is not measured per parent`)
       if (parentFields.length > 0) {
         if (view.fields[filter.fld]?.showAll) return unmeasured(`nested ${filter.type} with showAll field ${filter.fld} needs per-parent empty-item visibility`)
         const groupedKeys = new Uint32Array(store.count)
@@ -221,7 +227,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         const keyToPair: Array<{ parent: string; item: number }> = []
         for (let record = 0; record < store.count; record++) {
           const item = pivotItemAt(map, record)
-          if (item === undefined || item < 0) { eligible[record] = 0; groupedKeys[record] = NO_LINE; continue }
+          if (!eligible[record] || item === undefined || item < 0) { eligible[record] = 0; groupedKeys[record] = NO_LINE; continue }
           const parent = parentFields.map(parentField => {
             const parentMap = maps.get(parentField)!
             const raw = parentMap.recordItems![record]!
@@ -254,7 +260,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             const top10 = filter.autoFilter.columns[0]?.top10
             if (!top10) return unmeasured(`missing top-10 criteria for filter ${filter.id} are not measured`)
             const ranked = group.filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
-              .sort((a, b) => (top10.top ? b.value - a.value : a.value - b.value) || a.item - b.item)
+              .sort((a, b) => b.value - a.value || a.item - b.item)
             if (!Number.isFinite(top10.val) || top10.val <= 0) return invalid(`top-10 threshold for filter ${filter.id} is outside its valid range`)
             if (filter.type === 'percent') {
               const percentItems = selectTopPercent(ranked, top10.val)
@@ -303,7 +309,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         const column = filter.autoFilter.columns[0], top10 = column?.top10
         if (!top10) return unmeasured(`missing top-10 criteria for filter ${filter.id} are not measured`)
         const ranked = map.order.map(item => ({ item, value: aggregate.value[item] })).filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
-          .sort((a, b) => (top10.top ? b.value - a.value : a.value - b.value) || a.item - b.item)
+          .sort((a, b) => b.value - a.value || a.item - b.item)
         if (!Number.isFinite(top10.val) || top10.val <= 0) return invalid(`top-10 threshold for filter ${filter.id} is outside its valid range`)
         if (filter.type === 'sum') {
           let total = 0
@@ -358,7 +364,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         const raw = map.recordItems![record]!
         const item = map.grouped && raw === NO_GROUP ? -1 : map.toPivot[raw]
         if (passes[record] && (item === undefined || item < 0)) return unmeasured(`autoSortScope field ${field} has an unmapped record item`)
-        if (item === undefined || item < 0) { keys[record] = NO_LINE; eligible[record] = 0; continue }
+        if (!eligible[record] || item === undefined || item < 0) { keys[record] = NO_LINE; eligible[record] = 0; continue }
         if (level === 0) { keys[record] = item; continue }
         const parent = parentFields.map(parentField => {
           const parentMap = maps.get(parentField)!

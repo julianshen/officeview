@@ -588,3 +588,67 @@ describe('Task 21 oracle fix round 1 counterexamples', () => {
     expect(groupColumn(blankStore, boundaryTime, 1)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
   })
 })
+
+describe('Task 21 oracle fix round 2 counterexamples', () => {
+  const nestedFixture = (filterValue?: PivotFilter, valueSort = false) => {
+    const p = fixture(['A', 'B', 'C'].map(value => ({ type: 'string', value })), [0, 0, 0, 1, 1, 1], [100, 2, 8, 1, 30, 4])
+    p.cache.fields[0] = { databaseField: true, sharedItems: { inline: false, items: ['X', 'Y'].map(value => ({ type: 'string', value })) } } as never
+    p.cache.fields.push({ databaseField: true, sharedItems: { inline: false, items: ['P1', 'P2', 'P3'].map(value => ({ type: 'string', value })) } } as never)
+    p.def.fields[0] = { items: ['X', 'Y'].map((_, x) => ({ type: 'data', x })) } as never
+    p.def.fields.push({ items: ['P1', 'P2', 'P3'].map((_, x) => ({ type: 'data', x })) } as never)
+    p.store = { ...p.store, count: 6, columns: [p.store.columns[0]!, p.store.columns[1]!, { kind: 'shared', index: Uint32Array.from([0, 1, 2, 0, 1, 2]) }] }
+    p.view.rows = [0, 2]
+    p.view.fields = [field(2), field(0), { ...field(2), hidden: [true, false] }]
+    p.view.filters = filterValue ? [filterValue] : []
+    if (valueSort) p.view.fields = [p.view.fields[0]!, p.view.fields[1]!, { ...p.view.fields[2]!, sortType: 'descending', autoSortScope: {
+      type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false,
+      outline: true, collapsedLevelsAreSubtotals: false,
+      references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }],
+    } }]
+    return p
+  }
+
+  it('builds nested filter and sort item presence only from records still eligible', () => {
+    const scenarios: Array<[string, ReturnType<typeof nestedFixture>, number[], number[]]> = [
+      ['value-filter', nestedFixture(filter({ fld: 2, type: 'valueGreaterThan', iMeasureFld: 0, stringValue1: '5' })), [NO_LINE, NO_LINE, 1, NO_LINE, 3, NO_LINE], [2, 1]],
+      ['top-items-filter', nestedFixture(filter({
+        fld: 2, type: 'count', iMeasureFld: 0,
+        autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true, top10: { top: true, percent: false, val: 1 } }] },
+      })), [NO_LINE, NO_LINE, 1, NO_LINE, 3, NO_LINE], [2, 1]],
+      ['value-sort', nestedFixture(undefined, true), [NO_LINE, 2, 1, NO_LINE, 4, 5], [2, 1, 1, 2]],
+    ]
+    for (const [name, p, expectedKeys, expectedChildren] of scenarios) {
+      const computed = result(p)
+      expect(computed.ok, `${name}: ${computed.ok ? '' : computed.diagnostic.message}`).toBe(true)
+      if (computed.ok) {
+        expect([...computed.value.rowKey], `${name} record selection/order`).toEqual(expectedKeys)
+        expect(computed.value.rows.filter(line => line.items.length === 2).map(line => line.items[1]), `${name} nested order`).toEqual(expectedChildren)
+      }
+    }
+  })
+
+  it('refuses unmeasured equal-weight label orderings', () => {
+    for (const labels of [[' x', '#x'], ['a-bc', 'ab-c']]) {
+      const p = fixture(labels.map(value => ({ type: 'string', value })), [0, 1], [1, 1])
+      p.view.fields = [{ ...p.view.fields[0]!, sortType: 'ascending' }, p.view.fields[1]!]
+      expect(result(p)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+    }
+  })
+
+  it('refuses bottom-N items, percent and sum filters', () => {
+    for (const type of ['count', 'percent', 'sum'] as const) {
+      const p = fixture(['A', 'B', 'C'].map(value => ({ type: 'string', value })), [0, 1, 2], [10, 5, 1], [filter({
+        type, iMeasureFld: 0, autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true,
+          top10: { top: false, percent: type === 'percent', val: type === 'percent' ? 50 : 1 } }] },
+      })])
+      expect(result(p), type).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+    }
+  })
+
+  it('refuses nested Top Percent until the per-parent cutoff is measured', () => {
+    const p = nestedFixture(filter({ fld: 2, type: 'percent', iMeasureFld: 0, autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true,
+      top10: { top: true, percent: true, val: 50 } }] } }))
+    p.view.fields = [p.view.fields[0]!, p.view.fields[1]!, { ...p.view.fields[2]!, hidden: [false, false] }]
+    expect(result(p)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+  })
+})

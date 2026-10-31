@@ -83,6 +83,23 @@ function compareExcelLabels(left: string, right: string, customListSort: boolean
   return compareMeasuredCodeLabels(left, right)
 }
 
+function hasUnmeasuredEqualWeightPair(values: readonly (PivotValue | undefined)[]): boolean {
+  const labels = values.flatMap(value => value?.type === 'string' ? [value.value.toLowerCase()] : [])
+  const labelSet = new Set(labels)
+  const hyphensByText = new Map<string, string>()
+  for (const label of labels) {
+    if ((label.startsWith(' ') && labelSet.has(`#${label.slice(1)}`)) ||
+      (label.startsWith('#') && labelSet.has(` ${label.slice(1)}`))) return true
+    const positions = [...label].flatMap((character, index) => character === '-' ? [index] : []).join(',')
+    if (!positions) continue
+    const withoutHyphens = label.replace(/-/gu, '')
+    const previous = hyphensByText.get(withoutHyphens)
+    if (previous !== undefined && previous !== positions) return true
+    hyphensByText.set(withoutHyphens, positions)
+  }
+  return false
+}
+
 /** Stable ascending/descending order for homogeneous labels; item ids remain the pivotField item indexes. */
 export function sortItemOrder(current: readonly number[], valuesByItem: readonly PivotValue[], sortType: PivotFieldSortType, field: number,
   customListSort = true): EngineResult<number[]> {
@@ -93,6 +110,8 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
   if (presentTypes.has('date') && presentTypes.size > 1) return fail(`mixed date items in sorted field ${field} have no measured Excel order`)
   if (values.some(value => value?.type === 'string' && !hasMeasuredEnglishOrder(value.value)))
     return fail(`Excel's saved punctuation order for sorted field ${field} contains characters outside the measured alphanumeric, space and Code punctuation set`)
+  if (hasUnmeasuredEqualWeightPair(values))
+    return fail(`equal-weight space/hash or hyphen-position labels in sorted field ${field} have no measured Excel order`)
   if (customListSort) {
     const lists = values.map(value => value?.type === 'string' ? customListIndex(value.value) : undefined)
     const kinds = new Set(lists.flatMap(value => value ? [value.kind] : []))

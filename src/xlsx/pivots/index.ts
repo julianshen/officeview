@@ -11,6 +11,7 @@ export { decodeRecords, isoToSerial, recordEvents, RECORD_LIMITS, VALUE_TAG } fr
 export type { RecordColumn, RecordLimits, RecordResult, RecordStore } from './engine/records'
 export { initialViewState } from './engine/view'
 export type { DataFieldState, FieldState, PageState, PivotViewState } from './engine/view'
+/** `computeAxes` has no date-system input; 1904 workbooks with date filters must use `computePivot`, which refuses them. */
 export { computeAxes, lineCarriesValues, NO_LINE, subtotalTypes } from './engine/axes'
 export type { EngineResult, PivotAxes } from './engine/axes'
 export { liveDefinition, placeCells } from './engine/place'
