@@ -25,7 +25,8 @@
  * - Linked charts: every chart on any sheet whose `c:pivotSource` names this pivot (the name after the last `!`),
  *   whatever sheet it names: over-linking only makes a pivot display-only, never stale (fail closed, §6.6).
  */
-import type { XlsxDocument, XlsxSheet } from '../../../xlsx/types'
+import type { XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
+import type { StyledValueOverlayCell } from '../../../xlsx/view/viewport'
 import type { ChartModel } from '../../../charts/model'
 import type { ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/view/contracts'
 import type { SourceRect } from '../../../xlsx/view/coordinates'
@@ -36,6 +37,7 @@ import {
   PIVOT_VALUES_FIELD,
   type PivotCacheDefinition, type PivotDiagnostic, type PivotFieldSortType, type PivotFilter, type PivotTableDefinition,
 } from '../../../xlsx/pivots/model'
+import type { SavedPivotLayout } from '../../../xlsx/pivots/savedLayout'
 import {
   openPivotSession, ORACLE_VERIFIED_KINDS, pivotItemLabel, RECORD_LIMITS, savedPivotLayout, sheetCellReader,
   type ChartGate, type PivotDelta, type PivotDeltaKind, type PivotLayout, type PivotSession, type PivotViewState,
@@ -197,21 +199,67 @@ function layoutArea(layout: PivotLayout): SourceRect[] {
   for (const cell of layout.cells) if (!within(out, cell.row, cell.col)) out.push({ r0: cell.row, r1: cell.row, c0: cell.col, c1: cell.col })
   return out
 }
-interface PivotPart { saved: readonly SourceRect[]; current: readonly SourceRect[]; layout: PivotLayout }
-function overlayCell(layout: PivotLayout): (row: number, col: number) => ValueOverlayCell | null {
-  const cells = new Map<number, Map<number, ValueOverlayCell>>()
-  for (const cell of layout.cells) {
+/** `style`: the style a cell of the layout paints with (alignment, font, fill), its number format aside. */
+interface PivotPart { saved: readonly SourceRect[]; current: readonly SourceRect[]; layout: PivotLayout; style?: (row: number, col: number) => XlsxCellStyle | undefined }
+function overlayCell(part: PivotPart): (row: number, col: number) => ValueOverlayCell | null {
+  const cells = new Map<number, Map<number, StyledValueOverlayCell>>()
+  for (const cell of part.layout.cells) {
     const value = cell.value
     if (value.kind === 'empty') continue
     let line = cells.get(cell.row)
     if (!line) cells.set(cell.row, line = new Map())
-    line.set(cell.col, value.kind === 'error' ? { value: value.value, valueIsError: true } : { value: value.value, ...(cell.numFmtId !== undefined ? { numFmtId: cell.numFmtId } : {}) })
+    const style = part.style?.(cell.row, cell.col)
+    line.set(cell.col, value.kind === 'error' ? { value: value.value, valueIsError: true, ...(style ? { style } : {}) }
+      : { value: value.value, ...(cell.numFmtId !== undefined ? { numFmtId: cell.numFmtId } : {}), ...(style ? { style } : {}) })
   }
   return (row, col) => cells.get(row)?.get(col) ?? null
 }
+/** A pivot cell's role for its style (Task 28): its place in the header rows, or its column and its row line's kind
+ * and depth in the body; page cells by their offset. */
+function roleOf(layout: SavedPivotLayout, row: number, col: number): string | undefined {
+  const { rect, dataRow0 } = layout
+  const c = col - rect.minCol
+  if (row < rect.minRow || row > rect.maxRow || col < rect.minCol || col > rect.maxCol) return `page|${row - rect.minRow}|${c}`
+  if (row < dataRow0) return `head|${row - rect.minRow}|${c}`
+  const line = layout.rows[row - dataRow0]
+  return line ? `body|${c}|${line.type}|${line.items.length}` : undefined
+}
+/**
+ * The style a pivot cell keeps (ruling, Task 28): Excel writes one alignment, indent and font per pivot area (the
+ * pivot style itself is the region layer's), so a cell of the live layout takes the saved style of a cell in the same
+ * role (header row; column and line kind and depth in the body), else the saved cell's own at that position, else
+ * the workbook's default cell format (`cellXfs[0]`), as a cell Excel newly writes gets.
+ */
+function savedStyles(doc: XlsxDocument, sheet: XlsxSheet, savedDef: PivotTableDefinition, saved: readonly SourceRect[]): (live: SavedPivotLayout | undefined) => (row: number, col: number) => XlsxCellStyle | undefined {
+  let rows: Map<number, XlsxSheet['rows'][number]> | undefined
+  let roles: Map<string, XlsxCellStyle> | undefined
+  const fallback = doc.cellStyles?.[0]
+  const own = (row: number, col: number) => {
+    rows ??= new Map(sheet.rows.map(entry => [entry.index, entry]))
+    return rows.get(row)?.cells.find(cell => cell.col === col)?.style
+  }
+  const byRole = () => {
+    if (roles) return roles
+    roles = new Map()
+    const layout = savedPivotLayout(savedDef)
+    if (!layout) return roles
+    for (const rect of layout.rects) for (let row = rect.minRow; row <= rect.maxRow; row++) for (let col = rect.minCol; col <= rect.maxCol; col++) {
+      const key = roleOf(layout, row, col), style = own(row, col)
+      if (key !== undefined && style && !roles.has(key)) roles.set(key, style)
+    }
+    return roles
+  }
+  return live => (row, col) => {
+    const key = live ? roleOf(live, row, col) : undefined
+    const role = key !== undefined ? byRole().get(key) : undefined
+    if (role) return role
+    if (within(saved, row, col)) { const style = own(row, col); if (style) return style }
+    return fallback
+  }
+}
 /** The sheet's composite overlay over every committed pivot part (see the header's ruling). */
 export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay {
-  const owned = parts.map(part => ({ rects: [...part.saved, ...part.current], cell: overlayCell(part.layout), current: part.current }))
+  const owned = parts.map(part => ({ rects: [...part.saved, ...part.current], cell: overlayCell(part), current: part.current }))
   const rects = owned.flatMap(part => part.rects)
   const protectedRects = owned.flatMap(part => part.current)
   const merges = parts.flatMap(part => part.layout.merges.map(toSource))
@@ -243,7 +291,7 @@ export interface ResidentPivotClientOptions {
   /** Task 30's pivot chart gate; absent, a pivot with linked charts refuses at open. */
   chartGate?: ChartGate
 }
-interface OpenPivot { session: PivotSession; savedDef: PivotTableDefinition; cache: PivotCacheDefinition; saved: SourceRect[]; current: SourceRect[]; date1904: boolean }
+interface OpenPivot { session: PivotSession; savedDef: PivotTableDefinition; cache: PivotCacheDefinition; saved: SourceRect[]; current: SourceRect[]; date1904: boolean; style: ReturnType<typeof savedStyles> }
 
 /** The chart's pivot name: `[book]Sheet!Name` → `Name`. */
 const linkedName = (chart: ChartModel) => { const name = chart.pivot?.name ?? ''; return name.slice(name.lastIndexOf('!') + 1) }
@@ -268,7 +316,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
   const parts = (sheetId: number): PivotPart[] => {
     const out: PivotPart[] = []
     // A pivot back at its saved view (reset carries the saved definition) owns no overlay: the saved cells show.
-    for (const [id, entry] of open) if (id.startsWith(`${sheetId}:`) && entry.session.def !== entry.savedDef) out.push({ saved: entry.saved, current: entry.current, layout: entry.session.layout })
+    for (const [id, entry] of open) if (id.startsWith(`${sheetId}:`) && entry.session.def !== entry.savedDef) out.push({ saved: entry.saved, current: entry.current, layout: entry.session.layout, style: entry.style(savedPivotLayout(entry.session.def)) })
     return out
   }
   const occupiedFor = (sheetId: number, pivot: number) => {
@@ -326,7 +374,8 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         if (!session.ok) { leased.lease.release(); return session }
         const saved = savedPivotLayout(def)
         const current = layoutArea(session.value.layout)
-        const opened: OpenPivot = { session: session.value, savedDef: def, cache, saved: saved ? saved.rects.map(toSource) : current, current, date1904 }
+        const savedArea = saved ? saved.rects.map(toSource) : current
+        const opened: OpenPivot = { session: session.value, savedDef: def, cache, saved: savedArea, current, date1904, style: savedStyles(doc, sheet, def, savedArea) }
         if (signal.aborted) { session.value.release(); return refusal('pivot-session-released', `${nameOf(def)}: opening was cancelled`) }
         open.set(id, opened)
         return { ok: true, revision: 0, def: session.value.def, verifiedKinds: verified, model: modelOf(sheetId, opened) }

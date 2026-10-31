@@ -71,6 +71,12 @@ describe('resident pivot client (headless)', () => {
     expect(await valueAt(store, 5, 0)).toBe('East')
     expect(await valueAt(store, 6, 0)).toBe('North')
     expect(await valueAt(store, 23, 0)).toBe('blank')
+    // Overlay cells paint with the saved style of a cell in the same role (the browser's oracle repaint caught both):
+    // North's label moves up to row 6 and keeps a level-0 label's style, the grand total row keeps its own (no indent).
+    const savedStyle = (row: number, col: number) => doc.sheets[sheet]!.rows.find(r => r.index === row)!.cells.find(c => c.col === col)!.style
+    expect(installs[0].overlay.cell(6, 0).style).toEqual(savedStyle(9, 0))
+    expect(installs[0].overlay.cell(20, 0).style).toEqual(savedStyle(23, 0))
+    expect(installs[0].overlay.cell(20, 0).style.vertical).toBe('center')
     // A later change with nothing vacated keeps the earlier vacated rows blank (the overlay covers the saved area).
     const sorted = await client.apply(sheet, 0, { kind: 'sort', field: region.index, order: 'descending' })
     expect(sorted.ok, JSON.stringify(sorted)).toBe(true)
@@ -275,7 +281,10 @@ describe('the interactive viewer', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Collapse East (Region)' }))
     await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
     expect(doc.sheets[pivotSheet(doc)]!.pivotTables![0]).not.toBe(saved)
+    // The pivot's region (no gridlines inside it) follows the live rectangle: A3:I24 saved, A3:I21 collapsed.
+    expect(doc.sheets[pivotSheet(doc)]!.pivotRegions![0]!.ref).toBe('A3:I21')
     ui.unmount()
     expect(doc.sheets[pivotSheet(doc)]!.pivotTables![0]).toBe(saved)
+    expect(doc.sheets[pivotSheet(doc)]!.pivotRegions![0]!.ref).toBe('A3:I24')
   })
 })

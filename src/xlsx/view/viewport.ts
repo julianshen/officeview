@@ -18,7 +18,7 @@ import type { DrawingContentShape } from '../../drawing/content'
 import type {
   AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, CacheIdentity, CompactSourceRowSet, CompleteViewportContent, Completeness, IntervalSet, LogicalCellBox,
   LogicalViewport, OverviewDomain, OverviewGroup, RowOrder, RowPermutationBand, RowVisibility, SourceFailure, SourceStore, SparseRowPage,
-  ValueOverlay, ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
+  ValueOverlay, ValueOverlayCell, ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
 } from './contracts'
 import { MAX_COLS, MAX_ROWS, isValidCoordinate, validateSourceRect, type SourceCell } from './coordinates'
 import { AxisMetricsError, createAxisMetrics, type AxisMetricsErrorCode, type SparseAxisMetrics } from './axes'
@@ -182,6 +182,17 @@ export interface SheetGeometryOptions {
   sizes?: SessionSizes
   /** Committed pivot values and structure owned by this geometry. */
   overlay?: ValueOverlay
+}
+/** A resident overlay cell may carry the cell style it paints with (the pivot client keeps the saved cell's alignment,
+ * font and fill at that position, Task 28); its number format is always the overlay's (General when absent). */
+export interface StyledValueOverlayCell extends ValueOverlayCell { style?: XlsxCellStyle }
+function overlayCellStyle(value: StyledValueOverlayCell): { style?: XlsxCellStyle } {
+  const own = value.style
+  if (!own) return value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}
+  const numFmtId = value.numFmtId ?? 0
+  if (own.numFmtId === numFmtId) return { style: own }
+  const { formatCode: _code, ...rest } = own
+  return { style: { ...rest, numFmtId } }
 }
 /** Built once per geometry generation (sheet + order + visibility), never per paint. */
 export interface SheetGeometry {
@@ -370,7 +381,7 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
         if (!cells) cellsByRow.set(row, cells = [])
         const existing = cells.findIndex(cell => cell.row === row && cell.col === col)
         if (existing >= 0) cells.splice(existing, 1)
-        if (value !== null) cells.push({ ref: `R${row}C${col}`, row, col, value: value.value, styleIndex: 0, ...(value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}), hasCachedValue: true, valueIsError: value.valueIsError } as XlsxCell)
+        if (value !== null) cells.push({ ref: `R${row}C${col}`, row, col, value: value.value, styleIndex: 0, ...overlayCellStyle(value), hasCachedValue: true, valueIsError: value.valueIsError } as XlsxCell)
       }
     }
   }

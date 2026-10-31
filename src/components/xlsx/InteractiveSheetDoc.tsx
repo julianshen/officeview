@@ -478,12 +478,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pivotOverlays = useRef(new Map<string, ValueOverlay>()).current
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
+  const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
    * outlives the sessions that made it (unmount, or a new client). */
   const restorePivots = () => {
     doc.sheets.forEach((sheet, index) => {
       if (sheet.pivotTables === savedPivotDefs[index]) return
       sheet.pivotTables = savedPivotDefs[index]
+      sheet.pivotRegions = savedPivotRegions[index]
       invalidateRegionStyles(sheet)
     })
     for (const sheetId of pivotOverlays.keys()) { try { source.store(sheetId).setValueOverlay?.(undefined) } catch { /* released with the viewer */ } }
@@ -1248,6 +1250,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
     if (!sheet?.pivotTables || sheetId === undefined) return
     sheet.pivotTables = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def)
+    // The pivot's region (gridlines hidden inside it, regionGrid) follows its live location.
+    if (sheet.pivotRegions) sheet.pivotRegions = sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
     invalidateRegionStyles(sheet)
     regionStylesFor(sheet)
     if (!remote && commit.overlay !== undefined) {
@@ -1632,7 +1636,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let pages: Awaited<ReturnType<typeof loader>>
     // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
     const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
-    const printed = changed ? { ...doc, sheets: doc.sheets.map((sheet, index) => sheet.pivotTables === savedPivotDefs[index] ? sheet : { ...sheet, pivotTables: savedPivotDefs[index], regionStyles: undefined, regionStylesResolved: false }) } : doc
+    const printed = changed ? { ...doc, sheets: doc.sheets.map((sheet, index) => sheet.pivotTables === savedPivotDefs[index] ? sheet : { ...sheet, pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false }) } : doc
     try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
     }) } catch (error) {
