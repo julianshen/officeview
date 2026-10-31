@@ -39,8 +39,10 @@ function rangeBucket(groupItems: readonly PivotValue[], start: number, end: numb
   const lower = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
   const upper = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
   if (value < start && lower >= 0) return lower
-  if (value > end && upper >= 0) return upper
-  if (value < start || value > end) return -1
+  if (value < start) return -1
+  const count = Math.ceil((end - start) / interval)
+  const expectedUpper = start + count * interval
+  if (value > expectedUpper) return upper >= 0 ? upper : -1
   for (let i = 0; i < groupItems.length; i++) {
     const text = caption(groupItems[i]!)
     if (!text) continue
@@ -48,12 +50,17 @@ function rangeBucket(groupItems: readonly PivotValue[], start: number, end: numb
     if (match) buckets.push({ index: i, start: Number(match[1]), end: Number(match[2]) })
   }
   buckets.sort((a, b) => a.start - b.start)
-  const count = Math.ceil((end - start) / interval)
   if (buckets.length !== count) return -1
   const decimalPlaces = (n: number) => Math.min(12, (String(n).split('.')[1] ?? '').length)
   const scale = 10 ** Math.max(decimalPlaces(start), decimalPlaces(end), decimalPlaces(interval), decimalPlaces(value))
   const scaledStart = Math.round(start * scale), scaledValue = Math.round(value * scale), scaledInterval = Math.round(interval * scale)
   if (!Number.isSafeInteger(scaledStart) || !Number.isSafeInteger(scaledValue) || !Number.isSafeInteger(scaledInterval) || scaledInterval <= 0) return -1
+  const scaledExpectedUpper = Math.round(expectedUpper * scale) / scale
+  const last = buckets[count - 1]
+  if (value > end) {
+    if (value <= scaledExpectedUpper) return last && Math.abs(last.end - scaledExpectedUpper) <= 1 / scale ? last.index : -1
+    return upper >= 0 ? upper : -1
+  }
   const slot = Math.min(Math.floor((scaledValue - scaledStart) / scaledInterval), count - 1)
   const bucket = buckets[slot]
   if (!bucket) return -1
@@ -129,8 +136,9 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     const value = sourceValue(store, cache, base, row)
     if (!value) return invalid(`group field ${field} has an invalid base value at record ${row}`)
     if (value.type === 'missing') {
+      if (range.groupBy === 'range') return unmeasured(`blank values in number group field ${field} are not measured`)
       if (blank >= 0) output[row] = blank
-      else if (range.groupBy === 'range' || range.groupBy === 'years' || range.groupBy === 'quarters' || range.groupBy === 'months') {
+      else if (range.groupBy === 'years' || range.groupBy === 'quarters' || range.groupBy === 'months') {
         const lower = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
         if (lower >= 0) output[row] = lower
       }
@@ -149,6 +157,14 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     }
     if (value.type !== 'date') return unmeasured(`date group field ${field} contains a non-date base item`)
     const iso = value.value.slice(0, 10)
+    const startDay = range.startDate?.slice(0, 10), endDay = range.endDate?.slice(0, 10)
+    const nonMidnight = (text: string | undefined) => Boolean(text && /T(?!00:00:00(?:\.0+)?(?:Z|[+-]00:00)?$)/u.test(text))
+    if ((iso === startDay && (nonMidnight(value.value) || nonMidnight(range.startDate))) ||
+      (iso === endDay && (nonMidnight(value.value) || nonMidnight(range.endDate))))
+      return unmeasured(`date-group boundary times for ${iso} in field ${field} are not measured`)
+    const serial = Date.parse(`${iso}T00:00:00Z`) / 86_400_000 + 25_569
+    if (Number.isFinite(serial) && serial < 61)
+      return unmeasured(`date group field ${field} contains a date before Excel serial 61 (1900-03-01), whose grouping is not measured`)
     if (range.startDate && iso < range.startDate.slice(0, 10)) {
       const index = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
       if (index < 0) return unmeasured(`out-of-range date ${iso} has no lower bucket in group field ${field}`)

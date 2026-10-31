@@ -6,30 +6,13 @@ const fail = (message: string): EngineResult<never> => ({
   ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-engine-unmeasured', message } satisfies PivotDiagnostic,
 })
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
-/** Task 21's Excel oracle covers alphanumeric labels, spaces and the punctuation in its Code corpus. */
+/** Task 21 measured ASCII letters/digits/spaces, apostrophes and hyphens in words, and these leading code symbols. */
 export function hasMeasuredEnglishOrder(value: string): boolean {
-  return /^[A-Za-z0-9 #$@_~'\-]*$/u.test(value)
+  return [...value].every((character, index) => /^[A-Za-z0-9 '_-]$/u.test(character) || (index === 0 && /^[#$@~]$/u.test(character)))
 }
 
 export function compareEnglishLabels(left: string, right: string): number {
   return compareMeasuredCodeLabels(left, right)
-}
-/** Detect a measured-order boundary where a space competes with a word character. */
-export function hasUnmeasuredSpaceBoundary(leftValue: string, rightValue: string): boolean {
-  const left = leftValue.toLowerCase(), right = rightValue.toLowerCase()
-  const isAlphaNumeric = (value: string | undefined) => value !== undefined && /^[a-z0-9]$/u.test(value)
-  let offset = 0
-  while (offset < left.length && offset < right.length && left[offset] === right[offset]) offset++
-  const a = left[offset], b = right[offset]
-  return (a === ' ' && isAlphaNumeric(b)) || (b === ' ' && isAlphaNumeric(a))
-}
-/** Detect an unmeasured space-versus-word ordering without comparing every item pair. */
-export function hasUnmeasuredSpaceOrder(values: readonly string[]): boolean {
-  const labels = [...new Set(values.map(value => value.toLowerCase()))].sort()
-  for (let index = 1; index < labels.length; index++) {
-    if (hasUnmeasuredSpaceBoundary(labels[index - 1]!, labels[index]!)) return true
-  }
-  return false
 }
 function category(value: PivotValue): string {
   if (value.type === 'error') return 'error'
@@ -49,31 +32,35 @@ function compare(a: PivotValue, b: PivotValue): number | undefined {
   return undefined
 }
 
-function excelCharacterWeight(character: string, position: number): number {
+function excelCharacterWeight(character: string): number {
   const lower = character.toLowerCase()
-  if (position === 0) {
-    if (lower === '#') return 0
-    if (lower === '$') return 1
-    if (lower === '@') return 2
-    if (lower === '_') return 3
-    if (lower === '~') return 4
-    if (lower === '-') return 90
-  }
+  if (lower === '#') return 0
+  if (lower === '$') return 1
+  if (lower === '@') return 2
+  if (lower === '_') return 3
+  if (lower === '~') return 4
   if (lower === ' ') return 0
-  if (lower === '_') return 1
   if (lower >= '0' && lower <= '9') return 10 + lower.charCodeAt(0) - 48
   if (lower >= 'a' && lower <= 'z') return 30 + lower.charCodeAt(0) - 97
-  if (lower === "'") return 60
-  if (lower === '-') return 70
   return 100 + lower.charCodeAt(0)
 }
 function compareMeasuredCodeLabels(left: string, right: string): number {
-  const count = Math.min(left.length, right.length)
+  const primary = (value: string) => [...value.toLowerCase()].filter(character => character !== "'" && character !== '-')
+  const aText = primary(left), bText = primary(right)
+  const count = Math.min(aText.length, bText.length)
   for (let index = 0; index < count; index++) {
-    const a = excelCharacterWeight(left[index]!, index), b = excelCharacterWeight(right[index]!, index)
+    const a = excelCharacterWeight(aText[index]!), b = excelCharacterWeight(bText[index]!)
     if (a !== b) return a - b
   }
-  return left.length - right.length
+  if (aText.length !== bText.length) return aText.length - bText.length
+  // Excel puts a spelling with inserted punctuation after the otherwise equal plain spelling;
+  // when both have punctuation, apostrophe precedes hyphen (Task 15 Code oracle).
+  const punctuation = (value: string) => [...value.toLowerCase()].filter(character => character === "'" || character === '-').map(character => character === "'" ? 1 : 2)
+  const aPunctuation = punctuation(left), bPunctuation = punctuation(right)
+  for (let index = 0; index < Math.min(aPunctuation.length, bPunctuation.length); index++) {
+    if (aPunctuation[index] !== bPunctuation[index]) return aPunctuation[index]! - bPunctuation[index]!
+  }
+  return aPunctuation.length - bPunctuation.length
 }
 function customListIndex(value: string): { kind: 'month' | 'weekday'; index: number } | undefined {
   const month = MONTHS.indexOf(value.trim().toLocaleLowerCase())
@@ -88,20 +75,7 @@ function customListIndex(value: string): { kind: 'month' | 'weekday'; index: num
   const shortWeekday = shortWeekdays.indexOf(value.trim().toLocaleLowerCase())
   return shortWeekday >= 0 ? { kind: 'weekday', index: shortWeekday } : undefined
 }
-function compareExcelLabels(left: string, right: string, customListSort: boolean, groupLabels: boolean): number {
-  if (groupLabels) {
-    const ordinal = (value: string): number | undefined => {
-      if (value.startsWith('<')) return Number.NEGATIVE_INFINITY
-      if (value.startsWith('>')) return Number.POSITIVE_INFINITY
-      return /^(\d{4})(?:年)?$/u.exec(value)?.[1] ? Number(/^(\d{4})(?:年)?$/u.exec(value)![1]) : undefined
-    }
-    const a = ordinal(left), b = ordinal(right)
-    if (a !== undefined && b !== undefined) return a - b
-    const rangeStart = (value: string): number | undefined => /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*[-–]/u.exec(value)?.[1] !== undefined
-      ? Number(/^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*[-–]/u.exec(value)![1]) : undefined
-    const rangeA = rangeStart(left), rangeB = rangeStart(right)
-    if (rangeA !== undefined && rangeB !== undefined) return rangeA - rangeB
-  }
+function compareExcelLabels(left: string, right: string, customListSort: boolean): number {
   if (customListSort) {
     const a = customListIndex(left), b = customListIndex(right)
     if (a && b && a.kind === b.kind) return a.index - b.index
@@ -111,11 +85,20 @@ function compareExcelLabels(left: string, right: string, customListSort: boolean
 
 /** Stable ascending/descending order for homogeneous labels; item ids remain the pivotField item indexes. */
 export function sortItemOrder(current: readonly number[], valuesByItem: readonly PivotValue[], sortType: PivotFieldSortType, field: number,
-  customListSort = true, groupLabels = false): EngineResult<number[]> {
+  customListSort = true): EngineResult<number[]> {
   if (sortType === 'manual') return { ok: true, value: [...current] }
   const values = current.map(item => valuesByItem[item])
-  if (values.some(value => value?.type === 'string' && !groupLabels && !hasMeasuredEnglishOrder(value.value)))
+  if (values.some(value => value?.type === 'boolean')) return fail(`boolean items in sorted field ${field} have no measured Excel order`)
+  const presentTypes = new Set(values.filter((value): value is PivotValue => value !== undefined).map(value => value.type))
+  if (presentTypes.has('date') && presentTypes.size > 1) return fail(`mixed date items in sorted field ${field} have no measured Excel order`)
+  if (values.some(value => value?.type === 'string' && !hasMeasuredEnglishOrder(value.value)))
     return fail(`Excel's saved punctuation order for sorted field ${field} contains characters outside the measured alphanumeric, space and Code punctuation set`)
+  if (customListSort) {
+    const lists = values.map(value => value?.type === 'string' ? customListIndex(value.value) : undefined)
+    const kinds = new Set(lists.flatMap(value => value ? [value.kind] : []))
+    if (kinds.size > 1 || (kinds.size > 0 && lists.some(value => value === undefined)))
+      return fail(`sorted field ${field} mixes a custom-list item with labels outside one measured custom list`)
+  }
   const rank: Record<string, number> = { number: 0, date: 0, boolean: 1, string: 2, missing: 3, blank: 3, error: 4 }
   const direction = sortType === 'descending' ? -1 : 1
   const sorted = [...current].sort((left, right) => {
@@ -123,7 +106,7 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
     if (!a || !b) return left - right
     const categoryOrder = (rank[category(a)] ?? 2) - (rank[category(b)] ?? 2)
     const compared = categoryOrder || (a.type === 'string' && b.type === 'string'
-      ? compareExcelLabels(a.value, b.value, customListSort, groupLabels)
+      ? compareExcelLabels(a.value, b.value, customListSort)
       : compare(a, b) ?? 0)
     return direction * compared || left - right
   })

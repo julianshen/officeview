@@ -84,7 +84,7 @@ describe('Task 21 sort, filters and group mapping', () => {
     expect(items.ok).toBe(true)
     if (items.ok) expect([...items.value.rowKey]).toEqual([NO_LINE, NO_LINE, NO_LINE, 0])
     for (const mode of ['percent', 'sum'] as const) {
-      p.view.filters = [filter({ type: mode, iMeasureFld: 0, autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true, top10: { top: true, percent: mode === 'percent', val: mode === 'percent' ? 50 : 50 } }] } })]
+      p.view.filters = [filter({ type: mode, iMeasureFld: 0, autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true, top10: { top: true, percent: mode === 'percent', val: mode === 'percent' ? 50 : 75 } }] } })]
       const selected = result(p)
       expect(selected.ok).toBe(true)
       if (selected.ok) expect([...selected.value.rowKey]).toEqual([NO_LINE, NO_LINE, NO_LINE, 0])
@@ -111,7 +111,7 @@ describe('Task 21 sort, filters and group mapping', () => {
     grouped.def.fields.push({ items: [{ type: 'data', x: 0 }, { type: 'data', x: 1 }] } as never)
     grouped.view.rows = [2]
     grouped.view.fields = [...grouped.view.fields, { ...field(2), sortType: 'ascending' }]
-    expect(lines(result(grouped))).toEqual([0, 1])
+    expect(result(grouped)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
   })
 
   it('applies case-insensitive wildcard label filtering', () => {
@@ -184,7 +184,8 @@ describe('Task 21 sort, filters and group mapping', () => {
   it('filters numeric and renamed captions while dates remain outside measured label semantics', () => {
     for (const value of [{ type: 'number', value: 10 }, { type: 'missing' }] as PivotValue[]) {
       const p = fixture([value], [0], [1], [filter({ type: 'captionNotEqual', stringValue1: 'A' })])
-      expect(result(p).ok).toBe(true)
+      if (value.type === 'missing') expect(result(p)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+      else expect(result(p).ok).toBe(true)
     }
     const dateCaption = fixture([{ type: 'date', value: '2024-01-15T00:00:00' }], [0], [1], [filter({ type: 'captionNotEqual', stringValue1: 'A' })])
     expect(result(dateCaption)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
@@ -398,7 +399,7 @@ describe('Task 21 Excel manifest cases', () => {
   const cases = (Array.isArray(raw) ? raw : raw.cases ?? []).filter(entry => entry.task === 21 && entry.status !== 'pending')
   const exactRefusals: Record<string, string> = {
     'sort-error-item': 'error-valued pivot item field 0 is saved by Excel as text but place.ts currently emits a worksheet error cell',
-    'sort-value-showall-no-data': "showAll nested value sort for field 1 has multiple no-data items under parent 4; Excel's tie order differs from the pivot-field item order",
+    'sort-value-showall-no-data': "showAll value sort for field 1 has multiple no-data items under parent 4, whose tie order is not measured",
   }
   if (!cases.length) it.skip('SKIPPED: Task 21 has no runnable Excel manifest cases', () => {})
   else it.each(cases.map(entry => [entry.case, entry] as const))('manifest %s', async (_name, entry) => {
@@ -413,5 +414,177 @@ describe('Task 21 Excel manifest cases', () => {
       const axes = computeAxes(pivot.store, pivot.cache, pivot.def, initialViewState(pivot.def, pivot.cache))
       expect(axes.ok ? '' : axes.diagnostic.message, entry.case).toBe(expectedRefusal)
     } else expect(faithful.status, entry.case).toBe('ok')
+  })
+})
+
+describe('Task 21 oracle fix round 1 counterexamples', () => {
+  it('uses the oracle top-percent share threshold from filter-top-percent-30', async () => {
+    const file = resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/filter-top-percent-30.xlsx')
+    const p = (await loadAll(file))[0]!
+    const computed = computeAxes(p.store, p.cache, p.def, initialViewState(p.def, p.cache))
+    expect(computed.ok, computed.ok ? '' : computed.diagnostic.message).toBe(true)
+    if (!computed.ok) return
+    const items = p.def.fields[0]!.items!
+    const shared = p.cache.fields[0]!.sharedItems!.items
+    const labels = computed.value.rows.filter(line => line.type === 'data' && line.items.length === 1)
+      .map(line => {
+        const item = shared[items[line.items[0]!]!.x!]!
+        return item.type === 'string' ? item.value : undefined
+      })
+    expect(labels).toEqual(['South', 'West'])
+  })
+
+  it('uses Excel apostrophe and hyphen collation, position-independent measured symbols, and refuses unmeasured positions', () => {
+    for (const [input, expected] of [
+      [["O'Brien", 'Olsen'], [0, 1]], [['T-shirt', 'Tu'], [0, 1]], [['-a', 'b'], [0, 1]],
+      [['ab', "a'b", 'a-b'], [0, 1, 2]],
+    ] as const) {
+      const p = fixture(input.map(value => ({ type: 'string', value })), input.map((_, i) => i), input.map(() => 1))
+      p.view.fields = [{ ...p.view.fields[0]!, sortType: 'ascending' }, p.view.fields[1]!]
+      expect(lines(result(p))).toEqual(expected)
+    }
+    const interiorSymbol = fixture(['x#1', 'xa'].map(value => ({ type: 'string', value })), [0, 1], [1, 1])
+    interiorSymbol.view.fields = [{ ...interiorSymbol.view.fields[0]!, sortType: 'ascending' }, interiorSymbol.view.fields[1]!]
+    expect(result(interiorSymbol)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+  })
+
+  it('refuses sorted group fields and unmeasured custom-list mixtures', () => {
+    const p = fixture([{ type: 'number', value: 1 }, { type: 'number', value: 11 }], [0, 1], [1, 1])
+    p.cache.fields.push({ databaseField: false, fieldGroup: { base: 0, rangePr: { groupBy: 'range', groupInterval: 10, startNum: 1, endNum: 20 },
+      groupItems: [{ type: 'string', value: '1-10' }, { type: 'string', value: '11-20' }] } } as never)
+    p.def.fields.push({ items: [{ type: 'data', x: 0 }, { type: 'data', x: 1 }] } as never)
+    p.view.rows = [2]
+    p.view.fields = [...p.view.fields, { ...field(2), sortType: 'ascending' }]
+    expect(result(p)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const mixedList = fixture(['Jan', 'Other'].map(value => ({ type: 'string', value })), [0, 1], [1, 1])
+    mixedList.view.fields = [{ ...mixedList.view.fields[0]!, sortType: 'ascending' }, mixedList.view.fields[1]!]
+    expect(result(mixedList)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+  })
+
+  it('places a fractional value in the Excel-saved final bucket beyond endNum', () => {
+    const labels = ['<0.5', ...Array.from({ length: 40 }, (_, index) => {
+      const start = 0.5 + index * 2.5, end = start + 2.5
+      return `${Number(start.toFixed(1))}-${Number(end.toFixed(1))}`
+    }), '>100.5']
+    const cache = { fields: [
+      { databaseField: true, sharedItems: { inline: true, items: [] } },
+      { databaseField: false, fieldGroup: { base: 0, rangePr: { groupBy: 'range', groupInterval: 2.5, startNum: 0.5, endNum: 100 },
+        groupItems: labels.map(value => ({ type: 'string', value })) } },
+    ] } as unknown as PivotCacheDefinition
+    const store: RecordStore = { count: 1, bytes: 0, columns: [
+      { kind: 'inline', tag: Uint8Array.of(VALUE_TAG.number), num: Float64Array.of(100.25), text: [], textIndex: Uint32Array.of(0) },
+    ] }
+    expect(groupColumn(store, cache, 1)).toMatchObject({ ok: true, value: Uint32Array.of(40) })
+  })
+
+  it('refuses booleans and mixed date sorts', () => {
+    for (const items of [
+      [{ type: 'boolean', value: true }, { type: 'string', value: 'A' }],
+      [{ type: 'date', value: '2024-01-01T00:00:00' }, { type: 'number', value: 1 }],
+    ] as PivotValue[][]) {
+      const p = fixture(items, [0, 1], [1, 1])
+      p.view.fields = [{ ...p.view.fields[0]!, sortType: 'ascending' }, p.view.fields[1]!]
+      expect(result(p)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+    }
+  })
+
+  it('refuses unmeasured showAll value-sort empty-item placements', () => {
+    const nested = fixture(['A', 'B', 'C', 'D'].map(value => ({ type: 'string', value })), [0, 1, 2, 3], [10, 5, 1, 1])
+    nested.cache.fields[0] = { databaseField: true, sharedItems: { inline: false, items: ['A', 'B', 'C', 'D'].map(value => ({ type: 'string', value })) } } as never
+    nested.def.fields[0] = { items: ['A', 'B', 'C', 'D'].map((_, x) => ({ type: 'data', x })) } as never
+    nested.cache.fields.push({ databaseField: true, sharedItems: { inline: false, items: [{ type: 'string', value: 'P' }] } } as never)
+    nested.def.fields.push({ items: [{ type: 'data', x: 0 }] } as never)
+    nested.store = { ...nested.store, columns: [nested.store.columns[0]!, nested.store.columns[1]!, { kind: 'shared', index: Uint32Array.from([0, 0, 1, 1]) }] }
+    nested.view.rows = [2, 0]
+    nested.view.fields = [ { ...field(4), showAll: true, sortType: 'descending', autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }] } }, nested.view.fields[1]!, { ...field(1) } ]
+    expect(result(nested)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const ascending = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0], [10])
+    ascending.view.fields = [{ ...ascending.view.fields[0]!, showAll: true, sortType: 'ascending', autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }] } }, ascending.view.fields[1]!]
+    expect(result(ascending)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const noRecordsParent = fixture(['A', 'B', 'C'].map(value => ({ type: 'string', value })), [0, 1], [10, 5])
+    noRecordsParent.cache.fields.push({ databaseField: true, sharedItems: { inline: false, items: [{ type: 'string', value: 'P' }, { type: 'string', value: 'Q' }] } } as never)
+    noRecordsParent.def.fields.push({ items: [{ type: 'data', x: 0 }, { type: 'data', x: 1 }] } as never)
+    noRecordsParent.store = { ...noRecordsParent.store, columns: [noRecordsParent.store.columns[0]!, noRecordsParent.store.columns[1]!, { kind: 'shared', index: Uint32Array.of(0, 0) }] }
+    noRecordsParent.view.rows = [2, 0]
+    noRecordsParent.view.fields = [
+      { ...field(3), showAll: true, sortType: 'descending', autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }] } },
+      noRecordsParent.view.fields[1]!, { ...field(2), showAll: true },
+    ]
+    expect(result(noRecordsParent)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+  })
+
+  it('refuses value filters, top-10 and value sorts when records have a blank aggregate', () => {
+    const withBlankSum = (filters: PivotFilter[] = []) => {
+      const p = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 1], [1, 1], filters)
+      p.store = { ...p.store, columns: [p.store.columns[0]!, {
+        kind: 'inline', tag: Uint8Array.of(VALUE_TAG.missing, VALUE_TAG.number), num: Float64Array.of(0, 10), text: [], textIndex: Uint32Array.of(0, 0),
+      }] }
+      return p
+    }
+    const valueFilter = withBlankSum([filter({ type: 'valueNotEqual', iMeasureFld: 0, stringValue1: '5' })])
+    expect(result(valueFilter)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured', message: expect.stringContaining('blank aggregate') } })
+
+    const top10 = withBlankSum([filter({ type: 'percent', iMeasureFld: 0, autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true,
+      top10: { top: true, percent: true, val: 50 } }] } })])
+    expect(result(top10)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured', message: expect.stringContaining('blank aggregate') } })
+
+    const valueSort = withBlankSum()
+    valueSort.view.fields = [{ ...valueSort.view.fields[0]!, sortType: 'descending', autoSortScope: {
+      type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false,
+      outline: true, collapsedLevelsAreSubtotals: false, references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }],
+    } }, valueSort.view.fields[1]!]
+    expect(result(valueSort)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured', message: expect.stringContaining('blank aggregate') } })
+  })
+
+  it('handles Values before and between filtered or sorted row fields without throwing', () => {
+    const before = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 1], [1, 5], [filter({ type: 'valueGreaterThan', iMeasureFld: 0, stringValue1: '2' })])
+    before.view.rows = [-2, 0]
+    expect(() => result(before)).not.toThrow()
+    expect(result(before)).toMatchObject({ ok: true })
+    before.view.filters = []
+    before.view.fields = [{ ...before.view.fields[0]!, sortType: 'descending', autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }] } }, before.view.fields[1]!]
+    expect(() => result(before)).not.toThrow()
+    expect(result(before)).toMatchObject({ ok: true })
+
+    const between = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 1], [1, 5], [filter({ type: 'valueGreaterThan', iMeasureFld: 0, stringValue1: '2' })])
+    between.cache.fields.push({ databaseField: true, sharedItems: { inline: false, items: [{ type: 'string', value: 'P' }, { type: 'string', value: 'Q' }] } } as never)
+    between.def.fields.push({ items: [{ type: 'data', x: 0 }, { type: 'data', x: 1 }] } as never)
+    between.store = { ...between.store, columns: [between.store.columns[0]!, between.store.columns[1]!, { kind: 'shared', index: Uint32Array.of(0, 1) }] }
+    between.view.rows = [2, -2, 0]
+    between.view.fields = [between.view.fields[0]!, between.view.fields[1]!, field(2)]
+    expect(() => result(between)).not.toThrow()
+    expect(result(between)).toMatchObject({ ok: true })
+    between.view.filters = []
+    between.view.fields = [{ ...between.view.fields[0]!, sortType: 'descending', autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [{ field: -2, x: [0], selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [] }] } }, between.view.fields[1]!, between.view.fields[2]!]
+    expect(() => result(between)).not.toThrow()
+    expect(result(between)).toMatchObject({ ok: true })
+  })
+
+  it('refuses blank negated label filters, number-group blanks and 1900 phantom-era date groups', () => {
+    const blankFilter = fixture([{ type: 'missing' }], [0], [1], [filter({ type: 'captionNotEqual', stringValue1: 'A' })])
+    expect(result(blankFilter)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const numberGroup = { fields: [
+      { databaseField: true, sharedItems: { inline: false, items: [{ type: 'missing' }] } },
+      { databaseField: false, fieldGroup: { base: 0, rangePr: { groupBy: 'range', groupInterval: 1, startNum: 0, endNum: 2 }, groupItems: [{ type: 'string', value: '<0' }, { type: 'string', value: '0-1' }, { type: 'string', value: '1-2' }, { type: 'string', value: '>2' }] } },
+    ] } as unknown as PivotCacheDefinition
+    const blankStore: RecordStore = { count: 1, bytes: 0, columns: [{ kind: 'shared', index: Uint32Array.of(0) }] }
+    expect(groupColumn(blankStore, numberGroup, 1)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const oldDate = { fields: [
+      { databaseField: true, sharedItems: { inline: false, items: [{ type: 'date', value: '1900-02-01T00:00:00' }] } },
+      { databaseField: false, fieldGroup: { base: 0, rangePr: { groupBy: 'months', startDate: '1900-01-01T00:00:00', endDate: '1900-12-31T00:00:00' }, groupItems: [{ type: 'string', value: '1月' }, { type: 'string', value: '2月' }] } },
+    ] } as unknown as PivotCacheDefinition
+    expect(groupColumn(blankStore, oldDate, 1)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const boundaryTime = { fields: [
+      { databaseField: true, sharedItems: { inline: false, items: [{ type: 'date', value: '2020-01-01T15:00:00' }] } },
+      { databaseField: false, fieldGroup: { base: 0, rangePr: { groupBy: 'years', startDate: '2020-01-01T00:00:00', endDate: '2020-12-31T00:00:00' },
+        groupItems: [{ type: 'string', value: '2020年' }] } },
+    ] } as unknown as PivotCacheDefinition
+    expect(groupColumn(blankStore, boundaryTime, 1)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
   })
 })

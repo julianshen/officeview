@@ -79,7 +79,11 @@ function captionCompare(label: string, op: PivotFilterType, a: string, b?: strin
 export function matchesLabelFilter(filter: PivotFilter, value: PivotValue | undefined): boolean | undefined {
   if (!isLabelFilter(filter)) return undefined
   const column = filter.autoFilter.columns[0]
-  if (!value || value.type === 'missing') return false
+  if (!value || value.type === 'missing') {
+    if (filter.type === 'captionNotEqual' || filter.type === 'captionNotContains' || filter.type === 'captionNotBeginsWith' ||
+      filter.type === 'captionNotEndsWith' || filter.type === 'captionNotBetween') return undefined
+    return false
+  }
   if (value.type !== 'string' && value.type !== 'number') return undefined
   const label = value.type === 'string' ? value.value : String(value.value)
   if (!printableAscii(label)) return undefined
@@ -142,6 +146,8 @@ export function matchesDateFilter(filter: PivotFilter, value: PivotValue | undef
     return Number.isFinite(time) ? time / 86_400_000 + 25_569 : Number.NaN
   }
   if (v === undefined || aValue === undefined || (bValue !== undefined && !Number.isFinite(serial(bValue)))) return undefined
+  // The engine API carries no workbook date-system bit. Criteria here use the 1900 serial epoch;
+  // callers must keep 1904 workbooks on the display-only path until that context is threaded through.
   const a = serial(aValue)
   const b = bValue === undefined ? undefined : serial(bValue)
   if (!Number.isFinite(a)) return undefined

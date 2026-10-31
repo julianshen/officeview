@@ -35,8 +35,8 @@
  * Refused as `pivot-engine-unmeasured` until measured: `mergeItem` outside tabular fields with totals only after
  * outer items, classic layout without a column field beyond one data field with row fields, a hidden item on a field
  * on no axis or page, a collapsed item above Values on columns, in tabular form or above a Values level that is not
- * the last, mixed-type/custom-list/non-ASCII sort order, nested/value-sort ties, cross-field filter visibility with
- * `showAll` and out-of-range group captions. Dynamic date filters use the dedicated feature refusal.
+ * the last, unmeasured mixed-type/custom-list sort order, unsupported showAll value-sort empty-item placements, and
+ * unmeasured group boundaries. Dynamic date filters use the dedicated feature refusal.
  */
 import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDiagnostic, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition, type PivotValue } from '../model'
 import type { PivotLine } from '../savedLayout'
@@ -57,6 +57,23 @@ const pending = (message: string) => fail('unsupported', 'pivot-engine-pending',
 const invalid = (message: string) => fail('parse', 'pivot-definition-invalid', message)
 /** Behaviour Excel has not been measured on yet (Task 15 adds the cases); the pivot stays display-only. */
 const unmeasured = (message: string) => fail('unsupported', 'pivot-engine-unmeasured', message)
+
+function selectTopPercent(ranked: readonly { item: number; value: number }[], percent: number): Set<number> | undefined {
+  if (ranked.some(entry => entry.value < 0)) return undefined
+  const total = ranked.reduce((sum, entry) => sum + entry.value, 0)
+  if (!(total > 0) || !Number.isFinite(total)) return undefined
+  const threshold = total * percent / 100
+  let accumulated = 0, last: number | undefined
+  const selected = new Set<number>()
+  for (const entry of ranked) {
+    selected.add(entry.item); accumulated += entry.value; last = entry.value
+    if (accumulated >= threshold) break
+  }
+  const count = selected.size
+  if (count === 0) return undefined
+  if (count < ranked.length && ranked[count]!.value === last) return undefined
+  return selected
+}
 
 /** The subtotal lines a field's items get: its named functions, else the default subtotal, else none. */
 export function subtotalTypes(field: FieldState): PivotItemType[] {
@@ -195,8 +212,8 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
       const dataIndex = filter.iMeasureFld
       if (dataIndex === undefined || !view.data[dataIndex]) return invalid(`filter ${filter.id} names a missing data field`)
       const targetAxis = view.rows.includes(filter.fld) ? view.rows : view.cols.includes(filter.fld) ? view.cols : undefined
-      const targetLevel = targetAxis?.indexOf(filter.fld) ?? 0
-      if (targetAxis && targetLevel > 0) {
+      const parentFields = targetAxis ? targetAxis.slice(0, targetAxis.indexOf(filter.fld)).filter(field => field !== PIVOT_VALUES_FIELD) : []
+      if (parentFields.length > 0) {
         if (view.fields[filter.fld]?.showAll) return unmeasured(`nested ${filter.type} with showAll field ${filter.fld} needs per-parent empty-item visibility`)
         const groupedKeys = new Uint32Array(store.count)
         const eligible = new Uint8Array(passes)
@@ -205,7 +222,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         for (let record = 0; record < store.count; record++) {
           const item = pivotItemAt(map, record)
           if (item === undefined || item < 0) { eligible[record] = 0; groupedKeys[record] = NO_LINE; continue }
-          const parent = targetAxis.slice(0, targetLevel).map(parentField => {
+          const parent = parentFields.map(parentField => {
             const parentMap = maps.get(parentField)!
             const raw = parentMap.recordItems![record]!
             return String(parentMap.grouped && raw === NO_GROUP ? -1 : parentMap.toPivot[raw])
@@ -217,6 +234,8 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         }
         const aggregate = aggregateByKey(store, cache, view, dataIndex, groupedKeys, pairToKey.size, eligible)
         if (!aggregate.ok) return aggregate
+        if (aggregate.value.some((value, key) => keyToPair[key] !== undefined && value === undefined))
+          return unmeasured(`filter ${filter.type} has a blank aggregate for an item with records; its treatment is not measured`)
         const entries = new Map<string, Array<{ item: number; value: number | undefined }>>()
         for (let key = 0; key < keyToPair.length; key++) {
           const pair = keyToPair[key]!, list = entries.get(pair.parent) ?? []
@@ -237,11 +256,15 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             const ranked = group.filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
               .sort((a, b) => (top10.top ? b.value - a.value : a.value - b.value) || a.item - b.item)
             if (!Number.isFinite(top10.val) || top10.val <= 0) return invalid(`top-10 threshold for filter ${filter.id} is outside its valid range`)
-            if (filter.type === 'sum') {
+            if (filter.type === 'percent') {
+              const percentItems = selectTopPercent(ranked, top10.val)
+              if (!percentItems) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
+              keep = percentItems
+            } else if (filter.type === 'sum') {
               let sum = 0
               for (const entry of ranked) { keep.add(entry.item); sum += entry.value; if (sum >= top10.val) break }
             } else {
-              const count = Math.min(ranked.length, Math.max(1, top10.percent ? Math.floor(ranked.length * top10.val / 100) : Math.trunc(top10.val)))
+              const count = Math.min(ranked.length, Math.max(1, Math.trunc(top10.val)))
               const threshold = ranked[count - 1]?.value
               keep = new Set(ranked.filter(entry => threshold !== undefined && (top10.top ? entry.value >= threshold : entry.value <= threshold)).map(entry => entry.item))
             }
@@ -261,6 +284,10 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
       }
       const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, map.size, passes)
       if (!aggregate.ok) return aggregate
+      const hasRecords = new Uint8Array(map.size)
+      for (let r = 0; r < store.count; r++) if (passes[r] && keys[r] !== NO_LINE) hasRecords[keys[r]!] = 1
+      if (hasRecords.some((present, item) => present && aggregate.value[item] === undefined))
+        return unmeasured(`filter ${filter.type} has a blank aggregate for an item with records; its treatment is not measured`)
       if (axisFields.includes(filter.fld) && view.fields[filter.fld]?.showAll &&
         map.order.some(item => !view.fields[filter.fld]!.hidden[item] && aggregate.value[item] === undefined))
         return unmeasured(`showAll with ${filter.type} filter on field ${filter.fld} has visible items without aggregates`)
@@ -286,8 +313,12 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             if (total >= top10.val) break
           }
           allowed = selected
+        } else if (filter.type === 'percent') {
+          const percentItems = selectTopPercent(ranked, top10.val)
+          if (!percentItems) return unmeasured(`top-percent threshold ties or value signs for filter ${filter.id} are not measured`)
+          allowed = percentItems
         } else {
-          const count = Math.min(ranked.length, Math.max(1, top10.percent ? Math.floor(ranked.length * top10.val / 100) : Math.trunc(top10.val)))
+          const count = Math.min(ranked.length, Math.max(1, Math.trunc(top10.val)))
           const threshold = ranked[count - 1]?.value
           allowed = new Set(ranked.filter(entry => threshold !== undefined && (top10.top ? entry.value >= threshold : entry.value <= threshold)).map(entry => entry.item))
         }
@@ -304,9 +335,15 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   for (const field of axisFields) {
     const state = view.fields[field]!
     const map = maps.get(field)!
+    const candidateGroup = cache.fields[field]?.fieldGroup
+    const isGroupField = Boolean(candidateGroup && (candidateGroup.base !== undefined || candidateGroup.discretePr !== undefined ||
+      candidateGroup.rangePr !== undefined || candidateGroup.groupItems !== undefined))
+    if (isGroupField && (state.sortType !== 'manual' || state.autoSortScope))
+      return unmeasured(`sorting group field ${field} is not measured`)
     if (state.autoSortScope) {
       const fields = view.rows.includes(field) ? view.rows : view.cols
-      const level = fields.indexOf(field)
+      const parentFields = fields.slice(0, fields.indexOf(field)).filter(parentField => parentField !== PIVOT_VALUES_FIELD)
+      const level = parentFields.length
       const references = state.autoSortScope.references
       const values = references.filter(reference => reference.field === PIVOT_VALUES_FIELD)
       if (references.length !== 1 || values.length !== 1 || values[0]!.x.length !== 1)
@@ -323,7 +360,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         if (passes[record] && (item === undefined || item < 0)) return unmeasured(`autoSortScope field ${field} has an unmapped record item`)
         if (item === undefined || item < 0) { keys[record] = NO_LINE; eligible[record] = 0; continue }
         if (level === 0) { keys[record] = item; continue }
-        const parent = fields.slice(0, level).map(parentField => {
+        const parent = parentFields.map(parentField => {
           const parentMap = maps.get(parentField)!
           const parentRaw = parentMap.recordItems![record]!
           return String(parentMap.grouped && parentRaw === NO_GROUP ? -1 : parentMap.toPivot[parentRaw])
@@ -336,37 +373,40 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
       const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, level === 0 ? map.size : pairToKey.size, eligible)
       if (!aggregate.ok) return aggregate
       if (level === 0) {
+        const hasRecords = new Uint8Array(map.size)
+        for (let record = 0; record < store.count; record++) if (eligible[record] && keys[record] !== NO_LINE) hasRecords[keys[record]!] = 1
+        if (hasRecords.some((present, item) => present && aggregate.value[item] === undefined))
+          return unmeasured(`value sort for field ${field} has a blank aggregate for an item with records; its placement is not measured`)
         const scored = map.order.map(item => ({ item, value: aggregate.value[item] }))
           .filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
           .sort((a, b) => (state.sortType === 'descending' ? b.value - a.value : a.value - b.value) || a.item - b.item)
         const rankedItems = scored.map(entry => entry.item)
-        if (view.fields[field]!.showAll) for (const item of map.order) if (!view.fields[field]!.hidden[item] && !rankedItems.includes(item)) rankedItems.push(item)
+        const missing = map.order.filter(item => !state.hidden[item] && aggregate.value[item] === undefined)
+        if (state.showAll && missing.length) return unmeasured(`showAll value sort for top-level field ${field} has no-data items whose placement is not measured`)
         sortedOrders.set(field, rankedItems)
       } else {
+        if ([...pairToKey.values()].some(key => aggregate.value[key] === undefined))
+          return unmeasured(`value sort for field ${field} has a blank aggregate for an item with records; its placement is not measured`)
         const orders = new Map<string, number[]>()
-        const totalByItem = new Map<number, number>()
-        for (const [pair, key] of pairToKey) {
+        for (const [pair] of pairToKey) {
           const [parent, itemText] = pair.split('/')
           const item = Number(itemText)
           const entries = orders.get(parent!) ?? []
           entries.push(item); orders.set(parent!, entries)
-          totalByItem.set(item, (totalByItem.get(item) ?? 0) + (aggregate.value[key] ?? 0))
         }
         const byParent = new Map<string, readonly number[]>()
         for (const [parent, items] of orders) {
-          if (state.showAll && items.length === 1 && map.order.filter(item => !view.fields[field]!.hidden[item] && item !== items[0]).length > 1)
-            return unmeasured(`showAll nested value sort for field ${field} has multiple no-data items under parent ${parent}; Excel's tie order differs from the pivot-field item order`)
+          const missing = map.order.filter(item => !state.hidden[item] && !items.includes(item))
+          if (state.showAll && state.sortType === 'ascending' && missing.length)
+            return unmeasured(`showAll ascending value sort for field ${field} has no-data items under parent ${parent}, whose placement is not measured`)
+          if (state.showAll && missing.length > 1)
+            return unmeasured(`showAll value sort for field ${field} has multiple no-data items under parent ${parent}, whose tie order is not measured`)
           const scores = items.map(item => {
             const key = pairToKey.get(`${parent}/${item}`)!
             return { item, value: aggregate.value[key] }
           }).sort((a, b) => ((state.sortType === 'descending' ? (b.value ?? -Infinity) - (a.value ?? -Infinity) : (a.value ?? Infinity) - (b.value ?? Infinity))) || a.item - b.item)
           const ordered = scores.map(entry => entry.item)
-          if (state.showAll) {
-            const missing = map.order.filter(item => !view.fields[field]!.hidden[item] && !ordered.includes(item))
-              .sort((a, b) => ((state.sortType === 'descending' ? (totalByItem.get(b) ?? -Infinity) - (totalByItem.get(a) ?? -Infinity)
-                : (totalByItem.get(a) ?? Infinity) - (totalByItem.get(b) ?? Infinity))) || a - b)
-            ordered.push(...missing)
-          }
+          if (state.showAll) ordered.push(...missing)
           byParent.set(parent, ordered)
         }
         nestedSortOrders.set(field, byParent)
@@ -377,8 +417,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     const fieldValuesByItem = itemValuesByPivotIndex(fieldValues(cache, field), def.fields[field]?.items)
     if (fieldValuesByItem.some(value => value?.type === 'error'))
       return unmeasured(`error-valued pivot item field ${field} is saved by Excel as text but place.ts currently emits a worksheet error cell`)
-    const sorted = sortItemOrder(map.order, fieldValuesByItem, state.sortType, field,
-      def.customListSort !== false, Boolean(cache.fields[field]?.fieldGroup))
+    const sorted = sortItemOrder(map.order, fieldValuesByItem, state.sortType, field, def.customListSort !== false)
     if (!sorted.ok) return sorted
     sortedOrders.set(field, sorted.value)
   }
@@ -541,7 +580,8 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     }
     const state = view.fields[field]!
     const deeper = hasFieldAfter(fields, level), last = level === fields.length - 1
-    const nestedOrder = nestedSortOrders.get(field)?.get(path.join(','))
+    const parentPath = fields.slice(0, level).flatMap((parentField, index) => parentField === PIVOT_VALUES_FIELD ? [] : [path[index]!]).join(',')
+    const nestedOrder = nestedSortOrders.get(field)?.get(parentPath)
     const rank = nestedOrder ?? sortedOrders.get(field)
     const rankOf = rank ? new Map(rank.map((item, index) => [item, index])) : ranks.get(field)
     // With no node (an item shown by showAll with no records above), the field's visible items show
@@ -554,6 +594,18 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
         const present = itemsWithRecords(field)
         const missing = children.find(item => !present.has(item))
         if (missing !== undefined) { refusal ??= `an item without records under showAll lists field ${field} item ${missing}, which no passing record has`; return }
+      }
+    }
+    // A record-less parent makes every shown child a no-data item. The measured
+    // descending case only covers one such child; do not invent a tie order.
+    if (!node && state.showAll && nestedSortOrders.has(field)) {
+      if (state.sortType === 'ascending' && children.length > 0) {
+        refusal ??= `showAll ascending value sort for field ${field} has no-data items under a record-less parent, whose placement is not measured`
+        return
+      }
+      if (children.length > 1) {
+        refusal ??= `showAll value sort for field ${field} has multiple no-data items under a record-less parent, whose tie order is not measured`
+        return
       }
     }
     for (const item of children) {
