@@ -65,6 +65,7 @@ import { SheetImageCache, imageBudgetFor, installPivotCharts, mainChartParent, p
 import type { ChartModel } from '../../charts/model'
 import { chartLinksPivot } from '../../xlsx/pivotChartLink'
 import { overlayChartCell, rememberDependentChart, restoreDependentCharts } from '../../xlsx/pivots/session/dependentCharts'
+import { mergeOwedRects } from '../../xlsx/pivots/session/dependentRects'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -500,12 +501,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const dependentChartOwners = useRef(new Map<XlsxDrawing, Set<string>>()).current
   /** The resident stale marks each pivot's commits caused, by sheet index: `unsupported` readers keep their saved
    * value (S3-T, S3-Z); `outdated` ones were over the work budget and keep whatever they showed (S3-AE, M-4). */
-  const dependentStaleMarks = useRef(new Map<string, { unsupported: Set<number>; outdated: Set<number> }>()).current
+  const dependentStaleMarks = useRef(new Map<string, { unsupported: Set<number>; /** reader key → its sheet index */ outdated: Map<string, number> }>()).current
   const [pagedDependentNoticeSheets, setPagedDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
   const [residentDependentNotices, setResidentDependentNotices] = useState<{ unsupported: ReadonlySet<number>; outdated: ReadonlySet<number> }>(() => ({ unsupported: new Set(), outdated: new Set() }))
   const publishDependentNotices = () => {
     const unsupported = new Set<number>(), outdated = new Set<number>()
-    for (const marks of dependentStaleMarks.values()) { for (const index of marks.unsupported) unsupported.add(index); for (const index of marks.outdated) outdated.add(index) }
+    for (const marks of dependentStaleMarks.values()) { for (const index of marks.unsupported) unsupported.add(index); for (const index of marks.outdated.values()) outdated.add(index) }
     setResidentDependentNotices({ unsupported, outdated })
   }
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
@@ -1447,8 +1448,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (commit.reset && commit.allSaved) { restoreAllDependents(); return }
     pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache, layout, layoutCells: new Map(layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])), date1904: commit.date1904 ?? false, rects: changedRects, ...(commit.reset ? { saved: true as const } : {}) })
     if (commit.reset) releaseDependentsOf(contextKey)
-    // A superseded commit's rectangles stay owed until a recompute of this pivot runs.
-    const rects = [...(pendingDependentRects.get(contextKey) ?? []), ...changedRects]
+    // A superseded commit's rectangles stay owed until a recompute of this pivot runs: one canonical set, without
+    // duplicates or contained rectangles, so repeated over-budget retries stay bounded (codex r5 finding 1).
+    const rects = mergeOwedRects(pendingDependentRects.get(contextKey) ?? [], changedRects)
     pendingDependentRects.set(contextKey, rects)
     const changed = rects.map(rect => ({ sheetId: commit.sheetId, rect: { minRow: rect.r0, minCol: rect.c0, maxRow: rect.r1, maxCol: rect.c1 } }))
     const lifecycle = pivotLifecycle.current
@@ -1483,20 +1485,34 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           return undefined
         },
       })
-      // Over the budget nothing ran: the rectangles stay owed to this pivot's next recompute.
-      if (result.overBudget) pendingDependentRects.set(contextKey, [...rects, ...(pendingDependentRects.get(contextKey) ?? [])])
-      // Stale marks are this pivot's: a change adds them; a reset recomputes against saved cells, so only an
-      // over-budget reset leaves readers out of date (an unsupported reader keeps its saved value, which is right now).
-      const staleSheets = new Set(result.stale.map(key => {
+      // Over the budget nothing ran: the rectangles stay owed to this pivot's next recompute. Nothing was owed meanwhile
+      // (the recompute is synchronous after the delete above), so this is the same canonical set, not a copy appended.
+      if (result.overBudget) pendingDependentRects.set(contextKey, mergeOwedRects(pendingDependentRects.get(contextKey) ?? [], rects))
+      const sheetOf = (key: string) => {
         const bang = key.lastIndexOf('!')
         return doc.sheets.findIndex(candidate => candidate.name.toLocaleLowerCase() === key.slice(0, bang))
-      }).filter(index => index >= 0))
-      if (staleSheets.size && (result.overBudget || !commit.reset)) {
-        const marks = dependentStaleMarks.get(contextKey) ?? { unsupported: new Set<number>(), outdated: new Set<number>() }
-        for (const index of staleSheets) (result.overBudget ? marks.outdated : marks.unsupported).add(index)
-        dependentStaleMarks.set(contextKey, marks)
-        publishDependentNotices()
       }
+      let marksChanged = false
+      // A recompute within budget ran every reader it covered against every live pivot: whichever pivot's over-budget
+      // commit marked those readers out of date, they are current now (codex r5 finding 2). Readers it did not cover
+      // keep their marks.
+      if (!result.overBudget) for (const [owner, marks] of dependentStaleMarks) {
+        for (const key of result.readers) if (marks.outdated.delete(key)) marksChanged = true
+        if (!marks.unsupported.size && !marks.outdated.size) dependentStaleMarks.delete(owner)
+      }
+      // Stale marks are this pivot's: a change adds them; a reset recomputes against saved cells, so only an
+      // over-budget reset leaves readers out of date (an unsupported reader keeps its saved value, which is right now).
+      if (result.stale.length && (result.overBudget || !commit.reset)) {
+        const marks = dependentStaleMarks.get(contextKey) ?? { unsupported: new Set<number>(), outdated: new Map<string, number>() }
+        for (const key of result.stale) {
+          const index = sheetOf(key)
+          if (index < 0) continue
+          if (result.overBudget) marks.outdated.set(key, index); else marks.unsupported.add(index)
+          marksChanged = true
+        }
+        if (marks.unsupported.size || marks.outdated.size) dependentStaleMarks.set(contextKey, marks)
+      }
+      if (marksChanged) publishDependentNotices()
       if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
       if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges, refillChartModel }) => {
         if (!current()) return

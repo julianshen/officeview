@@ -612,7 +612,7 @@ export function recomputeDependents(
   doc: XlsxDocument,
   changed: readonly ChangedSheetRect[],
   options?: WorkbookEvaluationOptions,
-): { recomputed: number; charts: readonly number[]; sheets: readonly number[]; stale: readonly string[]; /** Over the work budget (S3-AE): nothing ran, and the stale readers keep whatever value they showed (maybe an earlier commit's live value), not necessarily the saved one (T31 r4 M-4). */ overBudget?: true } {
+): { recomputed: number; charts: readonly number[]; sheets: readonly number[]; stale: readonly string[]; /** Every reader this call covered: recomputed, or (over budget) left as it was. */ readers: readonly string[]; /** Over the work budget (S3-AE): nothing ran, and the stale readers keep whatever value they showed (maybe an earlier commit's live value), not necessarily the saved one (T31 r4 M-4). */ overBudget?: true } {
   if (workbookValuePolicy(doc) === 'cached') throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   const prior = docSpillStates.get(doc)
   const index = referenceIndexFor(doc)
@@ -657,7 +657,7 @@ export function recomputeDependents(
       for (const reader of dynamicReverse.get(follower) ?? []) enqueue(reader)
     }
   }
-  if (!formulaKeys.size) return { recomputed: 0, charts: [], sheets: [], stale: [] }
+  if (!formulaKeys.size) return { recomputed: 0, charts: [], sheets: [], stale: [], readers: [] }
   const staleKeys = new Set<string>()
   const estimatedVisits = dependentWorkEstimate(doc, index, formulaKeys, prior?.runtimeIndex)
   if (estimatedVisits > MAX_DEPENDENT_CELL_VISITS) {
@@ -666,7 +666,7 @@ export function recomputeDependents(
     for (const key of formulaKeys) retained.add(key)
     if (prior) prior.retainedUnsupportedKeys = retained
     const sheets = [...new Set([...formulaKeys].map(key => doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, key.lastIndexOf('!')))).filter(i => i >= 0))]
-    return { recomputed: 0, charts: [], sheets, stale: [...staleKeys], overBudget: true }
+    return { recomputed: 0, charts: [], sheets, stale: [...staleKeys], readers: [...formulaKeys], overBudget: true }
   }
   const recomputeKeys = formulaKeys
   let snapshots = liveFormulaSnapshots.get(doc)
@@ -704,7 +704,7 @@ export function recomputeDependents(
     }
   }
   for (const key of staleKeys) retained.add(key)
-  return { recomputed: recomputeKeys.size, charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
+  return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
 /** Restore the saved formula values after a resident viewer releases its live pivot contexts; returns the indexes of
