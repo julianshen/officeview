@@ -739,3 +739,28 @@ The recipes are in `xlsx-pivots-recipes-stage3.md`. The orchestrator ran them th
 **Two filter families (O7).** The seed has `multipleFieldFilters="0"` and a Product label filter "begins with B". The value filter was set through Excel's filter panel: 依值 → 大於 3000 on Sum of Sales.
 - The value filter **replaces** the label filter: the panel's 依標籤 resets to 請選擇一個.
 - Saved: one `<filter fld="1" type="valueGreaterThan" … iMeasureFld="0">` with `val="3000"`, and no label filter. The pivot is A3:I22, and the grand total is 221677.36 (Elderberries, 926, is dropped).
+
+## Stage 3 results (Task 33, 2026-11-01)
+
+### Interaction oracle
+- **Resident session.** All 33 Task 25 delta cases equal Excel's saved layout (`tests/xlsx-pivots-interaction-oracle.test.ts`). That covers collapse, collapse field, collapse all, items, page, label/value/date/top-10 filters, clear filters and sort. The hand-written deltas from `baseline.xlsx` equal it too. The 5 `setup` cases are bases or measurements, not deltas.
+- **Worker (paged) path.** For all 38 Task 25 entries, the paged layout equals the resident one (`tests/xlsx-pivots-worker.test.ts`).
+- **Charts.** 8/8 chart cases equal Excel's saved chart, with one series per column leaf and the row leaf lines as categories (Task 30).
+- **Autofit.** Each non-setup interaction case changes exactly the columns Excel changed, to within one Excel pixel under a Calibri-like measure (Task 29). In the browser, widths follow the canvas font, and the "still the old fit" test allows 10%.
+- **`GETPIVOTDATA`.** All 4 cases equal Excel's saved values (Task 31).
+- **refreshOnLoad.** All 3 cases equal Excel's refreshed saves (Task 32).
+- **Owner recipes O1–O7.** These are measured in "Owner recipes (measured 2026-11-01)" above. Rulings S3-U to S3-Y decide how the viewer differs:
+  - overlap is refused rather than shown as `#SPILL!`;
+  - a sort beside a pivot is refused, because the viewer moves whole rows.
+- **Browser.** Clicking collapse, on a plain pivot and on a pivot that feeds a chart, equals Excel at 0 px. This holds on the resident, `?worker=1` and paged legs, in Chromium and WebKit (`tests/browser/xlsx-pivots.spec.ts`). The menu-driven kinds are covered by the jsdom pivot UI tests (`tests/xlsx-viewer-pivot-ui.test.tsx`).
+
+### What the viewer refuses or approximates (Stage 3)
+- **Overlap.** Excel 16.114 shows no alert and turns the pivot into a `#SPILL!` anchor. The viewer refuses instead, naming the cell (S3-U). Merges, spill/array members, noted cells and other pivots' areas all count as occupied (S3-AC). Formatting-only cells are grown over (S3-V).
+- **Sheet sort and filter.** A sort that touches a pivot refuses, with Excel's message (S3-W). So does a sort beside a pivot in its rows, which is stricter than Excel (S3-AB). A filter inside a pivot refuses; a filter beside one is allowed (S3-X).
+- **Dependent formulas.**
+  - A recompute over the work budget (2×10⁶ estimated range-cell visits) leaves its readers marked "may be out of date" (S3-AE).
+  - `GETPIVOTDATA` shapes that were never measured keep their saved value (S3-T).
+  - `INDIRECT`/`OFFSET` readers always recompute (S3-Z).
+  - Paged workbooks don't recompute. They show a sheet-level notice once the worker's formula scan finds formulas (S3-S, S3-AA, S3-AG).
+- **refreshOnLoad.** A source given as a defined name or a table refuses (S3-R).
+- **Charts.** An unqualified `pivotSource` that names pivots on more than one sheet links to none (S3-Q).

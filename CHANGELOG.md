@@ -48,6 +48,38 @@ in git history.
     guessed.
   - 1,000,000 records compute in about 140 ms (axes and values). The code is in the lazy pivots chunk; the eager
     bundle is unchanged.
+- **Pivot tables you can change, in the interactive viewer.** The ± buttons and field dropdowns now work, with the
+  mouse or the keyboard (one Tab stop per pivot, then Alt+↓ to open a menu):
+  - **What you can do:**
+    - expand and collapse an item, an entire field or everything;
+    - choose items;
+    - set a label, value, date or top-10 filter, or clear filters;
+    - sort by label or by value;
+    - pick a report-filter (page) item;
+    - go back with **Reset to saved view**.
+  - **Faithful pivots only.** Only pivots the engine proves faithful to the file's saved cells become interactive.
+    Others stay exactly as saved and say why.
+  - **The result is Excel's.**
+    - Captions are computed as Excel writes them, including the zh-TW ones.
+    - Linked pivot charts redraw, one series per column line.
+    - Columns autofit the way Excel does unless you resized them.
+    - A pivot that refreshes on open is rebuilt from its source range on its first change.
+  - **Formulas follow the change.** Cell references into a pivot, ranges over it and `GETPIVOTDATA` recompute, and so
+    do the charts on those cells.
+    - When a formula can't be recomputed, it keeps its value and the sheet says it may be out of date. That covers
+      formulas whose recompute is over a work limit, and `GETPIVOTDATA` arguments of a shape Excel was not measured on.
+    - Large workbooks opened through the viewer worker don't recompute formulas. They show that notice instead.
+  - **Refusals.**
+    - A change that would grow a pivot over a value, a merged cell, a spill range, a noted cell or another pivot is
+      refused, and the message names the cell. (Excel 16.114 instead replaces the pivot with `#SPILL!`.)
+    - Sheet sort refuses on a range that touches a pivot, with Excel's message.
+    - Sheet filter refuses on a range inside a pivot. A filter beside a pivot is allowed, as in Excel.
+  - **Large workbooks.** Workbooks opened through the viewer worker change their pivots in the worker, with the same
+    results.
+  - **Checked against Excel.** The changes are checked against 57 Excel-saved interaction cases built by driving
+    Excel for Mac 16.114, plus 7 hand-run recipes: every expand, collapse, filter, sort and page case matches Excel's
+    saved layout, and so do the chart, autofit, `GETPIVOTDATA` and refresh cases. Details are in
+    `docs/validation/xlsx-pivots.md`.
 
 ## [0.10.0] - 2026-10-28
 
