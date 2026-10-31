@@ -1483,6 +1483,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           return undefined
         },
       })
+      // Over the budget nothing ran: the rectangles stay owed to this pivot's next recompute.
+      if (result.overBudget) pendingDependentRects.set(contextKey, [...rects, ...(pendingDependentRects.get(contextKey) ?? [])])
       // Stale marks are this pivot's: a change adds them; a reset recomputes against saved cells, so only an
       // over-budget reset leaves readers out of date (an unsupported reader keeps its saved value, which is right now).
       const staleSheets = new Set(result.stale.map(key => {
