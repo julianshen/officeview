@@ -166,6 +166,42 @@ describe('Task 21 sort, filters and group mapping', () => {
     if (escapedAxes.ok) expect([...escapedAxes.value.rowKey]).toEqual([0, NO_LINE])
   })
 
+  it('a globally sorted inner field under many parents stays linear (PR #56 review)', () => {
+    const n = 12000
+    const items = (prefix: string) => Array.from({ length: n }, (_, i) => ({ type: 'string', value: `${prefix}${String(i).padStart(5, '0')}` }) as PivotValue)
+    const cache = {
+      source: { type: 'worksheet' }, olap: false,
+      fields: [
+        { databaseField: true, sharedItems: { inline: false, items: items('P') } },
+        { databaseField: true, sharedItems: { inline: false, items: items('C') } },
+        { databaseField: true, sharedItems: { inline: true, items: [] } },
+      ],
+    } as unknown as PivotCacheDefinition
+    const pivotItems = Array.from({ length: n }, (_, x) => ({ type: 'data', x, hidden: false, showDetails: true }))
+    const def = { rowGrandTotals: false, colGrandTotals: false, fields: [{ items: pivotItems }, { items: pivotItems }, {}] } as unknown as PivotTableDefinition
+    const index = Uint32Array.from({ length: n }, (_, i) => i)
+    const store: RecordStore = {
+      count: n, bytes: 0,
+      columns: [
+        { kind: 'shared', index }, { kind: 'shared', index },
+        { kind: 'inline', tag: new Uint8Array(n).fill(VALUE_TAG.number), num: new Float64Array(n).fill(1), text: [], textIndex: new Uint32Array(n) },
+      ],
+    }
+    const view = (sortType: FieldState['sortType']) => ({
+      rows: [0, 1], cols: [], pages: [], filters: [], data: [{ field: 2, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Sum' }],
+      fields: [field(n), { ...field(n), sortType }, field(0)],
+    }) as ReturnType<typeof initialViewState>
+    const manual = computeAxes(store, cache, def, view('manual'))
+    const started = performance.now()
+    const sorted = computeAxes(store, cache, def, view('ascending'))
+    const elapsed = performance.now() - started
+    expect(manual.ok && sorted.ok).toBe(true)
+    if (!manual.ok || !sorted.ok) return
+    expect(sorted.value.rows.map(line => line.items.join(','))).toEqual(manual.value.rows.map(line => line.items.join(',')))
+    // Quadratic rebuilding took seconds at this size; linear work is tens of milliseconds.
+    expect(elapsed).toBeLessThan(1500)
+  })
+
   it('wildcard label filters are bounded: repeated stars on a non-matching label finish fast (PR #56 review)', () => {
     const pattern = '*a'.repeat(20) + 'b'
     const started = performance.now()

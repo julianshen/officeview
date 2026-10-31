@@ -579,6 +579,13 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
   const ownLines = (field: number) => which === 'rows' && (field === PIVOT_VALUES_FIELD ? def.outlineData : view.fields[field]!.outline)
   const ranks = new Map<number, Map<number, number>>()
   for (const [field, order] of sortedOrders) ranks.set(field, new Map(order.map((item, index) => [item, index])))
+  // Per-parent orders get their rank map built once, not on every visit (a field under many parents stayed quadratic).
+  const nestedRanks = new WeakMap<readonly number[], Map<number, number>>()
+  const nestedRankOf = (order: readonly number[]) => {
+    let map = nestedRanks.get(order)
+    if (!map) nestedRanks.set(order, map = new Map(order.map((item, index) => [item, index])))
+    return map
+  }
 
   const visit = (level: number, path: number[], node: Node | undefined, data: number): void => {
     if (level === fields.length) {
@@ -600,7 +607,7 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     const parentPath = fields.slice(0, level).flatMap((parentField, index) => parentField === PIVOT_VALUES_FIELD ? [] : [path[index]!]).join(',')
     const nestedOrder = nestedSortOrders.get(field)?.get(parentPath)
     const rank = nestedOrder ?? sortedOrders.get(field)
-    const rankOf = rank ? new Map(rank.map((item, index) => [item, index])) : ranks.get(field)
+    const rankOf = nestedOrder ? nestedRankOf(nestedOrder) : ranks.get(field)
     // With no node (an item shown by showAll with no records above), the field's visible items show
     // (quirk-cross-hidden-item-showall), provided each has passing records somewhere (else unmeasured).
     let children: number[]
