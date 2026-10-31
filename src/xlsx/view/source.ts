@@ -27,7 +27,7 @@ import type { TableMetadata } from '../formula/types'
 import { savedPivotRects } from '../pivots/stub'
 import { engineSpillFootprints, type EngineSpillFootprint } from '../formula/workbook'
 import { resolveDrawingAnchors } from './drawingBounds'
-import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, parseA1, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1, type SourceCell, type SourceRect } from './coordinates'
 import { createAxisMetrics } from './axes'
 import { createIntervalSet } from './visibility'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
@@ -263,6 +263,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       : used ?? base }
   }
   setValueOverlay(overlay: ValueOverlay | undefined): void {
+    if (overlay) assertOverlayCellsProtected(overlay)
     const previous = overlayStates.get(this)
     if (previous?.overlay === overlay || (!previous && overlay === undefined)) return
     const structureGen = (previous?.structureGen ?? 0) + (sameOverlayMerges(previous?.overlay?.merges, overlay?.merges) ? 0 : 1)
@@ -698,8 +699,9 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       finally { cacheAccount.release() }
     } else cached = this.drawings()
     const drawings = cached.filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
-    // Every saved pivot is guarded with its page-field cells (S3-G); one the overlay owns any part of
-    // is replaced as a whole by the overlay's protected bounds (vacated cells are not pivot, S3-H).
+    // Every saved pivot is guarded with its page-field cells, overlay or not (S3-G). Vacated cells read
+    // empty but stay guarded inside a saved area (S3-L): the guard is saved ∪ the overlay's protected
+    // bounds, whatever the producer names, never the overlay alone.
     const groups = [
       ...(this.sheet.pivotRegions ?? []).map(region => { const table = parseRange(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] }),
       ...(this.sheet.pivotTables ?? []).map(pivot => {
@@ -707,7 +709,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
         return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
       }),
     ]
-    const saved = uniqueRects(groups.filter(group => !group.some(part => overlay?.rects.some(owned => intersects(part, owned)))).flat())
+    const saved = uniqueRects(groups.flat())
     const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
@@ -1078,4 +1080,20 @@ export function overlayIncompleteColumnPage(page: Page<ColumnEntry>, request: Co
   while (at < intervals.length && intervals[at].r1 < resume) at++
   if (page.error || at >= intervals.length) return { ...rest, items: output }
   return { ...rest, items: output, nextCursor: `${prefix}:${at}:${Math.max(resume, intervals[at].r0)}` }
+}
+
+/** The overlay contract (ValueOverlay.protectedRects): every non-null owned cell lies inside the protected
+ * bounds, which also bound the extent (and so Find and copy). A producer that breaks it is refused before
+ * anything is published. Owned rectangles inside one protected rectangle are accepted without a scan; only
+ * the parts outside (vacated cells, which must be null) are read. */
+export function assertOverlayCellsProtected(overlay: ValueOverlay): void {
+  const inside = (row: number, col: number) => overlay.protectedRects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)
+  for (const rect of overlay.rects) {
+    if (overlay.protectedRects.some(bound => bound.r0 <= rect.r0 && bound.r1 >= rect.r1 && bound.c0 <= rect.c0 && bound.c1 >= rect.c1)) continue
+    for (let row = rect.r0; row <= rect.r1; row++) for (let col = rect.c0; col <= rect.c1; col++) {
+      if (inside(row, col)) continue
+      const value = overlay.cell(row, col)
+      if (value !== undefined && value !== null) throw new TypeError(`ValueOverlay cell R${row}C${col} (${formatA1({ row, col })}) has a value outside protectedRects`)
+    }
+  }
 }

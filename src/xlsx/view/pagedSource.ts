@@ -22,7 +22,7 @@ import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceR
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
-import { LaneBuilder, overlayIncompleteColumnPage, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
+import { LaneBuilder, assertOverlayCellsProtected, overlayIncompleteColumnPage, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
 import {
   F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt, textPrefix,
   type CellPagePayload, type PageSummary,
@@ -138,6 +138,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private get valueOverlay(): ValueOverlay | undefined { return overlayStates.get(this)?.overlay }
   get structureGen(): number { return overlayStates.get(this)?.structureGen ?? 0 }
   setValueOverlay(overlay: ValueOverlay | undefined): void {
+    if (overlay) assertOverlayCellsProtected(overlay)
     const previous = overlayStates.get(this)
     if (previous?.overlay === overlay || (!previous && overlay === undefined)) return
     const structureGen = (previous?.structureGen ?? 0) + (sameOverlayMerges(previous?.overlay?.merges, overlay?.merges) ? 0 : 1)
@@ -743,10 +744,11 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         error: failure('unsupported', `${sheet.metadata.structuralIncomplete.join(', ')} metadata is wrapped in mc:AlternateContent and cannot be read`),
       }
     }
-    // Every saved pivot is guarded with its page-field cells (S3-G); one the overlay owns any part of
-    // is replaced as a whole by the overlay's protected bounds (vacated cells are not pivot, S3-H).
+    // Every saved pivot is guarded with its page-field cells, overlay or not (S3-G). Vacated cells read
+    // empty but stay guarded inside a saved area (S3-L): the guard is saved ∪ the overlay's protected
+    // bounds, whatever the producer names, never the overlay alone.
     const groups = (sheet.metadata.pivotRegions ?? []).map(region => { const table = pivotRegionRect(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] })
-    const saved = uniqueRects(groups.filter(group => !group.some(part => overlay?.rects.some(owned => intersects(part, owned)))).flat())
+    const saved = uniqueRects(groups.flat())
     const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     return { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
   }

@@ -92,9 +92,12 @@ export interface ValueOverlayCell { value: XlsxCell['value']; valueIsError?: boo
 export interface ValueOverlay {
   /** Cells the overlay replaces, including explicit null blanks (vacated cells). */
   readonly rects: readonly SourceRect[]
-  /** The pivots' current output bounds: guarded from sheet sort/filter and joined to the extent (S3-G,
-   * S3-H). Vacated cells are in `rects` only, so they read as ordinary empty cells. Required: a fallback
-   * to `rects` would protect vacated cells and grow the extent over them. The stores derive the used
+  /** The pivots' protected bounds (at least the current output): guarded from sheet sort/filter and
+   * joined to the extent. Every non-null `cell()` lies inside them (the extent bounds Find and copy);
+   * `setValueOverlay` refuses an overlay that breaks this with a TypeError naming the cell. Vacated cells
+   * are in `rects` and read empty; the stores keep every saved pivot area (with its page-field cells)
+   * guarded on their own, so vacated cells inside one stay protected whatever is named here (S3-G, S3-L).
+   * Required: a fallback to `rects` would grow the extent over vacated cells. The stores derive the used
    * extent from these bounds; no separate row/column count is part of the overlay. */
   readonly protectedRects: readonly SourceRect[]
   cell(row: number, col: number): ValueOverlayCell | null | undefined

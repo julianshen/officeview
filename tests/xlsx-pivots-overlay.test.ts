@@ -274,7 +274,8 @@ describe('pivot value overlay', () => {
     store.setValueOverlay({ ...expanded, rects: [{ r0: 8, r1: 8, c0: 6, c1: 6 }], protectedRects: [{ r0: 8, r1: 8, c0: 6, c1: 6 }]})
     expect(store.extent.used).toEqual(base)
     const structure = new StructuralIndex(await store.queryStructural({ r0: 8, r1: 12, c0: 6, c1: 9 }, options(store)))
-    expect(structure.firstWhere({ r0: 12, r1: 12, c0: 9, c1: 9 }, hit => hit.kind === 'pivot')).toBeUndefined()
+    // The vacated cell reads empty but, inside the saved pivot area, stays guarded (S3-L).
+    expect(structure.firstWhere({ r0: 12, r1: 12, c0: 9, c1: 9 }, hit => hit.kind === 'pivot')).toBeDefined()
     expect(await store.readCell({ row: 12, col: 9 }, options(store))).toEqual({ kind: 'blank' })
     await source.release()
   })
@@ -611,7 +612,8 @@ describe('pivot value overlay (fix round 4)', () => {
     // @ts-expect-error the overlay carries no row/column counts; the extent comes from protectedRects
     const counted: ValueOverlay = { rects: [], protectedRects: [], merges: [], cell: () => undefined, usedRows: 1, usedCols: 1 }
     void missing; void counted
-    // The pivot shrank from A1:B3 to A1:A1: B1:B3 and A2:A3 are vacated (owned, null, unprotected).
+    // The pivot shrank from A1:B3 to A1:A1: B1:B3 and A2:A3 are vacated (owned, null) and, with no saved
+    // pivot area under them (S3-L), unprotected.
     const shrunk: ValueOverlay = { rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], cell: (row, col) => row === 0 && col === 0 ? { value: 7 } : null }
     const resident = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }]), 'n6')
     const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>' })
@@ -697,11 +699,11 @@ describe('pivot value overlay (fix round 4)', () => {
       expect(structure.firstWhere({ r0: 1, r1: 2, c0: 3, c1: 4 }, hit => hit.kind === 'pivot')).toBeDefined()
       expect(structure.firstWhere({ r0: 1, r1: 2, c0: 2, c1: 2 }, hit => hit.kind === 'pivot')).toBeUndefined()
       expect(await guardSort(range(3, 3, 0, 4), structure, occupancy)).toEqual({ ok: true })
-      // Once an overlay owns the pivot, the overlay's bounds replace the whole saved group, page cells included.
+      // S3-L: an overlay that owns the pivot never unguards its saved area: the saved page rows stay protected.
       const owned = { r0: 4, r1: 19, c0: 0, c1: 2 }
       store.setValueOverlay({ rects: [owned], protectedRects: [owned], merges: [], cell: () => null })
       const live = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 30, c0: 0, c1: 10 }, options(store)))
-      expect(await guardSort(range(1, 2, 0, 1), live, fromStoreScan(store, options(store)))).toEqual({ ok: true })
+      expect(await guardSort(range(1, 2, 0, 1), live, fromStoreScan(store, options(store)))).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
     }
     await residentSource.release(); await pagedSource.release()
   })
@@ -714,6 +716,56 @@ describe('pivot value overlay (fix round 4)', () => {
     const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 10, c0: 0, c1: 5 }, options(store)))
     expect(await guardSort({ r0: 1, r1: 1, c0: 1, c1: 2, headerRows: 0, totalsRows: 0 }, structure, fromStoreScan(store, options(store)))).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
     await source.release()
+  })
+
+  it('R3-1 (S3-L): after a collapse the vacated saved area stays protected from sort and filter on both stores', async () => {
+    // A worker-style producer: rects = saved ∪ current (vacated cells null), protectedRects = the current output only.
+    const saved = { r0: 4, r1: 19, c0: 0, c1: 2 }, current = { r0: 4, r1: 8, c0: 0, c1: 2 }
+    const collapsed: ValueOverlay = { rects: [saved], protectedRects: [current], merges: [], cell: (row, col) => row <= 8 ? { value: row * 10 + col } : null }
+    const region = { partPath: 'xl/pivotTables/pivotTable1.xml', ref: 'A5:C20' }
+    const doc = workbookOf([{ sheetId: 's', cells: [{ row: 12, col: 0, value: 'saved output' }] }])
+    doc.sheets[0].pivotRegions = [region]
+    const resident = createObjectWorkbookSource(doc, 'r3-1-resident')
+    const bytes = xlsxBytes({ sheetData: '<row r="13"><c r="A13" t="inlineStr"><is><t>saved output</t></is></c></row>' })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: 'r3-1-paged', profile: 'D', store: new SourcePageStore({ docId: 'r3-1-paged', backend: memoryPageBackend() }), pageRows: 8 })
+    expect((await session.done).kind).toBe('complete')
+    ;(session.workbook.sheets[0] as any).metadata.pivotRegions = [region]
+    const paged = createPagedWorkbookSource(session)
+    const axes = { rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }) }
+    const currentVisibility = visibilityFromHidden(createIntervalSet([]))
+    const candidateVisibility = visibilityFromHidden(createIntervalSet([{ r0: 12, r1: 12 }]))
+    const projectionBefore = createSheetMetrics({ ...axes, order: createIdentityOrder(), visibility: currentVisibility })
+    const projectionAfter = createSheetMetrics({ ...axes, order: createIdentityOrder(), visibility: candidateVisibility })
+    for (const store of [resident.store('s'), paged.store('1')] as any[]) {
+      store.setValueOverlay(collapsed)
+      expect(await store.readCell({ row: 12, col: 0 }, options(store))).toEqual({ kind: 'blank' })
+      const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 30, c0: 0, c1: 5 }, options(store)))
+      const vacated = { r0: 9, r1: 19, c0: 0, c1: 2, headerRows: 0 as const, totalsRows: 0 as const }
+      expect(await guardSort(vacated, structure, fromStoreScan(store, options(store)))).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+      expect(await guardFilter({ range: vacated, candidateVisibility, currentVisibility, projectionBefore, projectionAfter, structure })).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+      // Below the saved area the sheet is ordinary.
+      expect(await guardSort({ r0: 21, r1: 25, c0: 0, c1: 2, headerRows: 0, totalsRows: 0 }, structure, fromStoreScan(store, options(store)))).toEqual({ ok: true })
+    }
+    await resident.release(); await paged.release()
+  })
+
+  it('R3-2: an overlay whose non-null cell lies outside its protected bounds is refused on both stores', async () => {
+    const resident = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [] }]), 'r3-2-resident')
+    const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>' })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: 'r3-2-paged', profile: 'D', store: new SourcePageStore({ docId: 'r3-2-paged', backend: memoryPageBackend() }), pageRows: 2 })
+    expect((await session.done).kind).toBe('complete')
+    const paged = createPagedWorkbookSource(session)
+    const stray: ValueOverlay = { rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], cell: (row, col) => row === 2 && col === 1 ? { value: 'new' } : null }
+    for (const store of [resident.store('s'), paged.store('1')] as any[]) {
+      const before = store.stamp.valueGen
+      expect(() => store.setValueOverlay(stray)).toThrow(TypeError)
+      expect(() => store.setValueOverlay(stray)).toThrow(/R2C1|B3/)
+      expect(store.stamp.valueGen).toBe(before)
+      // Null (vacated) cells outside the protected bounds are fine.
+      store.setValueOverlay({ ...stray, cell: (row: number, col: number) => row === 0 && col === 0 ? { value: 1 } : null })
+      expect(store.stamp.valueGen).toBe(before + 1)
+    }
+    await resident.release(); await paged.release()
   })
 
   it('N5: remote invalidation drops the pivot display layer too, and a remote call without a sheet id throws', () => {
