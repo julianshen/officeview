@@ -26,7 +26,7 @@ import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
-import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../xlsx/types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
 import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues } from '../../xlsx/formula/workbook'
 import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
@@ -64,6 +64,7 @@ import type { FontDiagnostic } from '../../core/fonts/types'
 import { SheetImageCache, imageBudgetFor, installPivotCharts, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { ChartModel } from '../../charts/model'
 import { chartLinksPivot } from '../../xlsx/pivotChartLink'
+import { overlayChartCell, rememberDependentChart, restoreDependentCharts } from '../../xlsx/pivots/session/dependentCharts'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -491,11 +492,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pivotFormulaContexts = useRef(new Map<string, { sheet: string; def: import('../../xlsx/pivots/model').PivotTableDefinition; cache: import('../../xlsx/pivots/model').PivotCacheDefinition; layout: import('../../xlsx/pivots/engine/place').PivotLayout; layoutCells: Map<string, import('../../xlsx/pivots/engine/place').PivotLayout['cells'][number]>; date1904: boolean; rects: readonly { r0: number; r1: number; c0: number; c1: number }[]; overlay?: ValueOverlay }>()).current
   const pivotLifecycle = useRef(0)
   const [pagedDependentNoticeSheets, setPagedDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
+  const [residentDependentNoticeSheets, setResidentDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
   const savedPivotCharts = useRef(new Map<string, { sheet: string; name: string; charts: ChartModel[] }>()).current
+  // Non-pivot chart models rebuilt from dependent formulas are restored with the
+  // saved workbook on pivot-client teardown, just like pivot-linked charts.
+  const savedDependentCharts = useRef(new Map<XlsxDrawing, ChartModel>()).current
   /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
    * outlives the sessions that made it (unmount, or a new client). */
   /** Columns a pivot autofit sized, per sheet, in characters (Task 29): their widths are the "current" a later
@@ -546,6 +551,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     pivotAutofitChars.clear()
     pivotFormulaContexts.clear()
     restoreDependentFormulaValues(doc)
+    restoreDependentCharts(savedDependentCharts)
     doc.sheets.forEach((sheet, index) => {
       if (sheet.pivotTables === savedPivotDefs[index]) return
       sheet.pivotTables = savedPivotDefs[index]
@@ -1369,15 +1375,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const contexts = [...pivotFormulaContexts.values()]
       const lifecycle = pivotLifecycle.current
       const overlayEntries = contexts.flatMap(context => context.layout.cells.map(cell => ({ sheetName: context.sheet, col: cell.col, row: cell.row, value: cell.value.kind === 'error' ? formulaError(cell.value.value as Parameters<typeof formulaError>[0]) : cell.value.kind === 'empty' ? null : cell.value.value })))
-      const composite = [...contexts].reverse().find(context => context.overlay)?.overlay
       // The viewer's pivot chunk is already loaded here; keep formula support out
       // of the eager graph by resolving its adapter from a lazy import.
       void import('../../xlsx/pivots/session/getpivotdata').then(({ getPivotData }) => {
         if (lifecycle !== pivotLifecycle.current) return
         const result = recomputeDependents(doc, changed, {
-          getPivotData: (args, evaluate, currentSheet) => getPivotData(contexts, args, evaluate, currentSheet),
+          getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData(contexts, args, evaluate, currentSheet, markStale),
           overlayEntries,
           readCellValue: (name, col, row) => {
+            // The composite overlay is sheet-scoped. Never let a later commit
+            // on one worksheet shadow a same-coordinate read on another.
+            const composite = [...contexts].reverse().find(context => context.overlay && context.sheet.toLocaleLowerCase() === name.toLocaleLowerCase())?.overlay
             const current = composite?.cell(row, col)
             if (current !== undefined) {
               if (current === null) return null
@@ -1405,6 +1413,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           },
         })
         if (lifecycle !== pivotLifecycle.current) return
+        if (result.stale.length) {
+          const staleSheets = new Set(result.stale.map(key => {
+            const bang = key.lastIndexOf('!')
+            return doc.sheets.findIndex(candidate => candidate.name.toLocaleLowerCase() === key.slice(0, bang))
+          }).filter(index => index >= 0))
+          if (staleSheets.size) setResidentDependentNoticeSheets(current => new Set([...current, ...staleSheets]))
+        }
         if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
         if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges, refillChartModel }) => {
           if (lifecycle !== pivotLifecycle.current) return
@@ -1420,19 +1435,24 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                     categoryPending: sourceChart.categoryRef ?? sourceChart.categoryPending,
                     groups: sourceChart.groups.map(group => ({ ...group, series: group.series.map(series => ({ ...series, pending: series.refs ?? series.pending })) })),
                   }
-                  node.content.chart = refillChartModel(sourceChart, () => fillChartRanges(pendingChart, ownerSheet.name, (name, row, col, needsText) => {
+                  const refilled = refillChartModel(sourceChart, () => fillChartRanges(pendingChart, ownerSheet.name, (name, row, col, needsText) => {
                     const target = doc.sheets.find(candidate => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())
                     const context = contexts.find(candidate => candidate.sheet.toLocaleLowerCase() === name.toLocaleLowerCase())
                     const overlayValue = context?.overlay?.cell(row, col)
                     if (overlayValue === null) return { value: null }
-                    if (overlayValue && target) return { value: overlayValue.value, ...(overlayValue.valueIsError ? { error: String(overlayValue.value) } : {}), ...(needsText ? { text: String(overlayValue.value ?? '') } : {}) }
                     const cell = target?.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
+                    if (overlayValue && target) {
+                      return overlayChartCell(target, row, col, overlayValue.value, overlayValue.valueIsError ? String(overlayValue.value) : undefined, needsText)
+                    }
                     if (!cell) return undefined
                     const style = cell.style
                     return { value: cell.value, ...(cell.valueIsError ? { error: String(cell.value) } : {}),
                       ...(style?.formatCode ? { formatCode: style.formatCode } : {}),
                       ...(needsText ? { text: cellDisplayText(target!, { value: cell.value, style }) } : {}) }
                   }))
+                  rememberDependentChart(savedDependentCharts, node, sourceChart)
+                  mainLedger.chargeWhileReachable('drawings', [refilled], estimatePayloadBytes(refilled))
+                  node.content.chart = refilled
                   changedSheets.add(sheetIndex)
                 }
                 chartIndex++
@@ -1625,6 +1645,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
     ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
     ...(pagedDependentNoticeSheets.has(activeIndex) ? ['Formulas outside this pivot may still show saved values (paged workbook).'] : []),
+    ...(residentDependentNoticeSheets.has(activeIndex) ? ['Some formulas still show saved values because their pivot reference is unsupported.'] : []),
   ])] : []
 
   // Overlay layer: selection and search highlights in viewport space.

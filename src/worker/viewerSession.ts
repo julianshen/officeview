@@ -192,7 +192,7 @@ export interface WorkbookSource {
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
   /** Workbook-level formula scan for the paged dependent fallback, excluding saved pivot rectangles. */
-  scanFormulaCellsOutsidePivots?(): boolean | Promise<boolean>
+  scanFormulaCellsOutsidePivots?(signal?: AbortSignal): boolean | undefined | Promise<boolean | undefined>
   hasSparklines?(sheetId: string): boolean
   hasRegionStyles?(sheetId: string): boolean
   regionStyleTableCount?(sheetId: string): number
@@ -291,7 +291,7 @@ interface WorkerPivotHandle {
 export type WorkerPivotOutcome =
   | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[]; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
   | { kind: 'apply'; revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
-  | { kind: 'commit'; revision: number; valueGen: number }
+  | { kind: 'commit'; revision: number; valueGen: number; hasFormulaCellsOutsidePivots?: boolean }
   | { kind: 'stale' }
   | { kind: 'release'; released: boolean; valueGen?: number }
   | { kind: 'refused'; feature: string; message: string }
@@ -902,6 +902,8 @@ export class DocumentSession {
   private readonly pivotHandles = new Map<string, WorkerPivotHandle>()
   private readonly pivotStores = new Map<string, PivotStoreShare>()
   private readonly pivotRuntimeEntries = new Map<object, PivotRuntimeShare>()
+  private formulaOutsidePivots?: boolean
+  private formulaOutsidePivotsScan?: Promise<boolean | undefined>
   private pivotSerial = 0
   /** The single document-wide worker budget (§12.4): every sheet, operation and
    * retained cache of this document charges it. */
@@ -1474,19 +1476,42 @@ export class DocumentSession {
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), cells,
       protectedRects: overlay.protectedRects }
   }
-  pivotCommit(sheetId: string, pivot: number, revision: number): WorkerPivotOutcome {
+  async pivotCommit(sheetId: string, pivot: number, revision: number, signal: AbortSignal): Promise<WorkerPivotOutcome> {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot)), staged = handle?.staged
     if (!handle || !staged || staged.wireRevision !== revision) return { kind: 'stale' }
     const store = this.store(sheetId)
     if (!store.setValueOverlay) return { kind: 'refused', feature: 'pivot-overlay-unavailable', message: 'This source cannot publish pivot values.' }
-    if (!handle.session.commit(staged.result)) return { kind: 'stale' }
+    if (signal.aborted || !handle.session.commit(staged.result)) return signal.aborted ? { kind: 'cancelled' } : { kind: 'stale' }
     const previous = handle.committed
     handle.committed = staged; handle.staged = undefined; handle.def = staged.result.def
     handle.committedWireRevision = revision
     store.setValueOverlay(this.combinedPivotOverlay(sheetId))
     this.publishValues(sheetId)
     if (previous && previous !== staged && previous.entry !== staged.entry) previous.entry.release()
-    return { kind: 'commit', revision, valueGen: store.stamp.valueGen }
+    let hasFormulaCellsOutsidePivots: boolean | undefined
+    if (this.source.scanFormulaCellsOutsidePivots) {
+      while (this.formulaOutsidePivots === undefined) {
+        if (signal.aborted) return { kind: 'cancelled' }
+        let scan = this.formulaOutsidePivotsScan
+        try {
+          if (!scan) {
+            scan = Promise.resolve().then(() => this.source.scanFormulaCellsOutsidePivots!(signal))
+            this.formulaOutsidePivotsScan = scan
+          }
+          const result = await scan
+          if (signal.aborted) return { kind: 'cancelled' }
+          if (result !== undefined) this.formulaOutsidePivots = result
+        } catch {
+          if (signal.aborted) return { kind: 'cancelled' }
+          // An incomplete scan must conservatively retain the existing notice.
+          this.formulaOutsidePivots = true
+        } finally {
+          if (this.formulaOutsidePivotsScan === scan) this.formulaOutsidePivotsScan = undefined
+        }
+      }
+      hasFormulaCellsOutsidePivots = this.formulaOutsidePivots
+    }
+    return { kind: 'commit', revision, valueGen: store.stamp.valueGen, ...(hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots }) }
   }
   /** The display parts with each committed pivot's live definition (Task 28): its buttons, regions and styles
    * follow the committed layout, matched by part path. */

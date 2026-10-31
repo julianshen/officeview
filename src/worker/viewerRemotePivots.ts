@@ -26,6 +26,7 @@ export interface RemotePivotApplyPayload {
   readonly usedCols: number
   readonly charts: readonly RemotePivotChart[]
   readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]
+  readonly hasFormulaCellsOutsidePivots?: boolean
 }
 export interface RemotePivotChart { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: ChartModel }
 export interface RemotePivotHost {
@@ -95,6 +96,7 @@ export class RemotePivotSessions {
       const publish = registered && revision > entry.revision
       if (publish) {
         entry.revision = revision
+        staged = { ...staged, ...(committed.result.hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots: committed.result.hasFormulaCellsOutsidePivots }) }
         this.host.committed?.(sheetId, pivot, staged, committed.result.valueGen)
       }
       return generation !== entry.generation || !registered ? { kind: 'stale' } : { ...staged, kind: 'committed', valueGen: committed.result.valueGen }

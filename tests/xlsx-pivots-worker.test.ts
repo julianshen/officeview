@@ -7,6 +7,7 @@ import { overlayUsedCounts, overlayUsedExtent, type WorkerCommand, type WorkerRe
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { ViewerKernel } from '../src/worker/viewerKernel'
+import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { ViewerClient } from '../src/worker/viewerClient'
 import { connectInProcess } from '../src/worker/viewerKernel'
 import { RemotePivotSessions } from '../src/worker/viewerRemotePivots'
@@ -69,6 +70,39 @@ async function openObjectPivot(options: { afterDispatch?: (command: WorkerComman
 }
 
 describe('worker pivot protocol', () => {
+  it('does not scan a no-pivot workbook during paged/open source initialization', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
+    for (const sheet of doc.sheets) { sheet.pivotTables = []; sheet.pivotRegions = [] }
+    const docId = id(), source = createObjectWorkbookSource(doc, docId)
+    const scan = vi.fn(source.scanFormulaCellsOutsidePivots?.bind(source))
+    source.scanFormulaCellsOutsidePivots = scan
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    const opened = completed(await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' }))
+    expect(opened.kind).toBe('open')
+    expect(scan).not.toHaveBeenCalled()
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('scans formulas only at the first valid pivot commit and reports the cached result', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), source = createObjectWorkbookSource(doc, docId)
+    const scan = vi.fn(source.scanFormulaCellsOutsidePivots?.bind(source))
+    source.scanFormulaCellsOutsidePivots = scan
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    const sheetId = sheet.sheetId ?? '1'
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' })
+    expect(scan).not.toHaveBeenCalled()
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 })
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'collapse', field: 0, item: 0, collapsed: true }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    const committed = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision }))
+    expect(scan).toHaveBeenCalledTimes(1)
+    expect(committed).toMatchObject({ kind: 'pivotCommit', hasFormulaCellsOutsidePivots: true })
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('open streams records under the profile cap and charges the worker pool', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!

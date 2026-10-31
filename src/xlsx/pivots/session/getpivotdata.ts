@@ -81,7 +81,7 @@ function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: Rea
   return null
 }
 
-export function getPivotData(contexts: readonly LivePivotDataContext[], args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet?: string): EvaluationValue {
+export function getPivotData(contexts: readonly LivePivotDataContext[], args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet?: string, markStale?: (feature: string) => void): EvaluationValue {
   if (args.length < 2 || args.length % 2 !== 0) return formulaError('#NAME?')
   const evaluatedName = evaluate(args[0]!)
   if (typeof evaluatedName === 'object' && evaluatedName !== null && 'kind' in evaluatedName && evaluatedName.kind === 'formula-error') return evaluatedName
@@ -98,7 +98,7 @@ export function getPivotData(contexts: readonly LivePivotDataContext[], args: re
   const pairs = new Map<number, EvaluationValue>()
   for (let index = 2; index < args.length; index += 2) {
     const fieldName = text(evaluate(args[index]!)), value = evaluate(args[index + 1]!)
-    if (fieldName === undefined) return formulaError('#VALUE!')
+    if (fieldName === undefined) { markStale?.('GETPIVOTDATA'); return formulaError('#NAME?') }
     const field = fieldByName(context.def, context.cache, fieldName)
     if (field < 0 || pairs.has(field)) return formulaError('#NAME?')
     if (!context.def.rowFields.includes(field) && !context.def.colFields.includes(field) && !context.def.pageFields.some(page => page.fld === field)) return formulaError('#NAME?')
@@ -135,7 +135,7 @@ export function registerGetPivotData(): void {
       markUnsupported(ctx, 'GETPIVOTDATA')
       return formulaError('#NAME?')
     }
-    const result = ctx.getPivotData(args, evaluate, ctx.currentSheet ?? '')
+    const result = ctx.getPivotData(args, evaluate, ctx.currentSheet ?? '', feature => markUnsupported(ctx, feature))
     if (typeof result === 'object' && result !== null && 'kind' in result && result.kind === 'formula-error' && result.code === '#NAME?') markUnsupported(ctx, 'GETPIVOTDATA')
     return result
   })

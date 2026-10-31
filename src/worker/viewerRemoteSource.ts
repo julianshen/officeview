@@ -169,7 +169,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly latestQueries = new Map<string, string>()
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
-  readonly hasFormulaCellsOutsidePivots?: boolean
+  hasFormulaCellsOutsidePivots?: boolean
   readonly openDiagnostics: readonly WorkerDiagnostic[]
   readonly docId: string
   readonly profile: ProfileId
@@ -538,6 +538,7 @@ export class RemoteWorkbook implements WorkbookSource {
    * generation, merges and used extent to the main geometry before notifying. */
   private publishPivotCommit(sheetId: string, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void {
     if (this.closed || !this.sheets.some(sheet => sheet.sheetId === sheetId)) return
+    if (result.hasFormulaCellsOutsidePivots !== undefined) this.hasFormulaCellsOutsidePivots = result.hasFormulaCellsOutsidePivots
     let pivots = this.pivotMerges.get(sheetId)
     if (!pivots) this.pivotMerges.set(sheetId, pivots = new Map())
     pivots.set(pivot, result.merges.map(rect => ({ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 })))

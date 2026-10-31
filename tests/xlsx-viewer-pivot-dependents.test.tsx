@@ -6,6 +6,7 @@ import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
+import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
 
 const SEED = '/Users/julianshen/prj/officeview/.worktrees/pivots/tests/fixtures/xlsx-pivots/recipes/getpivotdata-seed.xlsx'
 const load = async () => parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEED))))
@@ -45,6 +46,9 @@ it('F2 mounted (Critical): a same-sheet GETPIVOTDATA (unqualified anchor) keeps 
   const pivot = doc.sheets.find(s => s.name === 'Pivot')!
   pivot.rows.find(r => r.index === 0)?.cells.push({ ref: 'K1', col: 10, row: 0, value: 222603.36000000004, formula: 'GETPIVOTDATA("Sum of Sales",$A$3)', styleIndex: 0, hasCachedValue: true } as never)
     ?? pivot.rows.unshift({ index: 0, cells: [{ ref: 'K1', col: 10, row: 0, value: 222603.36000000004, formula: 'GETPIVOTDATA("Sum of Sales",$A$3)', styleIndex: 0, hasCachedValue: true } as never] })
+  // This test adds a formula to an already evaluated parse. Rebuild the
+  // evaluator's runtime index before mounting, as callers must after edits.
+  evaluateWorkbookFormulas(doc, { forceRecalc: true })
   const ui = render(<InteractiveSheetDoc doc={doc} />)
   fireEvent.click(await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 }))
   await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })

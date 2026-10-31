@@ -1587,17 +1587,21 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
     hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
     pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
-    async scanFormulaCellsOutsidePivots() {
+    async scanFormulaCellsOutsidePivots(signal?: AbortSignal) {
       for (const candidate of workbook.sheets) {
+        if (signal?.aborted) return undefined
         if (candidate.state !== 'complete') return true // incomplete scan is conservative
         const pivots = (candidate.metadata.pivotRegions ?? []).flatMap(region => {
           const [a, b = a] = region.ref.split(':')
           try { const first = parseA1(a!.replace(/\$/g, '')), last = parseA1(b!.replace(/\$/g, '')); return [{ r0: Math.min(first.row, last.row), r1: Math.max(first.row, last.row), c0: Math.min(first.col, last.col), c1: Math.max(first.col, last.col) }] } catch { return [] }
         })
         for (const summary of workbook.store.pages(candidate.sheetId)) {
+          if (signal?.aborted) return undefined
           const lease = await workbook.store.pinnedPage(candidate.sheetId, summary.pageId)
           try {
+            if (signal?.aborted) return undefined
             for (const [record, meta] of lease.page.meta) {
+              if (signal?.aborted) return undefined
               if (!meta.formula && !meta.sharedFormula) continue
               const row = lease.page.rows[record]!, col = lease.page.cols[record]!
               if (!pivots.some(r => row >= r.r0 && row <= r.r1 && col >= r.c0 && col <= r.c1)) return true

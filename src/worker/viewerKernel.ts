@@ -519,7 +519,7 @@ export class ViewerKernel {
         switch (command.kind) {
           case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); if (outcome.kind === 'open' && outcome.created && outcome.handle) onPivotOpenCreated?.(outcome.handle); break
           case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.baseRevision, command.revision, command.delta, command.grantBytes); break
-          case 'pivotCommit': outcome = session.pivotCommit(command.sheetId, command.pivot, command.revision); break
+          case 'pivotCommit': outcome = await session.pivotCommit(command.sheetId, command.pivot, command.revision, signal); break
           case 'pivotRelease': outcome = session.pivotRelease(command.sheetId, command.pivot); break
         }
         if (outcome.kind === 'cancelled') return reply(command as never, owner, { kind: 'cancelled' } as never)
@@ -527,7 +527,7 @@ export class ViewerKernel {
         if (outcome.kind === 'refused') return errorReply(command as never, owner, 'operation-refused', false, [{ code: outcome.feature, message: outcome.message }])
         const result = outcome.kind === 'open' ? { kind: 'pivotOpen', revision: outcome.revision, def: outcome.def, menu: outcome.menu, cells: outcome.cells }
           : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, ...(outcome.notice ? { notice: outcome.notice } : {}), def: outcome.def, menu: outcome.menu, rects: outcome.rects, protectedRects: outcome.protectedRects, overlayExtent: outcome.overlayExtent, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, cells: outcome.cells }
-          : outcome.kind === 'commit' ? { kind: 'pivotCommit', revision: outcome.revision, valueGen: outcome.valueGen }
+          : outcome.kind === 'commit' ? { kind: 'pivotCommit', revision: outcome.revision, valueGen: outcome.valueGen, ...(outcome.hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots: outcome.hasFormulaCellsOutsidePivots }) }
           : outcome.kind === 'stale' ? (command.kind === 'pivotCommit' ? { kind: 'pivotCommit', refused: 'stale' } : undefined)
           : { kind: 'pivotRelease', released: outcome.released, ...(outcome.valueGen === undefined ? {} : { valueGen: outcome.valueGen }) }
         if (!result) return errorReply(command as never, owner, 'stale-source', true, [{ code: 'pivot-revision-stale', message: 'The pivot revision is stale.' }])
@@ -717,9 +717,8 @@ export class ViewerKernel {
     this.sessions.set(command.docId, session)
     this.stats.opens++
     const formatting = source.formatting?.()
-    const hasFormulaCellsOutsidePivots = await source.scanFormulaCellsOutsidePivots?.()
     return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets,
-      ...(hasFormulaCellsOutsidePivots !== undefined ? { hasFormulaCellsOutsidePivots } : {}), ...(formatting ? { formatting } : {}) } }, source.openDiagnostics ?? [])
+      ...(formatting ? { formatting } : {}) } }, source.openDiagnostics ?? [])
   }
   /** Open is the only place source bytes are read or parsed. A blob is copied
    * into worker memory exactly once (accounted), parsed, then dropped. */

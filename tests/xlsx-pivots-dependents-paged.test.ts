@@ -39,7 +39,8 @@ it('F4 (Critical): the paged shell sheet the viewer hands markPagedDependentsSta
   const h = workerHarness()
   const doc = await openPagedWorkbook(new Blob([new Uint8Array(readFileSync(SEED))]), { port: h.port as never, profile: 'D', signal: new AbortController().signal })
   expect(doc).toBeTruthy()
-  // Paged shell: the same sheet, with its 12 formulas, scans as formula-free.
-  expect(doc!.hasFormulaCellsOutsidePivots).toBe(true)
-  expect(markPagedDependentsStale(new Set(), formulas, doc!.sheets[formulas]!, [], doc!.hasFormulaCellsOutsidePivots)).toEqual(new Set([formulas]))
+  // The open no longer page-walks the workbook. Its first pivot commit supplies
+  // the cached document-level scan result, which the viewer uses for this notice.
+  expect(doc!.hasFormulaCellsOutsidePivots).toBeUndefined()
+  expect(markPagedDependentsStale(new Set(), formulas, doc!.sheets[formulas]!, [], true)).toEqual(new Set([formulas]))
 })

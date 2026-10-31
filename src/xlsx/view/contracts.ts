@@ -731,7 +731,7 @@ export type WorkerResult =
   | { kind: 'read'; result: SourceReadResult }
   | { kind: 'pivotOpen'; /** Last worker-committed wire revision. */ revision: number; def: PivotTableDefinition; /** The menus' model (Task 28), built where the cache lives. */ menu: import('../pivots/session/menu').PivotMenuModel; /** The session's current layout cells (Task 29: the main thread's autofit fits them). */ cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
   | { kind: 'pivotApply'; /** Worker-assigned candidate revision; commit only this value. */ revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; def: PivotTableDefinition; menu: import('../pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: ChartModel }[]; cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
-  | { kind: 'pivotCommit'; revision: number; valueGen: number } | { kind: 'pivotCommit'; refused: 'stale' }
+  | { kind: 'pivotCommit'; revision: number; valueGen: number; hasFormulaCellsOutsidePivots?: boolean } | { kind: 'pivotCommit'; refused: 'stale' }
   | { kind: 'pivotRelease'; released: boolean; valueGen?: number }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).
