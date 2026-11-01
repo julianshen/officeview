@@ -72,6 +72,35 @@ async function openObjectPivot(options: { afterDispatch?: (command: WorkerComman
 }
 
 describe('worker pivot protocol', () => {
+  it('preserves a selected report filter on reorder and initializes a field entering Filters as All', async () => {
+    const file = resolve(FIXTURE_ROOT, 'engine/quirk-page-single.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const page = opened.menu.fields.find(field => field.axis === 'page')!
+    expect(page.page).toEqual([0])
+
+    const reordered = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'moveField', field: page.index, axis: 'page', index: 0 }, grantBytes: 16 * 1024 * 1024 }))
+    if (reordered.kind !== 'pivotApply') throw new Error(JSON.stringify(reordered))
+    expect(reordered.menu.fields.find(field => field.index === page.index)?.page).toEqual([0])
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: reordered.revision })
+
+    const removed = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 1, revision: 2,
+      delta: { kind: 'moveField', field: page.index, axis: 'none' }, grantBytes: 16 * 1024 * 1024 }))
+    if (removed.kind !== 'pivotApply') throw new Error(JSON.stringify(removed))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: removed.revision })
+    const added = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 2, revision: 3,
+      delta: { kind: 'moveField', field: page.index, axis: 'page', index: 0 }, grantBytes: 16 * 1024 * 1024 }))
+    if (added.kind !== 'pivotApply') throw new Error(JSON.stringify(added))
+    expect(added.menu.fields.find(field => field.index === page.index)?.page).toBe('all')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('does not scan a no-pivot workbook during paged/open source initialization', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     for (const sheet of doc.sheets) { sheet.pivotTables = []; sheet.pivotRegions = [] }

@@ -460,6 +460,20 @@ describe('runtime retention (Ruling S3-E)', () => {
 })
 
 describe('session', () => {
+  it('preserves a single-item report filter when its field is reordered within Filters', async () => {
+    const p = (await load('quirk-page-single'))[0]!
+    const session = open(inputOf(p))
+    expect(session.view.pages).toEqual([{ field: PRODUCT, selected: [0] }])
+    const reordered = ok(session.apply({ kind: 'moveField', field: PRODUCT, axis: 'page', index: 0 }))
+    expect(reordered.view.pages).toEqual([{ field: PRODUCT, selected: [0] }])
+    expect(session.commit(reordered)).toBe(true)
+
+    const removed = ok(session.apply({ kind: 'moveField', field: PRODUCT, axis: 'none' }))
+    expect(session.commit(removed)).toBe(true)
+    const incoming = ok(session.apply({ kind: 'moveField', field: PRODUCT, axis: 'page', index: 0 }))
+    expect(incoming.view.pages.find(page => page.field === PRODUCT)?.selected).toBe('all')
+  })
+
   it('reuses the already-retained saved layout when a view returns to it, even if new layout admission is refused', async () => {
     const p = await baseline()
     const session = open(inputOf(p))

@@ -155,7 +155,8 @@ export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): Engi
       } else if (delta.axis === 'page') {
         const at = delta.index ?? pages.length
         if (!Number.isInteger(at) || at < 0 || at > pages.length) return reject('pivot-delta-invalid', 'The Filters position is invalid.')
-        pages.splice(at, 0, { field, selected: 'all' })
+        const selected = current === 'page' && pageAt >= 0 ? view.pages[pageAt]!.selected : 'all'
+        pages.splice(at, 0, { field, selected })
       }
       nextView = { ...view, rows, cols, pages, ...(delta.axis === 'page' ? { filters: view.filters.filter(filter => filter.fld !== field) } : {}) }
       if (delta.axis === 'none') {
