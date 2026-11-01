@@ -1,5 +1,5 @@
 // GETPIVOTDATA counter-examples (Task 31 review).
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { evaluateWorkbookFormulas, recomputeDependents } from '../src/xlsx/formula/workbook'
 import { registerGetPivotData, getPivotData } from '../src/xlsx/pivots/session/getpivotdata'
 import { load, cellAt, addCell, liveContext, viewerReadCellValue, changedOf, F } from './helpers/xlsx-pivots-dependent-fixtures'
@@ -21,6 +21,22 @@ async function run(formulas: Array<[sheet: string, ref: string, col: number, row
 }
 
 describe('GETPIVOTDATA', () => {
+  it('looks its cell up by position in the committed layout, never by a scan of the layout per formula', async () => {
+    const doc = await load()
+    evaluateWorkbookFormulas(doc, { forceRecalc: true })
+    const { ctx } = await liveContext('West')
+    const scan = vi.fn(() => undefined)
+    // Every lookup that scanned the layout's cells would call this `find`.
+    const context = { ...ctx, layout: { ...ctx.layout, cells: Object.assign([...ctx.layout.cells], { find: scan }) } }
+    recomputeDependents(doc, changedOf(doc, 'Pivot', ctx.rects), {
+      getPivotData: (args, evaluate) => getPivotData([context], args, evaluate, 'Formulas'),
+      readCellValue: viewerReadCellValue([ctx]),
+    })
+    expect(cellAt(doc, 'Formulas', 'B1')!.value).toBeCloseTo(161104.2, 6)
+    expect(cellAt(doc, 'Formulas', 'B3')!.value).toBeCloseTo(9585.23, 6)
+    expect(scan).not.toHaveBeenCalled()
+  })
+
   it('F2 (Critical): a same-sheet, unqualified anchor (what Excel writes) evaluates in the viewer, not #REF!', async () => {
     const { doc } = await run([['Pivot', 'K1', 10, 0, 'GETPIVOTDATA("Sum of Sales",$A$3)']], { hide: 'West', viewerShape: true })
     expect(cellAt(doc, 'Pivot', 'K1')!.value).toBeCloseTo(161104.2, 6)

@@ -13,6 +13,17 @@ export interface LivePivotDataContext {
   cache: PivotCacheDefinition
   layout: PivotLayout
   date1904: boolean
+  /** The layout's cells by `${row}:${col}` (the viewer builds it once per commit); absent, one is built per layout. */
+  layoutCells?: ReadonlyMap<string, PivotLayout['cells'][number]>
+}
+
+/** A layout's cells by position, built once per layout (final review minor 10: a lookup, not a scan per formula). */
+const cellIndexes = new WeakMap<PivotLayout, ReadonlyMap<string, PivotLayout['cells'][number]>>()
+function cellsOf(context: LivePivotDataContext): ReadonlyMap<string, PivotLayout['cells'][number]> {
+  if (context.layoutCells) return context.layoutCells
+  let index = cellIndexes.get(context.layout)
+  if (!index) cellIndexes.set(context.layout, index = new Map(context.layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])))
+  return index
 }
 
 const functions: Record<string, string> = { sum: 'Sum', count: 'Count', average: 'Average', max: 'Max', min: 'Min', product: 'Product', countNums: 'Count', stdDev: 'StdDev', stdDevp: 'StdDevp', var: 'Var', varp: 'Varp' }
@@ -73,7 +84,8 @@ function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: Rea
   }
   // If Values is on an axis, its line index already selects the data field;
   // otherwise the cell grid's data dimension follows the column lines.
-  const visible = candidates.map(position => layout.cells.find(cell => cell.row === position.row && cell.col === position.col)).filter(Boolean)
+  const cells = cellsOf(context)
+  const visible = candidates.map(position => cells.get(`${position.row}:${position.col}`)).filter(Boolean)
   if (visible.length !== 1) return formulaError('#REF!')
   const value = visible[0]!.value
   if (value.kind === 'error') return formulaError(value.value as Parameters<typeof formulaError>[0])
