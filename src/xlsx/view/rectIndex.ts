@@ -48,7 +48,8 @@ class PointIndex<T> {
       insert(node * 2, lo, mid, a, b, id); insert(node * 2 + 1, mid, hi, a, b, id)
     }
     entries.forEach(({ rect }, id) => { if (segments) insert(1, 0, segments, lower(rect.r0), lower(rect.r1 + 1), id) })
-    let bytes = 64 + 8 * this.rows.length + 8 * lists.length
+    // Its row bounds, the node table, and the owners array (one reference per rectangle: codex perf round 2 follow-up).
+    let bytes = 64 + 8 * this.rows.length + 8 * lists.length + 16 + 8 * this.values.length
     this.nodes = lists.map(list => {
       if (!list) return undefined
       const sorted = [...list].sort((a, b) => entries[a]!.rect.c0 - entries[b]!.rect.c0)
@@ -109,12 +110,13 @@ export class OwnedRects<T> {
     this.index = new PointIndex(list)
     this.size = list.length
   }
-  /** Retained bytes of the index (its row bounds, node column arrays and trees). */
+  /** Retained bytes of the index (its row bounds, owners, node column arrays and trees). */
   get estimatedBytes(): number { return this.index.bytes }
   /** An upper bound of the bytes `rects` rectangles add to an index of up to 2^21 rectangles (each stored at no more
-   * than 2·21 + 2 canonical nodes; per stored entry its columns, id and tree slots, plus a node's overhead), so a
+   * than 2·21 + 2 canonical nodes; per stored entry its columns, id and tree slots, plus a node's overhead; per
+   * rectangle its row bounds and owner reference), so a
    * composite of several owners' shares is charged by summing them. */
-  static upperBytesFor(rects: number): number { return 64 + rects * (16 + 44 * (20 + 32 + 104)) }
+  static upperBytesFor(rects: number): number { return 80 + rects * (24 + 44 * (20 + 32 + 104)) }
   /** The owner of every rectangle holding the cell (one per rectangle). */
   at(row: number, col: number): readonly T[] {
     if (!this.size) return []

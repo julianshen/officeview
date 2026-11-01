@@ -197,6 +197,18 @@ describe('perf round 2: pivots side by side in one row band do not defeat the in
     expect(twice.find(2, 2, owner => owner === 'b')).toBe('b')
   })
 
+  it('an index\'s charged bytes count its owners (one reference each) and stay within the per-rectangle upper bound', () => {
+    // The charge covers the node arrays and trees plus one owner reference per rectangle (codex perf round 2
+    // follow-up), and never exceeds the upper bound an admission reserves for that many rectangles.
+    for (const count of [1, 7, 1_000]) {
+      const entries = Array.from({ length: count }, (_, k) => ({ rect: { r0: k, r1: k + 3, c0: 2 * k, c1: 2 * k + 1 }, owner: k }))
+      const index = new OwnedRects(entries) as unknown as { estimatedBytes: number; index: { nodes: Array<{ c0: Float64Array; c1: Float64Array; ids: Int32Array; tree: Float64Array } | undefined> } }
+      const typed = index.index.nodes.reduce((sum, node) => sum + (node ? node.c0.byteLength + node.c1.byteLength + node.ids.byteLength + node.tree.byteLength : 0), 0)
+      expect(index.estimatedBytes).toBeGreaterThanOrEqual(typed + 8 * count)
+      expect(index.estimatedBytes).toBeLessThanOrEqual(OwnedRects.upperBytesFor(count))
+    }
+  })
+
   it('RectCover: 5,000 same-row rectangles against 5,000 reverse-ordered same-row bounds', () => {
     const rects: SourceRect[] = Array.from({ length: 5_000 }, (_, k) => ({ r0: 0, r1: 3, c0: 3 * k, c1: 3 * k + 1 }))
     const overlay: ValueOverlay = { rects, protectedRects: [...rects].reverse().map(rect => ({ ...rect, c1: rect.c1 + 1 })), merges: [], cell: () => ({ value: 1 }) }
