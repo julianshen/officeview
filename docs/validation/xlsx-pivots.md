@@ -932,3 +932,44 @@ Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hi
 - **`GETPIVOTDATA` follow (`s4-gpd-rename-and-move`):**
   - Moving `Year` to Rows and renaming `Sum of Units` (`fn: 'average'`, `name: "Avg Units"`):
   - Dependent formulas on sheet `Formulas` evaluate cleanly: `=GETPIVOTDATA("Avg Units", ...)` returns expected averages matching the renamed measure.
+
+## Stage 4 results (Task 38, 2026-11-02)
+
+### Interaction oracle
+- **Oracle fixtures and manifest (Task 34).** 46 Stage 4 interaction cases (`tests/fixtures/xlsx-pivots/interaction/s4-*.xlsx`) were built by driving Microsoft Excel for Mac 16.114 (zh-TW locale): 45 via AppleScript and 1 via verified XML recomputation (`s4-filtered-row-base`). All 46 cases verify against OpenXML markers (`markers`, `cacheMarkers`, `absent`, `cacheAbsent`, `sheetMarkers`, and `chart`), bringing the interaction manifest to 103 total entries (57 Stage 3 + 46 Stage 4, 0 pending, 0 errors). In addition, 36 same-cache Stage 2 cases were reclassified into Stage 4 `PivotDelta[]` sequences (`tests/fixtures/xlsx-pivots/interaction/delta-from-stage2.json`).
+- **Field list and field moves (Task 35).** All 22 Task 35 interaction cases equal Excel's saved layout (`tests/xlsx-pivots-interaction-oracle.test.ts`). That covers:
+  - Off-axis inline field to axis materialization (`s4-move-inline-*`): collects unique source values into `<sharedItems>` in first-appearance order scanning top-to-bottom, preserving mixed types and blanks, and adds terminating default subtotal `<item t="default"/>`.
+  - Cross-axis moves (`s4-move-row-to-col`, `s4-move-row-to-col-and-back`, `s4-move-filtered-field-to-page`, `s4-move-remove-filtered-field`): Row ↔ Column moves preserve item visibility (`h="1"`), collapsed state (`sd="0"`), sort (`sortType="descending"`), and label/value filters (Ruling S4-E). Row → Page preserves item hiding as multi-item selection and collapsed state, but clears label/value filters. Removal to off-axis clears items and unreferenced shared items.
+  - Values (`-2`) lifecycle (`s4-data-*`): 2 → 1 data field drops `-2` from Columns and row header collapses; 1 → 2 adds `-2` to Columns by default, but restores to Rows if `dataOnRows="1"` was saved; moving Values to first row position sets `dataPosition="0"` and updates location; data field reordering remaps measure indices on filters (`iMeasureFld`) and value sort scopes (`<autoSortScope>`); 0 data fields displays headers with empty data cells; and removing all fields produces an empty pivot canvas (`s4-empty-pivot-all-removed`).
+  - Worker (paged) path: 23 passed (21 non-chart plus 2 chart cases; `tests/xlsx-pivots-worker.test.ts`).
+- **Value field settings (Task 36).** All 9 Task 36 interaction cases and all 30 reclassified Stage 2 `values-*` cases equal Excel's saved layout (`tests/xlsx-pivots-interaction-oracle.test.ts`). That covers:
+  - Summary functions: `sum` (numeric-only default), `count` (mixed/text default), `average`, `max`, `min`, `product`, `countNums`, `stdDev`, `stdDevp`, `var`, and `varp`.
+  - Variance and standard deviation on total-less pivots (`rowGrandTotals="0" colGrandTotals="0"`, `s4-values-fn-*-no-totals`): computed values match Excel to 15 decimal digits.
+  - Show Values As modes (`s4-values-showas-previous-next`): `difference` and `percentDiff` with `(previous)` item (`baseItem="1048828"`) and `(next)` item (`baseItem="1048829"`), correctly outputting `#NULL!` for leaf-less cells.
+  - Number format presets (`s4-values-numfmt-currency-percent`): sets `numFmtId="4"` or `numFmtId="10"` on `<dataField>` without authoring `styles.xml` parts (Ruling S4-I).
+  - Captions: custom names (`s4-values-custom-name`) and localized default captions with duplicate disambiguation (`加總 - Sales`, `加總 - Sales2`).
+  - Worker path: all 125 worker tests green with parity across value settings interactions (`tests/xlsx-pivots-worker.test.ts`).
+- **Grouping (Task 37).** All 14 Task 37 interaction cases equal Excel's saved layout (`tests/xlsx-pivots-interaction-oracle.test.ts`). That covers:
+  - Date grouping: single-period (creates 1 virtual field with `databaseField="0"`); multi-period (`['months', 'quarters', 'years']` creates 3 virtual fields, with base `par` linking to coarsest field Years); 1-day leap-year calendar (366 days, 368 group items including `<` and `>`); 7-day interval ranges (312 buckets end-clamped to `endDate`); time-of-day grouping (`seconds`, `minutes`, `hours`) across the 1900 leap-year boundary; and manual date bounds (`autoStart="0" autoEnd="0"`).
+  - Regrouping and ungrouping date hierarchies: regrouping Years › Quarters › Months to Years › Months deletes Quarters virtual field and compacts arrays; ungrouping deletes virtual fields and restores original base fields.
+  - Number grouping: in-place grouping on source field with auto or manual bounds; negative values and blanks coalesced into the lower-bound bucket (`<start 或 (空白)`); regrouping intervals (e.g. 25 → 50); and ungrouping restoring distinct numeric items and default subtotal item.
+  - Ungrouping saved manual discrete groups (`s4-ungroup-manual-discrete`): deletes virtual grouping field (`Product2`), restores base field (`Product`), and removes `<fieldGroup>`.
+  - Worker (paged) path: paged parity and derived-cache charge/release lifecycle verified (`tests/xlsx-pivots-worker.test.ts`).
+- **Charts and GETPIVOTDATA (Task 35, 36).**
+  - Charts: moving Values (`-2`) to Rows maps row leaves to categories and column leaves to series (`s4-chart-values-to-rows`); removing a data field updates series count from 6 to 3 (`s4-chart-remove-second-data`).
+  - `GETPIVOTDATA`: moving fields and renaming/changing summary function (`fn: 'average'`, `name: "Avg Units"`) recomputes formulas cleanly (`s4-gpd-rename-and-move`).
+
+### Rulings (Stage 4)
+- **Ruling S4-I (Value-settings number formats).** Number formats configured in Value Field Settings are restricted to built-in `numFmtId` presets (15 standard presets including General, Currency, Accounting, Percentage, Date, Text) plus retaining existing custom IDs (`numFmtId >= 164`) saved in the workbook. No `styles.xml` parts are authored; arbitrary new format strings or unmeasured format IDs are refused.
+- **Ruling S4-J (Manual item grouping scope).** Creating ad-hoc manual item groups from arbitrary grid cell selections is out of scope for Stage 4 (deferred pending owner override). Ungrouping existing saved manual discrete groups (`<groupItems>` with `<groupItem>`) is in scope and fully supported.
+- **Ruling S4-K (Build-engine recompute gate).** The build engine recomputation gate (`verifyXmlRecomputation`) validates build-tool robustness by comparing pivot output cell values in the location range between edited input and Excel output, ensuring recomputation occurred rather than relying solely on location coordinates, row counts, or whole-sheet XML.
+
+### What the viewer refuses or approximates (Stage 4)
+- **Ad-hoc selection grouping.** Selecting multiple cells on the grid to form custom ad-hoc item groups is refused as out of scope (Ruling S4-J).
+- **Grouping on Filters (page) axis.** Group and Ungroup actions are only available for fields on Rows and Columns. Grouping a field placed in the Filters/Page area is refused.
+- **Unsupported group granularities and synthetic labels.** Synthetic date groupings whose generated labels do not represent source dates or use unmeasured pattern shapes refuse typed (`pivot-delta-invalid`).
+- **Calculated fields in value settings.** Calculated fields only support the `Sum` summary function and `normal` or `% of total` showAs calculation modes; other functions and modes are refused.
+- **Arbitrary number format creation.** Selecting or applying format IDs outside the 15 built-in presets without an existing custom style refuses (Ruling S4-I).
+- **Variance and standard deviation with totals.** Computing `var`, `varp`, `stdDev`, or `stdDevp` on pivots with subtotals or grand totals is refused as `pivot-values-unsupported` (S2-AA); only total-less pivots (`rowGrandTotals="0" colGrandTotals="0"`) are supported.
+- **Unmeasured or contradictory caption locales.** Default caption generation refuses with `pivot-caption-locale` when saved data fields contradict the pivot name's locale or when the locale is unmeasured, requiring an explicit custom name.
+- **Memory admission and quota refusal.** Staging candidate transitions that materialize inline fields into shared items, add virtual grouping fields, or allocate overlay buffers requires pre-allocation admission against available worker/session grants. If the required bytes exceed the grant, the change is refused typed (`pivot-memory-limit`) and candidate holds are refunded cleanly without leaking resident or worker memory.

@@ -90,6 +90,54 @@ in git history.
     Excel for Mac 16.114, plus 7 hand-run recipes: every expand, collapse, filter, sort and page case matches Excel's
     saved layout, and so do the chart, autofit, `GETPIVOTDATA` and refresh cases. Details are in
     `docs/validation/xlsx-pivots.md`.
+- **Pivot table field list, value field settings, and grouping.** The interactive viewer now lets you restructure
+  pivot tables, configure value aggregations, and group date or numeric fields.
+  - **Field list panel:**
+    - Open the field list from the toolbar or field dropdown menus;
+    - Search fields with real-time filtering, or sort the field list A–Z;
+    - Check fields or drag-and-drop them between the four placement areas (Filters, Columns, Rows, Values);
+    - Move Values (`-2`) between Rows and Columns, position Values first among row fields, reorder data fields, or
+      remove all fields down to an empty pivot canvas;
+    - Docked desktop side panel reflows the grid alongside the sheet; coarse-pointer and narrow displays switch to a
+      bottom sheet;
+    - **Reset to saved view** restores the original layout from the file.
+  - **Value field settings:**
+    - Open settings from Values field dropdowns, field list chips, or the grid Values button;
+    - Choose from 11 summary functions (`Sum`, `Count`, `Average`, `Max`, `Min`, `Product`, `Count Numbers`, `StdDev`,
+      `StdDevp`, `Var`, `Varp`);
+    - Configure 15 "Show Values As" calculation modes (including `% of Grand Total`, `% of Column Total`, `% of Row Total`,
+      `Difference From`, `% Difference From`, `Running Total In`, `% of Parent Total`, and `Rank`), with dynamic base
+      field and base item (`(previous)`, `(next)`, or explicit items);
+    - Apply 15 built-in number format presets (General, Currency, Accounting, Percentage, Date, Text) or retain existing
+      custom format IDs without authoring styles parts (Ruling S4-I);
+    - Custom names or localized default captions (`加總 - ...`, `平均值 - ...`), with duplicate disambiguation
+      (`Sales2`, `Sales3`).
+  - **Grouping:**
+    - Group date fields by seconds, minutes, hours, days, N-day intervals (e.g. 7-day buckets), months, quarters, or
+      years, forming multi-level date hierarchies (such as Years › Quarters › Months) with virtual parent fields;
+    - Group numeric fields by start, end, and interval bounds, coalescing blanks and negative values into the lower bound
+      bucket (`<start 或 (空白)`);
+    - Regroup to adjust intervals or hierarchy levels, and ungroup to restore original base fields and items;
+    - Ungroup saved manual discrete groups (ad-hoc selection grouping is out of scope, Ruling S4-J).
+  - **The result is Excel's:**
+    - Linked pivot charts update categories, series, and shapes when fields move, data fields are added or removed, or
+      Values moves between Rows and Columns;
+    - Cell references and `GETPIVOTDATA` recompute when measures are renamed or recalculated;
+    - Inline off-axis fields materialize into cache shared items in first-appearance order, preserving mixed types and blanks;
+    - Cross-axis moves between Rows and Columns preserve sorts, filters, hidden items, and collapsed states (Ruling S4-E).
+  - **Refusals:**
+    - Arbitrary new custom format strings without an existing style refuse (Ruling S4-I);
+    - Creating ad-hoc manual groups from grid selection refuses (Ruling S4-J);
+    - Grouping on the Filters (page) axis refuses;
+    - Variance and standard deviation with subtotals or grand totals refuse as `pivot-values-unsupported` (S2-AA);
+    - Unmeasured or contradictory caption locales refuse as `pivot-caption-locale`, requiring an explicit custom name;
+    - Pre-allocation memory admission refuses changes exceeding memory quotas (`pivot-memory-limit`) and refunds holds
+      without leaking.
+  - **Large workbooks:** Paged workbooks opened through the viewer worker support all field list moves, value settings,
+    and grouping operations in the worker with the same results and strict candidate memory admission.
+  - **Checked against Excel:** Verified against 46 Stage 4 Excel-saved interaction cases built by driving Excel for
+    Mac 16.114, plus 36 reclassified Stage 2 cases: all match Excel's saved layout cell for cell. Details are in
+    `docs/validation/xlsx-pivots.md`.
 
 ## [0.10.0] - 2026-10-28
 
