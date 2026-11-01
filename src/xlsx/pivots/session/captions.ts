@@ -193,7 +193,14 @@ export function captionRule(_def: PivotTableDefinition, saved: CellReader, layou
         const expected = pattern?.replace('{field}', fieldName)
         return d.name && expected && (d.name === expected || d.name.startsWith(expected))
       })
-      const isZhTwPivot = /[\u4e00-\u9fa5]/.test(_def.name)
+      const isDefaultZhTwName = /^樞紐分析表\d*$/.test(_def.name)
+      const isCustomZhTwName = /[\u4e00-\u9fa5]/.test(_def.name) && !isDefaultZhTwName
+      const hasContradictoryDataField = _def.dataFields?.some(d => {
+        if (!d.name) return false
+        if (/^(Sum|Count|Average|Max|Min|Product|StdDev|StdDevp|Var|Varp) of /i.test(d.name)) return true
+        return !/[\u4e00-\u9fa5]/.test(d.name)
+      })
+      const isZhTwPivot = isDefaultZhTwName || (isCustomZhTwName && !hasContradictoryDataField)
       if (hasZhTwDataField || isZhTwPivot) {
         return ruleOf('zh-TW', new Map(Object.entries(table).flatMap(([key, source]) => source === undefined ? [] : [[key, parseTemplate(source)] as const])))
       }

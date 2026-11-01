@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactElement } from 'react'
 import type { PivotDelta, PivotMenuModel } from './pivotClient'
 import type { PivotDataFunction, PivotValueShowAs } from '../../../xlsx/pivots/session/delta'
+import { ZH_TW_CAPTIONS } from '../../../xlsx/pivots/session/captions'
+import { PIVOT_FUNCTION_NAMES } from '../../../xlsx/pivots/session/functionNames'
 import { controlTarget, CONTROL_CLS, SELECT_CLS, CONTROL_PRIMARY_BTN_CLS, CONTROL_BTN_CLS } from '../controlUi'
 
 // Built-in number-format presets offered in Value Field Settings (Ruling S4-I):
@@ -68,6 +70,15 @@ export const requiresBaseField = (mode: PivotValueShowAs): boolean =>
 export const requiresBaseItem = (mode: PivotValueShowAs): boolean =>
   ['difference', 'percent', 'percentDiff'].includes(mode)
 
+export function defaultCaptionFor(model: PivotMenuModel, currentName: string, fieldName: string, fn: PivotDataFunction): string {
+  const isZhTw = Boolean(currentName && Object.values(ZH_TW_CAPTIONS).some(p => typeof p === 'string' && p.includes('{field}') && currentName.startsWith(p.split('{field}')[0]!))) || /[\u4e00-\u9fa5]/.test(model.name)
+  if (isZhTw) {
+    const pattern = ZH_TW_CAPTIONS[`dataField:${fn}`]
+    if (pattern) return pattern.replace('{field}', fieldName)
+  }
+  return `${PIVOT_FUNCTION_NAMES[fn] ?? fn} of ${fieldName}`
+}
+
 export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }: PivotValueSettingsDialogProps): ReactElement {
   const root = useRef<HTMLDivElement>(null)
   const opener = useRef<HTMLElement | null>(null)
@@ -78,6 +89,7 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
 
   const [activeTab, setActiveTab] = useState<'summary' | 'showAs'>('summary')
   const [customName, setCustomName] = useState(currentData?.name ?? '')
+  const [nameTouched, setNameTouched] = useState(false)
   const [fn, setFn] = useState<PivotDataFunction>(isCalculated ? 'sum' : (currentData?.fn ?? 'sum'))
   const [showAs, setShowAs] = useState<PivotValueShowAs>(currentData?.showAs ?? 'normal')
 
@@ -104,7 +116,7 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
 
   useEffect(() => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    root.current?.querySelector<HTMLElement>('input,button,select')?.focus()
+    root.current?.querySelector<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')?.focus()
     return () => opener.current?.focus()
   }, [])
 
@@ -130,27 +142,38 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
     }
   }
 
+  const onSelectFunction = (nextFn: PivotDataFunction) => {
+    setFn(nextFn)
+    if (!nameTouched) {
+      setCustomName(defaultCaptionFor(model, currentData?.name ?? '', sourceFieldMeta?.name ?? '', nextFn))
+    }
+  }
+
   const apply = async () => {
     try {
       setError('')
       const trimmed = customName.trim()
-      if (!trimmed) {
+      if (nameTouched && !trimmed) {
         setError('The custom name cannot be blank.')
         return
       }
-      const otherNames = model.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean)
-      if (otherNames.some(n => n.toLowerCase() === trimmed.toLowerCase())) {
-        setError(`A data field named "${trimmed}" already exists.`)
-        return
+      if (nameTouched) {
+        const otherNames = model.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean)
+        if (otherNames.some(n => n.toLowerCase() === trimmed.toLowerCase())) {
+          setError(`A data field named "${trimmed}" already exists.`)
+          return
+        }
       }
 
       setBusy(true)
+      const currentFn = currentData?.fn ?? 'sum'
+      const fnChanged = fn !== currentFn
       const delta: Extract<PivotDelta, { kind: 'valueSettings' }> = {
         kind: 'valueSettings',
         dataIndex,
-        fn,
+        ...(fnChanged ? { fn } : {}),
         showAs,
-        name: trimmed,
+        ...(nameTouched ? { name: trimmed } : {}),
         numFmtId: numFmtId === '' ? null : Number(numFmtId),
         ...(requiresBaseField(showAs) ? { baseField } : {}),
         ...(requiresBaseItem(showAs) ? { baseItem } : {}),
@@ -227,7 +250,10 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
               aria-label="Custom Name"
               type="text"
               value={customName}
-              onChange={event => setCustomName(event.target.value)}
+              onChange={event => {
+                setNameTouched(true)
+                setCustomName(event.target.value)
+              }}
               className={CONTROL_CLS}
               style={{ ...controlTarget, width: '100%', marginTop: 2 }}
             />
@@ -283,7 +309,7 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
                       name="summaryFunction"
                       value={item.fn}
                       checked={fn === item.fn}
-                      onChange={() => setFn(item.fn)}
+                      onChange={() => onSelectFunction(item.fn)}
                       style={{ marginRight: 6 }}
                     />
                     {item.label}

@@ -19,6 +19,9 @@ import { loadPivotWorkbook } from '../src/xlsx/pivots/load'
 import { decodeRecords, RECORD_LIMITS } from '../src/xlsx/pivots/engine/records'
 import { sheetCharts } from '../src/components/xlsx/sheetCharts'
 import { pivotChartGate } from '../src/xlsx/pivots/session/charts'
+import { captionRule } from '../src/xlsx/pivots/session/captions'
+import { computePivot } from '../src/xlsx/pivots/engine/compute'
+import { initialViewState } from '../src/xlsx/pivots/engine/view'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const BASELINE = resolve(FIXTURES, 'engine/baseline.xlsx')
@@ -156,6 +159,41 @@ describe('Task 36 value field settings deltas', () => {
       if (!failClosed.ok) {
         expect(failClosed.diagnostic.feature).toBe('pivot-caption-locale')
       }
+    }
+
+    // 5. User-renamed Chinese pivot with contradictory English data fields (def.name === '銷售分析')
+    // When saved names remain 'Sum of Sales' / 'Sum of Units' and no implicit caption samples exist,
+    // captionRule must return locale: 'file' and refuse unmeasured default captions.
+    const customZhLoaded = (await loadAll(NO_TOTALS))[0]!
+    const customZhDef = { ...customZhLoaded.def, name: '銷售分析' }
+    const view0 = initialViewState(customZhDef, customZhLoaded.cache)
+    const computed = computePivot(customZhLoaded.store, customZhLoaded.cache, customZhDef, view0, { date1904: customZhLoaded.date1904 })
+    expect(computed.ok).toBe(true)
+    if (computed.ok) {
+      const customZhRule = captionRule(customZhDef, sheetCellReader(customZhLoaded.sheet), computed.value)
+      expect(customZhRule.locale).toBe('file')
+    }
+
+    const customZhSession = openPivotSession({
+      def: customZhDef,
+      cache: customZhLoaded.cache,
+      store: customZhLoaded.store,
+      date1904: customZhLoaded.date1904,
+      saved: sheetCellReader(customZhLoaded.sheet),
+      occupied: () => false,
+      linkedCharts: [],
+      verifiedKinds: new Set(PIVOT_DELTA_KINDS),
+    })
+    expect(customZhSession.ok).toBe(true)
+    if (customZhSession.ok) {
+      const refused = customZhSession.value.apply({ kind: 'valueSettings', dataIndex: 0, fn: 'average' })
+      expect(refused.ok).toBe(false)
+      if (!refused.ok) {
+        expect(refused.diagnostic.feature).toBe('pivot-caption-locale')
+      }
+      // Supplying an explicit custom name succeeds
+      const explicit = customZhSession.value.apply({ kind: 'valueSettings', dataIndex: 0, fn: 'average', name: '平均銷售額' })
+      expect(explicit.ok).toBe(true)
     }
   })
 

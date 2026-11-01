@@ -106,6 +106,8 @@ describe('Pivot value field settings UI', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Value Field Settings' })
     expect(dialog).toBeTruthy()
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(screen.getByLabelText('Custom Name'))
 
     // Tab trap:
     const focusable = dialog.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')
@@ -144,9 +146,73 @@ describe('Pivot value field settings UI', () => {
 
     const dialogFromMenu = screen.getByRole('dialog', { name: 'Value Field Settings' })
     expect(dialogFromMenu).toBeTruthy()
+    expect(dialogFromMenu.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(within(dialogFromMenu).getByLabelText('Custom Name'))
     fireEvent.keyDown(dialogFromMenu, { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Value Field Settings' })).toBeNull()
     expect(document.activeElement).toBe(vsBtn)
+  })
+
+  it('preserves automatic caption when summary function changes and user has not touched name', async () => {
+    const onApply = vi.fn().mockResolvedValue(true)
+    const onClose = vi.fn()
+    const zhModel = makeModel({
+      name: '樞紐分析表1',
+      data: [
+        { index: 0, field: 2, name: '加總 - Sales', fn: 'sum', showAs: 'normal', baseField: -1, baseItem: -1 },
+      ],
+    })
+
+    render(<PivotValueSettingsDialog model={zhModel} dataIndex={0} onApply={onApply} onClose={onClose} />)
+
+    const customNameInput = screen.getByLabelText('Custom Name') as HTMLInputElement
+    expect(customNameInput.value).toBe('加總 - Sales')
+
+    // Change summary function from Sum to Average
+    const avgRadio = screen.getByRole('radio', { name: 'Average' })
+    fireEvent.click(avgRadio)
+
+    // The displayed default updates to the zh-TW auto-caption
+    expect(customNameInput.value).toBe('平均值 - Sales')
+
+    // Click OK without editing Custom Name
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    })
+
+    // onApply receives delta without explicit custom name, letting delta.ts generate it
+    expect(onApply).toHaveBeenCalledTimes(1)
+    const delta = onApply.mock.calls[0]![0]
+    expect(delta.kind).toBe('valueSettings')
+    expect(delta.fn).toBe('average')
+    expect(delta.name).toBeUndefined()
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('sends explicit custom name when edited, even if summary function changes afterwards', async () => {
+    const onApply = vi.fn().mockResolvedValue(true)
+    const onClose = vi.fn()
+    const model = makeModel()
+
+    render(<PivotValueSettingsDialog model={model} dataIndex={0} onApply={onApply} onClose={onClose} />)
+
+    const customNameInput = screen.getByLabelText('Custom Name') as HTMLInputElement
+    fireEvent.change(customNameInput, { target: { value: 'My Revenue' } })
+
+    // Change function to Average
+    fireEvent.click(screen.getByRole('radio', { name: 'Average' }))
+
+    // User's custom name is preserved, not overwritten by default
+    expect(customNameInput.value).toBe('My Revenue')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    })
+
+    expect(onApply).toHaveBeenCalledTimes(1)
+    const delta = onApply.mock.calls[0]![0]
+    expect(delta.name).toBe('My Revenue')
+    expect(delta.fn).toBe('average')
   })
 
   it('switching showAs to % Difference From enables Base field and Base item with (previous)/(next) and field items', async () => {
