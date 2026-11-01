@@ -605,7 +605,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!remote || !pivotUi || !pending?.size) return
     for (const sheetId of pending.sheets()) {
       const shownEntry = entries.get(sheetId)
-      if (!shownEntry || !shownEntry.sheet.regionStyles) continue
+      if (!shownEntry) continue
+      if (!shownEntry.sheet.regionStyles) {
+        // The sheet's refreshed styles cannot arrive any more (every read of them failed for good): its waiting fits
+        // are dropped with their charges, as a fit past the payload cap is (final review minor 12), not kept until close.
+        const layout = remote.layout(sheetId)
+        const contents = [...(layout.hasRegionStyles ? [remote.regionStyles(sheetId)] : []), ...(layout.hasPivotDisplay ? [remote.pivotDisplay(sheetId)] : [])]
+        if (contents.every(content => content.state === 'failed')) pending.discard(sheetId)
+        continue
+      }
       const ready = pending.take(sheetId, shownEntry.regionStyleGen)
       if (!ready.length) continue
       const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7

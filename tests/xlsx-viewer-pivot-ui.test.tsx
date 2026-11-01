@@ -655,7 +655,7 @@ describe('the interactive viewer', () => {
 })
 
 /** An in-process worker port over a ViewerKernel (tests/xlsx-viewer-paged-viewer.test.tsx's harness, trimmed). */
-function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
+function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0], intercept?: (command: WorkerCommand) => WorkerReply | undefined) {
   // Admission forced paged (src/debug/forcePaged.ts): these small fixtures take the worker-backed paged path.
   const kernel = new ViewerKernel({ parse: async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)), importLimits: FORCE_PAGED_LIMITS, ...env }, { yield: async () => {} })
   const listeners = new Set<(event: MessageEvent) => void>()
@@ -667,6 +667,8 @@ function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
       const command = structuredClone(blob ? { ...open, source: { kind: 'blob' } } : message, { transfer: transfer as ArrayBuffer[] }) as WorkerCommand
       if (blob && command.kind === 'open') command.source = { kind: 'blob', blob }
       posted.push(command)
+      const answered = intercept?.(command)
+      if (answered) { queueMicrotask(() => { for (const listener of [...listeners]) listener({ data: answered } as MessageEvent) }); return }
       void kernel.handle(command, (out: WorkerReply, replyTransfer) => {
         const data = structuredClone(out, { transfer: replyTransfer })
         for (const listener of [...listeners]) listener({ data } as MessageEvent)
@@ -789,6 +791,31 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
     fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
     await waitFor(() => expect(width()).toBeLessThan(saved), FIRST_PAINT_WAIT)
+    ui.unmount()
+  }, 60_000)
+
+  it('a paged autofit waiting for a pivot display that cannot load is dropped with its charge, not kept until close', async () => {
+    let failDisplay = false
+    const h = workerHarness(undefined, command => failDisplay && command.kind === 'read' && command.query.op === 'pivotDisplay'
+      ? { kind: 'error', commandKind: 'read', requestId: command.requestId, owner: command.owner, code: 'page-error', retryable: false, diagnostics: [{ code: 'test', message: 'The pivot display could not be read.' }] } as unknown as WorkerReply
+      : undefined)
+    const doc = await openPagedWorkbook(pagedFile(BASELINE), { port: h.port as never, profile: 'D', signal: new AbortController().signal })
+    const handle = doc && pagedWorkbookOf(doc)
+    if (!doc || !handle) throw new Error('the workbook did not open paged')
+    const ui = render(<InteractiveSheetDoc doc={doc} source={handle.source} />)
+    const ledger = (handle.source as unknown as { mainLedger: MainMemoryLedger }).mainLedger
+    const fitCharges = () => [...((ledger as unknown as { charges: Map<string, unknown> }).charges.keys())].filter(key => key.includes('pivot-fit:'))
+    fireEvent.click(await ui.findByRole('button', { name: /^Collapse East/ }, FIRST_PAINT_WAIT))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, FIRST_PAINT_WAIT)
+    // The second change waits for the refreshed display, which now fails for good.
+    failDisplay = true
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
+    await waitFor(() => expect(h.posted.filter(command => command.kind === 'pivotCommit')).toHaveLength(2), FIRST_PAINT_WAIT)
+    const remote = handle.source as unknown as { pivotDisplay(sheetId: string): { state: string } }
+    const sheetId = (ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement).value
+    await waitFor(() => expect(remote.pivotDisplay(sheetId).state).toBe('failed'), FIRST_PAINT_WAIT)
+    await waitFor(() => expect(fitCharges()).toEqual([]), FIRST_PAINT_WAIT)
     ui.unmount()
   }, 60_000)
 

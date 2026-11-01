@@ -658,6 +658,11 @@ export function pendingPivotFits<S>(memory?: PivotFitMemory) {
         return { ...pending, release: () => { if (held) { held = false; memory?.release(owner(sheetId, pending.pivot)) } } }
       })
     },
+    /** Drops a sheet's waiting fits and their charges (its pivot display can no longer arrive: no autofit). */
+    discard(sheetId: string): void {
+      const fits = bySheet.get(sheetId)
+      if (fits) for (const pivot of [...fits.keys()]) drop(sheetId, fits, pivot)
+    },
     clear(): void {
       for (const [sheetId, fits] of bySheet) for (const pivot of [...fits.keys()]) drop(sheetId, fits, pivot)
     },
