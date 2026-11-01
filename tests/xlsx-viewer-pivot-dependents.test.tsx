@@ -1,4 +1,5 @@
-// Mounted: the real viewer wiring (InteractiveSheetDoc installPivot) on the GETPIVOTDATA seed.
+// The interactive viewer's dependent values on one pivot (Task 31, spec §7.5, §7.10; rulings S3-T, S3-Z, S3-AL,
+// S3-AM): the real wiring (InteractiveSheetDoc installPivot) on the GETPIVOTDATA seed.
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -12,11 +13,21 @@ import { markSavedValuesOnly } from '../src/xlsx/formula/value-policy'
 import { chartWorkbook } from './helpers/xlsx-chart-fixture'
 import { patchedSeed } from './helpers/xlsx-pivots-dependent-patched'
 
+/** The recompute the viewer runs, passed through; `failNext` makes the next one throw (an unexpected engine failure). */
+const recompute = vi.hoisted(() => ({ failNext: false }))
+vi.mock('../src/xlsx/formula/workbook', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/xlsx/formula/workbook')>()
+  return { ...actual, recomputeDependents: (...args: Parameters<typeof actual.recomputeDependents>) => {
+    if (recompute.failNext) { recompute.failNext = false; throw new Error('the recompute failed') }
+    return actual.recomputeDependents(...args)
+  } }
+})
+
 const SEED = resolve(__dirname, 'fixtures/xlsx-pivots/recipes/getpivotdata-seed.xlsx')
 const load = async () => parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEED))))
 const value = (doc: XlsxDocument, ref: string) => doc.sheets.find(s => s.name === 'Formulas')!.rows.flatMap(r => r.cells).find(c => c.ref === ref)!.value
 const statusText = (container: HTMLElement) => [...container.querySelectorAll('[role=status]')].map(node => node.textContent ?? '').join(' ')
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); recompute.failNext = false })
 
 async function hideWest(doc: XlsxDocument) {
   const ui = render(<InteractiveSheetDoc doc={doc} />)
@@ -29,14 +40,14 @@ async function hideWest(doc: XlsxDocument) {
   return ui
 }
 
-it('mounted control (passes): GETPIVOTDATA on the committed layout updates in the viewer', async () => {
+it('GETPIVOTDATA on the committed layout updates in the viewer', async () => {
   const doc = await load()
   await hideWest(doc)
   await waitFor(() => expect(value(doc, 'B1')).toBeCloseTo(161104.2, 6), { timeout: 10_000 })
   expect(value(doc, 'B6')).toBe('#REF!')
 }, 30_000)
 
-it('F1 mounted (Critical): =SUM(Pivot!B6:B8) follows a collapse in the real viewer (Excel gpd-collapse-item saves 20019.48)', async () => {
+it('=SUM(Pivot!B6:B8) follows a collapse (Excel gpd-collapse-item saves 20019.48)', async () => {
   const doc = await load()
   const ui = render(<InteractiveSheetDoc doc={doc} />)
   fireEvent.click(await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 }))
@@ -46,7 +57,7 @@ it('F1 mounted (Critical): =SUM(Pivot!B6:B8) follows a collapse in the real view
   expect(value(doc, 'B11')).toBeCloseTo(11204.24, 6)
 }, 30_000)
 
-it('F2 mounted (Critical): a same-sheet GETPIVOTDATA (unqualified anchor) keeps evaluating after a collapse', async () => {
+it('a same-sheet GETPIVOTDATA (unqualified anchor) keeps evaluating after a collapse', async () => {
   const doc = await load()
   const pivot = doc.sheets.find(s => s.name === 'Pivot')!
   pivot.rows.find(r => r.index === 0)?.cells.push({ ref: 'K1', col: 10, row: 0, value: 222603.36000000004, formula: 'GETPIVOTDATA("Sum of Sales",$A$3)', styleIndex: 0, hasCachedValue: true } as never)
@@ -62,7 +73,7 @@ it('F2 mounted (Critical): a same-sheet GETPIVOTDATA (unqualified anchor) keeps 
   expect(k1.value).toBeCloseTo(222603.36, 6) // Excel: the grand total is still visible
 }, 30_000)
 
-it('reset control: after reset the GETPIVOTDATA cells read the saved layout again', async () => {
+it('after a reset the GETPIVOTDATA cells read the saved layout again', async () => {
   const doc = await load()
   const ui = render(<InteractiveSheetDoc doc={doc} />)
   fireEvent.click(await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 }))
@@ -75,7 +86,7 @@ it('reset control: after reset the GETPIVOTDATA cells read the saved layout agai
   expect(value(doc, 'B9')).toBe('#REF!')
 }, 30_000)
 
-it('F12 (Important): unmounting gives the host document its saved formula values back, like its saved pivot definitions', async () => {
+it('unmounting gives the host document its saved formula values back, like its saved pivot definitions', async () => {
   const doc = await load()
   const ui = await hideWest(doc)
   await waitFor(() => expect(value(doc, 'B1')).toBeCloseTo(161104.2, 6), { timeout: 10_000 })
@@ -237,3 +248,78 @@ it('a saved-values-only workbook keeps its formulas as saved after a pivot chang
   // The pivot's sheet says so once, as the paged path does (S3-S): the workbook has formulas outside its pivots.
   expect(statusText(ui.container)).toMatch(/Formulas outside this pivot still show saved values \(this workbook shows saved formula values only\)\./)
 }, 60_000)
+
+// ---- readers the engine cannot follow, and reads across sheets ---------------------------------------------------
+async function hideItem(doc: XlsxDocument, item: string) {
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+  const list = await ui.findByRole('dialog', { name: 'Region' })
+  fireEvent.click(within(list).getByRole('checkbox', { name: item }))
+  fireEvent.click(within(list).getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(value(doc, 'B1')).not.toBe(222603.36000000004), { timeout: 10_000 })
+  return ui
+}
+
+async function showFormulaSheet(ui: ReturnType<typeof render>) {
+  const selector = ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement
+  fireEvent.change(selector, { target: { value: '3' } })
+  await waitFor(() => expect(selector.value).toBe('3'))
+}
+
+it('a cell on another sheet at coordinates inside the pivot rectangle reads its own sheet, not the pivot overlay', async () => {
+  // Formulas!K1 = Pivot!B6 + Data!E6 (Data!E6 is an input cell; (row 5, col 4) is inside the pivot's A3:I24).
+  const doc = await patchedSeed([{ row: 1, formula: 'Pivot!B6+Data!E6', cached: 0 }])
+  const dataE6 = doc.sheets.find(s => s.name === 'Data')!.rows.flatMap(r => r.cells).find(c => c.ref === 'E6')!.value as number
+  await hideItem(doc, 'East')
+  await waitFor(() => expect(value(doc, 'B11')).not.toBe(11204.24), { timeout: 10_000 })
+  expect(value(doc, 'K1')).toBeCloseTo((value(doc, 'B11') as number) + dataE6, 6)
+}, 30_000)
+
+it('S3-T: an unmeasured GETPIVOTDATA keeps its saved value with the notice, until the reset', async () => {
+  const doc = await patchedSeed([{ row: 1, formula: 'GETPIVOTDATA("Sum of Sales",Pivot!$A$3,"Channel","Web")', cached: 5 }])
+  const ui = await hideItem(doc, 'West')
+  await waitFor(() => expect(value(doc, 'B1')).toBeCloseTo(161104.2, 6), { timeout: 10_000 })
+  expect(value(doc, 'K1')).toBe(5) // retained, as S3-T requires
+  await showFormulaSheet(ui)
+  await waitFor(() => expect(statusText(ui.container)).toMatch(/saved values/i)) // ... and flagged stale, as S3-T requires
+  fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: '2' } })
+  await waitFor(() => expect((ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement).value).toBe('2'))
+  fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+  const region = await ui.findByRole('dialog', { name: 'Region' })
+  fireEvent.click(within(region).getByRole('button', { name: 'Reset to saved view' }))
+  await waitFor(() => expect(statusText(ui.container)).not.toMatch(/saved values/i))
+}, 30_000)
+
+it('S3-Z: an INDIRECT into the pivot keeps its saved value with the notice', async () => {
+  const doc = await patchedSeed([{ row: 1, formula: 'INDIRECT("Pivot!B6")', cached: 11204.24 }])
+  const ui = await hideItem(doc, 'East')
+  await waitFor(() => expect(value(doc, 'B11')).not.toBe(11204.24), { timeout: 10_000 }) // =Pivot!B6 followed
+  await showFormulaSheet(ui)
+  await waitFor(() => expect(/saved values/i.test(statusText(ui.container))).toBe(true))
+  expect(value(doc, 'K1')).toBe(11204.24)
+}, 30_000)
+
+// ---- a commit after the load-time evaluation ----------------------------------------------------------------------
+it('a cell the host added after the load does not stop a commit from recomputing its dependents', async () => {
+  const doc = await patchedSeed([])
+  // A change in a sheet's row or cell count after the last full evaluation (here: a blank cell), not announced.
+  doc.sheets.find(s => s.name === 'Data')!.rows[0]!.cells.push({ ref: 'Z1', col: 25, row: 0, value: null, styleIndex: 0 } as never)
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  fireEvent.click(await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 }))
+  await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+  await waitFor(() => expect(value(doc, 'B3')).toBe('#REF!'), { timeout: 10_000 }) // Excel gpd-collapse-item
+  expect(statusText(ui.container)).not.toMatch(/may still show saved values/i)
+}, 30_000)
+
+it('a dependent recompute that fails leaves the change installed and says some formulas may still show saved values', async () => {
+  const doc = await patchedSeed([])
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  const collapse = await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  recompute.failNext = true
+  fireEvent.click(collapse)
+  await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+  await waitFor(() => expect(statusText(ui.container)).toMatch(/Some formulas that depend on this pivot may still show saved values\./), { timeout: 10_000 })
+  expect(recompute.failNext).toBe(false)
+  expect(value(doc, 'B3')).toBeCloseTo(9585.23, 6)   // its saved value, as the notice says
+}, 30_000)
