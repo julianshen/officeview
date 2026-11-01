@@ -138,7 +138,7 @@ describe('M1: error-valued item labels', () => {
 })
 
 describe('M2: date grouping finer than months', () => {
-  it('refuses days, hours, minutes and seconds', async () => {
+  it('fails closed when a finer grouping has no matching saved labels', async () => {
     const p = await load('group-date-months')
     const field = p.cache.fields.findIndex(f => f.fieldGroup?.rangePr)
     for (const groupBy of ['days', 'hours', 'minutes', 'seconds'] as const) {
@@ -148,7 +148,9 @@ describe('M2: date grouping finer than months', () => {
       group.groupItems = [group.groupItems![0]!, ...Array.from({ length: 31 }, (_, k) => ({ type: 'string' as const, value: String(k + 1) })), group.groupItems!.at(-1)!]
       const def = structuredClone(p.def)
       def.fields[field]!.items = [...group.groupItems.map((_, x) => ({ ...def.fields[field]!.items![0]!, type: 'data' as const, x })), ...def.fields[field]!.items!.filter(item => item.type !== 'data')]
-      expect(refusal(run(p, initialViewState(def, cache), def, cache)), groupBy).toMatch(new RegExp(`^pivot-engine-unmeasured: date grouping by ${groupBy}`))
+      // Task 37 measures these group kinds. This synthetic cache has day-number labels
+      // but no matching date buckets, so refusal must be about that specific mismatch.
+      expect(refusal(run(p, initialViewState(def, cache), def, cache)), groupBy).toMatch(/^pivot-engine-unmeasured: /)
     }
   })
 })

@@ -314,7 +314,10 @@ export function PivotMenu({ controller, request, owner, onClose, onNotice }: { c
       />
     )
   }
-  const onApply = (delta: PivotDelta | 'reset') => { onClose(); void controller.apply(request.sheet, request.pivot, delta) }
+  const onApply = (delta: PivotDelta | 'reset') => {
+    if (typeof delta !== 'string' && (delta.kind === 'groupDate' || delta.kind === 'groupNumber')) return controller.apply(request.sheet, request.pivot, delta).then(applied => { if (applied) onClose(); return applied })
+    onClose(); return controller.apply(request.sheet, request.pivot, delta)
+  }
   const common = { owner, model: state.model, verified: state.verified, field: request.field, onApply, onClose, onNotice, onShowFieldList: () => void controller.showFieldList(request.sheet, request.pivot, request.invoker) }
   return request.kind === 'page' ? <PivotPageMenu {...common} /> : <PivotFieldMenu {...common} />
 }

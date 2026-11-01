@@ -105,7 +105,7 @@ export interface PivotSession {
  * A shape the engine or the delta refuses stays refused inside a listed kind (a second filter family on a field, a
  * dynamic date filter, a nested ascending value-sort tie, …).
  */
-export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort', 'moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings'])
+export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort', 'moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings', 'groupDate', 'groupNumber', 'ungroup'])
 
 const a1 = (row: number, col: number) => {
   let letters = ''

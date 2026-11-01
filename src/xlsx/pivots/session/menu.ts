@@ -9,9 +9,19 @@ import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDataFunction, 
 import { pivotItemLabel } from '../engine/place'
 import type { PivotViewState } from '../engine/view'
 import { PIVOT_FUNCTION_NAMES } from './functionNames'
+import { pivotMenuGroupInfo } from './grouping'
+import type { PivotDateGroupPeriod } from './delta'
 
 /** One item of a field, by its pivot-item index (the index a delta names). */
 export interface PivotMenuItem { index: number; label: string; hidden: boolean; collapsed: boolean; number?: { value: number; numFmtId: number } }
+export interface PivotMenuGroupInfo {
+  kind?: 'date' | 'number'
+  grouped: boolean
+  baseField: number
+  bounds?: { min: number; max: number }
+  date?: { periods: readonly PivotDateGroupPeriod[]; startDate?: number; endDate?: number; autoStart: boolean; autoEnd: boolean; daysInterval: number }
+  number?: { start?: number; end?: number; by: number; autoStart: boolean; autoEnd: boolean }
+}
 export interface PivotMenuField {
   index: number
   sourceOrder: number
@@ -34,11 +44,13 @@ export interface PivotMenuField {
   multiple?: boolean
   calculated?: boolean
   virtualGroup?: boolean
+  group?: PivotMenuGroupInfo
   defaultDataFn: 'sum' | 'count'
   permissions: { dragToRow: boolean; dragToCol: boolean; dragToPage: boolean; dragToData: boolean; dragOff: boolean }
 }
 export interface PivotMenuModel {
   name: string
+  date1904?: boolean
   fields: PivotMenuField[]
   rows: readonly number[]
   cols: readonly number[]
@@ -95,11 +107,12 @@ export function pivotMenuModel(def: PivotTableDefinition, cache: PivotCacheDefin
       ...(page && def.fields[field]?.multipleItemSelectionAllowed ? { multiple: true } : {}),
       ...(cache.fields[field]?.formula !== undefined ? { calculated: true } : {}),
       ...(cache.fields[field]?.fieldGroup ? { virtualGroup: true } : {}),
+      group: pivotMenuGroupInfo(cache, field, date1904),
       defaultDataFn: cache.fields[field]?.formula !== undefined || (cache.fields[field]?.sharedItems?.containsNumber && !cache.fields[field]?.sharedItems?.containsString && !cache.fields[field]?.sharedItems?.containsDate) ? 'sum' : 'count',
       permissions: { dragToRow: Boolean(def.fields[field]?.dragToRow), dragToCol: Boolean(def.fields[field]?.dragToCol), dragToPage: Boolean(def.fields[field]?.dragToPage), dragToData: Boolean(def.fields[field]?.dragToData), dragOff: Boolean(def.fields[field]?.dragOff) },
     }
   })
   const data = view.data.map((entry, index) => ({ index, field: entry.field, name: entry.name || `${PIVOT_FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${pivotFieldName(def, cache, entry.field)}`, fn: entry.fn, showAs: entry.showAs, baseField: entry.baseField, baseItem: entry.baseItem, ...(entry.numFmtId !== undefined ? { numFmtId: entry.numFmtId } : {}) }))
   const nextFilterId = view.filters.reduce((max, filter) => Math.max(max, filter.id), 0) + 1
-  return { name: String(def.name ?? ''), fields, rows: view.rows, cols: view.cols, pages: view.pages.map(page => page.field), valuesCaption: def.dataCaption || 'Values', ...(def.disableFieldList ? { disableFieldList: true } : {}), ...(def.fieldListSortAscending !== undefined ? { fieldListSortAscending: def.fieldListSortAscending } : {}), canAutoCaptionDataField: true, data, nextFilterId }
+  return { name: String(def.name ?? ''), date1904, fields, rows: view.rows, cols: view.cols, pages: view.pages.map(page => page.field), valuesCaption: def.dataCaption || 'Values', ...(def.disableFieldList ? { disableFieldList: true } : {}), ...(def.fieldListSortAscending !== undefined ? { fieldListSortAscending: def.fieldListSortAscending } : {}), canAutoCaptionDataField: true, data, nextFilterId }
 }

@@ -534,7 +534,8 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-pivottable_tabular_mode.xlsx': ['equal'],
   'lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx': ['equal'],
   'lo-calc-PivotTableFormatsSubTotals.xlsx': ['equal'],
-  'lo-calc-PivotTableWithNoSourceData.xlsx': ['unmeasured'],
+  // Task 37 adds measured date grouping for the saved grouped fields in this corpus case.
+  'lo-calc-PivotTableWithNoSourceData.xlsx': ['equal'],
   'lo-calc-shared-dategroup.xlsx': ['equal', 'equal'],
   'lo-calc-shared-numgroup.xlsx': ['equal', 'equal'],
   'lo-calc-two-data-fields.xlsx': ['equal'],

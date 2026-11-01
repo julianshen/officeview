@@ -27,7 +27,6 @@
  * - `sort` sets `sortType`; `byData` (a data-field index) sets the `autoSortScope` Excel saves for "sort by a value
  *   column" (Task 15 sort-value-top-level), and a sort without `byData` drops it.
  */
-export type { PivotDataFunction } from '../model'
 import {
   PIVOT_VALUES_FIELD,
   type PivotArea, type PivotCacheDefinition, type PivotDataFunction, type PivotDiagnostic, type PivotFilter,
@@ -43,7 +42,9 @@ import { pageFieldsFit } from '../engine/place'
 import { sortItemOrder } from '../engine/sort'
 import { ZH_TW_CAPTIONS } from './captions'
 import { decodeSerial } from '../../formula/serial'
+import { applyGrouping } from './grouping'
 
+export type { PivotDataFunction } from '../model'
 export interface PivotMemoryHold { readonly bytes: number; release(): void }
 export interface PivotDeltaContext {
   def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; view: PivotViewState; date1904: boolean
@@ -102,6 +103,7 @@ function remapDataReferences(view: PivotViewState, map: readonly (number | undef
 
 /** Task 35 candidate transition. Materialization is reserved before allocating the candidate index or item arrays. */
 export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): EngineResult<PivotDeltaStateResult> {
+  if (delta.kind === 'groupDate' || delta.kind === 'groupNumber' || delta.kind === 'ungroup') return applyGrouping(ctx, delta)
   if (!['moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings'].includes(delta.kind)) {
     const view = applyDelta(ctx.view, delta, ctx.def, ctx.cache)
     return view.ok ? { ok: true, value: { def: ctx.def, cache: ctx.cache, store: ctx.store, view: view.value, extraBytes: 0 } } : view

@@ -4,6 +4,7 @@ import { useControlMedia } from '../controlMedia'
 import { controlTarget, CONTROL_CLS } from '../controlUi'
 import type { PivotDelta, PivotMenuModel } from './pivotClient'
 import type { PivotDeltaKind } from './pivotClient'
+import { PivotGroupDialog } from './PivotGroupDialog'
 import { PivotValueSettingsDialog } from './PivotValueSettingsDialog'
 
 export interface PivotFieldListProps {
@@ -11,7 +12,7 @@ export interface PivotFieldListProps {
   pivot: number
   pivotCount?: number
   onPivot?(pivot: number): void
-  onApply(delta: PivotDelta | 'reset'): void
+  onApply(delta: PivotDelta | 'reset'): Promise<boolean> | void
   verified?: ReadonlySet<PivotDeltaKind>
   onClose(): void
   invoker?: HTMLElement | null
@@ -28,6 +29,7 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
   const root = useRef<HTMLElement>(null)
   const [search, setSearch] = useState('')
   const [dragging, setDragging] = useState<DragSource | null>(null)
+  const [groupField, setGroupField] = useState<number | null>(null)
   const [valueSettingsDataIndex, setValueSettingsDataIndex] = useState<number | null>(null)
   const fields = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
@@ -128,9 +130,10 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
             <select aria-label={`Actions for ${label}`} style={controlTarget} value="" onChange={event => { const action = event.target.value; if (action === 'up' || action === 'down' || action === 'begin' || action === 'end') {
               if (area.id === 'data') { const toIndex = action === 'up' ? Math.max(0, index - 1) : action === 'down' ? Math.min(model.data.length - 1, index + 1) : action === 'begin' ? 0 : model.data.length - 1; onApply({ kind: 'moveDataField', dataIndex: index, toIndex }) }
               else { const list = chips(area.id), nextIndex = action === 'up' ? Math.max(0, index - 1) : action === 'down' ? Math.min(list.length - 1, index + 1) : action === 'begin' ? 0 : list.length - 1; move(field, area.id, nextIndex) }
-            } else if (action === 'remove') area.id === 'data' ? onApply({ kind: 'removeDataField', dataIndex: index }) : onApply({ kind: 'moveField', field, axis: 'none' }); else if (action === 'valueSettings') setValueSettingsDataIndex(index); else if (action) move(field, action as Area) ; event.currentTarget.value = '' }}>
+            } else if (action === 'remove') area.id === 'data' ? onApply({ kind: 'removeDataField', dataIndex: index }) : onApply({ kind: 'moveField', field, axis: 'none' }); else if (action === 'valueSettings') setValueSettingsDataIndex(index); else if (action === 'group') setGroupField(field); else if (action === 'ungroup') onApply({ kind: 'ungroup', field }); else if (action) move(field, action as Area) ; event.currentTarget.value = '' }}>
               <option value="">Actions</option>
               {area.id === 'data' && (!verified || verified.has('valueSettings')) && <option value="valueSettings">Value field settings…</option>}
+              {area.id !== 'data' && meta.group?.kind === 'date' && verified?.has('groupDate') && <option value="group">Group…</option>}{area.id !== 'data' && meta.group?.kind === 'number' && verified?.has('groupNumber') && <option value="group">Group…</option>}{area.id !== 'data' && meta.group?.grouped && verified?.has('ungroup') && <option value="ungroup">Ungroup</option>}
               {meta.permissions.dragToPage && !meta.calculated && <option value="page">Move to Filters</option>}{meta.permissions.dragToCol && !meta.calculated && <option value="col">Move to Columns</option>}{meta.permissions.dragToRow && !meta.calculated && <option value="row">Move to Rows</option>}{meta.permissions.dragToData && <option value="data">Move to Values</option>}
               <option value="up">Move Up</option><option value="down">Move Down</option><option value="begin">Move to Beginning</option><option value="end">Move to End</option>{meta.permissions.dragOff && <option value="remove">Remove Field</option>}
             </select>
@@ -140,6 +143,8 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
     </div>
     <footer style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><button type="button" style={controlTarget} onClick={() => onApply('reset')}>Reset to saved view</button><button type="button" style={controlTarget} onClick={close}>Close</button></footer>
     </section>
+    {groupField !== null && model.fields.find(field => field.index === groupField)?.group?.kind && <PivotGroupDialog field={model.fields.find(field => field.index === groupField)!} date1904={model.date1904 ?? false}
+      onApply={delta => Promise.resolve(onApply(delta)).then(result => result !== false)} onClose={() => setGroupField(null)} />}
     {valueSettingsDataIndex !== null && model.data[valueSettingsDataIndex] && <PivotValueSettingsDialog model={model} dataIndex={valueSettingsDataIndex}
       onApply={delta => Promise.resolve(onApply(delta)).then(result => result !== false)} onClose={() => setValueSettingsDataIndex(null)} />}
   </>

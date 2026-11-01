@@ -33,7 +33,7 @@ const FIXTURE = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/engine/', 
 const FIXTURE_ROOT = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url)))
 const INTERACTION_CASES = (JSON.parse(readFileSync(resolve(FIXTURE_ROOT, 'interaction/manifest.json'), 'utf8')) as Array<{
   case: string; file: string; task: number; status?: string; setup?: string; seed: string; base?: string; pivot: string; delta: PivotDelta[]
-}>).filter(entry => (entry.task === 25 || entry.task === 35 || entry.task === 36) && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
+}>).filter(entry => (entry.task === 25 || entry.task === 35 || entry.task === 36 || entry.task === 37) && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
 const SEEDS: Record<string, string> = {
   'engine-seed': resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx'),
   'chart-seed': resolve(FIXTURE_ROOT, 'recipes/pivot-chart-seed.xlsx'),
@@ -707,6 +707,37 @@ describe('worker pivot protocol', () => {
     expect(committedC).toBe(stageC - (committedB - opened))
     await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
     expect(session.memoryStats().sourceBytes).toBe(beforeOpen)
+  })
+
+  it('worker multi-level date group and ungroup release derived cache bytes', async () => {
+    const file = resolve(FIXTURE_ROOT, 'interaction/interaction-filter-date-base.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const session = kernel.session(docId)!, baseline = session.memoryStats().sourceBytes
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 })
+    const opened = session.memoryStats().sourceBytes
+    const grouped = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'groupDate', field: 5, periods: ['months', 'quarters', 'years'] }, grantBytes: 16 * 1024 * 1024 }))
+    expect(grouped.kind).toBe('pivotApply')
+    const staged = session.memoryStats().sourceBytes
+    expect(staged).toBeGreaterThan(opened)
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: 1 })
+    const committed = session.memoryStats().sourceBytes
+    expect(committed).toBe(staged)
+    const ungrouped = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 1, revision: 2,
+      delta: { kind: 'ungroup', field: 5 }, grantBytes: 16 * 1024 * 1024 }))
+    expect(ungrouped.kind).toBe('pivotApply')
+    expect((ungrouped as { menu: { fields: unknown[] } }).menu.fields).toHaveLength(12)
+    const ungroupCommit = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: 2 }))
+    expect(ungroupCommit).toMatchObject({ kind: 'pivotCommit', revision: 2 })
+    // This fixture's base values are inline, so ungroup materializes them; that
+    // charge remains. The date hierarchy charge must still disappear on commit.
+    expect(session.memoryStats().sourceBytes).toBeLessThan(committed)
+    await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    expect(session.memoryStats().sourceBytes).toBe(baseline)
   })
 
   it('pivots on one cache share one store until the last release', async () => {
