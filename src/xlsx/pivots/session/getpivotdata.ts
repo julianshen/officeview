@@ -6,6 +6,7 @@ import { registerFormulaFunction } from '../../formula/functions'
 import { dataFieldSource, PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotTableDefinition } from '../model'
 import type { PivotLayout } from '../engine/place'
 import { pivotItemLabel } from '../engine/place'
+import { PIVOT_FUNCTION_NAMES } from './functionNames'
 
 export interface LivePivotDataContext {
   sheet: string
@@ -26,7 +27,6 @@ function cellsOf(context: LivePivotDataContext): ReadonlyMap<string, PivotLayout
   return index
 }
 
-const functions: Record<string, string> = { sum: 'Sum', count: 'Count', average: 'Average', max: 'Max', min: 'Min', product: 'Product', countNums: 'Count', stdDev: 'StdDev', stdDevp: 'StdDevp', var: 'Var', varp: 'Varp' }
 const text = (value: EvaluationValue): string | undefined => typeof value === 'string' ? value : undefined
 
 function fieldByName(def: PivotTableDefinition, cache: PivotCacheDefinition, name: string): number {
@@ -37,7 +37,7 @@ function dataByName(context: LivePivotDataContext, name: string): number {
   return context.def.dataFields.findIndex(data => {
     const source = dataFieldSource(data)
     const fieldName = context.def.fields[source]?.name ?? context.cache.fields[source]?.name ?? ''
-    const label = data.name || `${functions[data.subtotal] ?? data.subtotal} of ${fieldName}`
+    const label = data.name || `${PIVOT_FUNCTION_NAMES[data.subtotal] ?? data.subtotal} of ${fieldName}`
     return label.toLocaleLowerCase() === name.toLocaleLowerCase()
   })
 }

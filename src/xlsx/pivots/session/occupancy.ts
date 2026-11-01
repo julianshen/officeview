@@ -5,8 +5,7 @@
  * asks only about cells outside the pivot's own area, so a pivot's own merges never block it.
  */
 import { RectangleIndex } from '../../view/structure'
-import { MAX_COLS, MAX_ROWS, type SourceRect } from '../../view/coordinates'
-import { cellCoords } from '../stub'
+import { MAX_COLS, MAX_ROWS, parseA1Range, type SourceRect } from '../../view/coordinates'
 import type { XlsxSheet } from '../../types'
 
 export interface StructuralBlockers { rects: SourceRect[]; notes: readonly number[]; notesUnknown: boolean }
@@ -22,12 +21,7 @@ export function structuralOccupancy(blockers: StructuralBlockers): StructuralOcc
   }
 }
 
-const rangeOf = (ref: string | undefined): SourceRect | undefined => {
-  if (!ref) return undefined
-  const [first, last = first] = ref.replace(/\$/g, '').split(':')
-  const a = cellCoords(first!), b = cellCoords(last)
-  return a && b ? { r0: Math.min(a.row, b.row) - 1, r1: Math.max(a.row, b.row) - 1, c0: Math.min(a.col, b.col) - 1, c1: Math.max(a.col, b.col) - 1 } : undefined
-}
+const rangeOf = (ref: string | undefined): SourceRect | undefined => ref ? parseA1Range(ref) : undefined
 const toEdge = (row: number, col: number): SourceRect => ({ r0: row, r1: MAX_ROWS - 1, c0: col, c1: MAX_COLS - 1 })
 
 /** A resident sheet's blockers; `spills` are the engine's footprints when it evaluated the sheet (`engineSpillFootprints`). */

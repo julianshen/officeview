@@ -18,7 +18,8 @@ import type {
 } from './contracts'
 import { resolveDrawingAnchors } from './drawingBounds'
 import { PackageError } from '../../core/package-error'
-import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1Range, type SourceCell, type SourceRect } from './coordinates'
+import { uniqueRectList } from './rectIndex'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
@@ -76,22 +77,6 @@ function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly Sou
     if (xOrder[i] !== yOrder[i]) return false
   }
   return true
-}
-function uniqueRects(rects: readonly SourceRect[]): SourceRect[] {
-  const seen = new Set<string>()
-  return rects.filter(rect => {
-    const key = `${rect.r0},${rect.c0},${rect.r1},${rect.c1}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-function pivotRegionRect(ref: string): SourceRect | undefined {
-  try {
-    const [first, last = first] = ref.split(':')
-    const a = parseA1(first), b = parseA1(last)
-    return { r0: Math.min(a.row, b.row), r1: Math.max(a.row, b.row), c0: Math.min(a.col, b.col), c1: Math.max(a.col, b.col) }
-  } catch { return undefined }
 }
 interface OverlayState { overlay?: ValueOverlay; structureGen: number }
 const overlayStates = new WeakMap<object, OverlayState>()
@@ -748,9 +733,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     // Every saved pivot is guarded with its page-field cells, overlay or not (S3-G). Vacated cells read
     // empty but stay guarded inside a saved area (S3-L): the guard is saved ∪ the overlay's protected
     // bounds, whatever the producer names, never the overlay alone.
-    const groups = (sheet.metadata.pivotRegions ?? []).map(region => { const table = pivotRegionRect(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] })
-    const saved = uniqueRects(groups.flat())
-    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
+    const groups = (sheet.metadata.pivotRegions ?? []).map(region => { const table = parseA1Range(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] })
+    const saved = uniqueRectList(groups.flat())
+    const pivots = uniqueRectList([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     return { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
   }
   /** Resolved once the sheet is complete (its row/column metadata is final), against the geometry the source publishes. */
@@ -1595,10 +1580,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       for (const candidate of workbook.sheets) {
         if (signal?.aborted) return undefined
         if (candidate.state !== 'complete') return true // incomplete scan is conservative
-        const pivots = (candidate.metadata.pivotRegions ?? []).flatMap(region => {
-          const [a, b = a] = region.ref.split(':')
-          try { const first = parseA1(a!.replace(/\$/g, '')), last = parseA1(b!.replace(/\$/g, '')); return [{ r0: Math.min(first.row, last.row), r1: Math.max(first.row, last.row), c0: Math.min(first.col, last.col), c1: Math.max(first.col, last.col) }] } catch { return [] }
-        })
+        const pivots = (candidate.metadata.pivotRegions ?? []).flatMap(region => { const rect = parseA1Range(region.ref); return rect ? [rect] : [] })
         for (const summary of workbook.store.pages(candidate.sheetId)) {
           if (signal?.aborted) return undefined
           const lease = await workbook.store.pinnedPage(candidate.sheetId, summary.pageId)

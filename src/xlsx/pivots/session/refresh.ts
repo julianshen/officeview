@@ -34,23 +34,17 @@ import { recordEvents, type RecordLimits, type RecordStore } from '../engine/rec
 import { placeCells, type PivotLayout } from '../engine/place'
 import { initialViewState } from '../engine/view'
 import { savedPivotLayout } from '../savedLayout'
+import { parseA1Range } from '../../view/coordinates'
 
 const refuse = (message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-refresh-on-load', message } satisfies PivotDiagnostic })
 const limit = (message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-records-limit', message } satisfies PivotDiagnostic })
 
-const CELL = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,6})$/
-const cellOf = (ref: string) => {
-  const m = CELL.exec(ref)
-  return m ? { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1 } : undefined
-}
 /** A worksheet range source's sheet and rectangle; undefined for a defined name or table, another workbook or no ref. */
 export function worksheetSourceRange(cache: PivotCacheDefinition): { sheet: string; ref: SheetRect } | undefined {
   const source = cache.source.worksheet
   if (cache.source.type !== 'worksheet' || !source || source.relId !== undefined || source.name !== undefined || !source.ref || !source.sheet) return undefined
-  const [a, b = a] = source.ref.split(':')
-  const from = cellOf(a!), to = cellOf(b!)
-  if (!from || !to) return undefined
-  return { sheet: source.sheet, ref: { minRow: Math.min(from.row, to.row), minCol: Math.min(from.col, to.col), maxRow: Math.max(from.row, to.row), maxCol: Math.max(from.col, to.col) } }
+  const rect = parseA1Range(source.ref)
+  return rect ? { sheet: source.sheet, ref: { minRow: rect.r0, minCol: rect.c0, maxRow: rect.r1, maxCol: rect.c1 } } : undefined
 }
 
 const DAY_MS = 86_400_000

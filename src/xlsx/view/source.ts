@@ -1,4 +1,4 @@
-import { RectCover } from './rectIndex'
+import { RectCover, uniqueRectList } from './rectIndex'
 import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type SourceAllocationOptions } from './allocationAccount'
 import type { FormatAllocation } from '../formula/format'
 /**
@@ -28,7 +28,7 @@ import type { TableMetadata } from '../formula/types'
 import { savedPivotRects } from '../pivots/stub'
 import { engineSpillFootprints, type EngineSpillFootprint } from '../formula/workbook'
 import { resolveDrawingAnchors } from './drawingBounds'
-import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1Range, type SourceCell, type SourceRect } from './coordinates'
 import { createAxisMetrics } from './axes'
 import { createIntervalSet } from './visibility'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
@@ -163,15 +163,8 @@ export class LaneBuilder {
 /** Bytes a lanes run holds (row 4 + tag 1 + number 8 + style 4 per entry, 2 per code unit). */
 export const laneBytes = (lanes: ColumnLanes): number => lanes.rows.length * 17 + lanes.text.length * 2 + lanes.textStart.length * 4
 
-function parseRange(ref: string): SourceRect | null {
-  try {
-    const [first, last = first] = ref.split(':')
-    const a = parseA1(first), b = parseA1(last)
-    return { r0: Math.min(a.row, b.row), r1: Math.max(a.row, b.row), c0: Math.min(a.col, b.col), c1: Math.max(a.col, b.col) }
-  } catch {
-    return null
-  }
-}
+/** An A1 range (or cell) ref as a rectangle, null when unreadable (the shared parser, `parseA1Range`). */
+const parseRange = (ref: string): SourceRect | null => parseA1Range(ref) ?? null
 const intersects = (a: SourceRect, b: SourceRect): boolean =>
   a.r0 <= b.r1 && b.r0 <= a.r1 && a.c0 <= b.c1 && b.c0 <= a.c1
 function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly SourceRect[] | undefined): boolean {
@@ -184,15 +177,6 @@ function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly Sou
     if (xOrder[i] !== yOrder[i]) return false
   }
   return true
-}
-function uniqueRects(rects: readonly SourceRect[]): SourceRect[] {
-  const seen = new Set<string>()
-  return rects.filter(rect => {
-    const key = `${rect.r0},${rect.c0},${rect.r1},${rect.c1}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
 }
 interface OverlayState { overlay?: ValueOverlay; structureGen: number }
 // Keep sheets that never publish a pivot overlay free of per-store overlay
@@ -265,7 +249,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
         return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
       }),
     ]
-    this.savedPivots = Object.freeze(uniqueRects(groups.flat()).map(rect => Object.freeze(rect)))
+    this.savedPivots = Object.freeze(uniqueRectList(groups.flat()).map(rect => Object.freeze(rect)))
     this.baseExtent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
   }
   get stamp(): SourceStamp { return this.currentStamp }
@@ -724,7 +708,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     // Every saved pivot is guarded with its page-field cells, overlay or not (S3-G). Vacated cells read
     // empty but stay guarded inside a saved area (S3-L): the guard is saved ∪ the overlay's protected
     // bounds, whatever the producer names, never the overlay alone.
-    const pivots = uniqueRects([...this.savedPivots, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
+    const pivots = uniqueRectList([...this.savedPivots, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
     return result
@@ -1002,10 +986,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       for (const { sheet } of sheets) {
         if (signal?.aborted) return undefined
         const refs = [...(sheet.pivotTables ?? []).map(def => String(def.location.ref)), ...(sheet.pivotRegions ?? []).map(region => region.ref)]
-        const pivots = refs.flatMap(ref => {
-          const [a, b = a] = ref.split(':')
-          try { const first = parseA1(a!.replace(/\$/g, '')), last = parseA1(b!.replace(/\$/g, '')); return [{ r0: Math.min(first.row, last.row), r1: Math.max(first.row, last.row), c0: Math.min(first.col, last.col), c1: Math.max(first.col, last.col) }] } catch { return [] }
-        })
+        const pivots = refs.flatMap(ref => { const rect = parseA1Range(ref); return rect ? [rect] : [] })
         for (const row of sheet.rows) for (const cell of row.cells) if (cell.formula || cell.sharedFormula) {
           if (signal?.aborted) return undefined
           if (!pivots.some(r => cell.row >= r.r0 && cell.row <= r.r1 && cell.col >= r.c0 && cell.col <= r.c1)) return true

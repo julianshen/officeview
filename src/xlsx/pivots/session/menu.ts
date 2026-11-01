@@ -8,6 +8,7 @@
 import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotFieldSortType, type PivotFilter, type PivotTableDefinition } from '../model'
 import { pivotItemLabel } from '../engine/place'
 import type { PivotViewState } from '../engine/view'
+import { PIVOT_FUNCTION_NAMES } from './functionNames'
 
 /** One item of a field, by its pivot-item index (the index a delta names). */
 export interface PivotMenuItem { index: number; label: string; hidden: boolean; collapsed: boolean; number?: { value: number; numFmtId: number } }
@@ -36,9 +37,6 @@ export interface PivotMenuModel {
   nextFilterId: number
 }
 
-const FUNCTION_NAMES: Record<string, string> = {
-  sum: 'Sum', count: 'Count', average: 'Average', max: 'Max', min: 'Min', product: 'Product', countNums: 'Count', stdDev: 'StdDev', stdDevp: 'StdDevp', var: 'Var', varp: 'Varp',
-}
 export function pivotFieldName(def: PivotTableDefinition, cache: PivotCacheDefinition | undefined, field: number): string {
   if (field === PIVOT_VALUES_FIELD) return def.dataCaption || 'Values'
   return def.fields[field]?.name ?? cache?.fields[field]?.name ?? `Field ${field + 1}`
@@ -80,7 +78,7 @@ export function pivotMenuModel(def: PivotTableDefinition, cache: PivotCacheDefin
       ...(page ? { page: page.selected } : {}),
     }
   })
-  const data = view.data.map((entry, index) => ({ index, name: entry.name || `${FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${pivotFieldName(def, cache, entry.field)}` }))
+  const data = view.data.map((entry, index) => ({ index, name: entry.name || `${PIVOT_FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${pivotFieldName(def, cache, entry.field)}` }))
   const nextFilterId = view.filters.reduce((max, filter) => Math.max(max, filter.id), 0) + 1
   return { name: String(def.name ?? ''), fields, data, nextFilterId }
 }

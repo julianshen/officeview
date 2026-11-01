@@ -292,12 +292,13 @@ describe('refresh fix round 1', () => {
 
   it('a source too large for the record limits refuses before reading its rows', async () => {
     const seed = await book('recipes/refresh-seed')
-    const cache = tall(seed.cache, 3_999_999), range = worksheetSourceRange(cache)!
+    // A worksheet range ends at row 1,048,576, so the byte cap is lowered to reach it with a real range.
+    const cache = tall(seed.cache, 999_999), range = worksheetSourceRange(cache)!
     const base = sheetCellReader(seed.source('Data')!)
     let reads = 0
     const counted = (row: number, col: number) => { reads++; return base(row, col) }
-    // Within D's record count (4,000,000) but not its 64 MiB: the store's least size is known from the shape alone.
-    const result = recordsFromSource(cache, counted, range.ref, false, RECORD_LIMITS.D)
+    // Within the record count (4,000,000) but not the byte cap: the store's least size is known from the shape alone.
+    const result = recordsFromSource(cache, counted, range.ref, false, { ...RECORD_LIMITS.D, maxBytes: 16 * 1024 * 1024 })
     expect(result.ok ? 'ok' : result.diagnostic.feature).toBe('pivot-records-limit')
     expect(reads).toBeLessThanOrEqual(12)
     // An admission refusal stops construction too.

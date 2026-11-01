@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   MAX_ROWS, MAX_COLS, MAX_CELL_ID, CoordinateError,
   validateCoordinate, isValidCoordinate, cellId, cellIdToCoordinate,
-  parseA1, formatA1, columnToLetters, lettersToColumn,
+  parseA1, parseA1Range, formatA1, columnToLetters, lettersToColumn,
   validateSourceRect, isValidSourceRect, sourceRectCellCount,
   validateSourceRectInput, isValidSourceRectInput, sourceRectCellCountInput, cellIdToCoordinateInput,
 } from '../src/xlsx/view/coordinates'
@@ -94,6 +94,12 @@ describe('coordinate contracts (spec §3, AC-CAP-01)', () => {
       expectCode(() => parseA1(address), 'invalid-a1')
     },
   )
+  it.each([
+    ['A1', { r0: 0, r1: 0, c0: 0, c1: 0 }], ['$A$3:$I$24', { r0: 2, r1: 23, c0: 0, c1: 8 }], ['I24:A3', { r0: 2, r1: 23, c0: 0, c1: 8 }],
+    ['A1:B2:C3', undefined], ['A1:', undefined], ['Sheet1!A1:B2', undefined], ['A1:XFE1', undefined], ['', undefined],
+  ] as const)('parses the A1 range %s through the shared cell parser', (ref, rect) => {
+    expect(parseA1Range(ref)).toEqual(rect)
+  })
   it.each([['A', 0], ['Z', 25], ['AA', 26], ['AZ', 51], ['BA', 52], ['XFD', 16_383]] as const)(
     'round-trips column letters %s', (letters, col) => {
       expect(columnToLetters(col)).toBe(letters)
