@@ -29,13 +29,18 @@
  */
 import {
   PIVOT_VALUES_FIELD,
-  type PivotArea, type PivotCacheDefinition, type PivotDiagnostic, type PivotFilter, type PivotTableDefinition,
+  type PivotArea, type PivotCacheDefinition, type PivotDataFunction, type PivotDiagnostic, type PivotFilter,
+  type PivotShowAsX14, type PivotShowDataAs, type PivotTableDefinition,
 } from '../model'
 import type { EngineResult } from '../engine/axes'
 import { isDateFilter, isLabelFilter } from '../engine/filters'
 import type { FieldState, PivotViewState } from '../engine/view'
 
+export type PivotDateGroupPeriod = 'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'
+export type PivotValueShowAs = PivotShowDataAs | PivotShowAsX14
+
 export type PivotDelta =
+  // Stage 3 kinds (unchanged)
   | { kind: 'collapse'; field: number; item: number; collapsed: boolean }
   | { kind: 'collapseField'; field: number; collapsed: boolean }
   | { kind: 'collapseAll'; collapsed: boolean }
@@ -44,8 +49,20 @@ export type PivotDelta =
   | { kind: 'filter'; field: number; filter: PivotFilter }               // label | value | date | top-10
   | { kind: 'clearFilters'; field: number }
   | { kind: 'sort'; field: number; order: 'ascending' | 'descending'; byData?: number }
+  // Stage 4 kinds (Task 35: field list; Task 36: value settings; Task 37: grouping)
+  | { kind: 'moveField'; field: number; axis: 'row' | 'col' | 'page' | 'none'; index?: number }
+  | { kind: 'addDataField'; field: number; index?: number }
+  | { kind: 'removeDataField'; dataIndex: number }
+  | { kind: 'moveDataField'; dataIndex: number; toIndex: number }
+  | { kind: 'valueSettings'; dataIndex: number; fn?: PivotDataFunction; showAs?: PivotValueShowAs; baseField?: number; baseItem?: number; name?: string; numFmtId?: number | null }
+  | { kind: 'groupDate'; field: number; periods: readonly PivotDateGroupPeriod[]; startDate?: number; endDate?: number; daysInterval?: number }
+  | { kind: 'groupNumber'; field: number; start?: number; end?: number; by: number }
+  | { kind: 'ungroup'; field: number }
 export type PivotDeltaKind = PivotDelta['kind']
-export const PIVOT_DELTA_KINDS: readonly PivotDeltaKind[] = Object.freeze(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
+export const PIVOT_DELTA_KINDS: readonly PivotDeltaKind[] = Object.freeze([
+  'collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort',
+  'moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings', 'groupDate', 'groupNumber', 'ungroup',
+])
 
 const refuse = (feature: string, message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } satisfies PivotDiagnostic })
 const invalid = (message: string) => refuse('pivot-delta-invalid', message)
@@ -76,6 +93,17 @@ function valueScope(data: number): PivotArea {
 }
 
 export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTableDefinition, _cache: PivotCacheDefinition): EngineResult<PivotViewState> {
+  switch (delta.kind) {
+    case 'moveField':
+    case 'addDataField':
+    case 'removeDataField':
+    case 'moveDataField':
+    case 'valueSettings':
+    case 'groupDate':
+    case 'groupNumber':
+    case 'ungroup':
+      return refuse('pivot-interaction-unverified', `the ${delta.kind} interaction is not implemented yet`)
+  }
   if (delta.kind === 'collapseAll') {
     // Every field with a level below it on its axis (the Values field counts as a level).
     const axis = new Set([...view.rows.slice(0, -1), ...view.cols.slice(0, -1)].filter(field => field !== PIVOT_VALUES_FIELD))

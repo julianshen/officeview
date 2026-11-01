@@ -118,11 +118,18 @@ function session(input: string, saved: string, lines: (t: Target) => string[], r
 }
 const message = (e: unknown) => String((e as Error)?.message ?? e).split('\n').find(l => /error|timed out|not found|lacks|has/i.test(l))?.trim() ?? String(e)
 
-async function verify(file: string, markers: RegExp[], cacheMarkers: RegExp[] = [], absent: RegExp[] = []): Promise<string> {
+async function verify(
+  file: string,
+  markers: RegExp[],
+  cacheMarkers: RegExp[] = [],
+  absent: RegExp[] = [],
+  cacheAbsent: RegExp[] = [],
+): Promise<string> {
   const parts = await readParts(file)
   for (const m of markers) if (!m.test(parts.pivot)) throw new Error(`saved pivot lacks ${m}`)
   for (const m of cacheMarkers) if (!m.test(parts.cache)) throw new Error(`saved cache lacks ${m}`)
   for (const m of absent) if (m.test(parts.pivot)) throw new Error(`saved pivot has ${m}`)
+  for (const m of cacheAbsent) if (m.test(parts.cache)) throw new Error(`saved cache has ${m}`)
   return pivotName(parts.pivot)
 }
 const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
@@ -333,9 +340,10 @@ async function probes(): Promise<void> {
 
 const INTERACTION_DIR = join(PIVOT_DIR, 'interaction')
 const INTERACTION_MANIFEST = join(INTERACTION_DIR, 'manifest.json')
+const STAGE4_RECIPES_DOC = join(ROOT, 'docs/validation/xlsx-pivots-recipes-stage4.md')
 
-/** One `interaction/manifest.json` entry: the plan's `InteractionCase` (Task 24 interfaces) plus where the case starts
- * (`base`), what non-UI change it made (`setup`), and how it was built. */
+/** One `interaction/manifest.json` entry: the plan's `InteractionCase` (Task 24 & Task 34 interfaces) plus where the
+ * case starts (`base`), what non-UI change it made (`setup`), and how it was built. */
 export interface InteractionManifestEntry {
   case: string
   file: string
@@ -348,8 +356,9 @@ export interface InteractionManifestEntry {
   base?: string
   /** A change no PivotDelta expresses, made before `delta`: the case is a measurement or a base, not a delta oracle. */
   setup?: string
-  route: 'applescript' | 'xml'
+  route: InteractionCase['route']
   status: 'built' | 'pending'
+  recipe?: string
   error?: string
 }
 
@@ -456,7 +465,7 @@ async function runInteraction(c: InteractionCase, route: 'applescript' | 'xml', 
   }
 }
 async function verifyInteraction(c: InteractionCase, out: string): Promise<string> {
-  const pivot = await verify(out, c.markers, c.cacheMarkers, c.absent)
+  const pivot = await verify(out, c.markers, c.cacheMarkers, c.absent, c.cacheAbsent)
   if (c.recordMarkers) await verifyRecords(out, c.recordMarkers)
   await verifySheets(out, c.sheetMarkers)
   if (c.chart) await verifyChart(out)
@@ -490,8 +499,22 @@ export async function buildInteractionCase(c: InteractionCase, fallback = true):
     catch (e) { error = [error, `delta: ${message(e)}`].filter(Boolean).join('; '); status = 'pending' }
     return {
       case: c.id, file: relative(ROOT, out), pivot, task: c.task, seed: c.seed, delta, measures: c.measures,
-      ...(c.base ? { base: c.base } : {}), ...(c.setup ? { setup: c.setup } : {}), route, status, ...(error ? { error } : {}),
+      ...(c.base ? { base: c.base } : {}), ...(c.setup ? { setup: c.setup } : {}), route, status,
+      ...(c.recipe && status === 'pending' ? { recipe: c.recipe } : {}),
+      ...(error ? { error } : {}),
     }
+  }
+  if (c.route === 'recipe') {
+    if (existsSync(out)) {
+      try {
+        const pivot = await verifyInteraction(c, out)
+        console.log(`verified existing recipe save ${c.id}`)
+        return entry('recipe', 'built', pivot)
+      } catch (e) {
+        return entry('recipe', 'pending', undefined, `recipe verify: ${message(e)}`)
+      }
+    }
+    return entry('recipe', 'pending')
   }
   const routes: Array<'applescript' | 'xml'> = c.route === 'xml' ? ['xml'] : ['applescript', ...(fallback && c.fallback === 'xml' ? ['xml' as const] : [])]
   const errors: string[] = []
@@ -508,7 +531,7 @@ export async function buildInteractionCase(c: InteractionCase, fallback = true):
     }
   }
   rmSync(out, { force: true })
-  return entry(routes[routes.length - 1]!, 'pending', undefined, errors.join('; '))
+  return entry(c.recipe ? 'recipe' : routes[routes.length - 1]!, 'pending', undefined, errors.join('; '))
 }
 
 function loadInteractionManifest(): InteractionManifestEntry[] {
@@ -518,6 +541,30 @@ function writeInteractionManifest(entries: InteractionManifestEntry[]): void {
   const order = new Map(INTERACTION_CASES.map((c, i) => [c.id, i]))
   entries.sort((a, b) => (order.get(a.case) ?? 1e9) - (order.get(b.case) ?? 1e9))
   writeFileSync(INTERACTION_MANIFEST, `${JSON.stringify(entries, null, 2)}\n`)
+}
+/** Single Stage 4 batch recipe doc (spec §11): written when any Stage 4 case (task 35..37) remains pending. */
+export function writeInteractionRecipes(entries: readonly InteractionManifestEntry[]): void {
+  const pending = entries.filter(e => e.status === 'pending' && (e.task === 35 || e.task === 36 || e.task === 37))
+  if (!pending.length) { rmSync(STAGE4_RECIPES_DOC, { force: true }); return }
+  const byId = new Map(INTERACTION_CASES.map(c => [c.id, c]))
+  const lines = [
+    '# XLSX pivots: Stage 4 interaction recipes', '',
+    'Cases that neither AppleScript nor a verified Excel-refreshed XML edit could complete (`scripts/xlsx-refs/build-engine.ts --interaction`).',
+    'Open a copy of each case\'s start workbook (never overwrite `recipes/*` or `engine/*`), apply the exact Excel UI clicks,',
+    'refresh the pivot (`PivotTable Analyze → Refresh`), and save to the output path listed.', '',
+  ]
+  for (const e of pending) {
+    const c = byId.get(e.case)
+    const start = c ? `tests/fixtures/xlsx-pivots/${startOf(c)}.xlsx` : `tests/fixtures/xlsx-pivots/recipes/${e.seed}.xlsx`
+    lines.push(`## ${e.case} (Task ${e.task})`, '')
+    lines.push(`- Start file: \`${start}\``)
+    lines.push(`- Output file: \`${e.file}\``)
+    if (e.measures) lines.push(`- Measures: ${e.measures}`)
+    lines.push(e.recipe || c?.recipe ? `- Recipe: ${e.recipe ?? c?.recipe}` : '- Recipe: none yet; automated routes failed (below) and require System Events UI recipe or owner save.')
+    if (e.error) lines.push(`- Automated attempts: ${e.error}`)
+    lines.push('')
+  }
+  writeFileSync(STAGE4_RECIPES_DOC, lines.join('\n'))
 }
 
 /** The parts the dry run diffs a case against: its start file when built, else the nearest built ancestor (a base
@@ -574,7 +621,8 @@ export async function interactionDryRun(cases: readonly InteractionCase[], seeds
       }
     }
     console.log(`   markers: ${[...c.markers.map(m => `pivot ${m}`), ...(c.cacheMarkers ?? []).map(m => `cache ${m}`), ...(c.absent ?? []).map(m => `not ${m}`),
-      ...(c.recordMarkers ?? []).map(m => `records ${m}`), ...(c.sheetMarkers ?? []).map(m => `${m.sheet} ${m.re}`), ...(c.chart ? ['pivot chart'] : [])].map(s => clip(s, 120)).join(' | ')}`)
+      ...(c.cacheAbsent ?? []).map(m => `cache not ${m}`), ...(c.recordMarkers ?? []).map(m => `records ${m}`), ...(c.sheetMarkers ?? []).map(m => `${m.sheet} ${m.re}`), ...(c.chart ? ['pivot chart'] : [])].map(s => clip(s, 120)).join(' | ')}`)
+    if (c.recipe) console.log(`   recipe: ${c.recipe}`)
     if (exact) {
       try { console.log(`   delta: ${JSON.stringify(c.delta.map(spec => resolveDelta(spec, startShapeOf(parts))).map(d => d.kind === 'filter' ? { ...d, filter: `${d.filter.type} (literal; Excel's saved filter replaces it)` } : d))}`) }
       catch (e) { failures++; console.log(`   delta RESOLUTION FAILED: ${(e as Error).message}`) }
@@ -589,32 +637,37 @@ export async function interactionDryRun(cases: readonly InteractionCase[], seeds
 }
 
 /** The first AppleScript case per unconfirmed incantation whose start file exists; nothing is recorded. */
-async function interactionProbes(): Promise<void> {
+async function interactionProbes(selected: readonly InteractionCase[] = INTERACTION_CASES): Promise<void> {
   const dir = join(INTERACTION_DIR, '.probes')
   mkdirSync(WORK_DIR, { recursive: true }); mkdirSync(dir, { recursive: true })
   const seen = new Set<string>()
-  for (const c of INTERACTION_CASES) {
+  for (const c of selected) {
     if (!c.probe || seen.has(c.probe) || c.route !== 'applescript' || !existsSync(fixturePath(startOf(c)))) continue
     seen.add(c.probe)
     let status: string
     try { await runInteraction(c, 'applescript', join(dir, `${c.id}.xlsx`)); await verifyInteraction(c, join(dir, `${c.id}.xlsx`)); status = 'REACHED' }
     catch (e) { status = `FAILED ${message(e)}` }
     console.log(`${c.probe} (${c.id}): ${status}`)
+    // Only this run's probe file: the directory also holds a tracked Stage 3 probe save.
+    rmSync(join(dir, `${c.id}.xlsx`), { force: true })
   }
-  for (const s of SEED_BUILDS) if (!seen.has(s.probe)) console.log(`${s.probe} (${s.id}): run --interaction --seeds (the seed build is the probe)`)
+  if (selected === INTERACTION_CASES) {
+    for (const s of SEED_BUILDS) if (!seen.has(s.probe)) console.log(`${s.probe} (${s.id}): run --interaction --seeds (the seed build is the probe)`)
+  }
   rmSync(WORK_DIR, { recursive: true, force: true })
 }
 
 async function interactionCli(args: string[]): Promise<number> {
   const ids = args.includes('--case') ? args[args.indexOf('--case') + 1]!.split(',') : undefined
+  const tasks = args.includes('--task') ? args[args.indexOf('--task') + 1]!.split(',').map(Number) : undefined
   const unknown = ids?.filter(id => !INTERACTION_CASES.some(c => c.id === id)) ?? []
   if (unknown.length) { console.error(`unknown interaction case ${unknown.join(', ')}`); return 2 }
-  const cases = INTERACTION_CASES.filter(c => !ids || ids.includes(c.id))
+  const cases = INTERACTION_CASES.filter(c => (!ids || ids.includes(c.id)) && (!tasks || tasks.includes(c.task)))
   const seedFiles = new Set(cases.map(startOf))
   const needed = SEED_BUILDS.filter(s => seedFiles.has(s.file))
-  if (args.includes('--dry-run')) return await interactionDryRun(cases, ids ? needed : SEED_BUILDS) ? 1 : 0
+  if (args.includes('--dry-run')) return await interactionDryRun(cases, ids || tasks ? needed : SEED_BUILDS) ? 1 : 0
   if (!existsSync(ENGINE_SEED)) { console.error(`${relative(ROOT, ENGINE_SEED)} is missing: run --seed first`); return 2 }
-  if (args.includes('--probes')) { await interactionProbes(); return 0 }
+  if (args.includes('--probes')) { await interactionProbes(ids || tasks ? cases : INTERACTION_CASES); return 0 }
   const fallback = !args.includes('--no-fallback')
   if (args.includes('--seeds')) {
     for (const s of SEED_BUILDS) await buildInteractionSeed(s, fallback)
@@ -631,6 +684,7 @@ async function interactionCli(args: string[]): Promise<number> {
     entries.set(c.id, await buildInteractionCase(c, fallback))
     writeInteractionManifest([...entries.values()])   // after every case, so an interrupted batch keeps what it built
   }
+  writeInteractionRecipes([...entries.values()])
   rmSync(WORK_DIR, { recursive: true, force: true })
   const built = cases.filter(c => entries.get(c.id)?.status === 'built')
   console.log(`${built.length}/${cases.length} built; manifest ${relative(ROOT, INTERACTION_MANIFEST)}`)

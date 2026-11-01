@@ -246,8 +246,12 @@ describe('§7.8 autofit after a change', () => {
     for (const spec of sheet.cols) for (let col = spec.min; col <= spec.max; col++) if (spec.widthChars !== undefined) widths.set(col, spec.widthChars)
     return { def, widths, fits: pivotColumnFits({ def, cells: inPivot }, measure, macDigitWidth(7)) }
   }
-  const manifest = (JSON.parse(readFileSync(resolve(FIXTURES, 'interaction/manifest.json'), 'utf8')) as Array<{ case: string; file: string; seed: string; base?: string; setup?: string }>)
+  const entries = (JSON.parse(readFileSync(resolve(FIXTURES, 'interaction/manifest.json'), 'utf8')) as Array<{ case: string; file: string; task: number; seed: string; base?: string; setup?: string }>)
     .filter(entry => !entry.setup && SEEDS[entry.seed])
+  // Stage 3 view changes (Tasks 25-32). Stage 4 reshapes (Tasks 35-37) move fields, change values and group, which
+  // §7.8's fit does not cover yet: Task 34 measured the gaps (docs/validation/xlsx-pivots.md, Stage 4 section).
+  const manifest = entries.filter(entry => entry.task < 35)
+  const stage4 = entries.filter(entry => entry.task >= 35)
 
   it('autofit widths equal Excel\'s saved <col> widths for every interaction case, within one Excel pixel (1/6 char + the 1/256 truncation)', async () => {
     const report: string[] = []
@@ -269,6 +273,8 @@ describe('§7.8 autofit after a change', () => {
     expect(changed).toBeGreaterThan(10)
     expect(columns).toBeGreaterThan(400)
   }, 120_000)
+
+  for (const entry of stage4) it.skip(`Stage 4 autofit: ${entry.case} (Task ${entry.task}; autofit of field moves, value settings and grouping is unmeasured until then)`, () => {})
 
   it('a user-resized column keeps its width', async () => {
     const start = await fitted('recipes/engine-seed'), saved = await fitted('interaction/interaction-collapse-field-compact-top')
