@@ -36,7 +36,7 @@ const groupCaptions = (period: PivotDateGroupPeriod, start: string, end: string,
       return [`<${lo}`, ...leap, `>${hi}`]
     }
     const startDay = Date.parse(`${start.slice(0, 10)}T00:00:00Z`), endDay = Date.parse(`${end.slice(0, 10)}T00:00:00Z`)
-    const count = Math.ceil((endDay - startDay) / 86_400_000 / interval) + 1
+    const count = Math.ceil(((endDay - startDay) / 86_400_000 + 1) / interval)
     if (count > 10000) return []
     const captions = [`<${lo}`]
     for (let i = 0; i < count; i++) {
@@ -92,16 +92,20 @@ function axisOfGroup(view: PivotViewState, cache: PivotCacheDefinition, base: nu
   const child = cache.fields.findIndex((field, index) => index !== base && field.fieldGroup?.base === base && axisOf(view, index) !== undefined)
   return child >= 0 ? axisOf(view, child) : axisOf(view, base)
 }
-function remapView(view: PivotViewState, removed: ReadonlySet<number>): PivotViewState {
-  const rows = view.rows.filter(f => !removed.has(f)), cols = view.cols.filter(f => !removed.has(f))
-  const pages = view.pages.filter(p => !removed.has(p.field))
-  const filters = view.filters.filter(f => !removed.has(f.fld))
+function remapView(view: PivotViewState, removed: ReadonlySet<number>, remap: (field: number) => number | undefined, mapReference: (field: number) => number): PivotViewState {
+  const rows = view.rows.filter(f => !removed.has(f)).map(f => remap(f)!)
+  const cols = view.cols.filter(f => !removed.has(f)).map(f => remap(f)!)
+  const pages = view.pages.filter(p => !removed.has(p.field)).map(p => ({ ...p, field: remap(p.field)! }))
+  const filters = view.filters.filter(f => !removed.has(f.fld)).map(f => ({ ...f, fld: remap(f.fld)!, ...(f.mpFld !== undefined ? { mpFld: mapReference(f.mpFld) } : {}) }))
   const fields = view.fields.filter((_, i) => !removed.has(i)).map(state => {
     if (!state.autoSortScope) return state
-    const references = state.autoSortScope.references.filter(ref => ref.field === undefined || !removed.has(ref.field))
-    return { ...state, ...(references.length ? { autoSortScope: { ...state.autoSortScope, references } } : { autoSortScope: undefined }) }
+    const references = state.autoSortScope.references.filter(ref => ref.field === undefined || !removed.has(ref.field)).map(ref => ({ ...ref, ...(ref.field !== undefined ? { field: remap(ref.field)! } : {}) }))
+    return { ...state, ...(references.length ? { autoSortScope: mapArea(state.autoSortScope, references, mapReference) } : { autoSortScope: undefined }) }
   })
-  return { ...view, rows, cols, pages, filters, fields }
+  return { ...view, rows, cols, pages, data: view.data.map(data => ({ ...data, field: mapReference(data.field), baseField: mapReference(data.baseField) })), filters, fields }
+}
+function mapArea(area: NonNullable<FieldState['autoSortScope']>, references = area.references, mapReference: (field: number) => number): typeof area {
+  return { ...area, ...(area.field !== undefined ? { field: mapReference(area.field) } : {}), references }
 }
 function removeGroupFields(ctx: PivotDeltaContext, base: number): { cache: PivotCacheDefinition; def: PivotDeltaContext['def']; view: PivotViewState; removed: Set<number> } {
   const removed = new Set<number>()
@@ -109,9 +113,44 @@ function removeGroupFields(ctx: PivotDeltaContext, base: number): { cache: Pivot
     const fg = ctx.cache.fields[i]?.fieldGroup
     if (i !== base && fg?.base === base) removed.add(i)
   }
-  const cache = { ...ctx.cache, fields: ctx.cache.fields.filter((_, i) => !removed.has(i)).map((f, i) => i === base ? { ...f, fieldGroup: undefined } : f) }
-  const def = { ...ctx.def, fields: ctx.def.fields.filter((_, i) => !removed.has(i)), rowFields: ctx.def.rowFields.filter(f => !removed.has(f)), colFields: ctx.def.colFields.filter(f => !removed.has(f)), pageFields: ctx.def.pageFields.filter(f => !removed.has(f.fld)) }
-  return { cache, def, view: remapView(ctx.view, removed), removed }
+  const indexMap = new Map<number, number>()
+  let next = 0
+  for (let i = 0; i < ctx.cache.fields.length; i++) if (!removed.has(i)) indexMap.set(i, next++)
+  const remap = (field: number): number | undefined => field < 0 ? field : indexMap.get(field)
+  const mapReference = (field: number): number => remap(field) ?? base
+  const retainedIndices = [...indexMap.keys()]
+  const cacheFields = retainedIndices.map(oldIndex => {
+    const field = ctx.cache.fields[oldIndex]!
+    const fieldGroup = oldIndex === base ? undefined : field.fieldGroup
+    return { ...field, ...(fieldGroup ? { fieldGroup: { ...fieldGroup, ...(fieldGroup.base !== undefined ? { base: mapReference(fieldGroup.base) } : {}), ...(fieldGroup.par !== undefined ? { par: mapReference(fieldGroup.par) } : {}) } } : { fieldGroup: undefined }) }
+  })
+  const fields = ctx.def.fields.filter((_, i) => !removed.has(i)).map(field => {
+    if (!field.autoSortScope) return field
+    const references = field.autoSortScope.references.filter(ref => ref.field === undefined || !removed.has(ref.field))
+      .map(ref => ({ ...ref, ...(ref.field !== undefined ? { field: remap(ref.field)! } : {}) }))
+    return { ...field, autoSortScope: references.length ? mapArea(field.autoSortScope, references, mapReference) : undefined }
+  })
+  const def = { ...ctx.def, fields,
+    rowFields: ctx.def.rowFields.filter(f => !removed.has(f)).map(f => remap(f)!),
+    colFields: ctx.def.colFields.filter(f => !removed.has(f)).map(f => remap(f)!),
+    pageFields: ctx.def.pageFields.filter(f => !removed.has(f.fld)).map(f => ({ ...f, fld: remap(f.fld)! })),
+    dataFields: ctx.def.dataFields.map(f => ({ ...f, fld: mapReference(f.fld), baseField: mapReference(f.baseField), ...(f.x14?.sourceField !== undefined ? { x14: { ...f.x14, sourceField: mapReference(f.x14.sourceField) } } : {}) })),
+    filters: ctx.def.filters.filter(f => !removed.has(f.fld)).map(f => ({ ...f, fld: remap(f.fld)!, ...(f.mpFld !== undefined ? { mpFld: mapReference(f.mpFld) } : {}) })),
+  }
+  return { cache: { ...ctx.cache, fields: cacheFields }, def, view: remapView(ctx.view, removed, remap, mapReference), removed }
+}
+
+function dateCaptionCount(period: PivotDateGroupPeriod, start: string, end: string, interval: number): number {
+  if (period === 'months') return 14
+  if (period === 'quarters') return 6
+  if (period === 'years') return Number(end.slice(0, 4)) - Number(start.slice(0, 4)) + 3
+  if (period === 'days') {
+    if (interval === 1) return 368
+    const lo = Date.parse(`${start.slice(0, 10)}T00:00:00Z`), hi = Date.parse(`${end.slice(0, 10)}T00:00:00Z`)
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return 0
+    return Math.ceil(((hi - lo) / 86_400_000 + 1) / interval) + 2
+  }
+  return (period === 'hours' ? 24 : 60) + 2
 }
 function allocation(ctx: PivotDeltaContext, bytes: number): { hold?: PivotMemoryHold } | undefined {
   const hold = ctx.admitCandidateBytes?.(bytes)
@@ -144,13 +183,15 @@ function groupDate(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'g
   const nameBase = ctx.def.fields[base]?.name ?? ctx.cache.fields[base]?.name ?? `Field ${base + 1}`
   const sourceAxis = axis === 'row' ? ctx.view.rows : ctx.view.cols
   const insertAt = insertionPoint(sourceAxis, groupedAxisSet(ctx.cache, base))
-  const generated = periods.map(period => ({ period, labels: groupCaptions(period, bounds.start, bounds.end, daysInterval) }))
-  if (generated.some(entry => !entry.labels.length || entry.labels.length > 10000)) return refuse('pivot-records-limit', 'The date group has too many items.')
+  const sizes = periods.map(period => ({ period, count: dateCaptionCount(period, bounds.start, bounds.end, daysInterval) }))
+  if (sizes.some(entry => !Number.isSafeInteger(entry.count) || entry.count < 1 || entry.count > 10000)) return refuse('pivot-records-limit', 'The date group has too many items.')
   // Reserve an upper bound before any group labels, cache fields, or pivot-item arrays are created.
-  const bytes = generated.reduce((sum, g) => sum + g.labels.length * 240 + 512, 0)
+  const bytes = sizes.reduce((sum, g) => sum + g.count * 240 + 512, 0)
   const admitted = allocation(ctx, bytes)
   if (!admitted) return refuse('pivot-records-limit', 'Date grouping exceeds the memory budget.')
   try {
+    const generated = sizes.map(({ period }) => ({ period, labels: groupCaptions(period, bounds.start, bounds.end, daysInterval) }))
+    if (generated.some(entry => !entry.labels.length || entry.labels.length > 10000)) { admitted.hold?.release(); return refuse('pivot-records-limit', 'The date group has too many items.') }
     const prior = removeGroupFields(ctx, base)
     const fields = [...prior.cache.fields], pivotFields = [...prior.def.fields], viewFields = [...prior.view.fields]
     const newIndices = new Map<PivotDateGroupPeriod, number>()
@@ -164,7 +205,7 @@ function groupDate(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'g
       pivotFields.push(pf)
       viewFields.push(makeFieldState(prior.view.fields[base]!, pf.items!.length))
     }
-    const oldIndex = newIndices.get(periods[0]!)!
+    const oldIndex = newIndices.get(periods[periods.length - 1]!)!
     fields[base] = { ...fields[base]!, fieldGroup: { par: oldIndex } }
     const newGroupIndices = periods.map(period => newIndices.get(period)!)
     const ordered = [...newGroupIndices].reverse()
@@ -194,7 +235,8 @@ function numberGroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 
   if (!admitted) return refuse('pivot-records-limit', 'Number grouping exceeds the memory budget.')
   try {
     const labels = [`<${min}${shared.containsBlank ? ' 或 (空白)' : ''}`, ...Array.from({ length: count }, (_, i) => {
-      const start = min + i * delta.by, end = min < 0 ? Math.min(start + delta.by - 1, min + count * delta.by) : start + delta.by
+      const start = min + i * delta.by, end = shared.containsInteger && Number.isInteger(min) && Number.isInteger(delta.by)
+        ? Math.min(start + delta.by - 1, min + count * delta.by) : start + delta.by
       return `${start}-${end}`
     }), `>${min + count * delta.by}`]
     const items = groupItems(labels), pivots = pivotItems(items.length)
@@ -208,7 +250,7 @@ function ungroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'ung
   const field = delta.field, cf = ctx.cache.fields[field]
   if (!Number.isInteger(field) || field < 0 || !cf) return invalid('The grouped field does not exist.')
   const base = groupBase(ctx.cache, field), group = cf.fieldGroup
-  if (!group || (!group.base && !group.discretePr && !cf.fieldGroup?.par)) return invalid('This field is not grouped.')
+  if (!group || (group.base === undefined && !group.discretePr && group.par === undefined && !group.rangePr)) return invalid('This field is not grouped.')
   const groupSet = groupedAxisSet(ctx.cache, base)
   const groupedField = ctx.cache.fields.findIndex((candidate, index) => index !== base && candidate.fieldGroup?.base === base && axisOf(ctx.view, index) !== undefined)
   const axis = axisOf(ctx.view, field) ?? axisOf(ctx.view, base) ?? (groupedField >= 0 ? axisOf(ctx.view, groupedField) : undefined)

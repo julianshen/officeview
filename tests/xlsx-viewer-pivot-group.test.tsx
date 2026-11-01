@@ -47,6 +47,24 @@ describe('pivot grouping UI', () => {
     expect([...manualActions.querySelectorAll('option')].map(option => option.textContent)).toContain('Ungroup')
   })
 
+  it('does not offer grouping actions for fields in Filters', () => {
+    const pageModel: PivotMenuModel = { ...model, rows: [1, 2], pages: [0] }
+    render(<PivotFieldList model={pageModel} pivot={0} verified={new Set(['groupDate', 'ungroup'])} onApply={vi.fn()} onClose={vi.fn()} />)
+    const actions = screen.getByRole('combobox', { name: 'Actions for Date' })
+    expect([...actions.querySelectorAll('option')].map(option => option.textContent)).not.toContain('Group…')
+    expect([...actions.querySelectorAll('option')].map(option => option.textContent)).not.toContain('Ungroup')
+  })
+
+  it('announces when the grouping apply is refused', async () => {
+    const onApply = vi.fn().mockResolvedValue(false)
+    render(<PivotFieldList model={model} pivot={0} verified={new Set(['groupDate'])} onApply={onApply} onClose={vi.fn()} />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Actions for Date' }), { target: { value: 'group' } })
+    fireEvent.click(screen.getByLabelText('Months'))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'OK' })) })
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
   it('prefills date bounds, gates day interval, applies regroup values, and restores focus on Escape', async () => {
     const onApply = vi.fn().mockResolvedValue(true)
     render(<PivotFieldList model={model} pivot={0} verified={new Set(['groupDate', 'ungroup'])} onApply={onApply} onClose={vi.fn()} />)

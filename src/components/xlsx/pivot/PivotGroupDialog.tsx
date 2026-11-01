@@ -68,6 +68,7 @@ export function PivotGroupDialog({ field, date1904, onApply, onClose }: PivotGro
         if (!Number.isInteger(Number(days)) || Number(days) < 1 || Number(days) > 32767) throw new RangeError('Number of days must be between 1 and 32767.')
         const result = await onApply({ kind: 'groupDate', field: info.baseField, periods: selected, ...(start !== undefined ? { startDate: start } : {}), ...(end !== undefined ? { endDate: end } : {}), daysInterval: Number(days) })
         if (result) onClose()
+        else setError('Grouping could not be applied.')
       } else {
         const start = autoStart ? undefined : Number(startNumber), end = autoEnd ? undefined : Number(endNumber), interval = Number(by)
         if (start !== undefined && !Number.isFinite(start) || end !== undefined && !Number.isFinite(end)) throw new RangeError('Enter finite numeric bounds.')
@@ -75,6 +76,7 @@ export function PivotGroupDialog({ field, date1904, onApply, onClose }: PivotGro
         if (!Number.isFinite(interval) || interval <= 0) throw new RangeError('By must be greater than zero.')
         const result = await onApply({ kind: 'groupNumber', field: info.baseField, ...(start !== undefined ? { start } : {}), ...(end !== undefined ? { end } : {}), by: interval })
         if (result) onClose()
+        else setError('Grouping could not be applied.')
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Check the grouping values.') }
     finally { setBusy(false) }
