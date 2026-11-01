@@ -49,7 +49,9 @@ in git history.
   - 1,000,000 records compute in about 140 ms (axes and values). The code is in the lazy pivots chunk; the eager
     bundle is unchanged.
 - **Pivot tables you can change, in the interactive viewer.** The ± buttons and field dropdowns now work, with the
-  mouse or the keyboard (one Tab stop per pivot, then Alt+↓ to open a menu):
+  mouse or the keyboard. The grid stays one Tab stop: move to a cell with a pivot control, then press Alt+↓ to
+  open its filter or report-filter menu, or Alt+→ / Alt+← to expand or collapse its item. The cell's description
+  names the control and its key.
   - **What you can do:**
     - expand and collapse an item, an entire field or everything;
     - choose items;
