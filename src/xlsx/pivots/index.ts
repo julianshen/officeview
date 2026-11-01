@@ -11,7 +11,7 @@ import { pivotRuntimeFor } from './session/runtime'
 
 export { loadPivotWorkbook, retainPivotRuntime } from './load'
 // The Stage 2 engine. Exported here so it lives in this lazy chunk.
-export { decodeRecords, isoToSerial, recordEvents, RECORD_LIMITS, VALUE_TAG } from './engine/records'
+export { decodeRecords, isoToSerial, serialToIso, recordEvents, RECORD_LIMITS, VALUE_TAG } from './engine/records'
 export type { RecordColumn, RecordLimits, RecordResult, RecordStore } from './engine/records'
 export { initialViewState } from './engine/view'
 export type { DataFieldState, FieldState, PageState, PivotViewState } from './engine/view'

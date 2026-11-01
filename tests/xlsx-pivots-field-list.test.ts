@@ -128,6 +128,38 @@ describe('Task 35 field list deltas', () => {
     ])
   })
 
+  it('decodes inline pre-March 1900 dates and time fractions using the record-store uniform epoch', async () => {
+    const loaded = (await loadAll(BASELINE))[0]!
+    const field = loaded.cache.fields.findIndex(cacheField => cacheField.sharedItems?.inline)
+    const original = loaded.cache.fields[field]!.sharedItems!
+    const sharedItems = { ...original, inline: true, containsDate: true, containsNumber: false, containsString: false, items: [] }
+    const cacheFields = [...loaded.cache.fields]
+    cacheFields[field] = { ...cacheFields[field]!, sharedItems }
+    const cache = { ...loaded.cache, fields: cacheFields }
+    const columns = [...loaded.store.columns]
+    const count = loaded.store.count
+    const tag = new Uint8Array(count); tag.fill(VALUE_TAG.missing)
+    const num = new Float64Array(count)
+    const textIndex = new Uint32Array(count)
+    tag[0] = VALUE_TAG.date; num[0] = 59 // 1900-02-27 under uniform 1899-12-30 epoch
+    tag[1] = VALUE_TAG.date; num[1] = 60 // 1900-02-28 under uniform 1899-12-30 epoch
+    tag[2] = VALUE_TAG.date; num[2] = 61 // 1900-03-01
+    tag[3] = VALUE_TAG.date; num[3] = 0.5 // 1899-12-30T12:00:00 (time-only Stamp fixture serial)
+    columns[field] = { kind: 'inline', tag, num, textIndex, text: [] }
+    const store = { ...loaded.store, columns }
+    const def = { ...loaded.def, fields: loaded.def.fields.map((pivotField, index) => {
+      if (index !== field) return pivotField
+      const { items: _items, ...rest } = pivotField
+      return rest
+    }) }
+    const view = initialViewState(def, cache)
+    const result = applyDeltaState({ def, cache, store, view, date1904: loaded.date1904 }, { kind: 'moveField', field, axis: 'row' })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.cache.fields[field]!.sharedItems!.items.filter(item => item.type === 'date').map(item => item.value)).toEqual([
+      '1900-02-27', '1900-02-28', '1900-03-01', '1899-12-30T12:00:00',
+    ])
+  })
+
   it('keeps committed cache/store allocation charged across a later layout-only commit', async () => {
     const { loaded, session } = await openBaseline()
     const field = loaded.cache.fields.findIndex(cacheField => cacheField.sharedItems?.inline)

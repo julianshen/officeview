@@ -36,12 +36,11 @@ import type { EngineResult } from '../engine/axes'
 import { isDateFilter, isLabelFilter } from '../engine/filters'
 import type { FieldState, PivotViewState } from '../engine/view'
 import type { RecordColumn, RecordStore } from '../engine/records'
-import { VALUE_TAG } from '../engine/records'
+import { VALUE_TAG, serialToIso } from '../engine/records'
 import type { PivotFieldItem, PivotCacheItem } from '../model'
 import { pageFieldsFit } from '../engine/place'
 import { sortItemOrder } from '../engine/sort'
 import { ZH_TW_CAPTIONS } from './captions'
-import { decodeSerial } from '../../formula/serial'
 import { applyGrouping } from './grouping'
 
 export type { PivotDataFunction } from '../model'
@@ -62,18 +61,8 @@ function inlineValue(column: Extract<RecordColumn, { kind: 'inline' }>, row: num
   const text = column.text[column.textIndex[row]!] ?? ''
   if (tag === VALUE_TAG.error) return { type: 'error', value: text }
   if (tag === VALUE_TAG.date) {
-    const decoded = decodeSerial(column.num[row]!, date1904 ? '1904' : '1900')
-    if ('civil' in decoded) {
-      const { year, month, day } = decoded.civil
-      const date = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-      if (decoded.fraction === 0) return { type: 'date', value: date }
-      const seconds = decoded.fraction * 86_400
-      const wholeSeconds = Math.floor(seconds)
-      const decimal = (seconds - wholeSeconds).toFixed(12).slice(1).replace(/0+$/, '')
-      const fraction = decimal.length > 1 ? decimal : ''
-      const hours = Math.floor(wholeSeconds / 3_600), minutes = Math.floor(wholeSeconds / 60) % 60, second = wholeSeconds % 60
-      return { type: 'date', value: `${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(second).padStart(2, '0')}${fraction}` }
-    }
+    const iso = serialToIso(column.num[row]!, date1904)
+    if (iso !== undefined) return { type: 'date', value: iso }
     return { type: 'error', value: '#VALUE!' }
   }
   return { type: 'string', value: text }

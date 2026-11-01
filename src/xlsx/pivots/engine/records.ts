@@ -2,7 +2,7 @@
 import { tokenizeBytes, type XmlEvents } from '../../../core/xml-stream'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotValue } from '../model'
 import type { ProfileId } from '../../view/contracts'
-import { daysFromCivil } from '../../formula/serial'
+import { civilFromDays, daysFromCivil } from '../../formula/serial'
 
 export interface RecordLimits {
   maxBytes: number
@@ -82,6 +82,26 @@ export function isoToSerial(iso: string, date1904: boolean): number {
   if (serial < 0) return Number.NaN
   // Time-zone rollover across a civil day uses the same serial arithmetic.
   return serial
+}
+
+/** Convert an Excel serial to SpreadsheetML ISO dateTime using the record-store uniform epoch. */
+export function serialToIso(serial: number, date1904: boolean): string | undefined {
+  if (!Number.isFinite(serial) || serial < 0) return undefined
+  const daySerial = Math.floor(serial)
+  const fraction = serial - daySerial
+  const epoch = date1904 ? daysFromCivil(1904, 1, 1) : daysFromCivil(1899, 12, 30)
+  const { year, month, day } = civilFromDays(epoch + daySerial)
+  if (year < 1 || year > 9999) return undefined
+  const date = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  if (fraction === 0) return date
+  const seconds = fraction * 86_400
+  const wholeSeconds = Math.min(86399, Math.floor(seconds))
+  const decimal = (seconds - Math.floor(seconds)).toFixed(12).slice(1).replace(/0+$/, '')
+  const sub = decimal.length > 1 ? decimal : ''
+  const hours = Math.floor(wholeSeconds / 3_600)
+  const minutes = Math.floor(wholeSeconds / 60) % 60
+  const second = wholeSeconds % 60
+  return `${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(second).padStart(2, '0')}${sub}`
 }
 
 interface MutableColumn {
