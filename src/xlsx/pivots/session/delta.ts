@@ -113,7 +113,10 @@ export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTa
       }
       const selected = delta.selected === 'all' ? 'all' as const : [...new Set(delta.selected)]
       const next = { ...view, pages: view.pages.map((page, k) => k === at ? { ...page, selected } : page) }
-      return { ok: true, value: selected === 'all' ? withField(next, field, { hidden: state.hidden.map((flag, k) => isData.has(k) ? false : flag) }) : next }
+      // (All) shows every item; a list shows each item it names, even one a saved multi-item filter ((All) plus hidden
+      // items) had hidden (PR #57 review). Other items' hidden flags stay as they are.
+      const shown = selected === 'all' ? isData : new Set(selected)
+      return { ok: true, value: withField(next, field, { hidden: state.hidden.map((flag, k) => shown.has(k) && isData.has(k) ? false : flag) }) }
     }
     case 'filter': {
       if (delta.filter.fld !== field) return invalid(`the filter names field ${delta.filter.fld}, not ${field}`)

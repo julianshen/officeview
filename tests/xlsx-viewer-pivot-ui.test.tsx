@@ -882,3 +882,71 @@ describe('a refreshed resident pivot (PR #57 review: labels from the session cac
     ui.unmount()
   }, 30_000)
 })
+
+// PR #57 review (bot round 6): a saved multi-item report filter is `selected: 'all'` plus hidden items
+// (interaction-page-multi: Bananas and Dates hidden). The page menu opens on that effective selection, an untouched OK
+// changes nothing, and checking (All) gives Excel's interaction-page-all.
+const PAGE_MULTI = `${FIXTURES}interaction/interaction-page-multi.xlsx`
+async function pageMultiMenu(ui: ReturnType<typeof render>) {
+  fireEvent.click(await ui.findByRole('button', { name: /^Report filter/ }, FIRST_PAINT_WAIT))
+  const menu = await ui.findByRole('dialog', { name: 'Product' }, FIRST_PAINT_WAIT)
+  const checked = (name: string) => (within(menu).getByRole('checkbox', { name }) as HTMLInputElement).checked
+  return { menu, checked }
+}
+async function pageMultiFlow(ui: ReturnType<typeof render>, applies: () => number) {
+  await waitFor(() => expect(cellText(ui.container, 0, 1)).toContain('(多重項目)'), FIRST_PAINT_WAIT)
+  const first = await pageMultiMenu(ui)
+  // Multi mode, the saved selection checked: Apples and Cherries, not Bananas, Dates or (All).
+  expect(first.checked('Select multiple items')).toBe(true)
+  const items = within(first.menu).getAllByRole('checkbox').filter(box => !['Select multiple items', '(All)'].includes(box.getAttribute('aria-label') ?? ''))
+  expect(items.map(box => box.getAttribute('aria-label'))).toEqual(expect.arrayContaining(['Apples', 'Bananas', 'Cherries']))
+  expect(items.map(box => (box as HTMLInputElement).checked)).toEqual([true, false, true, false])
+  expect(first.checked('(All)')).toBe(false)
+  const before = applies()
+  fireEvent.click(within(first.menu).getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(ui.queryByRole('dialog', { name: 'Product' })).toBeNull())
+  await new Promise(resolve => setTimeout(resolve, 200))
+  // Untouched: no change was applied, and the pivot is the saved one.
+  expect(applies()).toBe(before)
+  expect(cellText(ui.container, 0, 1)).toContain('(多重項目)')
+  expect(cellText(ui.container, 9, 0)).toContain('Grand Total')
+  // (All) shows every product: Excel's interaction-page-all (grand total on row 11).
+  const second = await pageMultiMenu(ui)
+  fireEvent.click(within(second.menu).getByRole('checkbox', { name: '(All)' }))
+  fireEvent.click(within(second.menu).getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(cellText(ui.container, 10, 0)).toContain('Grand Total'), FIRST_PAINT_WAIT)
+  expect(cellText(ui.container, 0, 1)).toContain('(全部)')
+}
+
+describe('a multi-item report filter saved as (All) with hidden items (PR #57 review)', () => {
+  it('resident: the menu opens on the effective selection; an untouched OK is a no-op; (All) gives Excel\'s', async () => {
+    const doc = await load(PAGE_MULTI)
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    let commits = 0
+    const pivots = () => doc.sheets[pivotSheet(doc)]!.pivotTables![0]!
+    const saved = pivots()
+    await pageMultiFlow(ui, () => { if (pivots() !== saved) commits++; return commits })
+  }, 60_000)
+
+  it('worker: the same, through the worker\'s menu model', async () => {
+    const h = workerHarness()
+    const ui = await renderPaged(h, PAGE_MULTI)
+    await pageMultiFlow(ui, () => h.posted.filter(command => command.kind === 'pivotApply').length)
+  }, 60_000)
+})
+
+describe('a multi-item report filter: adding a hidden item (PR #57 review)', () => {
+  it('a listed selection shows every item it names, the saved hidden flags notwithstanding', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const multi = await load(PAGE_MULTI), all = await load(`${FIXTURES}interaction/interaction-page-all.xlsx`)
+    const client = createResidentPivotClient({ doc: multi, ledger: new MainMemoryLedger(), install: () => {} })
+    const opened = await client.open(pivotSheet(multi), 0, signal())
+    if (!opened.ok) throw new Error(JSON.stringify(opened))
+    const product = opened.model.fields.find(field => field.axis === 'page')!
+    expect(product.page).toEqual([0, 2])
+    // Every product, listed: the same layout as Excel's (All) (interaction-page-all, A3:I11).
+    const listed = await client.apply(pivotSheet(multi), 0, { kind: 'page', field: product.index, selected: product.items.map(item => item.index) })
+    if (!listed.ok) throw new Error(JSON.stringify(listed))
+    expect(listed.def.location.ref).toBe(all.sheets[pivotSheet(all)]!.pivotTables![0]!.location.ref)
+  })
+})

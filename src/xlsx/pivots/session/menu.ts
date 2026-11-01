@@ -26,8 +26,11 @@ export interface PivotMenuField {
   values: 'text' | 'number' | 'date'
   /** A level lies below this field on its axis (collapse entire field applies). */
   expandable: boolean
-  /** A page field's selection. */
+  /** A page field's effective selection: 'all' only when no data item is hidden. A saved multi-item report filter is
+   * (All) plus hidden items (interaction-page-multi); it reads as the items left shown (PR #57 review). */
   page?: readonly number[] | 'all'
+  /** A page field saved with "Select multiple items" on (`multipleItemSelectionAllowed`). */
+  multiple?: boolean
 }
 export interface PivotMenuModel {
   name: string
@@ -75,7 +78,8 @@ export function pivotMenuModel(def: PivotTableDefinition, cache: PivotCacheDefin
       sort: state?.sortType ?? 'manual', ...(scope !== undefined ? { byData: scope } : {}),
       filters: view.filters.filter(filter => filter.fld === field), values: valuesOf(cache, field),
       expandable: below(view.rows, field) || below(view.cols, field),
-      ...(page ? { page: page.selected } : {}),
+      ...(page ? { page: page.selected === 'all' && indices.some(k => state?.hidden[k]) ? indices.filter(k => !state?.hidden[k]) : page.selected } : {}),
+      ...(page && def.fields[field]?.multipleItemSelectionAllowed ? { multiple: true } : {}),
     }
   })
   const data = view.data.map((entry, index) => ({ index, name: entry.name || `${PIVOT_FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${pivotFieldName(def, cache, entry.field)}` }))

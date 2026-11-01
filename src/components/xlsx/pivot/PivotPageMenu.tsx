@@ -11,8 +11,9 @@ export function PivotPageMenu(props: PivotMenuProps): ReactElement {
   usePivotMenuLifetime(props)
   const { model, verified, onApply } = props
   const field = model.fields.find(entry => entry.index === props.field)
+  // The effective selection (a saved multi-item filter is (All) with hidden items: the model lists the shown ones).
   const initial = field?.page ?? 'all'
-  const [multiple, setMultiple] = useState(initial !== 'all' && initial.length > 1)
+  const [multiple, setMultiple] = useState(Boolean(field?.multiple) || (initial !== 'all' && initial.length > 1))
   const [selected, setSelected] = useState<'all' | number[]>(initial === 'all' ? 'all' : [...initial])
   if (!field) return <PivotMenuShell title="Pivot table" onClose={props.onClose}><p>This field is no longer a report filter.</p><MenuButton onClick={props.onClose}>Close</MenuButton></PivotMenuShell>
   const isOn = (item: number) => selected !== 'all' && selected.includes(item)
@@ -35,9 +36,14 @@ export function PivotPageMenu(props: PivotMenuProps): ReactElement {
         {field.items.map(item => <label key={item.index} style={row}><input type="radio" name={`pivot-page-${field.index}`} aria-label={item.label || '(blank)'} checked={isOn(item.index)} onChange={() => setSelected([item.index])} />{item.label || '(blank)'}</label>)}
       </div>}
       {empty && <p>Select at least one item.</p>}
-      <MenuButton primary disabled={empty} onClick={() => onApply({ kind: 'page', field: field.index, selected })}>OK</MenuButton>
+      <MenuButton primary disabled={empty} onClick={() => unchanged(initial, selected) ? props.onClose() : onApply({ kind: 'page', field: field.index, selected })}>OK</MenuButton>
     </fieldset>}
     {verified.has('clearFilters') && <MenuButton onClick={() => onApply({ kind: 'clearFilters', field: field.index })}>{`Clear filter from ${field.name}`}</MenuButton>}
     <div><MenuButton onClick={() => onApply('reset')}>Reset to saved view</MenuButton><MenuButton onClick={props.onClose}>Cancel</MenuButton></div>
   </PivotMenuShell>
+}
+/** An untouched OK is no change (PR #57 review): the same selection, whatever its order. */
+function unchanged(initial: readonly number[] | 'all', selected: readonly number[] | 'all'): boolean {
+  if (initial === 'all' || selected === 'all') return initial === selected
+  return initial.length === selected.length && [...initial].sort((a, b) => a - b).every((item, k) => item === [...selected].sort((a, b) => a - b)[k])
 }
