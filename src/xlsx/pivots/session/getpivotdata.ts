@@ -59,9 +59,21 @@ function lineMatches(context: LivePivotDataContext, axis: readonly number[], lin
   return true
 }
 
-function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: ReadonlyMap<number, EvaluationValue>): EvaluationValue {
+/** The value GETPIVOTDATA reads, or `UNRESOLVED` for a layout shape the measured rules do not cover (Ruling S3-T: the
+ * formula keeps its saved value, never an invented #REF!). */
+const UNRESOLVED = Symbol('unresolved')
+function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: ReadonlyMap<number, EvaluationValue>): EvaluationValue | typeof UNRESOLVED {
   const { def, layout } = context
+  let unresolved = false
   const matches = (fields: readonly number[], lines: PivotLayout['axes']['rows']) => {
+    // An axis with no fields (a single data field and no column fields, or no row fields) lays out one line holding
+    // every value: its sole data line is the cell, as the measured Values-only column axis (I4) generalises. Any other
+    // shape of such an axis was never measured.
+    if (!fields.length) {
+      if (lines.length === 1 && lines[0]!.data === dataIndex) return [{ line: lines[0]!, index: 0 }]
+      unresolved = true
+      return []
+    }
     const axisPairs = new Map([...pairs].filter(([field]) => fields.includes(field)))
     if (fields.includes(PIVOT_VALUES_FIELD)) return lines.map((line, index) => ({ line, index }))
       .filter(({ line }) => line.data === dataIndex && (axisPairs.size ? lineMatches(context, fields, line, axisPairs) : (fields.length === 1 ? true : line.type === 'grand')))
@@ -76,6 +88,7 @@ function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: Rea
   }
   const rows = matches(def.rowFields, layout.axes.rows)
   const cols = matches(def.colFields, layout.axes.cols)
+  if (unresolved) return UNRESOLVED
   const candidates: Array<{ row: number; col: number }> = []
   for (const row of rows) for (const col of cols) {
     const sheetRow = layout.rect.minRow + def.location.firstDataRow + row.index
@@ -129,7 +142,9 @@ export function getPivotData(contexts: readonly LivePivotDataContext[], args: re
     const index = page.item
     if (index === undefined || !labelMatches(context, page.fld, index, requested!)) return formulaError('#NAME?')
   }
-  const value = pivotValue(context, dataIndex, pairs)
+  const resolved = pivotValue(context, dataIndex, pairs)
+  if (resolved === UNRESOLVED) { markStale?.('GETPIVOTDATA'); return formulaError('#NAME?') }
+  const value = resolved
   const innerWithoutParent = [...pairs.keys()].some(field => {
     const axis = context.def.rowFields.includes(field) ? context.def.rowFields : context.def.colFields
     const level = axis.indexOf(field)

@@ -2,7 +2,9 @@
 // ones keep their saved values.
 import { describe, expect, it, vi } from 'vitest'
 import { evaluateWorkbookFormulas, recomputeDependents } from '../src/xlsx/formula/workbook'
-import { registerGetPivotData, getPivotData } from '../src/xlsx/pivots/session/getpivotdata'
+import { registerGetPivotData, getPivotData, type LivePivotDataContext } from '../src/xlsx/pivots/session/getpivotdata'
+import type { PivotLayout } from '../src/xlsx/pivots/engine/place'
+import type { XlsxDocument } from '../src/xlsx/types'
 import { load, cellAt, addCell, liveContext, viewerReadCellValue, changedOf, F } from './helpers/xlsx-pivots-dependent-fixtures'
 
 registerGetPivotData()
@@ -103,5 +105,83 @@ describe('GETPIVOTDATA', () => {
     ] as Array<[string, string, number, number, string]>
     const { doc } = await run(formulas, { hide: 'West' })
     for (const [, ref] of formulas) expect(cellAt(doc, 'Formulas', ref)!.value).toBe(-123456789)
+  })
+})
+
+describe('GETPIVOTDATA on an axis with no fields (its sole data line)', () => {
+  const SINGLE = `${F}engine/layout-classic-single-data.xlsx`
+  /** The fixture's saved data cell at a row line of its layout (Excel's own saved values). */
+  const savedAt = (doc: XlsxDocument, layout: PivotLayout, line: number) => cellAt(doc, 'Pivot', `B${layout.rect.minRow + 2 + line + 1}`)!.value as number
+  async function single(formulas: Array<[ref: string, row: number, formula: string]>, change?: (session: Awaited<ReturnType<typeof liveContext>>['session']) => void) {
+    const doc = await load(SINGLE)
+    for (const [ref, row, formula] of formulas) addCell(doc, 'Pivot', ref, 10, row, formula, -123456789)
+    evaluateWorkbookFormulas(doc, { forceRecalc: true })
+    const live = await liveContext(undefined, SINGLE)
+    change?.(live.session)
+    const ctx = { ...live.ctx, def: live.session.def, layout: live.session.layout, rects: [live.savedRect, live.session.layout.rect].map(r => ({ r0: r.minRow, r1: r.maxRow, c0: r.minCol, c1: r.maxCol })) }
+    const result = recomputeDependents(doc, changedOf(doc, 'Pivot', ctx.rects), {
+      getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData([ctx], args, evaluate, currentSheet, markStale),
+      readCellValue: viewerReadCellValue([ctx]),
+    })
+    return { doc, ctx, result, saved: live.loaded }
+  }
+  const formulas: Array<[string, number, string]> = [['K1', 0, 'GETPIVOTDATA("Sum of Sales",$A$3)'], ['K2', 1, 'GETPIVOTDATA("Sum of Sales",$A$3,"Region","East")']]
+
+  it('a single-measure pivot with no column fields: the grand total and an item total equal Excel\'s saved cells', async () => {
+    const { doc, ctx } = await single(formulas)
+    const grand = ctx.layout.axes.rows.findIndex(line => line.type === 'grand'), east = 0
+    expect(ctx.layout.axes.cols).toEqual([expect.objectContaining({ type: 'data', items: [] })])
+    expect(cellAt(doc, 'Pivot', 'K1')!.value).toBeCloseTo(savedAt(doc, ctx.layout, grand), 6)
+    expect(cellAt(doc, 'Pivot', 'K1')!.value).toBeCloseTo(222603.36, 6)
+    expect(cellAt(doc, 'Pivot', 'K2')!.value).toBeCloseTo(savedAt(doc, ctx.layout, east), 6)
+  })
+
+  it('after a change that keeps the totals (Region sorted descending), the values still equal the saved totals', async () => {
+    const saved = await single(formulas)
+    const east = saved.ctx.layout.axes.rows.findIndex(line => line.items.length === 1 && line.items[0] === 0)
+    const savedEast = savedAt(saved.doc, saved.ctx.layout, east)
+    const { doc, ctx } = await single(formulas, session => {
+      const sorted = session.apply({ kind: 'sort', field: 0, order: 'descending' })
+      if (!sorted.ok) throw new Error(sorted.diagnostic.message)
+      expect(session.commit(sorted.value)).toBe(true)
+    })
+    expect(ctx.layout.axes.rows[0]!.items).not.toEqual([0])   // the order changed
+    expect(cellAt(doc, 'Pivot', 'K1')!.value).toBeCloseTo(222603.36, 6)
+    expect(cellAt(doc, 'Pivot', 'K2')!.value).toBeCloseTo(savedEast, 6)
+  })
+
+  /** The fixture's pivot with Region on columns and no row fields: one data line on rows, a line per Region. */
+  function transposed(ctx: LivePivotDataContext & { rects: { r0: number; r1: number; c0: number; c1: number }[] }, doc: XlsxDocument, rows: PivotLayout['axes']['rows'] = [{ type: 'data', items: [], data: 0 } as never]) {
+    const regions = ctx.layout.axes.rows.map((line, index) => ({ line, index })).filter(({ line }) => line.items.length === 1 || line.type === 'grand')
+    const rect = { minRow: 2, minCol: 0, maxRow: 4, maxCol: regions.length }
+    const value = (index: number) => savedAt(doc, ctx.layout, index)
+    const layout = { ...ctx.layout, rect, merges: [], axes: { ...ctx.layout.axes, rows, cols: regions.map(({ line }) => line) },
+      cells: regions.map(({ index }, k) => ({ row: 4, col: 1 + k, value: { kind: 'number' as const, value: value(index) } })) } as PivotLayout
+    const def = { ...ctx.def, rowFields: [], colFields: [0], location: { ...ctx.def.location, ref: 'A3:F5', firstHeaderRow: 1, firstDataRow: 2, firstDataCol: 1 } }
+    return { ...ctx, def, layout, layoutCells: undefined, rects: [{ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }] }
+  }
+  const evaluateWith = (doc: XlsxDocument, context: ReturnType<typeof transposed>) => recomputeDependents(doc, changedOf(doc, 'Pivot', context.rects), {
+    getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData([context], args, evaluate, currentSheet, markStale),
+    readCellValue: () => undefined,
+  })
+
+  it('mirrored: no row fields, the sole data line on rows', async () => {
+    const { doc, ctx } = await single([])
+    const east = ctx.layout.axes.rows.findIndex(line => line.items.length === 1 && line.items[0] === 0)
+    const savedEast = savedAt(doc, ctx.layout, east)
+    for (const [ref, row, formula] of formulas) addCell(doc, 'Pivot', ref, 10, row, formula, -1)
+    evaluateWorkbookFormulas(doc, { forceRecalc: true })
+    evaluateWith(doc, transposed(ctx, doc))
+    expect(cellAt(doc, 'Pivot', 'K1')!.value).toBeCloseTo(222603.36, 6)
+    expect(cellAt(doc, 'Pivot', 'K2')!.value).toBeCloseTo(savedEast, 6)
+  })
+
+  it('S3-T: an axis with no fields whose lines are not one data line keeps the saved value (no #REF!) and is flagged', async () => {
+    const { doc, ctx } = await single([])
+    addCell(doc, 'Pivot', 'K1', 10, 0, 'GETPIVOTDATA("Sum of Sales",$A$3)', 777)
+    evaluateWorkbookFormulas(doc)
+    const result = evaluateWith(doc, transposed(ctx, doc, []))
+    expect(cellAt(doc, 'Pivot', 'K1')!.value).toBe(777)
+    expect(result.stale).toEqual(expect.arrayContaining(['pivot!10:0']))
   })
 })
