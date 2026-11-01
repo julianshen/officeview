@@ -215,6 +215,75 @@ describe('Pivot value field settings UI', () => {
     expect(delta.fn).toBe('average')
   })
 
+  it('data field saved with a custom name keeps it after a function change', async () => {
+    const onApply = vi.fn().mockResolvedValue(true)
+    const onClose = vi.fn()
+    // A zh-TW pivot where data field 0 was already saved with custom name 'My Revenue'
+    const zhModelWithCustomName = makeModel({
+      name: '樞紐分析表1',
+      data: [
+        { index: 0, field: 2, name: 'My Revenue', fn: 'sum', showAs: 'normal', baseField: -1, baseItem: -1 },
+      ],
+    })
+
+    render(<PivotValueSettingsDialog model={zhModelWithCustomName} dataIndex={0} onApply={onApply} onClose={onClose} />)
+
+    const customNameInput = screen.getByLabelText('Custom Name') as HTMLInputElement
+    expect(customNameInput.value).toBe('My Revenue')
+
+    // Change summary function from Sum to Average
+    fireEvent.click(screen.getByRole('radio', { name: 'Average' }))
+
+    // Pre-existing custom name must NOT be overwritten with '平均值 - Sales'
+    expect(customNameInput.value).toBe('My Revenue')
+
+    // Click OK without editing
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    })
+
+    // onApply must receive the preserved custom name
+    expect(onApply).toHaveBeenCalledTimes(1)
+    const delta = onApply.mock.calls[0]![0]
+    expect(delta.name).toBe('My Revenue')
+    expect(delta.fn).toBe('average')
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('does not offer zh-TW auto captions when saved captions contradict zh-TW pivot name', async () => {
+    const onApply = vi.fn().mockResolvedValue(true)
+    const onClose = vi.fn()
+    // Custom Chinese pivot name with English saved data fields (contradictory locale)
+    const contradictoryModel = makeModel({
+      name: '銷售分析',
+      data: [
+        { index: 0, field: 2, name: 'Sum of Sales', fn: 'sum', showAs: 'normal', baseField: -1, baseItem: -1 },
+      ],
+    })
+
+    render(<PivotValueSettingsDialog model={contradictoryModel} dataIndex={0} onApply={onApply} onClose={onClose} />)
+
+    const customNameInput = screen.getByLabelText('Custom Name') as HTMLInputElement
+    expect(customNameInput.value).toBe('Sum of Sales')
+
+    // Change summary function from Sum to Average
+    fireEvent.click(screen.getByRole('radio', { name: 'Average' }))
+
+    // Must NOT guess a zh-TW caption ('平均值 - Sales') because locale is contradictory
+    expect(customNameInput.value).not.toBe('平均值 - Sales')
+
+    // Click OK
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    })
+
+    // Must submit with an explicit name so session does not reject with pivot-caption-locale
+    expect(onApply).toHaveBeenCalledTimes(1)
+    const delta = onApply.mock.calls[0]![0]
+    expect(delta.name).toBeDefined()
+    expect(delta.fn).toBe('average')
+  })
+
   it('switching showAs to % Difference From enables Base field and Base item with (previous)/(next) and field items', async () => {
     const onApply = vi.fn().mockResolvedValue(true)
     const onClose = vi.fn()

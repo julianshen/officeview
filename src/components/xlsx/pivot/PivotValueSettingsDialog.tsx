@@ -70,8 +70,43 @@ export const requiresBaseField = (mode: PivotValueShowAs): boolean =>
 export const requiresBaseItem = (mode: PivotValueShowAs): boolean =>
   ['difference', 'percent', 'percentDiff'].includes(mode)
 
-export function defaultCaptionFor(model: PivotMenuModel, currentName: string, fieldName: string, fn: PivotDataFunction): string {
-  const isZhTw = Boolean(currentName && Object.values(ZH_TW_CAPTIONS).some(p => typeof p === 'string' && p.includes('{field}') && currentName.startsWith(p.split('{field}')[0]!))) || /[\u4e00-\u9fa5]/.test(model.name)
+export function isZhTwLocale(model: PivotMenuModel): boolean {
+  const hasZhTwDataField = model.data.some(d => {
+    const fieldMeta = model.fields.find(f => f.index === d.field)
+    const fieldName = fieldMeta?.name ?? ''
+    const pattern = ZH_TW_CAPTIONS[`dataField:${d.fn}`]
+    const expected = pattern?.replace('{field}', fieldName)
+    return d.name && expected && (d.name === expected || d.name.startsWith(expected))
+  })
+  if (hasZhTwDataField) return true
+  if (/^樞紐分析表\d*$/.test(model.name)) return true
+  const isCustomZhTwName = /[\u4e00-\u9fa5]/.test(model.name)
+  if (isCustomZhTwName) {
+    const hasContradictoryDataField = model.data.some(d => {
+      if (!d.name) return false
+      if (/^(Sum|Count|Average|Max|Min|Product|StdDev|StdDevp|Var|Varp) of /i.test(d.name)) return true
+      return !/[\u4e00-\u9fa5]/.test(d.name)
+    })
+    return !hasContradictoryDataField
+  }
+  return false
+}
+
+export function isAutoCaption(name: string, fn: PivotDataFunction, fieldName: string, isZhTw: boolean): boolean {
+  if (!name) return false
+  if (isZhTw) {
+    const pattern = ZH_TW_CAPTIONS[`dataField:${fn}`]
+    if (pattern) {
+      const base = pattern.replace('{field}', fieldName)
+      const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return new RegExp(`^${escaped}(\\d+)?$`).test(name)
+    }
+  }
+  return false
+}
+
+export function defaultCaptionFor(model: PivotMenuModel, _currentName: string, fieldName: string, fn: PivotDataFunction): string {
+  const isZhTw = isZhTwLocale(model)
   if (isZhTw) {
     const pattern = ZH_TW_CAPTIONS[`dataField:${fn}`]
     if (pattern) return pattern.replace('{field}', fieldName)
@@ -87,9 +122,12 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
   const sourceFieldMeta = model.fields.find(f => f.index === currentData?.field)
   const isCalculated = Boolean(sourceFieldMeta?.calculated)
 
+  const isZhTw = isZhTwLocale(model)
+  const isAuto = isAutoCaption(currentData?.name ?? '', currentData?.fn ?? 'sum', sourceFieldMeta?.name ?? '', isZhTw)
+
   const [activeTab, setActiveTab] = useState<'summary' | 'showAs'>('summary')
   const [customName, setCustomName] = useState(currentData?.name ?? '')
-  const [nameTouched, setNameTouched] = useState(false)
+  const [nameTouched, setNameTouched] = useState(!isAuto)
   const [fn, setFn] = useState<PivotDataFunction>(isCalculated ? 'sum' : (currentData?.fn ?? 'sum'))
   const [showAs, setShowAs] = useState<PivotValueShowAs>(currentData?.showAs ?? 'normal')
 
@@ -153,11 +191,12 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
     try {
       setError('')
       const trimmed = customName.trim()
-      if (nameTouched && !trimmed) {
+      const canOmitName = isZhTw && !nameTouched
+      if (!canOmitName && !trimmed) {
         setError('The custom name cannot be blank.')
         return
       }
-      if (nameTouched) {
+      if (!canOmitName) {
         const otherNames = model.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean)
         if (otherNames.some(n => n.toLowerCase() === trimmed.toLowerCase())) {
           setError(`A data field named "${trimmed}" already exists.`)
@@ -173,7 +212,7 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
         dataIndex,
         ...(fnChanged ? { fn } : {}),
         showAs,
-        ...(nameTouched ? { name: trimmed } : {}),
+        ...(!canOmitName ? { name: trimmed } : {}),
         numFmtId: numFmtId === '' ? null : Number(numFmtId),
         ...(requiresBaseField(showAs) ? { baseField } : {}),
         ...(requiresBaseItem(showAs) ? { baseItem } : {}),
