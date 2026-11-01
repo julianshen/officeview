@@ -749,13 +749,18 @@ The recipes are in `xlsx-pivots-recipes-stage3.md`. The orchestrator ran them th
 - **Autofit.** Each non-setup interaction case changes exactly the columns Excel changed, to within one Excel pixel under a Calibri-like measure (Task 29). In the browser, widths follow the canvas font, and the "still the old fit" test allows 10%.
 - **`GETPIVOTDATA`.** All 4 cases equal Excel's saved values (Task 31).
 - **refreshOnLoad.** All 3 cases equal Excel's refreshed saves (Task 32).
-- **Owner recipes O1–O7.** These are measured in "Owner recipes (measured 2026-11-01)" above. Rulings S3-U to S3-Y decide how the viewer differs:
-  - overlap is refused rather than shown as `#SPILL!`;
+- **Owner recipes O1–O7.** These are measured in "Owner recipes (measured 2026-11-01)" above. Rulings S3-AO and S3-V to S3-Y decide how the viewer behaves:
+  - overlap spills as Excel does (S3-AO), except over unmeasured blockers, which refuse;
   - a sort beside a pivot is refused, because the viewer moves whole rows.
 - **Browser.** Clicking collapse, on a plain pivot and on a pivot that feeds a chart, equals Excel at 0 px. This holds on the resident, `?worker=1` and paged legs, in Chromium and WebKit (`tests/browser/xlsx-pivots.spec.ts`). The menu-driven kinds are covered by the jsdom pivot UI tests (`tests/xlsx-viewer-pivot-ui.test.tsx`).
 
 ### What the viewer refuses or approximates (Stage 3)
-- **Overlap.** Excel 16.114 shows no alert and turns the pivot into a `#SPILL!` anchor. The viewer refuses instead, naming the cell (S3-U). Merges, spill/array members, noted cells and other pivots' areas all count as occupied (S3-AC). Formatting-only cells are grown over (S3-V).
+- **Overlap.** The viewer follows Excel 16.114 (Ruling S3-AO, which replaces S3-U).
+  - **Measured blockers spill.** A change that would cover a cell with a value (O1) or another pivot's current area (O3) commits. The pivot then shows one `#SPILL!` cell at its top-left, with `location` set to that cell. Its other cells read empty, the blocker and the other pivots are unchanged, and the column widths are kept: O1's `<cols>` is the start file's, so there is no autofit into or out of the spilled state.
+  - **After a spill.** The item state is kept, so a later change that fits shows the pivot again, and Reset shows the saved view. The spilled cell carries the first axis field's dropdown, so the field menu stays reachable. The announcement names the blocking cell.
+  - **Dependents.** References into the old area read empty, and the anchor reads `#SPILL!`. `GETPIVOTDATA` keeps its saved value, marked stale (S3-T).
+  - **Still refused, failing closed.** Unmeasured blockers still refuse, naming the cell: merges, spill/array members, noted cells, and another pivot's vacated saved area (S3-AC). So does an overlapping change to a pivot with linked charts or page fields, because Excel's spilled charts and page cells were not measured.
+  - **Formatting-only cells** are grown over (S3-V).
 - **Sheet sort and filter.** A sort that touches a pivot refuses, with Excel's message (S3-W). So does a sort beside a pivot in its rows, which is stricter than Excel (S3-AB). A filter inside a pivot refuses; a filter beside one is allowed (S3-X).
 - **Dependent formulas.**
   - A recompute over the work budget (2×10⁶ estimated range-cell visits) leaves its readers marked "may be out of date" (S3-AE).

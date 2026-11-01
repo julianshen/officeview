@@ -74,8 +74,13 @@ in git history.
       why.
     - Large workbooks opened through the viewer worker don't recompute formulas. They show that notice instead.
   - **Refusals.**
-    - A change that would grow a pivot over a value, a merged cell, a spill range, a noted cell or another pivot is
-      refused, and the message names the cell. (Excel 16.114 instead replaces the pivot with `#SPILL!`.)
+    - A change that would grow a pivot over a value or over another pivot commits as Excel 16.114 saves it. The pivot
+      shows one `#SPILL!` cell at its top-left, its other cells are empty, and the column widths are kept. The
+      announcement names the blocking cell. A later change that fits shows the pivot again, and Reset shows its
+      saved view.
+    - A change that would cover a merged cell, a spill range or a noted cell is still refused, with a message that
+      names the cell, because Excel was not measured on those. So is an overlapping change to a pivot with linked
+      charts or page fields.
     - Sheet sort refuses on a range that touches a pivot, with Excel's message.
     - Sheet filter refuses on a range inside a pivot. A filter beside a pivot is allowed, as in Excel.
   - **Large workbooks.** Workbooks opened through the viewer worker change their pivots in the worker, with the same
