@@ -1318,19 +1318,22 @@ export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader
 
   `ORACLE_VERIFIED_KINDS` (`src/xlsx/pivots/session/session.ts:106`) admits a kind only when `tests/xlsx-pivots-interaction-oracle.test.ts` has at least one passing seed-based Excel 16.114 case for it. Any kind not in `verifiedKinds` is omitted (not greyed) from menus, buttons, and panels.
 - **Two paths and session-scoped cache/store staging (`S4-B`, §6.8, §7.4).** Both resident (`createResidentPivotClient`) and worker/paged (`viewerSession.ts` + `RemotePivotSessions`) paths run the same `PivotSession` transitions. Because two pivots can share one decoded `RecordStore` (`runtime.ts`, `viewerSession.ts:1490` `share`), materializing an inline column or adding/removing group fields never mutates the shared `RecordStore` or opened `PivotCacheDefinition` in place: `apply()` builds a candidate `{ cache, store, baseDef, view, extraBytes }` with a shallow-cloned `columns` array sharing unchanged columns by reference. `session.cache` updates only on `commit()`, and `reset()` restores the opened `cache0`/`store0`/`def0`.
-- **Memory admission before allocation (`S4-C`, §6.8).** Any net new bytes for materialized inline `Uint32Array(store.count)` columns, `PivotCacheItem[]`, or group metadata (`extraBytes`) are checked and admitted against the main-thread ledger (`MAIN_THREAD_BUDGETS[profile]`) on the resident path and against `grantBytes` + `WorkerMemoryPool` on the worker path **before** allocation or staging. Superseded candidates, uncommitted applies, `reset()`, and `release()` release their delta hold immediately.
+- **Memory admission before allocation (`S4-C`, §6.8).** Any net new bytes for materialized inline `Uint32Array(store.count)` columns, `PivotCacheItem[]`, or group metadata (`extraBytes`) are reserved **before** candidate construction allocates them, via `session.apply(delta, { admitCandidateBytes })` (falling back to `PivotSessionInput.admitCandidateBytes` on the resident path):
+  - **Resident (`pivotClient.ts`):** reserves `extraBytes` against the main-thread ledger (`MAIN_THREAD_BUDGETS[profile]`) before building; returns `undefined` (`pivot-records-limit`) if over budget.
+  - **Worker (`viewerSession.ts`):** `pivotApply` passes a reservation callback into `handle.session.apply` that checks `extraBytes <= grantBytes` **and** retains `extraBytes` in `WorkerMemoryPool` (`this.memory.retain(...)`) *before* `applyDeltaState` allocates any column or item array (throwing `PivotIndexQuota` on grant or pool exhaustion so candidate construction never transiently exceeds budget), then requires `extraBytes + overlayBytes <= grantBytes` when staging the overlay.
+  - **Single-release ownership:** Each reservation returns an idempotent `PivotMemoryHold` (`release()` refunds at most once). If `apply` or `pivotApply` fails at any later step (engine, caption, overlap, chart gate, or overlay quota), the hold is released immediately before returning; otherwise the staged candidate owns the hold until transferred to `committed` on `commit()` (which releases the prior committed delta hold once) or refunded once on candidate replacement, `'reset'`, or `release()`.
 - **Lazy bundle budget (`S4-D`, §8).** All Stage 4 UI (`PivotFieldList.tsx`, `PivotValueSettingsDialog.tsx`, `PivotGroupDialog.tsx`) lives under `src/components/xlsx/pivot/` and enters `InteractiveSheetDoc.tsx` solely through the existing dynamic `import('./pivot/PivotButtonLayer')` (`InteractiveSheetDoc.tsx:1461`). `dist/index.js` remains under 38,720 B gzip (`scripts/check-eager.ts` and `scripts/eager-budget.ts`).
 - **Inline-field materialization and cross-axis state rules (`S4-E`).** Moving an off-axis inline field onto `'row' | 'col' | 'page'` materializes `PivotSharedItems` + `{ kind: 'shared', index: Uint32Array }` from its inline `RecordColumn` using `refresh.ts`'s measured first-appearance + ASCII case-folding rules (refusing non-ASCII case collisions or mixed-type ambiguity that `refresh.ts` refuses), and initializes `<items>` and `FieldState` flags from `def.defaultLayout`, `def.compact`, `def.outline`, and `def.x14?.fillDownLabelsDefault` as pinned by Task 34. Removing a field from all axes (`axis: 'none'`) clears its `hidden`, `collapsed`, `filters`, `sortType`/`autoSortScope`, and page selection (`quirk-off-axis-hidden-item`). Moving a field between `'row'`, `'col'`, and `'page'` preserves or clears item/filter/sort state strictly as Task 34 measures.
 - **`Values` (`PIVOT_VALUES_FIELD = -2`) transitions and empty states (`S4-F`).** With 0 or 1 data fields, `-2` is on neither `rows` nor `cols`. When `view.data.length` transitions `1 → 2`, `-2` is appended to `cols` (or `rows` if Task 34 shows `def.dataOnRows` governs); when `2 → 1` or `1 → 0`, `-2` is removed from whichever axis holds it. With `data.length >= 2`, `-2` appears as the movable `∑ Values` (`def.dataCaption`) chip on Rows or Columns only (never Filters or Values). Layouts with `0` data fields or `0` fields on all axes render or refuse strictly as Task 34's empty-pivot cases measure (closing `place.ts:35`).
 - **Field permissions and calculated fields (`S4-G`).** `def.disableFieldList` hides/refuses the Field List for that pivot; `def.fieldListSortAscending` sorts the checklist A→Z instead of cache order; per-field `dragToRow`, `dragToCol`, `dragToPage`, `dragToData`, and `dragOff` (`model.ts:210-215`) are enforced in both UI affordances and `applyDelta`; calculated fields (`formula !== undefined`) are restricted to Values only (`axes.ts:189-191`). Adding a field to Values picks Excel's measured default function (`'sum'` for numeric-only and calculated fields, `'count'` otherwise, pinned in Task 34) and allows multiple Values entries per source field.
 - **Data-field captions and locale safety (`S4-H`).** Following Stage 3's closed Captions ruling, English default captions are never guessed. When `addDataField` creates a data field or `valueSettings` changes `fn` without an explicit custom `name`, the default caption is formatted via `CaptionRule` (`dataField:<fn>`) and disambiguated against existing `view.data` captions (`{base}2`, `{base}3`, … as pinned in Task 34), then stored in `DataFieldState.name`; if `CaptionRule` has no `dataField:<fn>` pattern (and saved `def.dataFields` do not match a measured table), `apply` refuses `pivot-caption-locale` unless an explicit custom `name` was supplied. Explicit empty/whitespace-only or duplicate custom names refuse `pivot-delta-invalid` (matching Excel). Changing `showAs` or `numFmtId` without changing `fn` or `name` preserves the existing `DataFieldState.name`.
-- **Number format scope in Value Field Settings (`S4-I`, [call]).** View-only mode must not mutate workbook `styles.xml` custom `numFmt` tables across worker/resident boundaries. Value Field Settings offers built-in ECMA-376 `numFmtId` presets (`0` General, `1` `0`, `2` `0.00`, `3` `#,##0`, `4` `#,##0.00`, `9` `0%`, `10` `0.00%`, `11` `0.00E+00`, `14` `yyyy-mm-dd`, `37` `#,##0;(#,##0)`, `38` `#,##0;[Red](#,##0)`, `39` `#,##0.00;(#,##0.00)`, `40` `#,##0.00;[Red](#,##0.00)`, `44` accounting, `49` `@`) plus an option to keep any custom `numFmtId >= 164` already saved on that data field, or clear `numFmtId` (`null`). Free-form custom format string authoring is out of scope.
-- **Grouping, regrouping, ungrouping, and manual discrete groups (`S4-J`, §6.7, [call]).** The Group dialog covers §6.7's two modes:
+- **Number format scope in Value Field Settings (`S4-I`, [owner]).** View-only mode never mutates workbook `styles.xml` custom `numFmt` tables across worker/resident boundaries. Number formats in Value Field Settings are the 15 built-in ECMA-376 `numFmtId` presets (`0` General, `1` `0`, `2` `0.00`, `3` `#,##0`, `4` `#,##0.00`, `9` `0%`, `10` `0.00%`, `11` `0.00E+00`, `14` `yyyy-mm-dd`, `37` `#,##0;(#,##0)`, `38` `#,##0;[Red](#,##0)`, `39` `#,##0.00;(#,##0.00)`, `40` `#,##0.00;[Red](#,##0.00)`, `44` accounting, `49` `@`) plus keeping an existing custom `numFmtId >= 164` already saved on that data field, or clearing `numFmtId` (`null`). Custom format string authoring is out of scope.
+- **Grouping, regrouping, ungrouping, and no ad-hoc manual item grouping (`S4-J`, §6.7, [owner]).** The Group dialog covers §6.7's two modes:
   1. **Date grouping:** `Starting at` (Auto checkbox + date input), `Ending at` (Auto checkbox + date input), multi-select periods (`Seconds`, `Minutes`, `Hours`, `Days`, `Months`, `Quarters`, `Years`), and `Number of days` (`1..32767`) enabled only when `Days` is the sole selected period.
   2. **Number grouping:** `Starting at` (Auto checkbox + number input), `Ending at` (Auto checkbox + number input), and `By` interval (`> 0`).
 
-  Regrouping an already-grouped date or number field (saved or session-created, invoked from the base field or any virtual parent date field) pre-populates current bounds/periods and replaces the group hierarchy cleanly, dropping filters/sorts on removed virtual parent fields. `ungroup` works on date groups, number groups, **and** saved manual (`discretePr`) item groups. Creating *new* manual (`discretePr`) groups from multi-cell grid selections is out of Stage 4 scope (spec §6.7 scopes the UI to the date/number Group dialog).
-- **Accessibility, responsive shells, and single grid Tab stop (`S4-K`, §6.7, §8, Ruling S3-J).** The worksheet grid keeps a single Tab stop (`S3-J`). On desktop (`!coarse && width > 640px`), `PivotFieldList` docks as a sibling `role="region"` (`aria-label="PivotTable Fields"`) beside `officeview-sheet-pane` so `ResizeObserver` reflows canvas tiles without covering cells; on coarse/narrow viewports (`(pointer: coarse), (max-width: 640px)`), it renders as a modal bottom sheet (`PivotMenuShell` pattern). Every drag-and-drop action in `PivotFieldList` has a 1-to-1 keyboard/button menu (`Move to Filters`, `Move to Columns`, `Move to Rows`, `Move to Values`, `Move Up`, `Move Down`, `Move to Beginning`, `Move to End`, `Remove Field`, plus `Value Field Settings…` on Values chips and `Group…`/`Ungroup` on Row/Column chips). Modal dialogs (`PivotValueSettingsDialog`, `PivotGroupDialog`, and mobile `PivotFieldList`) trap `Tab`/`Shift+Tab`, close on `Escape` restoring focus to the invoker, use ≥ 44 px coarse hit targets, and announce commits/refusals through `PivotControllerHost.announce`.
+  Regrouping an already-grouped date or number field (saved or session-created, invoked from the base field or any virtual parent date field) pre-populates current bounds/periods and replaces the group hierarchy cleanly, dropping filters/sorts on removed virtual parent fields. `ungroup` works on date groups, number groups, **and** saved manual (`discretePr`) item groups. There is no ad-hoc manual item grouping (creating new `discretePr` groups from multi-cell grid selections is out of scope).
+- **Accessibility, Field List reset, responsive shells, and single grid Tab stop (`S4-K`, §6.7, §8, Ruling S3-J, AGY-11).** The worksheet grid keeps a single Tab stop (`S3-J`). On desktop (`!coarse && width > 640px`), `PivotFieldList` docks as a sibling `role="region"` (`aria-label="PivotTable Fields"`) beside `officeview-sheet-pane` so `ResizeObserver` reflows canvas tiles without covering cells; on coarse/narrow viewports (`(pointer: coarse), (max-width: 640px)`), it renders as a modal bottom sheet (`PivotMenuShell` pattern). Every drag-and-drop action in `PivotFieldList` has a 1-to-1 keyboard/button menu (`Move to Filters`, `Move to Columns`, `Move to Rows`, `Move to Values`, `Move Up`, `Move Down`, `Move to Beginning`, `Move to End`, `Remove Field`, plus `Value Field Settings…` on Values chips and `Group…`/`Ungroup` on Row/Column chips). `PivotFieldList` also provides a keyboard-reachable **`Reset to saved view`** action (`onApply('reset')`, matching `PivotFieldMenu` and `PivotPageMenu` per §6.7 line 319) that returns the selected pivot to the file's saved `view0`/`def0`/`cache0`: in Stage 4 slicers and timelines are still display-only at the file's saved state (so `session.reset()` already restores any saved slicer-driven item filters on the pivot), and Stage 5 Task 41 extends `'reset'` to restore live interactive slicers/timelines driving that pivot. Modal dialogs (`PivotValueSettingsDialog`, `PivotGroupDialog`, and mobile `PivotFieldList`) trap `Tab`/`Shift+Tab`, close on `Escape` restoring focus to the invoker, use ≥ 44 px coarse hit targets, and announce commits/refusals through `PivotControllerHost.announce`.
 - **Pivot charts and `GETPIVOTDATA` follow (`S4-L`, §6.6, §7.5).** `pivotChartGate` (`charts.ts:245`) and `getPivotData` (`getpivotdata.ts:124`) run on every Stage 4 candidate layout and live definition: reshapes or `numFmtId` changes outside measured chart mappings fail closed with `pivot-chart-mapping` before commit, and resident dependent formulas/`GETPIVOTDATA` recompute against moved, renamed, or grouped fields (paged sheets emit the S3-S sheet-wide formula notice).
 
 **Agents (Stage 4).**
@@ -1344,14 +1347,14 @@ export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader
 - Execution order is strictly sequential (`34 → 35 → 36 → 37 → 38`) because Tasks 35, 36, and 37 all extend `src/xlsx/pivots/session/delta.ts`, `session.ts`, `menu.ts`, and `src/components/xlsx/pivot/PivotButtonLayer.tsx` (no two agents edit the same file at once).
 
 **Stage 4 review focus:**
-1. **Uncommitted `apply()` purity on inline-field materialization and shared `RecordStore`.** Two pivots sharing one `RecordStore` open sessions; Pivot A runs `apply({ kind: 'moveField', field: F.Channel, axis: 'row' })` without `commit()` (or hits a chart-gate/quota refusal). Neither Pivot B's store nor Pivot A's `session.cache` mutates, and the temporary delta hold is released. Test: Task 35 `inline field materialization is pure until commit and isolates shared stores`.
-2. **Worker `handle.cache` and pool charges across apply, stale commit, reset, and release.** Moving an inline field onto Rows or multi-level date grouping on the paged path updates `PivotMenuModel` in the `pivotApply` reply, updates `handle.cache` only on `pivotCommit`, restores `openedCache` and releases delta bytes on `'reset'`, and leaks 0 pool bytes on stale commit or `pivotRelease`. Test: Task 35 `worker staged cache and inline-column bytes follow two-phase commit and reset` and Task 37 `worker multi-level date group and ungroup release derived cache bytes`.
+1. **Uncommitted `apply()` purity on inline-field materialization and shared `RecordStore`.** Two pivots sharing one `RecordStore` open sessions; Pivot A runs `apply({ kind: 'moveField', field: F.Channel, axis: 'row' })` without `commit()` (or hits a chart-gate/quota refusal). Neither Pivot B's store nor Pivot A's `session.cache` mutates, and the pre-reserved candidate delta hold is released once before returning. Test: Task 35 `inline field materialization is pure until commit and isolates shared stores`.
+2. **Pre-allocation worker candidate admission, `handle.cache`, and single-release pool charges.** On `pivotApply`, the worker reserves candidate delta bytes against *both* `grantBytes` and live `WorkerMemoryPool` **before** `applyDeltaState` allocates any inline column or group metadata (never transiently exceeding budget), checks `extraBytes + overlayBytes <= grantBytes`, updates `PivotMenuModel` in the `pivotApply` reply, updates `handle.cache` only on `pivotCommit`, restores `openedCache` on `'reset'`, and refunds each hold at most once across failed apply, candidate replacement, stale commit, accepted commit, `'reset'`, and `pivotRelease`. Test: Task 35 `worker reserves candidate delta bytes before building and refunds once on every exit` and Task 37 `worker multi-level date group and ungroup release derived cache bytes`.
 3. **`Values` (`-2`) axis lifecycle and data-index remapping.** Removing `Sum of Units` (`2 → 1`) drops `-2` from `cols`, shifts `iMeasureFld` and `autoSortScope` references on remaining data fields (or clears sorts/filters targeting the removed measure), adding a second data field (`1 → 2`) places `-2` per the measured rule, and `1 → 0` matches Task 34's zero-data oracle. Test: Task 35 `data field add, remove and reorder maintain PIVOT_VALUES_FIELD and remap measure indices`.
 4. **Data-field caption locale safety and duplicate disambiguation.** Adding `Sales` a second time to Values produces Excel's measured disambiguated caption (e.g. `加總 - Sales2`), changing `fn` on a `zh-TW` pivot updates the auto caption while changing `showAs` keeps it, and an unmeasured-locale pivot refuses `pivot-caption-locale` on auto-captioning but succeeds when given an explicit custom `name`. Test: Task 36 `valueSettings caption rules: auto zh-TW, duplicate suffix, showAs preservation and fail-closed locale`.
 5. **S2-AA variance-total refusal vs total-less success in Value Field Settings.** Selecting `StdDev`/`Var` on `baseline.xlsx` (which has subtotals and grand totals) refuses `pivot-engine-unmeasured`, announces the diagnostic, and leaves the committed table intact; selecting `StdDev`/`Var` on the total-less pivot matches Excel 16.114 to 15 digits. Test: Task 36 `variance functions succeed without totals and fail closed with announcement when totals exist`.
 6. **Multi-level date regrouping (`Years › Quarters › Date` → `Months` → `ungroup`).** Regrouping a 3-level date hierarchy down to single-level `Months` removes virtual `Years` and `Quarters` fields from `cache.fields`, `def.fields`, `view.rows`/`cols`, `view.filters`, and `autoSortScope` with no dangling field index, and `ungroup` restores the ungrouped `Date` items (materializing shared items if `Date` was originally inline). Test: Task 37 `regrouping and ungrouping multi-level dates clean up virtual fields, filters and sorts`.
 7. **Linked pivot chart gate on Stage 4 reshapes and `numFmtId`.** Moving `Values` or a third axis field into a shape `charts.ts` covers updates series/categories to match Excel; setting a non-zero `numFmtId` or an unmeasured axis shape on a chart-linked pivot refuses `pivot-chart-mapping` cleanly without corrupting session state. Test: Task 35 `chart-linked pivot follows measured field moves and refuses unmeasured shapes` and Task 36 `chart-linked pivot refuses non-zero numFmtId cleanly`.
-8. **Keyboard-only Field List workflow and single grid Tab stop (`S3-J`).** A keyboard user toggles the Field List, moves an off-axis field to Rows, reorders it above `Region`, opens Value Field Settings from a Values chip, submits, and closes on `Escape` returning focus to the invoker while the worksheet grid retains one Tab stop. Test: Task 35 `keyboard-only field list move, reorder and Escape focus return preserve single grid Tab stop`.
+8. **Keyboard-only Field List workflow, Reset to saved view, and single grid Tab stop (`S3-J`, §6.7).** A keyboard user toggles the Field List, moves an off-axis field to Rows, reorders it above `Region`, opens Value Field Settings from a Values chip, submits, triggers `Reset to saved view` from the Field List to restore the saved pivot, and closes on `Escape` returning focus to the invoker while the worksheet grid retains one Tab stop. Test: Task 35 `keyboard-only field list move, reorder, Reset to saved view and Escape focus return preserve single grid Tab stop`.
 
 ---
 
@@ -1362,13 +1365,13 @@ export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader
 **Files:**
 - Modify:
   - `scripts/xlsx-refs/classify-stage2.ts` (reclassify Stage 2 same-cache field-move, `values-fn-*` except S2-AA variance-with-totals, and `values-showas-*` cases into Stage 4 `PivotDelta[]`);
-  - `scripts/xlsx-refs/interaction-cases.ts` (extend `InteractionTask` with `35 | 36 | 37`, extend `DeltaSpec`/`resolveDelta` with Stage 4 delta specs, and add Stage 4 oracle cases);
-  - `scripts/xlsx-refs/build-engine.ts` (if helper hooks are needed for grouping/field-list markers or System Events dialog recipes);
+  - `scripts/xlsx-refs/interaction-cases.ts` (extend `InteractionTask` with `35 | 36 | 37`, extend `DeltaSpec`/`resolveDelta` with Stage 4 delta specs, and add Stage 4 oracle cases with `'applescript' | 'xml' | 'recipe'` routing);
+  - `scripts/xlsx-refs/build-engine.ts` (if helper hooks are needed for grouping/field-list markers or `'recipe'` batch generation / System Events UI recipes);
   - `src/xlsx/pivots/session/delta.ts` (**types and `PIVOT_DELTA_KINDS` literal tuple only** so `interaction-cases.ts`, `classify-stage2.ts`, and `tsconfig.json` type-check cleanly; `ORACLE_VERIFIED_KINDS` stays unchanged in Task 34);
   - `tests/fixtures/xlsx-pivots/interaction/delta-from-stage2.json`, `manifest.json`, and `tests/fixtures/xlsx-pivots/interaction/*.xlsx`;
   - `tests/xlsx-refs-interaction-cases.test.ts` (pin new delta classifications and Stage 4 manifest cases);
   - `docs/validation/xlsx-pivots.md` (add section `"Stage 4 interaction oracle and measurements"`).
-- Create (only if an Excel alert/dialog case needs System Events UI scripting):
+- Create (if any case cannot be completed by AppleScript or verified XML refresh and enters the §11 recipe fallback):
   - `docs/validation/xlsx-pivots-recipes-stage4.md`.
 
 **Interfaces:**
@@ -1403,7 +1406,7 @@ export type PivotDelta =
     - Summary functions: `values-fn-sum`, `values-fn-count`, `values-fn-average`, `values-fn-max`, `values-fn-min`, `values-fn-product`, `values-fn-countnums` (`{ kind: 'valueSettings', dataIndex: 0, fn }`). Keep `values-fn-stdev`, `-stdevp`, `-var`, `-varp` at `delta: null` with explicit reason `"refused by S2-AA variance-total 15th-digit rule when totals are shown; covered on total-less base in Stage 4 manifest"`.
     - Show-values-as: all 13 AppleScript/XML single-step `values-showas-*` cases (`percentOfTotal`, `percentOfRow`, `percentOfCol`, `percentOfParentRow`, `percentOfParentCol`, `percentOfParent`, `difference`, `percent`, `percentDiff`, `runTotal`, `percentOfRunningTotal`, `rankAscending`, `rankDescending`, `index`) plus the 3 field-move + show-as combos (`values-showas-percent-of-parent-col-multi`, etc.) where cache/records match `engine-seed`.
   - Pin every reclassified entry and JSON round-trip in `tests/xlsx-refs-interaction-cases.test.ts`.
-- [ ] **Step 2: Build new Stage 4 Excel 16.114 oracle cases (`interaction-cases.ts`).** Drive Excel 16.114 via `scripts/xlsx-refs/build-engine.ts --interaction` (AppleScript first, XML fallback where AppleScript refuses, System Events only if an alert/dialog cannot be scripted otherwise):
+- [ ] **Step 2: Build new Stage 4 Excel 16.114 oracle cases (`interaction-cases.ts`).** Drive Excel 16.114 via `scripts/xlsx-refs/build-engine.ts --interaction` using the three-tier oracle route (spec §11 lines 464–468): (a) `'applescript'` first; (b) `'xml'` (`refreshOnLoad="1"` + Excel open, `refresh table`, save) where AppleScript refuses, accepted **only** when `markers` / `cacheMarkers` / `absent` and cell diffs prove Excel neither rejected, repaired away, nor skipped recomputing the edit (a rejected, repaired, or no-op XML save is never recorded as an oracle); (c) `'recipe'` fallback (Step 3 below) for anything Excel rejects, repairs, blocks with a UI dialog/alert, or refuses to recompute on the XML route:
   - **Field moves & inline materialization (task `35`):**
     - `s4-move-inline-text-to-row` (`Channel`, mixed text/number/blank inline field, moved to Rows);
     - `s4-move-inline-date-to-col` (`Date`, inline date with blanks, moved to Columns);
@@ -1435,14 +1438,17 @@ export type PivotDelta =
   - **Pivot chart & `GETPIVOTDATA` follow (tasks `35–37`):**
     - `s4-chart-values-to-rows` (`chart-seed` with `Values` moved to Rows) and `s4-chart-remove-second-data` (`chart-seed` reduced to 1 data field);
     - `s4-gpd-rename-and-move` (`getpivotdata-seed` after moving `Year` to Rows and changing `Sum of Units` function/name).
-- [ ] **Step 3: Record Stage 4 measurements in `docs/validation/xlsx-pivots.md`.** Cite cell coordinates and XML attributes for:
+- [ ] **Step 3: Owner-recipe route (`docs/validation/xlsx-pivots-recipes-stage4.md`, spec §11 lines 464–468).**
+  - Collect every case that AppleScript cannot reach and that Excel rejects, repairs, blocks with a dialog/alert, or will not recompute on the XML route into one single batch file `docs/validation/xlsx-pivots-recipes-stage4.md` (source data, pivot, and exact Excel UI clicks).
+  - The **orchestrator** runs UI, dialog, and alert recipes in Excel 16.114 via macOS **System Events** UI scripting (using the host Accessibility and Screen Recording grants, as in Stage 3's `owner-*.xlsx` saves); any remaining case that System Events cannot drive in Excel's UI is sent to the owner **once** in that single batch so the owner's saved `.xlsx` file is the oracle.
+- [ ] **Step 4: Record Stage 4 measurements in `docs/validation/xlsx-pivots.md`.** Cite cell coordinates and XML attributes for:
   - off-axis inline → axis `<items>` and default field flags (`defaultSubtotal`, `subtotalTop`, `compact`, `outline`, `fillDownLabels`);
   - cross-axis move retention vs clearing of hidden items, collapsed items, filters, and sort;
   - `Values` (`-2`) placement on `1 → 2`, removal on `2 → 1` / `1 → 0`, and empty-pivot (`0` data fields; `0` fields on all axes) cells and `location`;
   - default summary function rule (`sum` vs `count`) and duplicate data-field name suffix rule;
   - `days` / N-day bucket boundaries, `hours`/`minutes`/`seconds` labels, `<start` / `>end` / `(blank)` group item labels and order in `Date`, `Stamp`, and `Sales` (with blanks), virtual date-group field naming (`Years`/`年`, `Quarters`/`季`, etc. in zh-TW Excel 16.114!), and `ungroup` XML restoration.
-- [ ] **Step 4: Run `npx tsc --noEmit -p .` and `npx vitest run tests/xlsx-refs-interaction-cases.test.ts tests/xlsx-pivots-interaction-oracle.test.ts`.** Existing Stage 3 oracle tests stay green while unimplemented Stage 4 manifest tasks (`35`, `36`, `37`) show visible named skips until Tasks 35–37 wire them in.
-- [ ] **Step 5: Commit** (reviewed by `codex`).
+- [ ] **Step 5: Run `npx tsc --noEmit -p .` and `npx vitest run tests/xlsx-refs-interaction-cases.test.ts tests/xlsx-pivots-interaction-oracle.test.ts`.** Existing Stage 3 oracle tests stay green while unimplemented Stage 4 manifest tasks (`35`, `36`, `37`) show visible named skips until Tasks 35–37 wire them in.
+- [ ] **Step 6: Commit** (reviewed by `codex`).
 
 ---
 
@@ -1456,23 +1462,32 @@ export type PivotDelta =
 - Modify:
   - `src/xlsx/pivots/engine/place.ts` (support measured `0`-data and empty-pivot layouts per Task 34);
   - `src/xlsx/pivots/engine/axes.ts` (accept session-materialized shared columns and measured `0`-data / empty-axis states);
-  - `src/xlsx/pivots/session/delta.ts` (implement `'moveField'`, `'addDataField'`, `'removeDataField'`, `'moveDataField'`, inline-to-shared materialization helper, permission checks, `PIVOT_VALUES_FIELD` transitions, and `iMeasureFld`/`autoSortScope` remapping);
-  - `src/xlsx/pivots/session/session.ts` (stage `{ cache, store, baseDef, extraBytes }` per candidate, admit delta bytes before allocation, expose `PivotApplyResult.cache`, update `session.cache` on `commit`, restore on `reset`, and add `'moveField' | 'addDataField' | 'removeDataField' | 'moveDataField'` to `ORACLE_VERIFIED_KINDS`);
+  - `src/xlsx/pivots/session/delta.ts` (implement `'moveField'`, `'addDataField'`, `'removeDataField'`, `'moveDataField'`, pre-allocation inline-to-shared materialization helper reserving via `admitCandidateBytes` *before* allocating `Uint32Array` or `PivotCacheItem[]`, permission checks, `PIVOT_VALUES_FIELD` transitions, and `iMeasureFld`/`autoSortScope` remapping);
+  - `src/xlsx/pivots/session/session.ts` (accept per-apply `{ admitCandidateBytes }` option + `PivotSessionInput.admitCandidateBytes` fallback, reserve candidate delta bytes **before** candidate construction, release the hold immediately if `apply` fails, attach the idempotent `PivotMemoryHold` to `PivotApplyResult` until `commit`/`reset`/`release` transfers or refunds it once, expose `PivotApplyResult.cache`, update `session.cache` on `commit`, restore on `reset`, and add `'moveField' | 'addDataField' | 'removeDataField' | 'moveDataField'` to `ORACLE_VERIFIED_KINDS`);
   - `src/xlsx/pivots/session/menu.ts` (include all cache/calculated fields, `rows`/`cols`/`pages` arrays, `valuesCaption`, field permissions, `defaultDataFn`, `disableFieldList`, `fieldListSortAscending`, and rich `data` descriptors);
-  - `src/components/xlsx/pivot/pivotClient.ts` (pass `admitDeltaBytes` against `MAIN_THREAD_BUDGETS[profile]`, and read `entry.session.cache` instead of frozen `entry.cache` in `modelOf`, `commit.cache`, and `liveCaches.set`);
-  - `src/worker/viewerSession.ts` (charge candidate `extraBytes` under `grantBytes` + `this.memory`, pass `applied.value.cache` to `handle.menu(...)` at line 1536, commit `handle.cache = staged.result.cache` at line 1547, and release/restore on `'reset'` / `pivotRelease`);
+  - `src/components/xlsx/pivot/pivotClient.ts` (pass pre-allocation `admitCandidateBytes` against `MAIN_THREAD_BUDGETS[profile]`, refund uncommitted holds, and read `entry.session.cache` instead of frozen `entry.cache` in `modelOf`, `commit.cache`, and `liveCaches.set`);
+  - `src/worker/viewerSession.ts` (in `pivotApply`, pass `admitCandidateBytes` into `handle.session.apply` so candidate delta bytes are reserved against **both** `grantBytes` and live `this.memory` **before** building the candidate — throwing `PivotIndexQuota` on grant/pool exhaustion with zero transient over-budget allocation — require `extraBytes + overlayBytes <= grantBytes`, retain the delta hold on `handle.staged` with idempotent single-release across failed apply / replacement / stale commit / accepted commit / `'reset'` / `pivotRelease`, pass `applied.value.cache` to `handle.menu(...)` at line 1536, and commit `handle.cache = staged.result.cache` at line 1547);
   - `src/components/xlsx/pivot/PivotFieldMenu.tsx` and `PivotPageMenu.tsx` (add `"Show field list"` action when `!model.disableFieldList`);
   - `src/components/xlsx/pivot/PivotButtonLayer.tsx` (export `PivotFieldList` and controller state for opening/toggling the field list for the active or chosen pivot);
   - `src/components/xlsx/InteractiveSheetDoc.tsx` (add `"Pivot fields"` toolbar toggle when `activePivots.length > 0`, dock desktop side panel beside `officeview-sheet-pane` so `ResizeObserver` reflows the grid, or mount coarse/narrow bottom sheet).
 - Test:
   - `tests/xlsx-pivots-field-list.test.ts` (engine/session/memory/worker unit & oracle tests);
   - `tests/xlsx-pivots-interaction-oracle.test.ts` (enable `task === 35` manifest cases + reclassified Stage 2 field-move cases);
-  - `tests/xlsx-pivots-worker.test.ts` (paged parity for `task === 35` cases + staged cache/memory lifecycle);
-  - `tests/xlsx-viewer-pivot-field-list.test.tsx` (desktop side panel, mobile bottom sheet, drag-and-drop, keyboard/menu moves, focus & single grid Tab stop `S3-J`).
+  - `tests/xlsx-pivots-worker.test.ts` (paged parity for `task === 35` cases + pre-allocation worker reservation and single-release lifecycle);
+  - `tests/xlsx-viewer-pivot-field-list.test.tsx` (desktop side panel, mobile bottom sheet, drag-and-drop, keyboard/menu moves, `"Reset to saved view"`, focus & single grid Tab stop `S3-J`).
 
 **Interfaces:**
 ```ts
-// session/delta.ts
+// session/session.ts & session/delta.ts
+export interface PivotMemoryHold {
+  readonly bytes: number
+  /** Idempotent: refunds the reserved bytes at most once. */
+  release(): void
+}
+export interface PivotApplyOptions {
+  /** Invoked before candidate construction allocates materialized columns/items or group metadata; undefined refuses pivot-records-limit (or throws PivotIndexQuota in the worker). */
+  admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined
+}
 export interface PivotDeltaContext {
   def: PivotTableDefinition
   cache: PivotCacheDefinition
@@ -1481,20 +1496,21 @@ export interface PivotDeltaContext {
   date1904: boolean
   captionRule: CaptionRule
   limits: RecordLimits
-  /** Called before allocating materialized inline columns or shared-item arrays; returning false refuses pivot-records-limit. */
-  admitBytes?: (extraBytes: number) => boolean
+  /** Called before allocating materialized inline columns or shared-item arrays; returning undefined refuses pivot-records-limit. */
+  admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined
 }
 export interface PivotDeltaStateResult {
   def: PivotTableDefinition
   cache: PivotCacheDefinition
   store: RecordStore
   view: PivotViewState
-  /** Net newly allocated bytes above the session's opened store + cache0. */
+  /** Net newly allocated bytes above the session's opened store + cache0, owned by `hold` when > 0. */
   extraBytes: number
+  hold?: PivotMemoryHold
 }
 export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): EngineResult<PivotDeltaStateResult>
 
-// session/session.ts — PivotApplyResult gains `cache`:
+// session/session.ts — PivotSession.apply accepts PivotApplyOptions; PivotApplyResult gains `cache` and `hold`:
 export interface PivotApplyResult {
   revision: number
   view: PivotViewState
@@ -1505,7 +1521,11 @@ export interface PivotApplyResult {
   charts: readonly ChartModel[]
   notice?: string
   spill?: { row: number; col: number }
+  /** Pre-reserved memory hold for `extraBytes` on this candidate; released once on discard/supersedure/reset/release. */
+  hold?: PivotMemoryHold
 }
+// On PivotSession:
+// apply(delta: PivotDelta, options?: PivotApplyOptions): EngineResult<PivotApplyResult>
 
 // session/menu.ts — backward-compatible extensions:
 export interface PivotMenuFieldPermissions {
@@ -1547,13 +1567,14 @@ export interface PivotMenuModel {
   - Search box filters the field checklist by substring (case-insensitive).
   - Checklist respects `model.fieldListSortAscending` (A→Z when true, `sourceOrder` otherwise) and marks a field checked whenever it is on `row`, `col`, `page`, or in `data`. Checking an unchecked field dispatches `addDataField` when `defaultDataFn === 'sum'` (numeric/calculated, if `dragToData`) else `moveField` to `'row'` (if `dragToRow`); unchecking removes its placement(s) (disabled when `!permissions.dragOff`).
   - Four drop areas (**Filters**, **Columns**, **Rows**, **Values**) support pointer/HTML5 drag-and-drop (between checklist and areas, across areas, and within an area to reorder at exact drop index) **and** a keyboard/click action menu on every checklist row and area chip (`Move to Filters`, `Move to Columns`, `Move to Rows`, `Move to Values`, `Move Up`, `Move Down`, `Move to Beginning`, `Move to End`, `Remove Field`), omitting illegal destinations per `permissions`, `calculated`, and `PIVOT_VALUES_FIELD` (`row` / `col` only).
+  - Footer/header action bar includes a keyboard-reachable **`Reset to saved view`** button (`onApply('reset')`, spec §6.7 line 319) that returns the selected pivot to its saved state (and in Stage 5 Task 41, any live slicers/timelines driving it; in Stage 4 slicers are display-only at the file's saved state and `session.reset()` restores any saved slicer-driven item filters).
   - Multi-pivot sheets show a compact pivot switcher header inside `PivotFieldList` (defaulting to the pivot containing the active cell, or `activePivots[0]`).
 
 - [ ] **Step 1: Write the failing tests.**
   - `tests/xlsx-pivots-field-list.test.ts`:
     - `inline field materialization builds shared items and Uint32Array index matching Excel first-appearance order`;
     - `inline field materialization is pure until commit and isolates shared stores`;
-    - `inline field materialization refuses pivot-records-limit before allocating when ledger budget is exceeded`;
+    - `inline field materialization reserves bytes before allocating and refunds once when over budget or when a later gate refuses`;
     - `moveField enforces dragToRow, dragToCol, dragToPage, dragOff, disableFieldList, pageFieldsFit and calculated-field restrictions`;
     - `removing a field from all axes clears hidden items, collapsed state, filters, sort and page selection`;
     - `data field add, remove and reorder maintain PIVOT_VALUES_FIELD and remap measure indices`;
@@ -1561,16 +1582,17 @@ export interface PivotMenuModel {
     - `chart-linked pivot follows measured field moves and refuses unmeasured shapes`.
   - `tests/xlsx-pivots-interaction-oracle.test.ts` & `tests/xlsx-pivots-worker.test.ts`:
     - enable `task === 35` manifest cases and Stage 2 field-move cases on resident and paged paths;
-    - `worker staged cache and inline-column bytes follow two-phase commit and reset`.
+    - `worker reserves candidate delta bytes before building and refunds once on every exit` (verifies `admitCandidateBytes` runs *before* allocation against both `grantBytes` and `WorkerMemoryPool`, combined `extraBytes + overlayBytes > grantBytes` refunds the delta hold immediately, and replacement / stale commit / accepted commit / `'reset'` / `pivotRelease` each refund at most once).
   - `tests/xlsx-viewer-pivot-field-list.test.tsx`:
     - `toolbar button and field menu toggle desktop docked side panel without covering sheet pane`;
     - `coarse or narrow viewport renders field list as modal bottom sheet with 44 px targets`;
     - `search filters checklist and fieldListSortAscending sorts A to Z`;
     - `drag and drop moves off-axis field to Rows, reorders Values chip and moves field between Rows and Columns`;
-    - `keyboard-only field list move, reorder and Escape focus return preserve single grid Tab stop`;
+    - `Reset to saved view in field list is keyboard-reachable and returns the selected pivot to its saved view`;
+    - `keyboard-only field list move, reorder, Reset to saved view and Escape focus return preserve single grid Tab stop`;
     - `disableFieldList hides field-list entry points`.
 - [ ] **Step 2: Run the new tests; confirm they fail for the expected reasons.**
-- [ ] **Step 3: Implement engine/session deltas, resident + worker staged cache/memory plumbing, and `PivotFieldList.tsx`.**
+- [ ] **Step 3: Implement engine/session deltas, pre-allocation resident + worker staged cache/memory plumbing, and `PivotFieldList.tsx`.**
 - [ ] **Step 4: Run tests and gates:** `npx tsc --noEmit -p .`, `bun scripts/check-eager.ts`, `bun scripts/eager-budget.ts`, and `npx vitest run tests/xlsx-pivots* tests/xlsx-viewer-pivot*`.
 - [ ] **Step 5: Review and commit** (`agy` + `Claude sonnet` review before orchestrator commit).
 
@@ -1663,7 +1685,7 @@ export interface PivotValueSettingsDialogProps {
   - `src/xlsx/pivots/session/grouping.ts` (pure `groupDate`, `groupNumber`, and `ungroup` transitions over `{ def, cache, store, view }`, virtual parent `cacheField`/`pivotField` synthesis & cleanup, and `PivotMenuGroupInfo` builder).
 - Modify:
   - `src/xlsx/pivots/engine/groups.ts` (implement `'days'` including N-day `groupInterval`, `'hours'`, `'minutes'`, `'seconds'`, manual `<start` / `>end` date buckets, and number grouping with blank source records per Task 34's Excel 16.114 measurements);
-  - `src/xlsx/pivots/session/delta.ts` (dispatch `'groupDate'`, `'groupNumber'`, and `'ungroup'` through `grouping.ts` with `admitBytes` pre-allocation checks);
+  - `src/xlsx/pivots/session/delta.ts` (dispatch `'groupDate'`, `'groupNumber'`, and `'ungroup'` through `grouping.ts` using Task 35's `admitCandidateBytes` pre-allocation reservation before building derived group caches, `groupItems`, or materialized base shared items);
   - `src/xlsx/pivots/session/session.ts` (add `'groupDate' | 'groupNumber' | 'ungroup'` to `ORACLE_VERIFIED_KINDS`);
   - `src/xlsx/pivots/session/menu.ts` (populate `field.group?: PivotMenuGroupInfo` on axis fields);
   - `src/components/xlsx/pivot/PivotFieldMenu.tsx`, `PivotFieldList.tsx`, and `PivotButtonLayer.tsx` (add `"Group…"` and `"Ungroup"` entries when `field.group?.kind` / `field.group?.grouped` and `verifiedKinds` allow, and mount `PivotGroupDialog`).
@@ -1757,5 +1779,5 @@ export interface PivotGroupDialogProps {
 
 - **Task 39. Slicer controls (Claude opus).** Click, Ctrl/⌘-click, the Multi-Select toggle (AGY-7), clear, and cross-filter states (§7.2).
 - **Task 40. Timeline controls (codex).** Period select by click or drag, and level changes.
-- **Task 41. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`.
+- **Task 41. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`; `Reset to saved view` on a pivot (from the field menu or field list, §6.7 AGY-11) also restores any live slicers and timelines driving that pivot to the file's saved state.
 - **Task 42. Stage 5 oracle, verification and the final whole-feature review (orchestrator).**
