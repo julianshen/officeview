@@ -245,8 +245,10 @@ export interface WorkerPivotAssets {
   /** Task 32: the cells of a refreshOnLoad cache's worksheet source range, read through the worker's store for that
    * sheet; undefined when the source is not a sheet of this workbook. */
   source?(cache: PivotCacheDefinition, signal: AbortSignal): Promise<CellReader | undefined>
-  /** The sheet's nonblank cells, and its merges, array and spill ranges and noted cells (Ruling S3-AC). */
+  /** The sheet's nonblank cells (measured blockers: a change covering one spills, Ruling S3-AO). */
   occupied(row: number, col: number): boolean
+  /** Its merges, array and spill ranges and noted cells (unmeasured, Ruling S3-AC: a change covering one refuses). */
+  blocked?(row: number, col: number): boolean
   store(sheetId: string): SourceStore
 }
 
@@ -1463,10 +1465,13 @@ export class DocumentSession {
     // Ruling S3-AC: the other pivots' saved areas (vacated cells included: each protects its own) and the areas their
     // commits show, from the sheet's blocker index (one point query per cell; Task 33 perf); then the sheet's cells.
     const savedRectsOf = (table: PivotTableDefinition) => (savedPivotLayout(table)?.rects ?? []).map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))
-    const occupied = (row: number, col: number): boolean =>
-      this.pivotBlockers(sheetId, assets.tables, savedRectsOf).find(row, col, owner => owner !== pivot) !== undefined || assets.occupied(row, col)
+    const other = (row: number, col: number, measured: boolean) => this.pivotBlockers(sheetId, assets.tables, savedRectsOf).find(row, col, owner => owner.pivot !== pivot && owner.measured === measured) !== undefined
+    // Measured (S3-AO): another pivot's current area, or a cell with a value. Unmeasured (S3-AC): the structure, or a
+    // cell another pivot vacated but still protects.
+    const occupied = (row: number, col: number): boolean => other(row, col, true) || assets.occupied(row, col)
+    const unmeasured = (row: number, col: number): boolean => Boolean(assets.blocked?.(row, col)) || (other(row, col, false) && !other(row, col, true))
     const opened = openPivotSession({ def, cache, ...(held.store ? { store: held.store } : {}), date1904: assets.date1904, saved,
-      occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
+      occupied, unmeasured, linkedCharts, ...(chartGate ? { chartGate } : {}),
       ...(refreshSource ? {
         source: refreshSource, limits: { ...limits, admitBytes: (bytes: number) => building!.set(bytes) },
         admitStore: (store: import('../xlsx/pivots/engine/records').RecordStore, metadataBytes: number) => {
@@ -1638,24 +1643,32 @@ export class DocumentSession {
     this.dropPivotBlockers(sheetId)
     return combinePivotOverlays([...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed?.overlay.rects.length).map(handle => handle.committed!.overlay))
   }
-  private readonly pivotBlockerIndexes = new Map<string, { index: OwnedRects<number>; entry: PoolEntry }>()
+  private readonly pivotBlockerIndexes = new Map<string, { index: OwnedRects<{ pivot: number; measured: boolean }>; entry: PoolEntry }>()
   private pivotBlockerSerial = 0
   /** Per sheet: every pivot's saved area and each committed pivot's protected rectangles, by pivot (Task 33 perf).
    * Retained in the pool as rebuildable (perf round 2): evicted, it is rebuilt by the next check; refused, the apply
    * that asked is refused for memory. */
-  private pivotBlockers(sheetId: string, tables: readonly PivotTableDefinition[], savedRects: (table: PivotTableDefinition) => SourceRect[]): OwnedRects<number> {
+  private pivotBlockers(sheetId: string, tables: readonly PivotTableDefinition[], savedRects: (table: PivotTableDefinition) => SourceRect[]): OwnedRects<{ pivot: number; measured: boolean }> {
     const cached = this.pivotBlockerIndexes.get(sheetId)
     if (cached?.entry.live) return cached.index
-    const entries: { rect: SourceRect; owner: number }[] = []
-    tables.forEach((table, pivot) => { for (const rect of savedRects(table)) entries.push({ rect, owner: pivot }) })
-    for (const handle of this.pivotHandles.values()) {
-      if (handle.sheetId === sheetId && handle.committed) for (const rect of handle.committed.overlay.protectedRects) entries.push({ rect, owner: handle.pivot })
-    }
+    // By pivot: its current area (measured, S3-AO) and, once it committed a change, the rest of what it protects
+    // (its saved and earlier areas: unmeasured, S3-AC).
+    const entries: { rect: SourceRect; owner: { pivot: number; measured: boolean } }[] = []
+    const committed = new Map<number, WorkerPivotHandle>()
+    for (const handle of this.pivotHandles.values()) if (handle.sheetId === sheetId && handle.committed) committed.set(handle.pivot, handle)
+    tables.forEach((table, pivot) => {
+      const handle = committed.get(pivot)
+      for (const rect of savedRects(table)) entries.push({ rect, owner: { pivot, measured: !handle } })
+      if (handle) {
+        for (const rect of pivotOutputRects(handle.committed!.result.layout)) entries.push({ rect, owner: { pivot, measured: true } })
+        for (const rect of handle.committed!.overlay.protectedRects) entries.push({ rect, owner: { pivot, measured: false } })
+      }
+    })
     // Admitted before it is built (its upper bound, transiently), then kept at its measured size.
     this.dropPivotBlockers(sheetId)
     const upper = OwnedRects.upperBytesFor(entries.length)
     const charge = this.memory.charge()
-    let index: OwnedRects<number>
+    let index: OwnedRects<{ pivot: number; measured: boolean }>
     try {
       if (!charge.set(upper)) throw new PivotIndexQuota(upper, this.memory.limitBytes)
       index = new OwnedRects(entries)

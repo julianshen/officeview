@@ -14,13 +14,15 @@
  * refusal; a caption with no pattern (`pivot-caption-locale`); an overlap; the chart gate's refusal.
  *
  * Rulings recorded here (Task 25):
- * - Overlap (§7.1): a cell the new rectangle or page cells cover is "this pivot's" when it lies in the pivot's SAVED
- *   area (the overlay replaces those saved cells) or its current area; any other cell for which `occupied` is true
- *   refuses the change with `pivot-overlap`. `occupied` answers for the sheet as loaded: a cell with a value, or a
- *   cell of another pivot. A formatting-only cell is not occupied: the pivot grows over it and its format replaces
- *   the cell's (Ruling S3-V, owner-overlap-format). Excel 16.114 turns an overlapping pivot into a #SPILL! anchor
- *   with no alert (owner-overlap-value, -pivot); the viewer keeps §7.1's refusal, the pivot unchanged, with its own
- *   message naming the blocking cell (Ruling S3-U, `pivotOverlapMessage`).
+ * - Overlap (§7.1, Ruling S3-AO, replacing S3-U): a cell the new rectangle or page cells cover is "this pivot's" when
+ *   it lies in the pivot's SAVED area (the overlay replaces those saved cells) or its current area. Any other cell
+ *   `occupied` holds — measured blockers: a cell with a value (O1) or another pivot's current area (O3) — makes the
+ *   change commit as Excel 16.114 saves it (owner-overlap-value, -pivot): the pivot spills, one #SPILL! error cell at
+ *   its top-left (`location` that cell, header/data offsets 0), its other cells empty, the item state kept (a later
+ *   change that fits shows it again). A cell `unmeasured` holds (merges, spill/array members, noted cells, another
+ *   pivot's vacated saved area: Ruling S3-AC), a pivot with linked charts, or one with page fields refuses
+ *   `pivot-overlap` instead, naming the cell (fail closed: unmeasured). A formatting-only cell is not occupied: the
+ *   pivot grows over it and its format replaces the cell's (Ruling S3-V, owner-overlap-format).
  * - `vacated` is the current area (rectangle and page cells) minus the new one, as disjoint row-band rectangles.
  * - Revision 0 and `reset()` carry the saved definition object itself and the saved state's layout, its implicit
  *   captions filled with the saved text; `reset()` is pure like `apply` (the caller commits it, as Task 27 stages it).
@@ -45,7 +47,10 @@ import { savedPivotLayout } from '../savedLayout'
 export interface PivotSessionInput {
   /** `store`: the decoded records; absent for a refreshOnLoad pivot rebuilt from `source` (§7.7). */
   def: PivotTableDefinition; cache: PivotCacheDefinition; store?: RecordStore; date1904: boolean; saved: CellReader
+  /** Measured blockers (Ruling S3-AO): a change covering one spills. */
   occupied: (row: number, col: number) => boolean
+  /** Unmeasured blockers (Ruling S3-AC): a change covering one refuses `pivot-overlap`. */
+  unmeasured?: (row: number, col: number) => boolean
   linkedCharts: readonly ChartModel[]   // charts whose c:pivotSource names this pivot (the client collects them)
   chartGate?: ChartGate                 // Task 30; absent → a pivot with linked charts refuses pivot-chart-mapping at open
   /** The store's lease (runtime.ts), released with the session. */
@@ -67,7 +72,9 @@ export interface PivotSessionInput {
 export type ChartGate = (charts: readonly ChartModel[], layout: PivotLayout, def: PivotTableDefinition) => EngineResult<readonly ChartModel[]>
 /** `notice`: the one-line notice a refreshed pivot shows with its first change (§7.7), on every result issued before
  * the session's first commit. */
-export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[]; charts: readonly ChartModel[]; notice?: string }
+export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[]; charts: readonly ChartModel[]; notice?: string
+  /** Ruling S3-AO: the change spilled; the blocking cell (also `def.spill`). */
+  spill?: { row: number; col: number } }
 export interface PivotSession {
   readonly revision: number; readonly view: PivotViewState; readonly def: PivotTableDefinition; readonly layout: PivotLayout
   /** The cache the session computes from: the saved one, or the one a refresh rebuilt (its definitions index it). */
@@ -98,12 +105,29 @@ export interface PivotSession {
  */
 export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
 
-/** The refusal of a change that would overlap a cell outside the pivot (Ruling S3-U: Excel shows no alert, it turns
- * the pivot into a #SPILL! anchor; the viewer refuses and names the blocking cell). */
-export function pivotOverlapMessage(row: number, col: number, sheet: string): string {
+const a1 = (row: number, col: number) => {
   let letters = ''
   for (let n = col + 1; n > 0; n = Math.floor((n - 1) / 26)) letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters
-  return `This change would overlap cell ${letters}${row + 1} on ${sheet}.`
+  return `${letters}${row + 1}`
+}
+/** The refusal of a change that would cover an unmeasured blocker (Ruling S3-AC; S3-AO spills over measured ones),
+ * naming the blocking cell. */
+export function pivotOverlapMessage(row: number, col: number, sheet: string): string {
+  return `This change would overlap cell ${a1(row, col)} on ${sheet}.`
+}
+/** Ruling S3-AO: the change's announcement when the pivot spills, naming the blocking cell. */
+export function pivotSpillNotice(name: string, row: number, col: number, sheet: string): string {
+  return `Pivot table ${name.slice(0, 128)} can't fit: #SPILL!. Cell ${a1(row, col)} on ${sheet} is in the way.`
+}
+/** The spilled layout (Ruling S3-AO, owner-overlap-value): one #SPILL! error cell at the would-be layout's top-left. */
+function spillLayout(layout: PivotLayout): PivotLayout {
+  const { minRow: row, minCol: col } = layout.rect
+  return { rect: { minRow: row, maxRow: row, minCol: col, maxCol: col }, axes: layout.axes, cells: [{ row, col, value: { kind: 'error', value: '#SPILL!' } }], merges: [], captionsUnverified: false }
+}
+/** The live definition as Excel saves a spilled pivot: `location` its top-left cell, header and data offsets 0 (the
+ * item state, e.g. an expanded item, is kept). */
+function spillDefinition(live: PivotTableDefinition, layout: PivotLayout, spill: { row: number; col: number }): PivotTableDefinition {
+  return { ...live, location: { ...live.location, ref: a1(layout.rect.minRow, layout.rect.minCol), firstHeaderRow: 0, firstDataRow: 0, firstDataCol: 0, rowPageCount: 0, colPageCount: 0 }, spill }
 }
 
 const refuse = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
@@ -213,6 +237,7 @@ function openRefreshed(input: PivotSessionInput, source: CellReader): EngineResu
 
 export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSession> {
   const { date1904, occupied, linkedCharts, chartGate, lease } = input
+  const unmeasured = input.unmeasured ?? (() => false)
   const verified = input.verifiedKinds ?? ORACLE_VERIFIED_KINDS
   const readable = input.source !== undefined && worksheetSourceRange(input.cache) !== undefined
   const eligible = engineEligibility(input.cache, input.def, { sourceReadable: readable })
@@ -241,15 +266,18 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
   let notice = notice0
   let released = false
 
-  /** Ruling §7.1/S3-U: the first cell of `area` outside this pivot's own (saved ∪ shown) area that `occupied` holds. */
-  const overlapOf = (area: readonly SheetRect[]): { ok: false; diagnostic: PivotDiagnostic } | undefined => {
+  /** Ruling S3-AO/S3-AC over the cells of `area` outside this pivot's own (saved ∪ shown) area: the first unmeasured
+   * blocker refuses; otherwise the first measured one spills. */
+  const overlapOf = (area: readonly SheetRect[]): { ok: false; diagnostic: PivotDiagnostic } | { spill: { row: number; col: number } } | undefined => {
     const own = [...savedArea, ...shown]
+    let spill: { row: number; col: number } | undefined
     for (const rect of area) for (let row = rect.minRow; row <= rect.maxRow; row++) {
       for (const [c0, c1] of uncovered(row, rect.minCol, rect.maxCol, own)) for (let col = c0; col <= c1; col++) {
-        if (occupied(row, col)) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
+        if (unmeasured(row, col)) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
+        if (!spill && occupied(row, col)) spill = { row, col }
       }
     }
-    return undefined
+    return spill ? { spill } : undefined
   }
 
   const session: PivotSession = {
@@ -269,8 +297,18 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       if (!layout.ok) return layout
       const area = areaFor(layout.value), current = shown
       const overlap = overlapOf(area)
-      if (overlap) return overlap
+      if (overlap && 'ok' in overlap) return overlap
       const live = liveDefinition(def, view.value, next.value.axes, layout.value)
+      if (overlap) {
+        // A spilled pivot's charts and page cells were never measured: those refuse (fail closed).
+        const { row, col } = overlap.spill
+        if (linkedCharts.length || view.value.pages.length) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
+        const spilled = spillLayout(layout.value)
+        const result: PivotApplyResult = { revision: state.revision + 1, view: view.value, def: spillDefinition(live, layout.value, overlap.spill), layout: spilled,
+          vacated: subtract(current, areaFor(spilled)), charts: [], spill: overlap.spill, notice: [notice, pivotSpillNotice(String(def.name ?? ''), row, col, def.sheet)].filter(Boolean).join(' ') }
+        issued.add(result)
+        return { ok: true, value: result }
+      }
       const charts = gate(layout.value, live)
       if (!charts.ok) return charts
       const result: PivotApplyResult = { revision: state.revision + 1, view: view.value, def: live, layout: layout.value, vacated: subtract(current, area), charts: charts.value, ...(notice ? { notice } : {}) }
@@ -288,8 +326,9 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       if (released) return refuse('pivot-session-released', `the session of pivot table ${def.name} was released`)
       // The saved route's layout0 covers exactly the saved area (nothing to check); a refreshed one may reach further
       // (final review minor 1: checked like any change).
+      // A refreshed saved view that no longer fits refuses (its spill was never measured).
       const overlap = overlapOf(areaFor(layout0))
-      if (overlap) return overlap
+      if (overlap) return 'ok' in overlap ? overlap : refuse('pivot-overlap', pivotOverlapMessage(overlap.spill.row, overlap.spill.col, def.sheet))
       const result: PivotApplyResult = { revision: state.revision + 1, view: view0, def: def0, layout: layout0, vacated: subtract(shown, areaFor(layout0)), charts: charts0.value, ...(notice ? { notice } : {}) }
       issued.add(result)
       return { ok: true, value: result }

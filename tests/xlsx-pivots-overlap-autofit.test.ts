@@ -91,19 +91,15 @@ describe('S3-Y: two filter families with multipleFieldFilters="0"', () => {
   })
 })
 
-describe('S3-U / S3-V: overlap', () => {
-  it('a change into a non-empty cell refuses with the measured message and leaves the pivot as it was', async () => {
+describe('S3-AO / S3-V: overlap', () => {
+  it('a change into a non-empty cell spills (Ruling S3-AO, replacing S3-U\'s refusal; tests/xlsx-pivots-spill.test.ts)', async () => {
     const doc = await load('engine/layout-collapsed-item'), sheet = pivotSheet(doc)
     putCell(doc.sheets[sheet]!, 22, 0, 'blocker')
     const { client: c, installs } = client(doc)
     expect((await c.open(sheet, 0, signal())).ok).toBe(true)
-    const refused = await c.apply(sheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: false })
-    expect(refused.ok).toBe(false)
-    if (!refused.ok) {
-      expect(refused.diagnostic.feature).toBe('pivot-overlap')
-      expect(refused.diagnostic.message).toBe('This change would overlap cell A23 on Pivot.')
-    }
-    expect(installs).toHaveLength(0)
+    const spilled = await c.apply(sheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: false })
+    expect(spilled).toMatchObject({ ok: true, def: { location: { ref: 'A3' }, spill: { row: 22, col: 0 } } })
+    expect(installs).toHaveLength(1)
   })
 
   it('formatting-only cells are not occupied: the pivot grows over them (owner-overlap-format)', async () => {
@@ -119,17 +115,14 @@ describe('S3-U / S3-V: overlap', () => {
     expect(applied.commit.overlay!.cell(22, 0)).toMatchObject({ value: 'Elderberries' })
   })
 
-  it('another pivot\'s cells refuse, naming its first cell (owner-overlap-pivot\'s second pivot)', async () => {
+  it('another pivot\'s cells spill it too (owner-overlap-pivot\'s second pivot)', async () => {
     const doc = await load('engine/layout-collapsed-item'), sheet = pivotSheet(doc)
     const second = (await loadPivotParts(file('interaction/owner-overlap-pivot'))).find(parts => parts.def.name === '樞紐分析表1')!.def
     expect(second.location.ref).toBe('A23:B29')
     doc.sheets[sheet]!.pivotTables = [...doc.sheets[sheet]!.pivotTables!, { ...second, sheet: doc.sheets[sheet]!.name }]
-    const { client: c, installs } = client(doc)
+    const { client: c } = client(doc)
     expect((await c.open(sheet, 0, signal())).ok).toBe(true)
-    const refused = await c.apply(sheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: false })
-    expect(refused.ok).toBe(false)
-    if (!refused.ok) expect(refused.diagnostic.message).toBe('This change would overlap cell A23 on Pivot.')
-    expect(installs).toHaveLength(0)
+    expect(await c.apply(sheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: false })).toMatchObject({ ok: true, def: { location: { ref: 'A3' }, spill: { row: 22, col: 0 } } })
   })
 })
 
@@ -158,11 +151,11 @@ async function pagedApply(blob: Blob): Promise<WorkerReply> {
   return reply
 }
 
-describe('S3-U / S3-V on the paged worker store', () => {
-  it('a value refuses naming the cell; a formatting-only cell is grown over', async () => {
-    const refused = await pagedApply(await withA23('<c r="A23" t="inlineStr"><is><t>blocker</t></is></c>'))
-    expect(refused.kind).toBe('error')
-    expect(JSON.stringify(refused)).toContain('This change would overlap cell A23 on Pivot.')
+describe('S3-AO / S3-V on the paged worker store', () => {
+  it('a value spills the pivot (S3-AO); a formatting-only cell is grown over', async () => {
+    const spilled = await pagedApply(await withA23('<c r="A23" t="inlineStr"><is><t>blocker</t></is></c>'))
+    expect(spilled).toMatchObject({ kind: 'complete', result: { kind: 'pivotApply', def: { location: { ref: 'A3' } } } })
+    expect(JSON.stringify(spilled)).toContain("can't fit: #SPILL!")
     const grown = await pagedApply(await withA23('<c r="A23" s="1"/>'))
     expect(grown).toMatchObject({ kind: 'complete', result: { kind: 'pivotApply' } })
     if (grown.kind === 'complete' && grown.result.kind === 'pivotApply') expect(grown.result.def.location.ref).toBe('A3:I24')

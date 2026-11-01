@@ -1032,7 +1032,8 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
           const sourceSheet = range ? doc.sheets.find(candidate => candidate.name === range.sheet) : undefined
           return sourceSheet ? sheetCellReader(sourceSheet) : undefined
         },
-        occupied: (row, col) => cells.has(row * MAX_COLS + col) || structure.occupied(row, col),
+        occupied: (row, col) => cells.has(row * MAX_COLS + col),
+        blocked: (row, col) => structure.occupied(row, col),
         store: storeFor,
       }
     },

@@ -1553,7 +1553,8 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
           const sourceStore = storeFor(target.sheetId)
           return pagedRangeReader(sourceStore, range.ref, { signal: readSignal, stamp: sourceStore.stamp }, profile)
         },
-        occupied: (row, col) => occupied.has(row * MAX_COLS + col) || structure.occupied(row, col),
+        occupied: (row, col) => occupied.has(row * MAX_COLS + col),
+        blocked: (row, col) => structure.occupied(row, col),
         store: storeFor,
       }
       pivotAssetCache.set(cacheKey, { assets, ...(entry ? { entry } : {}), refs: 0, retired: false })

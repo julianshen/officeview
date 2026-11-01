@@ -386,16 +386,19 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
   // Ruling S3-AC: every pivot's saved area (vacated cells too, which it protects while it is open and gets back on a
   // reset) and the current area of each one showing a change, indexed per sheet (Task 33 perf: one point query per
   // cell, not a walk over every pivot); rebuilt after a commit or a release.
-  const blockers = new Map<number, OwnedRects<number>>()
-  const blockersOf = (sheetId: number): OwnedRects<number> => {
+  // Per sheet, by pivot: each pivot's current area (measured, Ruling S3-AO: a change covering it spills) and, while it
+  // shows a change, the rest of its saved area (it still protects it; unmeasured, S3-AC: refuses). Indexed (Task 33
+  // perf: one point query per cell); rebuilt after a commit or a release.
+  const blockers = new Map<number, OwnedRects<{ pivot: number; measured: boolean }>>()
+  const blockersOf = (sheetId: number): OwnedRects<{ pivot: number; measured: boolean }> => {
     let index = blockers.get(sheetId)
     if (index) return index
-    const entries: { rect: SourceRect; owner: number }[] = []
-    savedDefs[sheetId]!.forEach((def, pivot) => { for (const rect of savedPivotLayout(def)?.rects ?? []) entries.push({ rect: toSource(rect), owner: pivot }) })
-    for (const [id, entry] of open) {
-      const [sheet, pivot] = id.split(':').map(Number) as [number, number]
-      if (sheet === sheetId && shows(entry)) for (const rect of entry.current) entries.push({ rect, owner: pivot })
-    }
+    const entries: { rect: SourceRect; owner: { pivot: number; measured: boolean } }[] = []
+    savedDefs[sheetId]!.forEach((def, pivot) => {
+      const live = open.get(key(sheetId, pivot)), showing = live && shows(live)
+      for (const rect of savedPivotLayout(def)?.rects ?? []) entries.push({ rect: toSource(rect), owner: { pivot, measured: !showing } })
+      if (showing) for (const rect of live.current) entries.push({ rect, owner: { pivot, measured: true } })
+    })
     blockers.set(sheetId, index = new OwnedRects(entries))
     // Charged while the client keeps it (perf round 2); replaced after a commit or release, it is collected.
     ledger.chargeWhileReachable('structure', [index], index.estimatedBytes)
@@ -406,10 +409,13 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     const saved = sheetCellReader(sheet)
     // Merges, array and spill ranges and noted cells (S3-AC), charged while the session holds the check.
     const structure = structuralOccupancy(sheetBlockers(sheet, engineSpillFootprints(doc)?.get(sheet)))
-    const occupied = (row: number, col: number): boolean =>
-      blockersOf(sheetId).find(row, col, owner => owner !== pivot) !== undefined || saved(row, col) !== undefined || structure.occupied(row, col)
-    ledger.chargeWhileReachable('structure', [occupied], structure.bytes)
-    return occupied
+    const other = (row: number, col: number, measured: boolean) => blockersOf(sheetId).find(row, col, owner => owner.pivot !== pivot && owner.measured === measured) !== undefined
+    // Measured (S3-AO): another pivot's current area, or a cell with a value.
+    const occupied = (row: number, col: number): boolean => other(row, col, true) || saved(row, col) !== undefined
+    // Unmeasured (S3-AC): the structure, or a cell another pivot vacated but still protects.
+    const unmeasured = (row: number, col: number): boolean => structure.occupied(row, col) || (other(row, col, false) && !other(row, col, true))
+    ledger.chargeWhileReachable('structure', [occupied, unmeasured], structure.bytes)
+    return { occupied, unmeasured }
   }
   // Ruling S3-Q: an unqualified source naming same-named pivots on several sheets links none, and they refuse.
   const linkedCharts = (def: PivotTableDefinition) => linkPivotCharts(doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)), { sheet: def.sheet, name: String(def.name ?? '') },
@@ -470,7 +476,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         // document pool as it grows, under its own owner, until the session holds the store (codex review T32-1).
         const building = `pivot-refresh-build:${++refreshBuilds}`
         const session = openPivotSession({
-          def, cache, ...(leased?.store ? { store: leased.store } : {}), date1904, saved: sheetCellReader(sheet), occupied: occupiedFor(sheetId, pivot),
+          def, cache, ...(leased?.store ? { store: leased.store } : {}), date1904, saved: sheetCellReader(sheet), ...occupiedFor(sheetId, pivot),
           linkedCharts: linked, ...(leased ? { lease: leased } : {}), verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
           ...(sourceSheet ? {
             source: sheetCellReader(sourceSheet), limits: { ...limits, admitBytes: admitAs(building) },
@@ -602,6 +608,9 @@ export function pivotAutofitColumns(input: {
   current(col: number): number | undefined
   userSet(col: number): boolean
 }): Map<number, number> {
+  // Ruling S3-AO: no autofit into or out of a spilled pivot (owner-overlap-value keeps the start file's <cols>; the
+  // way back was never measured).
+  if (input.before.def.spill || input.after.def.spill) return new Map()
   const mdw = macDigitWidth(input.mdwPx)
   const fits = (side: typeof input.before) => {
     const layout = savedPivotLayout(side.def)

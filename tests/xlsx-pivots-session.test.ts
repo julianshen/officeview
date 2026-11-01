@@ -539,14 +539,36 @@ describe('session', () => {
     expect(ok(session.reset()).vacated).toEqual([])
   })
 
-  it('a change whose new cells cover a non-empty cell outside the pivot refuses as an overlap', async () => {
+  it('a change whose new cells cover a measured blocker spills (S3-AO); an unmeasured one refuses (S3-AC)', async () => {
     const p = (await load('layout-collapsed-item'))[0]!
     // Saved A3:I21; expanding East grows it to A3:I24.
     const blocked = open(inputOf(p, { occupied: (row, col) => row === 22 && col === 4 }))
-    const refused = blocked.apply(EXPAND_EAST)
-    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toBe('pivot-overlap')
+    const spilled = ok(blocked.apply(EXPAND_EAST))
+    expect(spilled.spill).toEqual({ row: 22, col: 4 })
+    expect(spilled.def.location).toMatchObject({ ref: 'A3', firstHeaderRow: 0, firstDataRow: 0, firstDataCol: 0 })
+    expect(spilled.layout.cells).toEqual([{ row: 2, col: 0, value: { kind: 'error', value: '#SPILL!' } }])
+    expect(spilled.vacated).toEqual([{ minRow: 2, minCol: 1, maxRow: 2, maxCol: 8 }, { minRow: 3, minCol: 0, maxRow: 20, maxCol: 8 }])
+    expect(spilled.notice).toMatch(/can't fit: #SPILL!\. Cell E23 on .* is in the way\./)
     expect(blocked.revision).toBe(0)
+    // An unmeasured blocker anywhere in the new cells refuses, even with a measured one first.
+    const both = open(inputOf(p, { occupied: (row, col) => row === 21 && col === 0, unmeasured: (row, col) => row === 23 && col === 8 }))
+    const refused = both.apply(EXPAND_EAST)
+    expect(refused.ok ? 'ok' : refused.diagnostic.message).toMatch(/overlap cell I24/)
     expect(ok(open(inputOf(p, { occupied: (row, col) => row === 24 && col === 4 })).apply(EXPAND_EAST)).layout.rect.maxRow).toBe(23)
+    // A later change that fits shows the pivot again (the item state kept), from the spilled state.
+    expect(blocked.commit(spilled)).toBe(true)
+    const back = ok(blocked.apply(COLLAPSE_EAST))
+    expect(back.spill).toBeUndefined()
+    expect(back.layout.rect).toEqual({ minRow: 2, maxRow: 20, minCol: 0, maxCol: 8 })
+  })
+
+  it('a pivot with linked charts refuses an overlap instead of spilling (a spilled pivot chart is unmeasured)', async () => {
+    const p = (await load('layout-collapsed-item'))[0]!
+    const chart = { pivot: { name: `[x]Pivot!${p.def.name}` } } as unknown as ChartModel
+    const gate: ChartGate = () => ({ ok: true, value: [chart] })
+    const session = open(inputOf(p, { occupied: (row, col) => row === 22 && col === 4, linkedCharts: [chart], chartGate: gate }))
+    const refused = session.apply(EXPAND_EAST)
+    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toBe('pivot-overlap')
   })
 
   it('a pivot with a linked chart and no chart gate refuses pivot-chart-mapping at open, before any apply', async () => {

@@ -57,6 +57,14 @@ const drillShown = (def: PivotTableDefinition, mode: RegionStyleMode) => mode ==
 const dropDowns = (def: PivotTableDefinition, field: number) => field !== PIVOT_VALUES_FIELD && def.fields[field]?.showDropDowns !== false
 
 export function pivotButtons(def: PivotTableDefinition, mode: RegionStyleMode, layout = savedPivotLayout(def)): ButtonPlacement[] {
+  // A spilled pivot (Ruling S3-AO) shows one #SPILL! cell; on screen its first axis field's dropdown sits there, so the
+  // field menu can make a change that fits, or Reset (Excel keeps its field list).
+  if (def.spill) {
+    const field = def.rowFields.find(index => index >= 0) ?? def.colFields.find(index => index >= 0)
+    const at = /^\$?([A-Z]{1,3})\$?(\d+)/.exec(def.location.ref)
+    if (mode !== 'screen' || field === undefined || !at) return []
+    return [{ row: Number(at[2]) - 1, col: [...at[1]!].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1, kind: 'filter', field }]
+  }
   if (!layout) return []
   const out: ButtonPlacement[] = []
   const { rect, dataRow0, dataCol0, itemRow0, labelCol } = layout

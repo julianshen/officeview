@@ -185,3 +185,19 @@ describe('GETPIVOTDATA on an axis with no fields (its sole data line)', () => {
     expect(result.stale).toEqual(expect.arrayContaining(['pivot!10:0']))
   })
 })
+
+describe('S3-AO: GETPIVOTDATA on a spilled pivot', () => {
+  it('keeps its saved value, marked stale (unmeasured, S3-T)', async () => {
+    const doc = await load()
+    addCell(doc, 'Formulas', 'Z1', 25, 0, 'GETPIVOTDATA("Sum of Sales",Pivot!$A$3)', 777)
+    evaluateWorkbookFormulas(doc)
+    const { ctx } = await liveContext()
+    const spilled = { ...ctx, def: { ...ctx.def, spill: { row: 24, col: 0 } } }
+    const result = recomputeDependents(doc, changedOf(doc, 'Pivot', ctx.rects), {
+      getPivotData: (args, evaluate, _currentSheet, markStale) => getPivotData([spilled], args, evaluate, 'Formulas', markStale),
+      readCellValue: viewerReadCellValue([ctx]),
+    })
+    expect(cellAt(doc, 'Formulas', 'Z1')!.value).toBe(777)
+    expect(result.stale).toEqual(expect.arrayContaining(['formulas!25:0']))
+  })
+})

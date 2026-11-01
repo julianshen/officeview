@@ -64,6 +64,8 @@ function lineMatches(context: LivePivotDataContext, axis: readonly number[], lin
 const UNRESOLVED = Symbol('unresolved')
 function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: ReadonlyMap<number, EvaluationValue>): EvaluationValue | typeof UNRESOLVED {
   const { def, layout } = context
+  // Ruling S3-AO: a spilled pivot's GETPIVOTDATA was never measured; the formula keeps its saved value (S3-T).
+  if (def.spill) return UNRESOLVED
   let unresolved = false
   const matches = (fields: readonly number[], lines: PivotLayout['axes']['rows']) => {
     // An axis with no fields (a single data field and no column fields, or no row fields) lays out one line holding
