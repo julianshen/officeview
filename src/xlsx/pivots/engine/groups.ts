@@ -29,7 +29,7 @@ function sourceValue(store: RecordStore, cache: PivotCacheDefinition, base: numb
 }
 
 function missingGroup(groupItems: readonly PivotValue[]): number {
-  return groupItems.findIndex(item => item.type === 'missing' || (item.type === 'string' && item.value.toLocaleLowerCase() === '(blank)'))
+  return groupItems.findIndex(item => item.type === 'missing' || (item.type === 'string' && /\(blank\)|\(空白\)/iu.test(item.value)))
 }
 function caption(item: PivotValue): string | undefined {
   return item.type === 'string' || item.type === 'number' ? String(item.value) : undefined
@@ -101,11 +101,12 @@ function datePartLabel(groupItems: readonly PivotValue[], value: string, groupBy
   } else if (groupBy === 'months') {
     for (const label of MONTH_ALIASES[month]!) candidates.add(label)
   } else if (groupBy === 'days') {
-    candidates.add(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
-    candidates.add(String(day))
-  } else if (groupBy === 'hours') candidates.add(String(hour))
-  else if (groupBy === 'minutes') candidates.add(String(minute))
-  else if (groupBy === 'seconds') candidates.add(String(second))
+    candidates.add(`${month + 1}月${day}日`)
+    candidates.add(`${month + 1}/${day}`)
+    candidates.add(`${month + 1}/${String(day).padStart(2, '0')}`)
+  } else if (groupBy === 'hours') { candidates.add(String(hour)); candidates.add(`${hour}時`) }
+  else if (groupBy === 'minutes') { candidates.add(String(minute)); candidates.add(`${minute}分`) }
+  else if (groupBy === 'seconds') { candidates.add(String(second)); candidates.add(`${second}秒`) }
   // The first group item matching a day's date or any candidate caption, through lookups built once per list.
   const { byCaption, byDay } = dateLabelIndex(groupItems)
   let found = groupBy === 'days' ? byDay.get(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`) ?? -1 : -1
@@ -114,6 +115,26 @@ function datePartLabel(groupItems: readonly PivotValue[], value: string, groupBy
     if (at !== undefined && (found < 0 || at < found)) found = at
   }
   return found
+}
+
+function daysGroupItem(groupItems: readonly PivotValue[], range: NonNullable<PivotCacheDefinition['fields'][number]['fieldGroup']>['rangePr'], value: string): number {
+  if (!range) return -1
+  const groupInterval = range.groupInterval || 1
+  const date = new Date(value.endsWith('Z') ? value : `${value}Z`)
+  const startText = range.startDate
+  if (!Number.isFinite(date.getTime()) || !startText) return -1
+  if (groupInterval === 1) {
+    // Excel's 1-day grouping is a calendar table (Jan 1..Dec 31, including Feb 29),
+    // not a sequence starting at the lower bound.
+    const first = Date.UTC(2000, 0, 1)
+    const day = Math.floor((Date.UTC(2000, date.getUTCMonth(), date.getUTCDate()) - first) / 86_400_000)
+    return day + 1 < groupItems.length - 1 ? day + 1 : -1
+  }
+  const start = new Date(`${startText.slice(0, 10)}T00:00:00Z`)
+  const at = Math.floor((Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) - start.getTime()) / 86_400_000)
+  if (at < 0) return -1
+  const index = 1 + Math.floor(at / groupInterval)
+  return index < groupItems.length - 1 ? index : -1
 }
 /** First index per caption and per date item's day, built once per group-item list (a scan per record was quadratic). */
 const DATE_LABEL_INDEXES = new WeakMap<readonly PivotValue[], { byCaption: Map<string, number>; byDay: Map<string, number> }>()
@@ -162,9 +183,10 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
 
   const range = fieldGroup.rangePr
   if (!range) return invalid(`group field ${field} has neither rangePr nor discretePr`)
-  // The Task 15 cases measure number ranges and date years, quarters and months only (final review M2).
-  if (range.groupBy !== 'range' && range.groupBy !== 'years' && range.groupBy !== 'quarters' && range.groupBy !== 'months')
+  if (!['range', 'years', 'quarters', 'months', 'days', 'hours', 'minutes', 'seconds'].includes(range.groupBy))
     return unmeasured(`date grouping by ${range.groupBy} on field ${field} is not measured`)
+  // Empty-source day groups have no Task 34/37 oracle; keep them a typed refusal.
+  if (range.groupBy === 'days' && store.count === 0) return unmeasured(`day grouping on an empty source for field ${field} is not measured`)
   // The out-of-range buckets, found once (not per record).
   const lowerBucket = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
   const upperBucket = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
@@ -172,9 +194,13 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     const value = sourceValue(store, cache, base, row)
     if (!value) return invalid(`group field ${field} has an invalid base value at record ${row}`)
     if (value.type === 'missing') {
-      if (range.groupBy === 'range') return unmeasured(`blank values in number group field ${field} are not measured`)
-      if (blank >= 0) output[row] = blank
-      else if ((range.groupBy === 'years' || range.groupBy === 'quarters' || range.groupBy === 'months') && lowerBucket >= 0) output[row] = lowerBucket
+      if (range.groupBy === 'range') {
+        if (blank >= 0) output[row] = blank
+        else if (lowerBucket >= 0 && /\(空白\)|\(blank\)/iu.test(caption(groupItems[lowerBucket]!) ?? '')) output[row] = lowerBucket
+        else return unmeasured(`blank value in number group field ${field} has no represented blank bucket`)
+      } else if (blank >= 0) output[row] = blank
+      else if (['years', 'quarters', 'months', 'days', 'hours', 'minutes', 'seconds'].includes(range.groupBy) && lowerBucket >= 0) output[row] = lowerBucket
+      else return unmeasured(`blank value in date group field ${field} has no represented blank bucket`)
       continue
     }
     if (range.groupBy === 'range') {
@@ -192,11 +218,11 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     const iso = value.value.slice(0, 10)
     const startDay = range.startDate?.slice(0, 10), endDay = range.endDate?.slice(0, 10)
     const nonMidnight = (text: string | undefined) => Boolean(text && /T(?!00:00:00(?:\.0+)?(?:Z|[+-]00:00)?$)/u.test(text))
-    if ((iso === startDay && (nonMidnight(value.value) || nonMidnight(range.startDate))) ||
-      (iso === endDay && (nonMidnight(value.value) || nonMidnight(range.endDate))))
+    if (!['hours', 'minutes', 'seconds'].includes(range.groupBy) && ((iso === startDay && (nonMidnight(value.value) || nonMidnight(range.startDate))) ||
+      (iso === endDay && (nonMidnight(value.value) || nonMidnight(range.endDate)))))
       return unmeasured(`date-group boundary times for ${iso} in field ${field} are not measured`)
     const serial = Date.parse(`${iso}T00:00:00Z`) / 86_400_000 + 25_569
-    if (Number.isFinite(serial) && serial < 61)
+    if (Number.isFinite(serial) && serial < 61 && !['hours', 'minutes', 'seconds'].includes(range.groupBy))
       return unmeasured(`date group field ${field} contains a date before Excel serial 61 (1900-03-01), whose grouping is not measured`)
     if (range.startDate && iso < range.startDate.slice(0, 10)) {
       if (lowerBucket < 0) return unmeasured(`out-of-range date ${iso} has no lower bucket in group field ${field}`)
@@ -207,7 +233,7 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
       output[row] = upperBucket; continue
     }
     if (source.kind === 'inline') return unmeasured(`inline date grouping for field ${field} needs the workbook date-system context`)
-    const item = datePartLabel(groupItems, value.value, range.groupBy)
+    const item = range.groupBy === 'days' ? daysGroupItem(groupItems, range, value.value) : datePartLabel(groupItems, value.value, range.groupBy)
     if (item < 0) return unmeasured(`date group label for ${iso} in field ${field} is not represented`)
     output[row] = item
   }

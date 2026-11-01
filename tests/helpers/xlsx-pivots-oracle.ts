@@ -51,7 +51,11 @@ function lines(def: PivotTableDefinition, axis: 'rowItems' | 'colItems'): string
 export function compareCells(layout: PivotLayout, target: SavedCase): Outcome {
   const saved = sheetCellReader(target.sheet)
   const rects = savedPivotLayout(target.def)?.rects
-  if (!rects) return { status: 'differs', reason: 'the case has no saved layout' }
+  if (!rects) {
+    // Excel's measured empty-pivot case omits all row/column/page/data fields and all populated pivot cells.
+    if (!target.def.rowFields.length && !target.def.colFields.length && !target.def.pageFields.length && !target.def.dataFields.length && !layout.cells.length) return { status: 'ok' }
+    return { status: 'differs', reason: 'the case has no saved layout' }
+  }
   const cells = new Map(layout.cells.map(cell => [`${cell.row},${cell.col}`, cell]))
   const seen = new Set<string>()
   for (const rect of rects) for (let row = rect.minRow; row <= rect.maxRow; row++) for (let col = rect.minCol; col <= rect.maxCol; col++) {

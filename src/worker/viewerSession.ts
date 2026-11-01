@@ -877,6 +877,22 @@ function pivotOverlayBytes(overlay: import('../xlsx/view/contracts').ValueOverla
   for (const cell of layout.cells) if (cell.value.kind === 'text' || cell.value.kind === 'error') bytes += cell.value.value.length * 5
   return bytes
 }
+/** Upper bound for the protected/output rects and cell index before pivotOverlay builds any of them. */
+function pivotOverlayUpperBytes(layout: import('../xlsx/pivots/engine/place').PivotLayout, saved: readonly SourceRect[], atSaved: boolean): number {
+  if (atSaved) return 512
+  const area = (rect: SourceRect) => (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1)
+  let ownedArea = area({ r0: layout.rect.minRow, r1: layout.rect.maxRow, c0: layout.rect.minCol, c1: layout.rect.maxCol })
+  for (const rect of saved) ownedArea += area(rect)
+  let external = 0, textBytes = 0
+  for (const cell of layout.cells) {
+    if (cell.row < layout.rect.minRow || cell.row > layout.rect.maxRow || cell.col < layout.rect.minCol || cell.col > layout.rect.maxCol) external++
+    if (cell.value.kind === 'text' || cell.value.kind === 'error') textBytes += cell.value.value.length * 5
+  }
+  const outputRectUpper = saved.length + 1 + external
+  const bytes = ownedArea * PAGED_CELL_BYTES_ESTIMATE + external * PAGED_CELL_BYTES_ESTIMATE
+    + layout.cells.length * 64 + layout.merges.length * 48 + textBytes + OwnedRects.upperBytesFor(outputRectUpper) + 2048
+  return Number.isSafeInteger(bytes) ? bytes : Number.POSITIVE_INFINITY
+}
 
 export class DocumentSession {
   private readonly formatDiagnosticCharges: Charge[] = []
@@ -1509,31 +1525,87 @@ export class DocumentSession {
       || !Number.isSafeInteger(requestRevision) || requestRevision <= handle.requestRevision
       || !Number.isSafeInteger(grantBytes) || grantBytes <= 0) return { kind: 'stale' }
     handle.requestRevision = requestRevision
-    handle.staged?.entry.release()
+    if (handle.staged) { handle.staged.result.hold?.release(); handle.staged.entry.release() }
     handle.staged = undefined
     let applied: ReturnType<typeof handle.session.apply>
-    try { applied = delta === 'reset' ? handle.session.reset() : handle.session.apply(delta) }
+    let deltaBytes = 0
+    const candidateHolds: Array<{ bytes: number; release(): void }> = []
+    try { applied = delta === 'reset' ? handle.session.reset() : handle.session.apply(delta, {
+      admitCandidateBytes: extraBytes => {
+      if (extraBytes > grantBytes) throw new PivotIndexQuota(extraBytes, grantBytes)
+      const entry = this.memory.retain(`pivot-delta:${this.docId}:${sheetId}:${pivot}:${requestRevision}:${handle.serial++}`, {
+        tier: 'source', owner: sheetId, bytes: extraBytes, evictable: false,
+      })
+      if (!entry) throw new PivotIndexQuota(extraBytes, this.memory.limitBytes)
+      deltaBytes += extraBytes
+      let held = true
+      const hold = { bytes: extraBytes, release: () => { if (!held) return; held = false; entry.release() } }
+      candidateHolds.push(hold)
+      return hold
+      },
+      admitLayoutBytes: extraBytes => {
+        const required = deltaBytes + extraBytes
+        if (!Number.isSafeInteger(required) || required > grantBytes) throw new PivotIndexQuota(required, grantBytes)
+        const charge = this.memory.charge()
+        if (!charge.set(extraBytes)) { charge.release(); throw new PivotIndexQuota(required, this.memory.limitBytes) }
+        let held = true
+        return {
+          get bytes() { return charge.bytes },
+          resize: (bytes: number) => {
+            const required = deltaBytes + bytes
+            if (!Number.isSafeInteger(required) || required > grantBytes) throw new PivotIndexQuota(required, grantBytes)
+            if (!charge.set(bytes)) throw new PivotIndexQuota(required, this.memory.limitBytes)
+            return true
+          },
+          release: () => { if (!held) return; held = false; charge.release() },
+        }
+      },
+    }) }
     catch (error) {
+      for (const hold of candidateHolds) hold.release()
       if (error instanceof PivotIndexQuota) return { kind: 'quota', requiredBytes: error.requiredBytes, limitBytes: error.limitBytes }
       throw error
     }
     if (!applied.ok) return { kind: 'refused', feature: applied.diagnostic.feature, message: applied.diagnostic.message }
     const atSaved = applied.value.def === handle.savedDef
-    const overlay = pivotOverlay(applied.value, handle.savedRects, atSaved)
+    const extraBytes = applied.value.hold?.bytes ?? 0
+    const overlayUpper = pivotOverlayUpperBytes(applied.value.layout, handle.savedRects, atSaved)
+    const upperRequired = extraBytes + overlayUpper
+    const overlayCharge = this.memory.charge()
+    if (!Number.isSafeInteger(upperRequired) || upperRequired > grantBytes || !overlayCharge.set(overlayUpper)) {
+      overlayCharge.release()
+      applied.value.hold?.release()
+      return { kind: 'quota', requiredBytes: upperRequired, limitBytes: grantBytes }
+    }
+    let overlay: import('../xlsx/view/contracts').ValueOverlay
+    try { overlay = pivotOverlay(applied.value, handle.savedRects, atSaved) }
+    catch (error) { overlayCharge.release(); applied.value.hold?.release(); throw error }
     // Plus its share of the sheet's composite overlay index, built when it commits (perf round 2).
     const bytes = pivotOverlayBytes(overlay, applied.value.layout) + OwnedRects.upperBytesFor(overlay.rects.length)
-    if (!Number.isSafeInteger(bytes) || bytes > grantBytes) return { kind: 'quota', requiredBytes: bytes, limitBytes: grantBytes }
+    const requiredBytes = extraBytes + bytes
+    if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(requiredBytes) || requiredBytes > grantBytes) {
+      overlayCharge.release()
+      applied.value.hold?.release()
+      return { kind: 'quota', requiredBytes, limitBytes: grantBytes }
+    }
+    if (!overlayCharge.set(bytes)) {
+      overlayCharge.release()
+      applied.value.hold?.release()
+      return { kind: 'quota', requiredBytes, limitBytes: this.memory.limitBytes }
+    }
+    // Transfer the synchronous preflight to a retained entry without leaving either lifetime uncharged.
+    overlayCharge.release()
     const revision = Math.max(handle.highestWireRevision, handle.committedWireRevision, handle.session.revision) + 1
     const entry = this.memory.retain(`pivot-overlay:${this.docId}:${sheetId}:${pivot}:${revision}:${handle.serial++}`, {
       tier: 'source', owner: sheetId, bytes, evictable: false,
     })
-    if (!entry) return { kind: 'quota', requiredBytes: bytes, limitBytes: this.memory.limitBytes }
+    if (!entry) { applied.value.hold?.release(); return { kind: 'quota', requiredBytes: bytes, limitBytes: this.memory.limitBytes } }
     handle.highestWireRevision = revision
     handle.staged = { wireRevision: revision, requestRevision, result: applied.value, overlay, entry }
     const fitBytes = fitGrant(fitGrantBytes)
     const cells = fitBytes > 0 ? handle.fitPayload(applied.value.def, (row, col) => overlay.cell(row, col), undefined, fitBytes) : undefined
     // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
-    return { kind: 'apply', revision, ...(applied.value.notice ? { notice: applied.value.notice } : {}), ...(atSaved ? { atSaved: true as const } : {}), def: applied.value.def, menu: handle.menu(applied.value.def, handle.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
+    return { kind: 'apply', revision, ...(applied.value.notice ? { notice: applied.value.notice } : {}), ...(atSaved ? { atSaved: true as const } : {}), def: applied.value.def, menu: handle.menu(applied.value.def, applied.value.cache, applied.value.view, handle.assets.date1904), rects: overlay.rects, merges: overlay.merges,
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), ...withCells(cells),
       protectedRects: overlay.protectedRects }
   }
@@ -1541,10 +1613,10 @@ export class DocumentSession {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot)), staged = handle?.staged
     if (!handle || !staged || staged.wireRevision !== revision) return { kind: 'stale' }
     const store = this.store(sheetId)
-    if (!store.setValueOverlay) return { kind: 'refused', feature: 'pivot-overlay-unavailable', message: 'This source cannot publish pivot values.' }
-    if (signal.aborted || !handle.session.commit(staged.result)) return signal.aborted ? { kind: 'cancelled' } : { kind: 'stale' }
+    if (!store.setValueOverlay) { staged.result.hold?.release(); staged.entry.release(); handle.staged = undefined; return { kind: 'refused', feature: 'pivot-overlay-unavailable', message: 'This source cannot publish pivot values.' } }
+    if (signal.aborted || !handle.session.commit(staged.result)) { staged.result.hold?.release(); staged.entry.release(); handle.staged = undefined; return signal.aborted ? { kind: 'cancelled' } : { kind: 'stale' } }
     const previous = handle.committed
-    handle.committed = staged; handle.staged = undefined; handle.def = staged.result.def
+    handle.committed = staged; handle.staged = undefined; handle.def = staged.result.def; handle.cache = staged.result.cache
     handle.committedWireRevision = revision
     store.setValueOverlay(this.combinedPivotOverlay(sheetId))
     this.publishValues(sheetId)
@@ -1600,7 +1672,7 @@ export class DocumentSession {
     if (!handle) return { kind: 'release', released: false }
     this.pivotHandles.delete(key)
     this.dropPivotBlockers(sheetId)
-    handle.staged?.entry.release()
+    if (handle.staged) { handle.staged.result.hold?.release(); handle.staged.entry.release() }
     let valueGen: number | undefined
     if (handle.committed) {
       const store = this.store(sheetId)
@@ -1622,7 +1694,7 @@ export class DocumentSession {
   cancelPivotApply(sheetId: string, pivot: number, revision: number): void {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot))
     if (handle?.staged?.requestRevision !== revision) return
-    handle.staged.entry.release()
+    handle.staged.result.hold?.release(); handle.staged.entry.release()
     handle.staged = undefined
   }
   /** Releases every pivot session (close), or those of the other sheets. With `keepChanged` (a sheet switch, Ruling
@@ -1632,7 +1704,7 @@ export class DocumentSession {
     for (const handle of [...this.pivotHandles.values()]) {
       if (sheetId !== undefined && handle.sheetId === sheetId) continue
       if (keepChanged && handle.committed && handle.committed.result.def !== handle.savedDef) {
-        handle.staged?.entry.release()
+        if (handle.staged) { handle.staged.result.hold?.release(); handle.staged.entry.release() }
         handle.staged = undefined
       } else this.pivotRelease(handle.sheetId, handle.pivot)
     }

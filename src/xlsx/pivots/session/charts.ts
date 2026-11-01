@@ -51,16 +51,17 @@ const unmapped = (def: PivotTableDefinition, why: string) => refuse(PIVOT_CHART_
 
 const n15 = (v: number) => Number(v.toPrecision(15))
 
-/** The measured field layouts: Values last on columns over one column field (rows [a] or [a, b]), or Values last on
- * rows [a, b, Values] under one column field. */
+/** The measured field layouts: Values last on columns over one column field (rows [a] or [a, b]), the same compact
+ * layout with one data field (where Excel removes the Values axis), or Values last on rows [a, b, Values]. */
 type Shape = 'valuesOnColumns' | 'valuesOnRows'
 function shapeOf(def: PivotTableDefinition): Shape | string {
   const rows = def.rowFields, cols = def.colFields
   const plain = (fields: readonly number[]) => fields.every(field => field !== PIVOT_VALUES_FIELD)
-  const shape: Shape | undefined = cols.length === 2 && cols[1] === PIVOT_VALUES_FIELD && plain(cols.slice(0, 1)) && (rows.length === 1 || rows.length === 2) && plain(rows) ? 'valuesOnColumns'
+  const oneDataColumns = def.dataFields.length === 1 && cols.length === 1 && plain(cols) && (rows.length === 1 || rows.length === 2) && plain(rows)
+  const shape: Shape | undefined = oneDataColumns || (cols.length === 2 && cols[1] === PIVOT_VALUES_FIELD && plain(cols.slice(0, 1)) && (rows.length === 1 || rows.length === 2) && plain(rows)) ? 'valuesOnColumns'
     : cols.length === 1 && plain(cols) && rows.length === 3 && rows[2] === PIVOT_VALUES_FIELD && plain(rows.slice(0, 2)) ? 'valuesOnRows' : undefined
   if (!shape) return `its fields (rows ${JSON.stringify(rows)}, columns ${JSON.stringify(cols)}) have no measured chart mapping`
-  if (def.dataFields.length < 2) return 'a single data field has no measured chart mapping'
+  if (def.dataFields.length < 2 && !oneDataColumns) return 'a single data field has no measured chart mapping'
   if (def.pageFields.length > 1) return 'more than one page field has no measured chart mapping'
   if (!def.rowGrandTotals || !def.colGrandTotals) return 'grand totals turned off have no measured chart mapping'
   if (def.location.firstDataCol !== 1) return 'only the compact form (one label column) has a measured chart mapping'

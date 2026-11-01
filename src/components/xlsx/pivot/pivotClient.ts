@@ -29,7 +29,6 @@
  *   `installPivotCharts` walks them.
  */
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
-import type { StyledValueOverlayCell } from '../../../xlsx/view/viewport'
 import type { ChartModel } from '../../../charts/model'
 import type { ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/view/contracts'
 import type { SourceRect } from '../../../xlsx/view/coordinates'
@@ -241,17 +240,22 @@ function layoutArea(layout: PivotLayout): SourceRect[] {
 /** `style`: the style a cell of the layout paints with (alignment, font, fill), its number format aside. */
 interface PivotPart { saved: readonly SourceRect[]; current: readonly SourceRect[]; layout: PivotLayout; style?: (row: number, col: number) => XlsxCellStyle | undefined }
 function overlayCell(part: PivotPart): (row: number, col: number) => ValueOverlayCell | null {
-  const cells = new Map<number, Map<number, StyledValueOverlayCell>>()
-  for (const cell of part.layout.cells) {
-    const value = cell.value
-    if (value.kind === 'empty') continue
-    let line = cells.get(cell.row)
-    if (!line) cells.set(cell.row, line = new Map())
-    const style = part.style?.(cell.row, cell.col)
-    line.set(cell.col, value.kind === 'error' ? { value: value.value, valueIsError: true, ...(style ? { style } : {}) }
-      : { value: value.value, ...(cell.numFmtId !== undefined ? { numFmtId: cell.numFmtId } : {}), ...(style ? { style } : {}) })
+  // PivotLayout.cells is emitted in row/column order. Read it directly so a resident overlay does not retain a second
+  // per-cell Map alongside the already-owned layout (the remote path has its own explicitly charged index).
+  const cells = part.layout.cells
+  return (row, col) => {
+    let low = 0, high = cells.length
+    while (low < high) {
+      const mid = low + ((high - low) >>> 1), cell = cells[mid]!
+      if (cell.row < row || (cell.row === row && cell.col < col)) low = mid + 1
+      else high = mid
+    }
+    const cell = cells[low]
+    if (!cell || cell.row !== row || cell.col !== col || cell.value.kind === 'empty') return null
+    const value = cell.value, style = part.style?.(row, col)
+    return value.kind === 'error' ? { value: value.value, valueIsError: true, ...(style ? { style } : {}) }
+      : { value: value.value, ...(cell.numFmtId !== undefined ? { numFmtId: cell.numFmtId } : {}), ...(style ? { style } : {}) }
   }
-  return (row, col) => cells.get(row)?.get(col) ?? null
 }
 /** A pivot cell's role for its style (Task 28): its place in the header rows, or its column and its row line's kind
  * and depth in the body; page cells by their offset. */
@@ -363,6 +367,30 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       return true
     }
   }
+  const admitCandidate = (sheetId: number, pivot: number) => (bytes: number) => {
+    const owner = `pivot-candidate:${sheetId}:${pivot}:${++refreshBuilds}`
+    if (ledger.bytes + bytes > budget) return undefined
+    ledger.set('document', owner, bytes)
+    let held = true
+    return { bytes, release: () => { if (!held) return; held = false; ledger.set('document', owner, 0) } }
+  }
+  const admitLayout = (sheetId: number, pivot: number) => {
+    const owner = `pivot-layout:${sheetId}:${pivot}:${++refreshBuilds}`
+    let bytes = 0, held = true
+    return (next: number) => {
+      if (ledger.bytes - bytes + next > budget) return undefined
+      ledger.set('document', owner, bytes = next)
+      return {
+        get bytes() { return bytes },
+        resize(value: number) {
+          if (!Number.isSafeInteger(value) || value < 0 || ledger.bytes - bytes + value > budget) return false
+          ledger.set('document', owner, bytes = value)
+          return true
+        },
+        release() { if (!held) return; held = false; bytes = 0; ledger.set('document', owner, 0) },
+      }
+    }
+  }
   /** A decode's or a build's refusal as the main thread says it (the engine words it for the worker). */
   const mainQuota = (diagnostic: PivotDiagnostic): PivotDiagnostic => diagnostic.feature === 'pivot-worker-quota' ? { ...diagnostic, feature: 'pivot-records-limit', message: MAIN_QUOTA_MESSAGE } : diagnostic
 
@@ -422,7 +450,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     doc.sheets.flatMap(sheet => (sheet.pivotTables ?? []).map(table => ({ sheet: table.sheet, name: String(table.name ?? '') }))))
   /** The cache each live definition this client installed indexes (its session's), for labels read off the sheet. */
   const liveCaches = new WeakMap<PivotTableDefinition, PivotCacheDefinition>()
-  const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.cache, entry.session.view, entry.date1904)
+  const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.session.cache, entry.session.view, entry.date1904)
 
   const client: PivotClient = {
     preflight,
@@ -492,6 +520,8 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
               ledger.chargeWhileHeld('document', [store], store.bytes + metadataBytes); return ledger.hold(store) ?? undefined
             },
           } : {}),
+          admitCandidateBytes: admitCandidate(sheetId, pivot),
+          admitLayoutBytes: admitLayout(sheetId, pivot),
         })
         ledger.set('document', building, 0)
         if (!session.ok) { leased?.release(); return { ok: false, diagnostic: mainQuota(session.diagnostic) } }
@@ -511,10 +541,16 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       const entry = open.get(key(sheetId, pivot))
       if (!entry) return refusal('pivot-session-released', `${nameOf(savedDefs[sheetId]?.[pivot])} has no open session`)
       const { session } = entry
-      const applied = delta === 'reset' ? session.reset() : session.apply(delta)
+      const applied = delta === 'reset' ? session.reset() : session.apply(delta, {
+        admitCandidateBytes: admitCandidate(sheetId, pivot), admitLayoutBytes: admitLayout(sheetId, pivot),
+      })
       if (!applied.ok) return applied
       const result = applied.value
-      if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
+      if (!session.commit(result)) {
+        result.hold?.release()
+        return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
+      }
+      entry.cache = result.cache
       // Ruling S3-AF: the dependents to recompute read the saved area, the area shown before this commit and the one
       // shown after (a shrink or reset vacates cells the previous layout filled).
       const before = entry.current
@@ -525,10 +561,10 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       // Its cell indexes are charged while the viewer keeps the overlay (perf round 2).
       if (overlay) ledger.chargeWhileReachable('structure', [overlay], overlay.indexBytes)
       const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay, ...(delta === 'reset' ? { reset: true } : {}),
-        layout: result.layout, cache: entry.cache, date1904: entry.date1904,
+        layout: result.layout, cache: result.cache, date1904: entry.date1904,
         changedRects: [...entry.saved, ...before, ...entry.current], allSaved: ![...open.values()].some(shows),
         ...(result.charts.length ? { charts: result.charts } : {}) }
-      liveCaches.set(session.def, entry.cache)
+      liveCaches.set(session.def, result.cache)
       options.install(commit)
       return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit, ...(result.notice ? { notice: result.notice } : {}) }
     },

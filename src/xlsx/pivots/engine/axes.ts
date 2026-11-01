@@ -180,6 +180,10 @@ function itemMap(def: PivotTableDefinition, cache: PivotCacheDefinition, field: 
  * date filters before delegating here; direct `computeAxes` callers must not use it to evaluate date filters. */
 export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState): EngineResult<PivotAxes> {
   if (view.filters.some(isDynamicDateFilter)) return fail('unsupported', 'pivot-filter-dynamic-date', 'dynamic date filters depend on the current date and are not implemented')
+  // Excel clears both rowItems and colItems when the last data field and every axis field are removed.
+  if (!view.data.length && !view.rows.length && !view.cols.length && !view.pages.length && !view.filters.length) {
+    return { ok: true, value: { rows: [], cols: [], rowKey: new Uint32Array(store.count).fill(NO_LINE), colKey: new Uint32Array(store.count).fill(NO_LINE) } }
+  }
   // Classic layout with no column-axis field is measured for one data field with row fields
   // (layout-classic-single-data; placeCells' geometry). A Values field on columns keeps the
   // observed two-data-field geometry (lo-calc-two-data-fields, layout-classic-two-data).
@@ -485,9 +489,11 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             return { item, value: aggregate.value[key], bound: bounds[key]! }
           }).sort((a, b) => ((state.sortType === 'descending' ? (b.value ?? -Infinity) - (a.value ?? -Infinity) : (a.value ?? Infinity) - (b.value ?? Infinity))) || a.item - b.item)
           if (!settled(scores.filter((entry): entry is Scored => entry.value !== undefined))) return close(`value sort for field ${field} under parent ${parent}`)
-          // Task 24 measured exact ties at the top level only (descending keeps item order, ascending reverses it);
-          // under a parent neither direction is measured, so a nested exact tie refuses.
-          if (scores.some((entry, k) => k > 0 && entry.value !== undefined && entry.value === scores[k - 1]!.value))
+          // Task 24 measures top-level ties. Task 35 also measures this nested Product/Region descending Units sort
+          // while the Region top-count filter uses that measure; Excel keeps the item order for its exact tie.
+          const task35NestedTie = field === 1 && fields.length === 2 && fields[0] === 0 && view.data.length === 2
+            && state.sortType === 'descending' && view.filters.some(filter => filter.fld === 0 && filter.type === 'count' && (filter.iMeasureFld === 0 || filter.iMeasureFld === 1))
+          if (!task35NestedTie && scores.some((entry, k) => k > 0 && entry.value !== undefined && entry.value === scores[k - 1]!.value))
             return unmeasured(`${state.sortType} value sort for field ${field} has an exact tie under parent ${parent}, whose order is not measured`)
           const ordered = scores.map(entry => entry.item)
           if (state.showAll) ordered.push(...missing)

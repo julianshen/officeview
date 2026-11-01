@@ -408,10 +408,10 @@ describe('pivot value aggregation', () => {
     expect(run('difference', [10, 30], [0, 1])).toEqual([{ kind: 'empty' }, { kind: 'number', value: 20 }, { kind: 'number', value: -10 }])
     // % of: own line 1; blank current with a base value is #NULL!.
     expect(run('percent', [10, 30], [0, 1])).toEqual([{ kind: 'number', value: 1 }, { kind: 'number', value: 3 }, { kind: 'error', value: '#NULL!' }])
-    // % difference: own line blank; a zero base is #DIV/0!; a blank base leaves the cell blank.
+    // % difference: own line blank; a zero base is #DIV/0!; a blank base leaves the cell blank; blank current with a base value is #NULL!.
     expect(run('percentDiff', [0, 30, 5], [0, 1, 2])).toEqual([{ kind: 'empty' }, { kind: 'error', value: '#DIV/0!' }, { kind: 'error', value: '#DIV/0!' }])
-    // Unmeasured, so refused: % difference of a blank cell from a base value, and % of a blank base cell.
-    expect(run('percentDiff', [10, 30], [0, 1])).toBe('% difference of a blank cell from its base item is not measured')
+    expect(run('percentDiff', [10, 30], [0, 1])).toEqual([{ kind: 'empty' }, { kind: 'number', value: 2 }, { kind: 'error', value: '#NULL!' }])
+    // Unmeasured, so refused: % of a blank base cell.
     expect(run('percent', [30], [1])).toBe('% of a base item with a blank base cell is not measured')
     expect(run('percentDiff', [30, 40], [1, 2])).toEqual([{ kind: 'empty' }, { kind: 'empty' }, { kind: 'empty' }])
     // Difference from previous: a blank base counts as 0 (difference-previous R22C4).

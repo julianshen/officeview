@@ -526,7 +526,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     setResidentDependentNotices({ unsupported, outdated, cells })
   }
-  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
+  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length) || Boolean(remote && sheetIds.some(id => remote.layout(id).hasPivotDisplay)), [doc, remote, sheetIds])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
@@ -1653,8 +1653,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     dropTiles(sheetId, null)
     rerender()
   }
-  const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup })
-  pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
+  const [fieldListPivot, setFieldListPivot] = useState<number | null>(null)
+  const [fieldListInvoker, setFieldListInvoker] = useState<HTMLElement | null>(null)
+  const openFieldList = (sheet: number, pivot: number, invoker?: HTMLElement) => {
+    if (sheet !== sheetIds.indexOf(activeSheetId)) return
+    setFieldListPivot(pivot); setFieldListInvoker(invoker ?? null)
+  }
+  const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup, openFieldList })
+  pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup, openFieldList }
   // Declared before the pivot controller's effect, so on unmount this cleanup runs first (restorePivots reads it).
   const unmounting = useRef(false)
   useEffect(() => { unmounting.current = false; return () => { unmounting.current = true } }, [])
@@ -1671,7 +1677,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       sheet: index => doc.sheets[index],
     }, pivotFitMemory), commit => pivotHost.current.installPivot(commit))
       : pivotUi.createResidentPivotClient({ doc, saved: savedPivotDefs, ledger: mainLedger, profile: budgetProfile, install: commit => pivotHost.current.installPivot(commit), ...(pivotKinds ? { verifiedKinds: pivotKinds } : {}) })
-    const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu() })
+    const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu(), openFieldList: (sheet, pivot, invoker) => pivotHost.current.openFieldList(sheet, pivot, invoker) })
     setPivotController(controller)
     return () => {
       controller.dispose()
@@ -1686,7 +1692,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [sortPending, setSortPending] = useState<{ col: number; job: AbortController } | null>(null)
   const domHold = useRef<{ job: AbortController; bytes: number } | null>(null)
   const heldDomBytes = (measured: number) => Math.max(measured, domHold.current?.bytes ?? 0)
-  useEffect(() => { closePopup(); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
+  useEffect(() => { closePopup(); setFieldListPivot(null); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
   // A job's hold ends in the commit that no longer shows its pending glyph
   // (completion, refusal, cancellation or a sheet switch), never when the job
   // merely settles: until React commits, the DOM still holds the smaller
@@ -1824,6 +1830,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Pivots on the active sheet (Task 28): load-time pivot-* diagnostics, and one notice per pivot not interactive.
   const activeIndex = sheetIds.indexOf(activeSheetId)
   const activePivots = entry?.sheet.pivotTables
+  const firstFieldListPivot = Math.max(0, activePivots?.findIndex(def => !def.disableFieldList) ?? 0)
+  const activePivotDataCell = useMemo(() => {
+    const at = selection.active
+    return at ? pivotCellMatch(activePivots, at.row, at.col) : null
+  }, [selection.active, activePivots])
+  const selectedFieldListPivot = fieldListPivot ?? firstFieldListPivot
+  const fieldListState = fieldListPivot !== null && pivotController ? pivotController.state(activeIndex, fieldListPivot) : null
   const activeStaleCells = remote ? undefined : residentDependentNotices.cells.get(activeIndex)
   const pivotCellText = (row: number, col: number): string => { if (!entry) return ''; const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }
   const pivotNotices = entry ? [...new Set([
@@ -2376,6 +2389,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
             <span className={toolbarLabel}>Reset sizes</span>
           </button>
+          {(activePivots ? activePivots.length > 0 && activePivots.some(def => !def.disableFieldList) : Boolean(remote && remote.layout(activeSheetId).hasPivotDisplay)) ? <button type="button" className={toolbarBtn} aria-expanded={fieldListPivot !== null} onClick={event => {
+            if (fieldListPivot !== null) { setFieldListPivot(null); requestAnimationFrame(() => fieldListInvoker?.focus()) }
+            else if (pivotController) void pivotController.showFieldList(activeIndex, selectedFieldListPivot, event.currentTarget)
+          }}>Pivot fields</button> : null}
+          {activePivotDataCell && pivotController && (
+            <button
+              type="button"
+              className={toolbarBtn}
+              onClick={event => {
+                void pivotController.showValueSettings(activeIndex, activePivotDataCell.pivot, activePivotDataCell.dataIndex, event.currentTarget)
+              }}
+            >
+              Value field settings…
+            </button>
+          )}
         </div>
         {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}
         {showSearch && (
@@ -2387,13 +2415,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           </div>
         )}
         </div>
-        <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
+        <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0, minWidth: 0 }}>
+        <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
+              popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: popup.request.kind === 'valueSettings' ? 'Value field settings' : pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
                 : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
               cellControls={pivotUi && pivotController && activePivots?.length && scroll ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
                 cellText={pivotCellText} /> : undefined}
@@ -2402,7 +2431,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 const found = pivotUi.controlsAt(activePivots, at.row, at.col)
                 const drill = found.find(entry => entry.button.kind === 'expand' || entry.button.kind === 'collapse')
                 const target = action === 'open' ? found.find(entry => entry.button.kind === 'filter' || entry.button.kind === 'page') : drill
-                if (!target) return false
+                if (!target) {
+                  if (action === 'open') {
+                    const match = pivotCellMatch(activePivots, at.row, at.col)
+                    if (match) {
+                      void pivotController.showValueSettings(activeIndex, match.pivot, match.dataIndex, grid)
+                      return true
+                    }
+                  }
+                  return false
+                }
                 // The cell comes into view first, as the cursor does (PR #57: a cell under a frozen strip has no target).
                 const shown = scrollIntoView(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection } }, at)
                 if (shown !== scroll) setWindow(activeSheetId, shown)
@@ -2434,6 +2472,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             </GridSemantics>
           )}
           <SheetChartDescriptions charts={activeCharts} />
+        </div>
+        {pivotUi && pivotController && fieldListState?.status === 'open' && fieldListState.model && !fieldListState.model.disableFieldList ? <pivotUi.PivotFieldList model={fieldListState.model} pivot={selectedFieldListPivot} pivotCount={activePivots?.length ?? 1} invoker={fieldListInvoker} verified={fieldListState.verified}
+          onPivot={pivot => { setFieldListPivot(pivot); void pivotController.open(activeIndex, pivot) }} onApply={delta => pivotController.apply(activeIndex, selectedFieldListPivot, delta)} onClose={() => setFieldListPivot(null)} /> : null}
         </div>
         </div>
         {allowPrint && (
@@ -2574,6 +2615,32 @@ function lastVisibleRowLabel(metrics: ProjectedSheetMetrics, window: ScrollWindo
 function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.PivotMenuRequest): string {
   const state = controller.state(request.sheet, request.pivot)
   return (state.status === 'open' ? state.model.fields.find(field => field.index === request.field)?.name : undefined) ?? 'Pivot table field'
+}
+
+export function pivotCellMatch(defs: readonly import('../../xlsx/pivots/model').PivotTableDefinition[] | undefined, row: number, col: number): { pivot: number; dataIndex: number } | null {
+  if (!defs) return null
+  for (let pivot = 0; pivot < defs.length; pivot++) {
+    const def = defs[pivot]!
+    const rect = parseA1Range(def.location?.ref ?? '')
+    if (!rect) continue
+    if (row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1) {
+      const dataRow0 = rect.r0 + (def.location.firstDataRow ?? 1)
+      const dataCol0 = rect.c0 + (def.location.firstDataCol ?? 1)
+      const dataCount = def.dataFields?.length || 1
+      let dataIndex = 0
+      if (dataCount > 1) {
+        if (def.colFields?.includes(-2)) {
+          const item = def.colItems?.[col - dataCol0]
+          dataIndex = item && item.i >= 0 && item.i < dataCount ? item.i : Math.max(0, (col - dataCol0) % dataCount)
+        } else if (def.rowFields?.includes(-2)) {
+          const item = def.rowItems?.[row - dataRow0]
+          dataIndex = item && item.i >= 0 && item.i < dataCount ? item.i : Math.max(0, (row - dataRow0) % dataCount)
+        }
+      }
+      return { pivot, dataIndex }
+    }
+  }
+  return null
 }
 
 /** A pivot's linked charts in `installPivotCharts`' order (sheets, then drawing order), by the name after the last `!`. */

@@ -9,7 +9,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { loadPivotWorkbook } from '../src/xlsx/pivots/load'
 import type { PivotCacheDefinition, PivotCacheField } from '../src/xlsx/pivots/model'
-import { decodeRecords, isoToSerial, RECORD_LIMITS, recordEvents, VALUE_TAG } from '../src/xlsx/pivots/engine/records'
+import { decodeRecords, isoToSerial, serialToIso, RECORD_LIMITS, recordEvents, VALUE_TAG } from '../src/xlsx/pivots/engine/records'
 
 function field(name: string, inline: boolean, databaseField = true): PivotCacheField {
   return { name, serverField: false, uniqueList: true, sqlType: 0, hierarchy: 0, level: 0, databaseField, memberPropertyField: false,
@@ -104,6 +104,18 @@ describe('pivot cache record store', () => {
     expect(isoToSerial('1904-01-01T06:00:00', true)).toBe(0.25)
     expect(isoToSerial('bad', false)).toBeNaN()
     expect(isoToSerial('1899-12-29T23:59:59', false)).toBeNaN()
+
+    expect(serialToIso(10 / 24, false)).toBe('1899-12-30T10:00:00')
+    expect(serialToIso(1, false)).toBe('1899-12-31')
+    expect(serialToIso(2, false)).toBe('1900-01-01')
+    expect(serialToIso(59, false)).toBe('1900-02-27')
+    expect(serialToIso(60, false)).toBe('1900-02-28')
+    expect(serialToIso(61.5, false)).toBe('1900-03-01T12:00:00')
+    expect(serialToIso(61, false)).toBe('1900-03-01')
+    expect(serialToIso(0.25, true)).toBe('1904-01-01T06:00:00')
+    expect(serialToIso(0.5, false)).toBe('1899-12-30T12:00:00')
+    expect(serialToIso(-1, false)).toBeUndefined()
+    expect(serialToIso(NaN, false)).toBeUndefined()
   })
 
   it('fails closed on date values before the 1900 epoch', async () => {

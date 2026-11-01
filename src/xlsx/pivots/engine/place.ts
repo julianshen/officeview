@@ -61,7 +61,9 @@ export interface CaptionRef { kind: CaptionKind; args: CaptionArgs }
 /** An implicit caption cell of a layout: where it is and what it says. */
 export interface CaptionSlot extends CaptionRef { row: number; col: number }
 /** `captionSlots` lists every `caption: 'implicit'` cell, in cell order (absent on layouts built elsewhere). */
-export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean; captionSlots?: CaptionSlot[] }
+export interface PivotCandidateHold { readonly bytes: number; resize?(bytes: number): boolean; release(): void }
+export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean; captionSlots?: CaptionSlot[]
+  /** Internal admission retained by a staged session; omitted for ordinary engine calls. */ candidateHold?: PivotCandidateHold }
 /** Ruling S2-J: the workbook's date system is explicit (the cache does not know it). `savedCaption` is the saved text
  * of a caption slot, for the saved state only (Stage 2 caption ruling). */
 export interface PlaceOptions { date1904: boolean; savedCaption?: (row: number, col: number) => string | undefined }
@@ -75,6 +77,18 @@ const FUNCTION_NAMES: Record<string, string> = {
 const X14_SHOW_AS = new Set<string>(['percentOfParent', 'percentOfParentRow', 'percentOfParentCol', 'percentOfRunningTotal', 'rankAscending', 'rankDescending'])
 
 const CELL = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,6})/
+function boundsOf(ref: string): SheetRect | undefined {
+  const parse = (cell: string) => {
+    const m = CELL.exec(cell)
+    if (!m) return undefined
+    return { row: Number(m[2]) - 1, col: [...m[1]!].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1 }
+  }
+  const [a, b = a] = ref.split(':')
+  if (!a) return undefined
+  const first = parse(a), last = parse(b!)
+  if (!first || !last) return undefined
+  return { minRow: Math.min(first.row, last.row), maxRow: Math.max(first.row, last.row), minCol: Math.min(first.col, last.col), maxCol: Math.max(first.col, last.col) }
+}
 function anchorOf(ref: string): { row: number; col: number } {
   const m = CELL.exec(ref)
   if (!m) return { row: 0, col: 0 }
@@ -99,7 +113,8 @@ function geometry(def: PivotTableDefinition, view: PivotViewState, axes: PivotAx
   const anchor = anchorOf(def.location.ref)
   const labelCol: number[] = []
   view.rows.forEach((_, level) => labelCol.push(level === 0 ? anchor.col : labelCol[level - 1]! + (shares(def, view, view.rows[level - 1]!) ? 0 : 1)))
-  const firstDataCol = view.rows.length ? labelCol[labelCol.length - 1]! - anchor.col + 1 : 1
+  const empty = !view.data.length && !view.rows.length && !view.cols.length && !view.pages.length && !view.filters.length
+  const firstDataCol = view.rows.length ? labelCol[labelCol.length - 1]! - anchor.col + 1 : empty ? 0 : 1
   const columnFields = view.cols.length
   // hideValuesRow holds in every form but classic (see the header).
   const valuesRowHidden = columnFields === 1 && view.cols[0] === PIVOT_VALUES_FIELD && Boolean(def.x14?.hideValuesRow) && !def.gridDropZones
@@ -109,7 +124,8 @@ function geometry(def: PivotTableDefinition, view: PivotViewState, axes: PivotAx
   // An axis with nothing on it keeps one line; it has a body cell only when there is a value to show.
   const bodyRows = view.rows.length === 0 && !view.data.length ? 0 : axes.rows.length
   const bodyCols = view.cols.length === 0 && !view.data.length ? 0 : axes.cols.length
-  const rect = { minRow: anchor.row, minCol: anchor.col, maxRow: anchor.row + firstDataRow + bodyRows - 1, maxCol: anchor.col + firstDataCol + bodyCols - 1 }
+  const rect = empty ? boundsOf(def.location.ref) ?? { minRow: anchor.row, minCol: anchor.col, maxRow: anchor.row, maxCol: anchor.col }
+    : { minRow: anchor.row, minCol: anchor.col, maxRow: anchor.row + firstDataRow + bodyRows - 1, maxCol: anchor.col + firstDataCol + bodyCols - 1 }
   // Page fields: "down, then over" unless pageOverThenDown, wrapping at pageWrap; a blank row above the location.
   const { rowPageCount, colPageCount } = pageGrid(def, view.pages.length)
   const pages: Geometry['pages'] = []

@@ -13,7 +13,8 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
-import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import InteractiveSheetDoc, { pivotCellMatch } from '../src/components/xlsx/InteractiveSheetDoc'
+import { PivotFieldList } from '../src/components/xlsx/pivot/PivotFieldList'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
@@ -81,6 +82,42 @@ const status = (container: HTMLElement) => [...container.querySelectorAll('[role
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('resident pivot client (headless)', () => {
+  it('uses the rowItems measure index for a data-on-rows value cell', async () => {
+    const doc = await load(chartCase('s4-move-values-to-rows-first'))
+    const def = doc.sheets.flatMap(sheet => sheet.pivotTables ?? []).find(candidate => candidate.dataOnRows)!
+    expect(def.dataFields).toHaveLength(2)
+    const row = def.rowItems!.findIndex((item, index) => item.type === 'data' && item.i === 1 && index % def.dataFields!.length !== 1)
+    expect(row).toBeGreaterThanOrEqual(0)
+    const rowStart = 2 + (def.location.firstDataRow ?? 1)
+    const col = 0 + (def.location.firstDataCol ?? 1)
+    expect(pivotCellMatch([def], rowStart + row, col)).toEqual({ pivot: 0, dataIndex: def.rowItems![row]!.i })
+  })
+
+  it('normalizes same-area drops at the end to valid post-removal positions', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const doc = await load(BASELINE)
+    const sheet = pivotSheet(doc)
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: () => {} })
+    const opened = await client.open(sheet, 0, signal())
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const applied: any[] = []
+    const { container } = render(<PivotFieldList model={opened.model} pivot={0} verified={opened.verifiedKinds} onApply={delta => { applied.push(delta) }} onClose={() => {}} />)
+    const transfer = { setData: vi.fn(), getData: vi.fn(() => '') }
+    const rowsArea = container.querySelector<HTMLElement>('fieldset[aria-label="Rows"]')!
+    const rowField = opened.model.fields.find(field => opened.model.rows.includes(field.index))!
+    fireEvent.dragStart(within(rowsArea).getByText(rowField.name).closest('[draggable="true"]') as HTMLElement, { dataTransfer: transfer })
+    fireEvent.drop(rowsArea as HTMLElement, { dataTransfer: transfer })
+    expect(applied.at(-1)).toMatchObject({ kind: 'moveField', field: rowField.index, axis: 'row', index: opened.model.rows.length - 1 })
+
+    const valuesArea = container.querySelector<HTMLElement>('fieldset[aria-label="Values"]')!
+    fireEvent.dragStart(within(valuesArea).getByText(opened.model.data[0]!.name).closest('[draggable="true"]') as HTMLElement, { dataTransfer: transfer })
+    fireEvent.drop(valuesArea as HTMLElement, { dataTransfer: transfer })
+    expect(applied.at(-1)).toMatchObject({ kind: 'moveDataField', dataIndex: 0, toIndex: opened.model.data.length - 1 })
+    cleanup()
+    client.release(sheet, 0)
+  })
+
   it('applies a delta as source data: the live definition and a cumulative overlay, reset gives the saved cells back', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await load(BASELINE), sheet = pivotSheet(doc), source = createObjectWorkbookSource(doc, 'pivot-client')
@@ -91,7 +128,7 @@ describe('resident pivot client (headless)', () => {
     expect(opened.ok, JSON.stringify(opened)).toBe(true)
     if (!opened.ok) return
     expect(opened.revision).toBe(0)
-    expect([...opened.verifiedKinds].sort()).toEqual(['clearFilters', 'collapse', 'collapseAll', 'collapseField', 'filter', 'items', 'page', 'sort'])
+    expect([...opened.verifiedKinds].sort()).toEqual(['addDataField', 'clearFilters', 'collapse', 'collapseAll', 'collapseField', 'filter', 'groupDate', 'groupNumber', 'items', 'moveDataField', 'moveField', 'page', 'removeDataField', 'sort', 'ungroup', 'valueSettings'])
     const region = opened.model.fields.find(field => field.name === 'Region')!
     expect(region.items.map(item => item.label)).toEqual(['East', 'North', 'South', 'West', 'Central'].slice(0, region.items.length))
     // A3:I24 saved; R24 is the grand total row. Collapsing East (rows 6–8 under it) vacates three rows at the bottom.
@@ -446,6 +483,43 @@ describe('the interactive viewer', () => {
       expect(within(full).getByRole('button', { name: present }), present).toBeTruthy()
     }
     expect(within(full).queryByRole('option', { name: /Bottom/ })).toBeNull()
+  })
+
+  it('field-list toolbar and field-menu entry point open and close the docked panel', async () => {
+    const ui = render(<InteractiveSheetDoc doc={await load(BASELINE)} />)
+    const toggle = await ui.findByRole('button', { name: 'Pivot fields' }, { timeout: 10_000 })
+    await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 })
+    const pane = ui.getByTestId('officeview-sheet-pane')
+    fireEvent.click(toggle)
+    const panel = await ui.findByRole('region', { name: 'PivotTable Fields' })
+    expect(panel.getAttribute('data-pivot-field-list')).toBe('docked')
+    expect(pane.isConnected).toBe(true)
+    expect(document.activeElement).toBe(within(panel).getByRole('textbox', { name: 'Search fields' }))
+    const grid = ui.getByRole('grid')
+    expect(grid.tabIndex).toBe(0)
+    for (const button of ui.container.querySelectorAll<HTMLButtonElement>('button[data-officeview-ui="pivot-button"]')) expect(button.tabIndex).toBe(-1)
+    fireEvent.click(toggle)
+    await waitFor(() => expect(ui.queryByRole('region', { name: 'PivotTable Fields' })).toBeNull())
+
+    fireEvent.click(await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 }))
+    const fieldMenu = await ui.findByRole('dialog', { name: 'Region' })
+    fireEvent.click(within(fieldMenu).getByRole('button', { name: 'Show field list' }))
+    const fromMenu = await ui.findByRole('region', { name: 'PivotTable Fields' })
+    fireEvent.keyDown(fromMenu, { key: 'Escape' })
+    await waitFor(() => expect(ui.queryByRole('region', { name: 'PivotTable Fields' })).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(ui.getByRole('button', { name: 'Filter and sort Region' })))
+  })
+
+  it('disableFieldList removes both toolbar and menu entry points', async () => {
+    const doc = await load(BASELINE)
+    const sheet = doc.sheets[pivotSheet(doc)]!
+    sheet.pivotTables = sheet.pivotTables!.map(def => ({ ...def, disableFieldList: true }))
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    expect(await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 })).toBeTruthy()
+    expect(ui.queryByRole('button', { name: 'Pivot fields' })).toBeNull()
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    const menu = await ui.findByRole('dialog', { name: 'Region' })
+    expect(within(menu).queryByRole('button', { name: 'Show field list' })).toBeNull()
   })
 
   it('keyboard (Ruling S3-J): one Tab stop; Alt+arrows from the gridcell; described controls; 44 px targets; coarse pointer uses the bottom sheet', async () => {

@@ -27,16 +27,17 @@ import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { MemoryPool } from '../src/xlsx/view/tileCache'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 
 const FIXTURE = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/engine/', import.meta.url)), 'baseline.xlsx')
 const FIXTURE_ROOT = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url)))
-const TASK25_CASES = (JSON.parse(readFileSync(resolve(FIXTURE_ROOT, 'interaction/manifest.json'), 'utf8')) as Array<{
+const INTERACTION_CASES = (JSON.parse(readFileSync(resolve(FIXTURE_ROOT, 'interaction/manifest.json'), 'utf8')) as Array<{
   case: string; file: string; task: number; status?: string; setup?: string; seed: string; base?: string; pivot: string; delta: PivotDelta[]
-}>).filter(entry => entry.task === 25 && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
+}>).filter(entry => (entry.task === 25 || entry.task === 35 || entry.task === 36 || entry.task === 37) && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
 const SEEDS: Record<string, string> = {
   'engine-seed': resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx'),
   'chart-seed': resolve(FIXTURE_ROOT, 'recipes/pivot-chart-seed.xlsx'),
-  'getpivotdata-seed': resolve(FIXTURE_ROOT, 'interaction/getpivotdata-seed.xlsx'),
+  'getpivotdata-seed': resolve(FIXTURE_ROOT, 'recipes/getpivotdata-seed.xlsx'),
   'refresh-seed': resolve(FIXTURE_ROOT, 'interaction/refresh-seed.xlsx'),
 }
 const quiet = { yield: async () => {} }
@@ -71,6 +72,35 @@ async function openObjectPivot(options: { afterDispatch?: (command: WorkerComman
 }
 
 describe('worker pivot protocol', () => {
+  it('preserves a selected report filter on reorder and initializes a field entering Filters as All', async () => {
+    const file = resolve(FIXTURE_ROOT, 'engine/quirk-page-single.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const page = opened.menu.fields.find(field => field.axis === 'page')!
+    expect(page.page).toEqual([0])
+
+    const reordered = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'moveField', field: page.index, axis: 'page', index: 0 }, grantBytes: 16 * 1024 * 1024 }))
+    if (reordered.kind !== 'pivotApply') throw new Error(JSON.stringify(reordered))
+    expect(reordered.menu.fields.find(field => field.index === page.index)?.page).toEqual([0])
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: reordered.revision })
+
+    const removed = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 1, revision: 2,
+      delta: { kind: 'moveField', field: page.index, axis: 'none' }, grantBytes: 16 * 1024 * 1024 }))
+    if (removed.kind !== 'pivotApply') throw new Error(JSON.stringify(removed))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: removed.revision })
+    const added = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 2, revision: 3,
+      delta: { kind: 'moveField', field: page.index, axis: 'page', index: 0 }, grantBytes: 16 * 1024 * 1024 }))
+    if (added.kind !== 'pivotApply') throw new Error(JSON.stringify(added))
+    expect(added.menu.fields.find(field => field.index === page.index)?.page).toBe('all')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('does not scan a no-pivot workbook during paged/open source initialization', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     for (const sheet of doc.sheets) { sheet.pivotTables = []; sheet.pivotRegions = [] }
@@ -331,6 +361,134 @@ describe('worker pivot protocol', () => {
     if (read.kind !== 'read' || read.result.op !== 'pivotDisplay') throw new Error(JSON.stringify(read))
     expect(read.result.result.pivotTables.find(def => def.name === '樞紐分析表2')!.location.ref).toBe('A3:I21')
     await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('Task 35: a worker field-list candidate is admitted before materialization and becomes the committed menu', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const field = opened.menu.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)
+    expect(field).toBeDefined()
+    const before = kernel.session(docId)!.memoryStats().sourceBytes
+    const refused = await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'moveField', field: field!.index, axis: 'row' }, grantBytes: 1 })
+    expect(refused.kind).toBe('quota')
+    expect(kernel.session(docId)!.memoryStats().sourceBytes).toBe(before)
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 2,
+      delta: { kind: 'moveField', field: field!.index, axis: 'row' }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    expect(staged.menu.fields.find(entry => entry.index === field!.index)?.axis).toBe('row')
+    const committed = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision }))
+    expect(committed.kind).toBe('pivotCommit')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('worker keeps a materialized cache/store charge through the next layout-only commit', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const session = kernel.session(docId)!
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const field = opened.menu.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
+    const def = sheet.pivotTables![0]!
+    const runtime = pivotRuntimeFor(doc)!
+    const cache = runtime.cache(def)!
+    const records = await runtime.records(cache, new AbortController().signal)
+    expect(records.ok).toBe(true)
+    if (!records.ok) return
+    expect(cache.fields[field.index]!.sharedItems?.inline).toBe(true)
+    const materializedUpper = records.store.count * (4 + 96 + 8) + 256
+    const openedBytes = session.memoryStats().sourceBytes
+
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'moveField', field: field.index, axis: 'row' }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision })
+    const firstCommitBytes = session.memoryStats().sourceBytes
+    expect(firstCommitBytes).toBeGreaterThanOrEqual(openedBytes + materializedUpper)
+
+    const sorted = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 1, revision: 2,
+      delta: { kind: 'sort', field: field.index, order: 'ascending' }, grantBytes: 16 * 1024 * 1024 }))
+    if (sorted.kind !== 'pivotApply') throw new Error(JSON.stringify(sorted))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: sorted.revision })
+    const secondCommitBytes = session.memoryStats().sourceBytes
+    expect(secondCommitBytes).toBeGreaterThanOrEqual(firstCommitBytes - materializedUpper / 2)
+    await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('Task 35: candidate and overlay bytes share the per-apply grant', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const field = opened.menu.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
+    const session = kernel.session(docId)!
+    const before = session.memoryStats().sourceBytes
+    const delta: PivotDelta = { kind: 'moveField', field: field.index, axis: 'row' }
+    const staged = session.pivotApply(sheetId, 0, 0, 1, delta, 16 * 1024 * 1024)
+    expect(staged.kind).toBe('apply')
+    const internals = session as unknown as { pivotHandles: Map<string, { staged?: { result: { hold?: { bytes: number } }; entry: { bytes: number } } }> }
+    const entry = internals.pivotHandles.get(JSON.stringify([sheetId, 0]))?.staged
+    const extraBytes = entry?.result.hold?.bytes ?? 0, overlayBytes = entry?.entry.bytes ?? 0
+    expect(extraBytes).toBeGreaterThan(0)
+    expect(overlayBytes).toBeGreaterThan(0)
+    const grantBytes = Math.max(extraBytes, overlayBytes)
+    expect(extraBytes).toBeLessThanOrEqual(grantBytes)
+    expect(overlayBytes).toBeLessThanOrEqual(grantBytes)
+    expect(extraBytes + overlayBytes).toBeGreaterThan(grantBytes)
+
+    const refused = session.pivotApply(sheetId, 0, 0, 2, delta, grantBytes)
+    expect(refused).toMatchObject({ kind: 'quota', limitBytes: grantBytes })
+    if (refused.kind === 'quota') expect(refused.requiredBytes).toBeGreaterThan(grantBytes)
+    expect(session.memoryStats().sourceBytes).toBe(before)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('Task 35: refunds a resident candidate when its session is released before commit', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    class ReleasingLedger extends MainMemoryLedger {
+      client: { dispose?(): void } | undefined
+      candidateOwners: string[] = []
+      private triggered = false
+      override set(pool: Parameters<MainMemoryLedger['set']>[0], owner: string, bytes: number) {
+        super.set(pool, owner, bytes)
+        if (bytes > 0 && (owner.startsWith('pivot-candidate:') || owner.startsWith('pivot-layout:'))) this.candidateOwners.push(owner)
+        if (!this.triggered && bytes > 0 && owner.startsWith('pivot-candidate:')) {
+          this.triggered = true
+          this.client?.dispose?.()
+        }
+      }
+    }
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEEDS['engine-seed']!))))
+    const sheet = doc.sheets.findIndex(candidate => candidate.pivotTables?.length)
+    const ledger = new ReleasingLedger()
+    const client = createResidentPivotClient({ doc, ledger, install: () => {} })
+    ledger.client = client
+    const opened = await client.open(sheet, 0, new AbortController().signal)
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const field = opened.model.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
+    const result = await client.apply(sheet, 0, { kind: 'moveField', field: field.index, axis: 'row' })
+    expect(result).toMatchObject({ ok: false })
+    expect(ledger.candidateOwners.some(owner => owner.startsWith('pivot-candidate:'))).toBe(true)
+    expect(ledger.candidateOwners.some(owner => owner.startsWith('pivot-layout:'))).toBe(true)
+    const releasedBytes = ledger.candidateOwners.map(owner => ledger.ownerBytes('document', owner))
+    expect(releasedBytes.length).toBeGreaterThan(0)
+    expect(releasedBytes.every(bytes => bytes === 0)).toBe(true)
   })
 
   it('R2-1 (S3-L): the first commit protects the saved area, end to end, and main publishes no stale saved merge', async () => {
@@ -622,6 +780,37 @@ describe('worker pivot protocol', () => {
     expect(session.memoryStats().sourceBytes).toBe(beforeOpen)
   })
 
+  it('worker multi-level date group and ungroup release derived cache bytes', async () => {
+    const file = resolve(FIXTURE_ROOT, 'interaction/interaction-filter-date-base.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const session = kernel.session(docId)!, baseline = session.memoryStats().sourceBytes
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 })
+    const opened = session.memoryStats().sourceBytes
+    const grouped = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'groupDate', field: 5, periods: ['months', 'quarters', 'years'] }, grantBytes: 16 * 1024 * 1024 }))
+    expect(grouped.kind).toBe('pivotApply')
+    const staged = session.memoryStats().sourceBytes
+    expect(staged).toBeGreaterThan(opened)
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: 1 })
+    const committed = session.memoryStats().sourceBytes
+    expect(committed).toBe(staged)
+    const ungrouped = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 1, revision: 2,
+      delta: { kind: 'ungroup', field: 5 }, grantBytes: 16 * 1024 * 1024 }))
+    expect(ungrouped.kind).toBe('pivotApply')
+    expect((ungrouped as { menu: { fields: unknown[] } }).menu.fields).toHaveLength(12)
+    const ungroupCommit = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: 2 }))
+    expect(ungroupCommit).toMatchObject({ kind: 'pivotCommit', revision: 2 })
+    // This fixture's base values are inline, so ungroup materializes them; that
+    // charge remains. The date hierarchy charge must still disappear on commit.
+    expect(session.memoryStats().sourceBytes).toBeLessThan(committed)
+    await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    expect(session.memoryStats().sourceBytes).toBe(baseline)
+  })
+
   it('pivots on one cache share one store until the last release', async () => {
     const { kernel, docId, sheetId, session, beforePivotOpen } = await openObjectPivot({ duplicate: true })
     const baseline = beforePivotOpen
@@ -636,7 +825,7 @@ describe('worker pivot protocol', () => {
     expect(session.memoryStats().sourceBytes).toBe(baseline)
   })
 
-  it.each(TASK25_CASES.map(entry => [entry.case, entry] as const))('paged layout equals resident layout for interaction case %s', async (_name, entry) => {
+  it.each(INTERACTION_CASES.map(entry => [entry.case, entry] as const))('paged layout equals resident layout for interaction case %s', async (_name, entry) => {
     const start = entry.base ? resolve(FIXTURE_ROOT, `${entry.base}.xlsx`) : SEEDS[entry.seed]
     if (!start) throw new Error(`Unknown interaction seed ${entry.seed}`)
     const parts = await loadPivotParts(start)
@@ -682,7 +871,7 @@ describe('worker pivot protocol', () => {
           ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }),
         }
       })
-      expect(expected?.length).toBeGreaterThan(0)
+      if (entry.case !== 's4-empty-pivot-all-removed') expect(expected?.length).toBeGreaterThan(0)
       expect(pagedReply.cells).toEqual(expected)
       const committed = await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId: sheet.sheetId, pivot, revision })
       expect(completed(committed)).toMatchObject({ kind: 'pivotCommit', revision })

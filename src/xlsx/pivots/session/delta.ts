@@ -29,13 +29,372 @@
  */
 import {
   PIVOT_VALUES_FIELD,
-  type PivotArea, type PivotCacheDefinition, type PivotDiagnostic, type PivotFilter, type PivotTableDefinition,
+  type PivotArea, type PivotCacheDefinition, type PivotDataFunction, type PivotDiagnostic, type PivotFilter,
+  type PivotShowAsX14, type PivotShowDataAs, type PivotTableDefinition,
 } from '../model'
 import type { EngineResult } from '../engine/axes'
 import { isDateFilter, isLabelFilter } from '../engine/filters'
 import type { FieldState, PivotViewState } from '../engine/view'
+import type { RecordColumn, RecordStore } from '../engine/records'
+import { VALUE_TAG, serialToIso } from '../engine/records'
+import type { PivotFieldItem, PivotCacheItem } from '../model'
+import { pageFieldsFit } from '../engine/place'
+import { sortItemOrder } from '../engine/sort'
+import { ZH_TW_CAPTIONS } from './captions'
+import { applyGrouping } from './grouping'
+
+export type { PivotDataFunction } from '../model'
+export interface PivotMemoryHold { readonly bytes: number; release(): void }
+export interface PivotDeltaContext {
+  def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; view: PivotViewState; date1904: boolean
+  captionRule?: { locale?: 'zh-TW' | 'file'; caption(kind: 'dataField', args: { fn: string; field?: string }): string | undefined }
+  admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined
+}
+export interface PivotDeltaStateResult { def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; view: PivotViewState; extraBytes: number; hold?: PivotMemoryHold }
+
+const asciiLower = (s: string) => s.replace(/[A-Z]+/g, run => run.toLowerCase())
+function inlineValue(column: Extract<RecordColumn, { kind: 'inline' }>, row: number, date1904: boolean): PivotCacheItem {
+  const tag = column.tag[row]!
+  if (tag === VALUE_TAG.missing) return { type: 'missing' }
+  if (tag === VALUE_TAG.number) return { type: 'number', value: column.num[row]! }
+  if (tag === VALUE_TAG.boolean) return { type: 'boolean', value: column.num[row] !== 0 }
+  const text = column.text[column.textIndex[row]!] ?? ''
+  if (tag === VALUE_TAG.error) return { type: 'error', value: text }
+  if (tag === VALUE_TAG.date) {
+    const iso = serialToIso(column.num[row]!, date1904)
+    if (iso !== undefined) return { type: 'date', value: iso }
+    return { type: 'error', value: '#VALUE!' }
+  }
+  return { type: 'string', value: text }
+}
+const valueKey = (v: PivotCacheItem) => v.type === 'missing' ? 'missing' : `${v.type}:${v.type === 'string' ? asciiLower(v.value) : String(v.value)}`
+function fieldStateForMaterialized(old: FieldState, count: number): FieldState {
+  return { ...old, hidden: Array.from({ length: count }, (_, i) => old.hidden[i] ?? false), collapsed: Array.from({ length: count }, (_, i) => old.collapsed[i] ?? false) }
+}
+function dataFunction(field: number, cache: PivotCacheDefinition): PivotDataFunction {
+  const cf = cache.fields[field]
+  return cf?.formula !== undefined || (cf?.sharedItems?.containsNumber && !cf.sharedItems.containsString && !cf.sharedItems.containsDate) ? 'sum' : 'count'
+}
+function remapDataReferences(view: PivotViewState, map: readonly (number | undefined)[]): PivotViewState {
+  return {
+    ...view,
+    filters: view.filters.flatMap(filter => {
+      const index = filter.iMeasureFld
+      if (index === undefined) return [filter]
+      const next = map[index]
+      return next === undefined ? [] : [{ ...filter, iMeasureFld: next }]
+    }),
+    fields: view.fields.map(state => {
+      const scope = state.autoSortScope
+      if (!scope) return state
+      const references = scope.references.flatMap(ref => {
+        if (ref.field !== PIVOT_VALUES_FIELD) return [ref]
+        const next = ref.x.map(index => map[index])
+        return next.some(index => index === undefined) ? [] : [{ ...ref, x: next as number[] }]
+      })
+      return { ...state, ...(references.length ? { autoSortScope: { ...scope, references } } : { autoSortScope: undefined }) }
+    }),
+  }
+}
+
+/** Task 35 candidate transition. Materialization is reserved before allocating the candidate index or item arrays. */
+export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): EngineResult<PivotDeltaStateResult> {
+  if (delta.kind === 'groupDate' || delta.kind === 'groupNumber' || delta.kind === 'ungroup') return applyGrouping(ctx, delta)
+  if (!['moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings'].includes(delta.kind)) {
+    const view = applyDelta(ctx.view, delta, ctx.def, ctx.cache)
+    return view.ok ? { ok: true, value: { def: ctx.def, cache: ctx.cache, store: ctx.store, view: view.value, extraBytes: 0 } } : view
+  }
+  const { def, cache, store, view } = ctx
+  let nextDef = def, nextCache = cache, nextStore = store, nextView = view, extraBytes = 0
+  let hold: PivotMemoryHold | undefined
+  const failWith = (result: EngineResult<never>): EngineResult<PivotDeltaStateResult> => { hold?.release(); return result }
+  const reject = (feature: string, message: string) => failWith(refuse(feature, message))
+  if (delta.kind !== 'valueSettings' && def.disableFieldList) return reject('pivot-field-list-disabled', `The field list is disabled for ${def.name}.`)
+  if (delta.kind === 'moveField') {
+    const field = delta.field
+    if (field === PIVOT_VALUES_FIELD) {
+      if (delta.axis !== 'row' && delta.axis !== 'col') return reject('pivot-delta-invalid', 'Values can be placed on Rows or Columns only.')
+      if (view.data.length < 2) return reject('pivot-delta-invalid', 'Values is available on an axis only when there are at least two data fields.')
+      const source = view.rows.includes(field) ? 'row' : view.cols.includes(field) ? 'col' : 'none'
+      const rows = view.rows.filter(f => f !== field), cols = view.cols.filter(f => f !== field)
+      const target = delta.axis === 'row' ? rows : cols
+      const at = delta.index ?? target.length
+      if (!Number.isInteger(at) || at < 0 || at > target.length) return reject('pivot-delta-invalid', 'The Values position is invalid.')
+      target.splice(at, 0, field)
+      nextView = { ...view, rows, cols }
+      void source
+    } else {
+      if (!Number.isInteger(field) || field < 0 || field >= def.fields.length || !def.fields[field]) return reject('pivot-delta-invalid', `Field ${field} does not exist.`)
+      const pf = def.fields[field]!
+      const cacheField = cache.fields[field]
+      const current: 'row' | 'col' | 'page' | 'none' = view.rows.includes(field) ? 'row' : view.cols.includes(field) ? 'col' : view.pages.some(p => p.field === field) ? 'page' : 'none'
+      if (cacheField?.formula !== undefined && delta.axis !== 'none') return reject('pivot-calculated-field', `Calculated field ${field} can be used in Values only.`)
+      const permission = delta.axis === 'row' ? pf.dragToRow : delta.axis === 'col' ? pf.dragToCol : delta.axis === 'page' ? pf.dragToPage : pf.dragOff
+      if (!permission) return reject('pivot-delta-invalid', `Field ${field} cannot be moved to ${delta.axis}.`)
+      if (current !== delta.axis && current !== 'none' && !pf.dragOff) return reject('pivot-delta-invalid', `Field ${field} cannot be removed from its current area.`)
+      const rows = [...view.rows], cols = [...view.cols], pages = [...view.pages]
+      const removeAt = <T,>(array: T[], item: T) => { const i = array.indexOf(item); if (i >= 0) array.splice(i, 1) }
+      removeAt(rows, field); removeAt(cols, field)
+      const pageAt = pages.findIndex(p => p.field === field); if (pageAt >= 0) pages.splice(pageAt, 1)
+      const target = delta.axis === 'row' ? rows : delta.axis === 'col' ? cols : undefined
+      if (target) {
+        const at = delta.index ?? target.length
+        if (!Number.isInteger(at) || at < 0 || at > target.length) return reject('pivot-delta-invalid', `The ${delta.axis} position is invalid.`)
+        target.splice(at, 0, field)
+      } else if (delta.axis === 'page') {
+        const at = delta.index ?? pages.length
+        if (!Number.isInteger(at) || at < 0 || at > pages.length) return reject('pivot-delta-invalid', 'The Filters position is invalid.')
+        const selected = current === 'page' && pageAt >= 0 ? view.pages[pageAt]!.selected : 'all'
+        pages.splice(at, 0, { field, selected })
+      }
+      nextView = { ...view, rows, cols, pages, ...(delta.axis === 'page' ? { filters: view.filters.filter(filter => filter.fld !== field) } : {}) }
+      if (delta.axis === 'none') {
+        nextView = { ...nextView, filters: view.filters.filter(f => f.fld !== field), pages: pages.filter(p => p.field !== field), fields: view.fields.map((f, i) => i === field ? { ...f, hidden: f.hidden.map(() => false), collapsed: f.collapsed.map(() => false), sortType: 'manual', autoSortScope: undefined } : f) }
+      }
+      if (delta.axis === 'page' && !pageFieldsFit(def, nextView)) return reject('pivot-page-fields-fit', `Field ${field} cannot fit in the page-field area.`)
+
+      const cf = cache.fields[field], column = store.columns[field]
+      if ((delta.axis === 'row' || delta.axis === 'col' || delta.axis === 'page') && cf?.sharedItems?.inline) {
+        if (!column || column.kind !== 'inline') return reject('pivot-records-absent', `Field ${field} has no inline record column to materialize.`)
+        // A size upper bound derived from source cardinality. The reservation is taken before item/index arrays exist.
+        const maximum = store.count * (4 + 96 + 8) + 256
+        const admitted = ctx.admitCandidateBytes?.(maximum)
+        if (ctx.admitCandidateBytes && !admitted) return reject('pivot-records-limit', `Materializing field ${field} exceeds the memory budget.`)
+        hold = admitted; extraBytes = maximum
+        const values: PivotCacheItem[] = [], indexByKey = new Map<string, number>(), rowIndex = new Uint32Array(store.count)
+        const seenLower = new Map<string, string>()
+        for (let row = 0; row < store.count; row++) {
+          const value = inlineValue(column, row, ctx.date1904), key = valueKey(value)
+          if (value.type === 'string') {
+            const lower = value.value.toLowerCase(), folded = asciiLower(value.value), previous = seenLower.get(lower)
+            if (previous !== undefined && previous !== folded) return reject('pivot-engine-unmeasured', `Field ${field} contains non-ASCII case-fold collisions.`)
+            seenLower.set(lower, folded)
+          }
+          let index = indexByKey.get(key)
+          if (index === undefined) { index = values.length; indexByKey.set(key, index); values.push(value) }
+          rowIndex[row] = index
+        }
+        const old = cf.sharedItems
+        nextCache = { ...cache, fields: cache.fields.map((f, i) => i === field ? { ...f, sharedItems: {
+          ...(old ?? { containsSemiMixedTypes: false, containsNonDate: false, containsDate: false, containsString: false, containsBlank: false, containsMixedTypes: false, containsNumber: false, containsInteger: false, longText: false, inline: true, items: [] }),
+          inline: false, items: values,
+        } } : f) }
+        nextStore = { ...store, columns: store.columns.map((c, i) => i === field ? { kind: 'shared' as const, index: rowIndex } : c), bytes: store.bytes + rowIndex.byteLength }
+        // The oracle measures date items together with blanks: dates sort chronologically and (blank) follows.
+        const hasDates = values.some(value => value.type === 'date')
+        const mixedDateBlank = hasDates && values.every(value => value.type === 'date' || value.type === 'missing')
+        const order = mixedDateBlank
+          ? { ok: true as const, value: values.map((_, x) => x).sort((a, b) => {
+              const left = values[a]!, right = values[b]!
+              if (left.type === 'missing') return right.type === 'missing' ? a - b : 1
+              if (right.type === 'missing') return -1
+              if (left.type !== 'date' || right.type !== 'date') return a - b
+              return left.value < right.value ? -1 : left.value > right.value ? 1 : a - b
+            }) }
+          : sortItemOrder(values.map((_, x) => x), values, 'ascending', field, def.customListSort !== false)
+        if (!order.ok) return failWith(order)
+        const items: PivotFieldItem[] = order.value.map(x => ({ type: 'data', x, hidden: false, char: false, showDetails: true, calculated: false, missing: false, childItems: false, expanded: false, drillAcross: false }))
+        nextDef = { ...def, fields: def.fields.map((f, i) => i === field ? { ...f, axis: delta.axis === 'row' ? 'axisRow' : delta.axis === 'col' ? 'axisCol' : 'axisPage', items: f.items?.length ? f.items : items } : f) }
+        nextView = { ...nextView, fields: nextView.fields.map((f, i) => i === field ? fieldStateForMaterialized(f, values.length) : f) }
+      } else {
+        const axis = delta.axis === 'row' ? 'axisRow' : delta.axis === 'col' ? 'axisCol' : delta.axis === 'page' ? 'axisPage' : undefined
+        nextDef = { ...def, fields: def.fields.map((f, i) => i === field ? { ...f, ...(axis ? { axis } : { axis: undefined }) } : f) }
+      }
+      if (delta.axis !== 'none') nextDef = { ...nextDef, fields: nextDef.fields.map((f, i) => i === field ? { ...f, axis: delta.axis === 'row' ? 'axisRow' : delta.axis === 'col' ? 'axisCol' : 'axisPage' } : f) }
+    }
+  } else if (delta.kind === 'addDataField') {
+    const field = delta.field
+    if (!Number.isInteger(field) || field < 0 || field >= def.fields.length) return reject('pivot-delta-invalid', `Field ${field} does not exist.`)
+    const pf = def.fields[field]!
+    if (!pf.dragToData) return reject('pivot-delta-invalid', `Field ${field} cannot be moved to Values.`)
+    if (!cache.fields[field]?.databaseField && cache.fields[field]?.formula === undefined) return reject('pivot-engine-unmeasured', `Field ${field} has no value column.`)
+    const at = delta.index ?? view.data.length
+    if (!Number.isInteger(at) || at < 0 || at > view.data.length) return reject('pivot-delta-invalid', 'The Values position is invalid.')
+    const fn = dataFunction(field, cache)
+    const fieldName = def.fields[field]?.name ?? cache.fields[field]?.name ?? `Field ${field + 1}`
+    const table = ZH_TW_CAPTIONS[`dataField:${fn}`]
+    const fromMeasuredTable = table?.replace('{field}', fieldName)
+    const baseName = ctx.captionRule?.caption('dataField', { fn, field: fieldName }) ?? fromMeasuredTable
+    if (!baseName) return reject('pivot-caption-locale', `A default caption for ${fn} is not measured; provide a custom name.`)
+    let name = baseName, suffix = 2
+    const names = new Set(view.data.map(d => d.name).filter(Boolean))
+    while (names.has(name)) name = `${baseName}${suffix++}`
+    const data = [...view.data]; data.splice(at, 0, { field, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name })
+    const map = Array.from({ length: view.data.length }, (_, i) => i < at ? i : i + 1)
+    nextView = remapDataReferences({ ...view, data }, map)
+    if (view.data.length === 1) {
+      const valuesAxis = def.dataOnRows ? 'rows' : 'cols'
+      nextView = { ...nextView, [valuesAxis]: [...nextView[valuesAxis], PIVOT_VALUES_FIELD] }
+    }
+    nextDef = { ...def, fields: def.fields.map((f, i) => i === field ? { ...f, dataField: true } : f) }
+  } else if (delta.kind === 'removeDataField') {
+    if (!Number.isInteger(delta.dataIndex) || delta.dataIndex < 0 || delta.dataIndex >= view.data.length) return reject('pivot-delta-invalid', `Data field ${delta.dataIndex} does not exist.`)
+    const data = [...view.data]; data.splice(delta.dataIndex, 1)
+    const map = Array.from({ length: view.data.length }, (_, i) => i === delta.dataIndex ? undefined : i > delta.dataIndex ? i - 1 : i)
+    nextView = remapDataReferences({ ...view, data }, map)
+    if (data.length < 2) nextView = { ...nextView, rows: nextView.rows.filter(f => f !== PIVOT_VALUES_FIELD), cols: nextView.cols.filter(f => f !== PIVOT_VALUES_FIELD) }
+    const remaining = new Set(data.map(d => d.field))
+    nextDef = { ...def, fields: def.fields.map((f, i) => i >= 0 && i < def.fields.length ? { ...f, dataField: remaining.has(i) } : f) }
+  } else if (delta.kind === 'moveDataField') {
+    if (!Number.isInteger(delta.dataIndex) || !Number.isInteger(delta.toIndex) || delta.dataIndex < 0 || delta.dataIndex >= view.data.length || delta.toIndex < 0 || delta.toIndex >= view.data.length) return reject('pivot-delta-invalid', 'The Values reorder index is invalid.')
+    const data = [...view.data], [item] = data.splice(delta.dataIndex, 1); data.splice(delta.toIndex, 0, item!)
+    const map = Array.from({ length: view.data.length }, (_, old) => data.findIndex(entry => entry === view.data[old]))
+    nextView = remapDataReferences({ ...view, data }, map)
+  } else if (delta.kind === 'valueSettings') {
+    const { dataIndex } = delta
+    if (!Number.isInteger(dataIndex) || dataIndex < 0 || dataIndex >= view.data.length) {
+      return reject('pivot-delta-invalid', `Data field ${dataIndex} does not exist.`)
+    }
+    const current = view.data[dataIndex]!
+    const sourceField = current.field
+    const isCalculated = cache.fields[sourceField]?.formula !== undefined
+
+    const VALID_FNS = new Set<PivotDataFunction>(['sum', 'count', 'average', 'max', 'min', 'product', 'countNums', 'stdDev', 'stdDevp', 'var', 'varp'])
+    if (delta.fn !== undefined && !VALID_FNS.has(delta.fn)) return reject('pivot-delta-invalid', `Summary function ${delta.fn} is not supported.`)
+    const nextFn = delta.fn ?? current.fn
+    if (isCalculated && nextFn !== 'sum') return reject('pivot-delta-invalid', 'Calculated fields only support Sum.')
+
+    const VALID_SHOW_AS = new Set<PivotValueShowAs>([
+      'normal', 'difference', 'percent', 'percentDiff', 'runTotal',
+      'percentOfRow', 'percentOfCol', 'percentOfTotal', 'index',
+      'percentOfParent', 'percentOfParentRow', 'percentOfParentCol',
+      'percentOfRunningTotal', 'rankAscending', 'rankDescending',
+    ])
+    if (delta.showAs !== undefined && !VALID_SHOW_AS.has(delta.showAs)) return reject('pivot-delta-invalid', `Show values as mode ${delta.showAs} is not supported.`)
+    const nextShowAs = delta.showAs ?? current.showAs
+    if (isCalculated && nextShowAs !== 'normal' && nextShowAs !== 'percentOfTotal') return reject('pivot-delta-invalid', 'Calculated fields only support No Calculation or % of Grand Total.')
+
+    const needsBaseField = ['percentOfParent', 'difference', 'percent', 'percentDiff', 'runTotal', 'percentOfRunningTotal', 'rankAscending', 'rankDescending'].includes(nextShowAs)
+    const needsBaseItem = ['difference', 'percent', 'percentDiff'].includes(nextShowAs)
+
+    let baseField = delta.baseField !== undefined ? delta.baseField : current.baseField
+    let baseItem = delta.baseItem !== undefined ? delta.baseItem : current.baseItem
+
+    if (needsBaseField) {
+      if (baseField === undefined || !Number.isInteger(baseField) || baseField < 0 || baseField >= def.fields.length) {
+        return reject('pivot-delta-invalid', `Base field is required for ${nextShowAs}.`)
+      }
+      const onRows = view.rows.includes(baseField)
+      const onCols = view.cols.includes(baseField)
+      if (nextShowAs === 'percentOfParent') {
+        if (!onRows) return reject('pivot-delta-invalid', '% of Parent Total requires a row base field.')
+      } else {
+        if (!onRows && !onCols) return reject('pivot-delta-invalid', `Base field ${baseField} must be on rows or columns.`)
+      }
+    } else {
+      if (delta.showAs !== undefined && delta.baseField === undefined) {
+        baseField = -1
+      }
+    }
+
+    if (needsBaseItem) {
+      if (baseItem === undefined || !Number.isInteger(baseItem)) {
+        return reject('pivot-delta-invalid', `Base item is required for ${nextShowAs}.`)
+      }
+      const isPrevNext = baseItem === 1048828 || baseItem === 1048829
+      const bf = def.fields[baseField]
+      const itemCount = bf?.items?.length ?? cache.fields[baseField]?.sharedItems?.items.length ?? 0
+      const isItemIndex = baseItem >= 0 && baseItem < itemCount
+      if (!isPrevNext && !isItemIndex) {
+        return reject('pivot-delta-invalid', `Base item ${baseItem} is invalid for base field ${baseField}.`)
+      }
+    } else {
+      if (delta.showAs !== undefined && delta.baseItem === undefined) {
+        baseItem = 1048832
+      }
+    }
+
+    const PRESET_NUMFMT_IDS = new Set([0, 1, 2, 3, 4, 9, 10, 11, 14, 37, 38, 39, 40, 44, 49])
+    let nextNumFmtId: number | undefined
+    if (delta.numFmtId === null) {
+      nextNumFmtId = undefined
+    } else if (delta.numFmtId !== undefined) {
+      if (!Number.isInteger(delta.numFmtId) || delta.numFmtId < 0) {
+        return reject('pivot-delta-invalid', `Number format ID ${delta.numFmtId} is invalid.`)
+      }
+      if (PRESET_NUMFMT_IDS.has(delta.numFmtId)) {
+        nextNumFmtId = delta.numFmtId
+      } else if (delta.numFmtId >= 164 && delta.numFmtId === current.numFmtId) {
+        nextNumFmtId = delta.numFmtId
+      } else {
+        return reject('pivot-delta-invalid', `Number format ID ${delta.numFmtId} is not supported.`)
+      }
+    } else {
+      nextNumFmtId = current.numFmtId
+    }
+
+    let nextName: string
+    if (delta.name !== undefined) {
+      const trimmed = delta.name.trim()
+      if (!trimmed) return reject('pivot-delta-invalid', 'The custom name cannot be blank.')
+      const otherNames = view.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean)
+      if (otherNames.some(n => n.toLowerCase() === trimmed.toLowerCase())) {
+        return reject('pivot-delta-invalid', `A data field named "${trimmed}" already exists.`)
+      }
+      nextName = trimmed
+    } else if (delta.fn !== undefined) {
+      if (ctx.captionRule?.locale === 'file' || !ctx.captionRule) {
+        return reject('pivot-caption-locale', `A default caption for ${nextFn} is not measured; provide a custom name.`)
+      }
+      const fieldName = def.fields[sourceField]?.name ?? cache.fields[sourceField]?.name ?? `Field ${sourceField + 1}`
+      const table = ZH_TW_CAPTIONS[`dataField:${nextFn}`]
+      const fromMeasuredTable = table?.replace('{field}', fieldName)
+      const baseName = ctx.captionRule.caption('dataField', { fn: nextFn, field: fieldName }) ?? fromMeasuredTable
+      if (!baseName) return reject('pivot-caption-locale', `A default caption for ${nextFn} is not measured; provide a custom name.`)
+      let disambiguated = baseName, suffix = 2
+      const otherNames = new Set(view.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean))
+      while (otherNames.has(disambiguated)) disambiguated = `${baseName}${suffix++}`
+      nextName = disambiguated
+    } else {
+      nextName = current.name
+    }
+
+    const nextData = view.data.map((entry, i) => {
+      if (i !== dataIndex) return entry
+      const updated = {
+        ...entry,
+        fn: nextFn,
+        showAs: nextShowAs,
+        baseField,
+        baseItem,
+        name: nextName,
+        ...(nextNumFmtId !== undefined ? { numFmtId: nextNumFmtId } : {}),
+      }
+      if (nextNumFmtId === undefined) delete (updated as any).numFmtId
+      return updated
+    })
+    nextView = { ...view, data: nextData }
+
+    const X14_SHOW_AS = new Set<string>(['percentOfParent', 'percentOfParentRow', 'percentOfParentCol', 'percentOfRunningTotal', 'rankAscending', 'rankDescending'])
+    if (def.dataFields && def.dataFields[dataIndex]) {
+      nextDef = {
+        ...def,
+        dataFields: def.dataFields.map((df, i) => {
+          if (i !== dataIndex) return df
+          const updatedDf = {
+            ...df,
+            subtotal: nextFn,
+            showDataAs: (X14_SHOW_AS.has(nextShowAs) ? 'normal' : nextShowAs) as any,
+            baseField,
+            baseItem,
+            name: nextName,
+            ...(nextNumFmtId !== undefined ? { numFmtId: nextNumFmtId } : {}),
+            ...(X14_SHOW_AS.has(nextShowAs) ? { x14: { ...df.x14, pivotShowAs: nextShowAs as any } } : {}),
+          }
+          if (nextNumFmtId === undefined) delete (updatedDf as any).numFmtId
+          return updatedDf
+        }),
+      }
+    }
+  }
+  return { ok: true, value: { def: nextDef, cache: nextCache, store: nextStore, view: nextView, extraBytes, ...(hold ? { hold } : {}) } }
+}
+
+export type PivotDateGroupPeriod = 'seconds' | 'minutes' | 'hours' | 'days' | 'months' | 'quarters' | 'years'
+export type PivotValueShowAs = PivotShowDataAs | PivotShowAsX14
 
 export type PivotDelta =
+  // Stage 3 kinds (unchanged)
   | { kind: 'collapse'; field: number; item: number; collapsed: boolean }
   | { kind: 'collapseField'; field: number; collapsed: boolean }
   | { kind: 'collapseAll'; collapsed: boolean }
@@ -44,8 +403,20 @@ export type PivotDelta =
   | { kind: 'filter'; field: number; filter: PivotFilter }               // label | value | date | top-10
   | { kind: 'clearFilters'; field: number }
   | { kind: 'sort'; field: number; order: 'ascending' | 'descending'; byData?: number }
+  // Stage 4 kinds (Task 35: field list; Task 36: value settings; Task 37: grouping)
+  | { kind: 'moveField'; field: number; axis: 'row' | 'col' | 'page' | 'none'; index?: number }
+  | { kind: 'addDataField'; field: number; index?: number }
+  | { kind: 'removeDataField'; dataIndex: number }
+  | { kind: 'moveDataField'; dataIndex: number; toIndex: number }
+  | { kind: 'valueSettings'; dataIndex: number; fn?: PivotDataFunction; showAs?: PivotValueShowAs; baseField?: number; baseItem?: number; name?: string; numFmtId?: number | null }
+  | { kind: 'groupDate'; field: number; periods: readonly PivotDateGroupPeriod[]; startDate?: number; endDate?: number; daysInterval?: number }
+  | { kind: 'groupNumber'; field: number; start?: number; end?: number; by: number }
+  | { kind: 'ungroup'; field: number }
 export type PivotDeltaKind = PivotDelta['kind']
-export const PIVOT_DELTA_KINDS: readonly PivotDeltaKind[] = Object.freeze(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
+export const PIVOT_DELTA_KINDS: readonly PivotDeltaKind[] = Object.freeze([
+  'collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort',
+  'moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings', 'groupDate', 'groupNumber', 'ungroup',
+])
 
 const refuse = (feature: string, message: string): EngineResult<never> => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } satisfies PivotDiagnostic })
 const invalid = (message: string) => refuse('pivot-delta-invalid', message)
@@ -76,6 +447,17 @@ function valueScope(data: number): PivotArea {
 }
 
 export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTableDefinition, _cache: PivotCacheDefinition): EngineResult<PivotViewState> {
+  switch (delta.kind) {
+    case 'moveField':
+    case 'addDataField':
+    case 'removeDataField':
+    case 'moveDataField':
+    case 'valueSettings':
+    case 'groupDate':
+    case 'groupNumber':
+    case 'ungroup':
+      return refuse('pivot-interaction-unverified', `the ${delta.kind} interaction is not implemented yet`)
+  }
   if (delta.kind === 'collapseAll') {
     // Every field with a level below it on its axis (the Values field counts as a level).
     const axis = new Set([...view.rows.slice(0, -1), ...view.cols.slice(0, -1)].filter(field => field !== PIVOT_VALUES_FIELD))

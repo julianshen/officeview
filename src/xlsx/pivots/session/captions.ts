@@ -15,7 +15,7 @@
  * A pattern is keyed by kind, plus the function for the kinds that name one (`dataField:sum`, `subtotalFunction:avg`):
  * Excel localises the function name, so it is part of the pattern, not an argument.
  */
-import type { PivotDiagnostic, PivotTableDefinition } from '../model'
+import { dataFieldSource, type PivotDiagnostic, type PivotTableDefinition } from '../model'
 import type { EngineResult } from '../engine/axes'
 import type { CellReader } from '../engine/faithful'
 import type { CaptionArg, CaptionArgs, CaptionKind, CaptionRef, PivotLayout, PivotLayoutCell } from '../engine/place'
@@ -38,6 +38,7 @@ export const ZH_TW_CAPTIONS: CaptionTable = Object.freeze({
   grandTotal: '總計',                          // interaction/caption-defaults A24
   valuesTotal: '{data} 的加總',                // engine/baseline H4 "Sum of Sales 的加總"
   subtotal: '{item} 合計',                     // engine/layout-tabular-three-rows B7 "Apples 合計"
+  subtotalData: '{item} {data}',               // interaction/s4-move-row-to-col R4C8 "2022 Sum of Sales"
   'subtotalFunction:sum': '{item} 加總',       // engine/layout-named-subtotals-compact A10
   'subtotalFunction:countA': '{item} 計數',    // engine/layout-named-subtotals-compact A11
   'subtotalFunction:avg': '{item} 平均值',     // engine/layout-named-subtotals-compact A12
@@ -179,6 +180,32 @@ export function captionRule(_def: PivotTableDefinition, saved: CellReader, layou
     return cell?.kind === 'text' ? [{ ref: slot, text: cell.value }] : []
   })
   const own = filePatterns(samples)
+  // Stage 4 creates captions for fields the saved layout never contained. When the source contains no implicit
+  // caption evidence at all, detect zh-TW if saved def.dataFields match ZH_TW_CAPTIONS['dataField:<fn>'] or if
+  // the pivot's name indicates zh-TW without contradiction, keeping English/unknown files at 'file'.
+  if (!samples.length) {
+    const table = tables['zh-TW']
+    if (table) {
+      const hasZhTwDataField = _def.dataFields?.some(d => {
+        const source = dataFieldSource(d)
+        const fieldName = _def.fields[source]?.name ?? ''
+        const pattern = table[`dataField:${d.subtotal}`]
+        const expected = pattern?.replace('{field}', fieldName)
+        return d.name && expected && (d.name === expected || d.name.startsWith(expected))
+      })
+      const isDefaultZhTwName = /^樞紐分析表\d*$/.test(_def.name)
+      const isCustomZhTwName = /[\u4e00-\u9fa5]/.test(_def.name) && !isDefaultZhTwName
+      const hasContradictoryDataField = _def.dataFields?.some(d => {
+        if (!d.name) return false
+        if (/^(Sum|Count|Average|Max|Min|Product|StdDev|StdDevp|Var|Varp) of /i.test(d.name)) return true
+        return !/[\u4e00-\u9fa5]/.test(d.name)
+      })
+      const isZhTwPivot = isDefaultZhTwName || (isCustomZhTwName && !hasContradictoryDataField)
+      if (hasZhTwDataField || isZhTwPivot) {
+        return ruleOf('zh-TW', new Map(Object.entries(table).flatMap(([key, source]) => source === undefined ? [] : [[key, parseTemplate(source)] as const])))
+      }
+    }
+  }
   for (const [locale, table] of Object.entries(tables) as Array<['zh-TW', CaptionTable]>) {
     const templates = new Map(Object.entries(table).flatMap(([key, source]) => source === undefined ? [] : [[key, parseTemplate(source)] as const]))
     const measured = ruleOf(locale, templates)

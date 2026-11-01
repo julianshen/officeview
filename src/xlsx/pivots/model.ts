@@ -85,6 +85,9 @@ export interface PivotFieldGroup {
   /** `discretePr`: for each base item, the index of its group item. */
   discretePr?: number[]
   groupItems?: PivotCacheItem[]
+  /** Session-only shared snapshots used to restore an ungrouped numeric pivot field; never parsed or written to XML. */
+  savedPivotItems?: PivotFieldItem[]
+  savedFieldState?: unknown
 }
 
 export interface PivotCacheField {

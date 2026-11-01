@@ -17,19 +17,23 @@
  * A case with `setup` made a change no `PivotDelta` expresses (a field move, a layout option, removed explicit
  * captions, column widths). Its saved file is a measurement, or the `base` of later cases; it is not a delta oracle.
  */
-import type { PivotFilter } from '../../src/xlsx/pivots/model'
-import type { PivotDelta } from '../../src/xlsx/pivots/session/delta'
 import {
-  F, SEED_PIVOT_MARKERS, UNITS, addFilter, attrOf, autoSort, childrenOf, custom, dataField, editItem, editPivotField, editRoot, fieldAttr, fieldHas, fieldItem,
-  fieldItems, find, form, hideItem, labelFilter, must, onlyRows, rowField, setFieldItems, sharedItemValues, splice, str, subtotalsAt, toPage, valueFilter,
+  PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD,
+  type PivotDataFunction, type PivotFilter,
+} from '../../src/xlsx/pivots/model'
+import type { PivotDateGroupPeriod, PivotDelta, PivotValueShowAs } from '../../src/xlsx/pivots/session/delta'
+import {
+  F, SALES, SEED_PIVOT_MARKERS, UNITS, addFilter, attrOf, autoSort, childrenOf, colField, custom, dataField, editItem, editPivotField, editRoot,
+  fieldAttr, fieldHas, fieldItem, fieldItems, find, form, hide, hideItem, labelFilter, must, onlyRows, rowField, setFieldItems, sharedItemValues,
+  splice, str, subtotalsAt, toCols, toPage, toRows, valueFilter,
   type PivotParts, type Target, field as pivotField,
 } from './engine-cases'
 
 // ---------------------------------------------------------------------------------------------------------------
-// PivotDelta (Task 25)
+// PivotDelta (Tasks 25 & 35–37)
 // ---------------------------------------------------------------------------------------------------------------
 
-/** Task 25's delta type (src/xlsx/pivots/session/delta.ts), the manifest's `delta` entries (ruling S3-A). */
+/** Task 25 & Stage 4's delta type (src/xlsx/pivots/session/delta.ts), the manifest's `delta` entries (ruling S3-A). */
 export type { PivotDelta }
 
 /** An item named by its caption (a number item by its value, e.g. Year 2023). */
@@ -44,6 +48,23 @@ export type DeltaSpec =
   | { kind: 'filter'; field: string; filter: Omit<PivotFilter, 'fld'> }
   | { kind: 'clearFilters'; field: string }
   | { kind: 'sort'; field: string; order: 'ascending' | 'descending'; byData?: number }
+  | { kind: 'moveField'; field: string; axis: 'row' | 'col' | 'page' | 'none'; index?: number }
+  | { kind: 'addDataField'; field: string; index?: number }
+  | { kind: 'removeDataField'; dataIndex: number }
+  | { kind: 'moveDataField'; dataIndex: number; toIndex: number }
+  | {
+      kind: 'valueSettings'
+      dataIndex: number
+      fn?: PivotDataFunction
+      showAs?: PivotValueShowAs
+      baseField?: string
+      baseItem?: '(previous)' | '(next)' | ItemName
+      name?: string
+      numFmtId?: number | null
+    }
+  | { kind: 'groupDate'; field: string; periods: readonly PivotDateGroupPeriod[]; startDate?: number; endDate?: number; daysInterval?: number }
+  | { kind: 'groupNumber'; field: string; start?: number; end?: number; by: number }
+  | { kind: 'ungroup'; field: string }
 
 /** What resolution needs from the start file: cache field names, and each field's pivot items as captions ('' for a
  * subtotal or blank item; undefined when the field has no `<items>` list, so the shared items stand in). */
@@ -55,6 +76,7 @@ export function resolveDelta(spec: DeltaSpec, start: StartShape): PivotDelta {
     if (index < 0) throw new Error(`delta: field ${name} not in the start file`)
     return index
   }
+  const fieldOrValuesOf = (name: string) => name === 'Values' ? PIVOT_VALUES_FIELD : fieldOf(name)
   const itemOf = (field: number, name: ItemName) => {
     const list = start.items[field] ?? start.shared[field] ?? []
     const index = list.indexOf(String(name))
@@ -70,6 +92,58 @@ export function resolveDelta(spec: DeltaSpec, start: StartShape): PivotDelta {
     case 'filter': { const f = fieldOf(spec.field); return { kind: 'filter', field: f, filter: { fld: f, ...spec.filter } } }
     case 'clearFilters': return { kind: 'clearFilters', field: fieldOf(spec.field) }
     case 'sort': return { kind: 'sort', field: fieldOf(spec.field), order: spec.order, ...(spec.byData !== undefined ? { byData: spec.byData } : {}) }
+    case 'moveField':
+      return {
+        kind: 'moveField',
+        field: fieldOrValuesOf(spec.field),
+        axis: spec.axis,
+        ...(spec.index !== undefined ? { index: spec.index } : {}),
+      }
+    case 'addDataField':
+      return { kind: 'addDataField', field: fieldOf(spec.field), ...(spec.index !== undefined ? { index: spec.index } : {}) }
+    case 'removeDataField':
+      return { kind: 'removeDataField', dataIndex: spec.dataIndex }
+    case 'moveDataField':
+      return { kind: 'moveDataField', dataIndex: spec.dataIndex, toIndex: spec.toIndex }
+    case 'valueSettings': {
+      const baseField = spec.baseField !== undefined ? fieldOf(spec.baseField) : undefined
+      const baseItem = spec.baseItem === undefined ? undefined
+        : spec.baseItem === '(previous)' ? PIVOT_BASE_ITEM_PREVIOUS
+          : spec.baseItem === '(next)' ? PIVOT_BASE_ITEM_NEXT
+            : (() => {
+                if (baseField === undefined) throw new Error('delta: baseItem requires baseField')
+                return itemOf(baseField, spec.baseItem)
+              })()
+      return {
+        kind: 'valueSettings',
+        dataIndex: spec.dataIndex,
+        ...(spec.fn !== undefined ? { fn: spec.fn } : {}),
+        ...(spec.showAs !== undefined ? { showAs: spec.showAs } : {}),
+        ...(baseField !== undefined ? { baseField } : {}),
+        ...(baseItem !== undefined ? { baseItem } : {}),
+        ...(spec.name !== undefined ? { name: spec.name } : {}),
+        ...(spec.numFmtId !== undefined ? { numFmtId: spec.numFmtId } : {}),
+      }
+    }
+    case 'groupDate':
+      return {
+        kind: 'groupDate',
+        field: fieldOf(spec.field),
+        periods: [...spec.periods],
+        ...(spec.startDate !== undefined ? { startDate: spec.startDate } : {}),
+        ...(spec.endDate !== undefined ? { endDate: spec.endDate } : {}),
+        ...(spec.daysInterval !== undefined ? { daysInterval: spec.daysInterval } : {}),
+      }
+    case 'groupNumber':
+      return {
+        kind: 'groupNumber',
+        field: fieldOf(spec.field),
+        ...(spec.start !== undefined ? { start: spec.start } : {}),
+        ...(spec.end !== undefined ? { end: spec.end } : {}),
+        by: spec.by,
+      }
+    case 'ungroup':
+      return { kind: 'ungroup', field: fieldOf(spec.field) }
   }
 }
 
@@ -198,7 +272,8 @@ export const SEED_BUILDS: readonly SeedBuild[] = [
 // Cases
 // ---------------------------------------------------------------------------------------------------------------
 
-export type InteractionTask = 25 | 29 | 30 | 31 | 32
+export type InteractionTask = 25 | 29 | 30 | 31 | 32 | 35 | 36 | 37
+export type InteractionRoute = 'applescript' | 'xml' | 'recipe'
 export interface InteractionCase {
   id: string
   task: InteractionTask
@@ -207,16 +282,19 @@ export interface InteractionCase {
   base?: string
   /** A change no PivotDelta expresses, made before `delta` (see the header): not a delta oracle. */
   setup?: string
-  route: 'applescript' | 'xml'
+  route: InteractionRoute
   lines?: (t: Target) => string[]
   xmlPrep?: (t: Target) => string[]
   xmlEdit?: (parts: PivotParts) => PivotParts
   /** xml route: AppleScript run on the edited file before `refresh table`. */
   post?: (t: Target) => string[]
   fallback?: 'xml'
+  /** UI clicks for docs/validation/xlsx-pivots-recipes-stage4.md when neither AppleScript nor verified XML reaches the case. */
+  recipe?: string
   markers: RegExp[]
   cacheMarkers?: RegExp[]
   absent?: RegExp[]
+  cacheAbsent?: RegExp[]
   recordMarkers?: RegExp[]
   sheetMarkers?: SheetMarker[]
   /** The saved file keeps a pivot chart (c:pivotSource) — the chart cases. */
@@ -564,6 +642,407 @@ add('refresh-on-load-nodata', 32, {
   cacheMarkers: [/saveData="0"/], delta: [], measures: 'refreshOnLoad with saveData="0": the cells Excel computes from the source alone',
 })
 
+// ---- Stage 4: Field moves, data fields & inline materialization (Task 35) ----------------------------------
+const toData = (t: Target, name: string) => `set pivot field orientation of ${pivotField(t, name)} to orient as data field`
+const hideData = (t: Target, name: string) => `set pivot field orientation of ${dataField(t, name)} to orient as hidden`
+const hideDataAt = (t: Target, index: number) => `set pivot field orientation of data field ${index} of ${t.p} to orient as hidden`
+const groupCell = (t: Target, name: string) => `(label range of pivot item 1 of ${pivotField(t, name)})`
+const firstRowGroupCell = (t: Target) => `(label range of pivot item 1 of row field 1 of ${t.p})`
+/** A number group's item 1 is the empty `<start` bucket (no label range), so Excel is pointed at the first data bucket. */
+const numberGroupCell = (t: Target, name: string) => `(label range of pivot item 2 of ${pivotField(t, name)})`
+const ALL_DATE_PERIODS: readonly PivotDateGroupPeriod[] = ['seconds', 'minutes', 'hours', 'days', 'months', 'quarters', 'years']
+const allPeriods = (...on: PivotDateGroupPeriod[]) => `{${ALL_DATE_PERIODS.map(p => on.includes(p)).join(', ')}}`
+
+add('s4-move-inline-text-to-row', 35, {
+  route: 'applescript', lines: t => [toRows(t, 'Channel')],
+  markers: [rowField(F.Channel), /<rowFields count="3">/], cacheMarkers: [/<s v="Online"\/>/, /<n v="42"\/>/],
+  delta: [{ kind: 'moveField', field: 'Channel', axis: 'row' }],
+  measures: 'inline mixed text/number/blank field (Channel) moved to Rows: materialises sharedItems, <items> and default field flags',
+})
+add('s4-move-inline-date-to-col', 35, {
+  route: 'applescript', lines: t => [toCols(t, 'Date')],
+  markers: [colField(F.Date), /<colFields count="3">/], cacheMarkers: [/<d v="2019-01-15T00:00:00"\/>/],
+  delta: [{ kind: 'moveField', field: 'Date', axis: 'col' }],
+  measures: 'inline date field with blanks (Date) moved to Columns: materialises sharedItems and pins default insertion index relative to Values (-2)',
+})
+add('s4-move-inline-to-page', 35, {
+  route: 'applescript', lines: t => [toPage(t, 'Month')],
+  markers: [/<pageFields count="1"><pageField fld="9"/], cacheMarkers: [/<s v="Jan"\/>/],
+  delta: [{ kind: 'moveField', field: 'Month', axis: 'page' }],
+  measures: 'inline text field (Month) moved to Filters/Page: materialises sharedItems/<items> and defaults selection to (All)',
+})
+add('s4-move-reorder-rows', 35, {
+  route: 'applescript', lines: t => [`set position of ${pivotField(t, 'Product')} to 1`], probe: 'field-position',
+  markers: [/<rowFields count="2"><field x="1"\/><field x="0"\/><\/rowFields>/],
+  delta: [{ kind: 'moveField', field: 'Product', axis: 'row', index: 0 }],
+  measures: 'reorder within Rows: Product moved above Region ([1, 0])',
+})
+add('s4-move-values-to-rows-first', 35, {
+  route: 'applescript', probe: 'field-position',
+  lines: t => [`set pivot field orientation of data pivot field of ${t.p} to orient as row field`, `set position of data pivot field of ${t.p} to 1`],
+  markers: [/ dataOnRows="1"/, /<rowFields count="3"><field x="-2"\/><field x="0"\/><field x="1"\/><\/rowFields>/],
+  delta: [{ kind: 'moveField', field: 'Values', axis: 'row', index: 0 }],
+  measures: 'Values (-2) moved to Rows at index 0 (dataOnRows="1" dataPosition="0")',
+})
+add('s4-filtered-row-base', 35, {
+  route: 'xml',
+  xmlPrep: t => [hideItem(t, 'Region', 'West'), showDetail(t, 'Region', 'East', false), autoSort(t, 'Region', 'descending', 'Region')],
+  xmlEdit: p => ({ ...p, pivot: labelFilter(p.pivot, F.Region, 'captionGreaterThan', 'D') }),
+  markers: [
+    /<location ref="A3:I15" firstHeaderRow="1" firstDataRow="3" firstDataCol="1"\/>/,
+    /<rowItems count="10">/,
+    hiddenItem(F.Region), collapsedItem(F.Region), fieldAttr(F.Region, 'sortType', 'descending'),
+    /<filter [^>]*fld="0"[^>]*type="captionGreaterThan"/,
+  ],
+  delta: [
+    { kind: 'items', field: 'Region', hidden: ['West'] },
+    { kind: 'collapse', field: 'Region', item: 'East', collapsed: true },
+    { kind: 'sort', field: 'Region', order: 'descending' },
+    { kind: 'filter', field: 'Region', filter: filterLiteral('captionGreaterThan', { customFilters: { and: false, filters: [{ operator: 'greaterThan', val: 'D' }] } }, { stringValue1: 'D' }) },
+  ],
+  measures: 'Region on Rows carrying hidden West, collapsed East, descending sort and label filter >"D" (excludes Central): start state for cross-axis retention tests',
+})
+add('s4-move-row-to-col', 35, {
+  base: 'interaction/s4-filtered-row-base', route: 'applescript', lines: t => [toCols(t, 'Region')],
+  markers: [colField(F.Region)],
+  delta: [{ kind: 'moveField', field: 'Region', axis: 'col' }],
+  measures: 'Row → Column move of a field with hidden item, collapsed item, label filter and descending sort: pins cross-axis retention (S4-E)',
+})
+add('s4-move-row-to-col-and-back', 35, {
+  base: 'interaction/s4-filtered-row-base', route: 'applescript', probe: 'field-position',
+  lines: t => [toCols(t, 'Region'), toRows(t, 'Region'), `set position of ${pivotField(t, 'Region')} to 1`],
+  markers: [/<rowFields count="2"><field x="0"\/><field x="1"\/><\/rowFields>/],
+  delta: [{ kind: 'moveField', field: 'Region', axis: 'col' }, { kind: 'moveField', field: 'Region', axis: 'row', index: 0 }],
+  measures: 'Row → Column → Row round-trip of a filtered/hidden/collapsed/sorted field: pins S4-E preservation vs reset',
+})
+add('s4-move-filtered-field-to-page', 35, {
+  base: 'interaction/s4-filtered-row-base', route: 'applescript', lines: t => [toPage(t, 'Region')],
+  markers: [/<pageFields count="1"><pageField fld="0"/],
+  delta: [{ kind: 'moveField', field: 'Region', axis: 'page' }],
+  measures: 'Row → Page move of a field carrying hidden item, collapsed item, label filter and descending sort',
+})
+add('s4-move-remove-filtered-field', 35, {
+  base: 'interaction/s4-filtered-row-base', route: 'applescript', lines: t => [hide(t, 'Region')],
+  markers: [/<rowFields count="1"><field x="1"\/><\/rowFields>/], absent: [rowField(F.Region), colField(F.Region)],
+  delta: [{ kind: 'moveField', field: 'Region', axis: 'none' }],
+  measures: 'Row → none removal of a field carrying hidden item, collapsed item, label filter and descending sort: pins what Excel clears on removal',
+})
+add('s4-data-remove-to-single', 35, {
+  route: 'applescript', lines: t => [hideData(t, UNITS)],
+  markers: [/<dataFields count="1">/, /<colFields count="1"><field x="2"\/><\/colFields>/], absent: [colField(-2), rowField(-2)],
+  delta: [{ kind: 'removeDataField', dataIndex: 1 }],
+  measures: '2 → 1 data fields removes Values (-2) from Columns',
+})
+add('s4-data-add-second-default-axis', 35, {
+  base: 'interaction/s4-data-remove-to-single', route: 'applescript', lines: t => [toData(t, 'Units')],
+  markers: [/<dataFields count="2">/, colField(-2)],
+  delta: [{ kind: 'addDataField', field: 'Units' }],
+  measures: '1 → 2 data fields from a single-data pivot: Values (-2) axis & default position and zh-TW default data-field caption',
+})
+add('s4-data-add-second-after-values-on-rows', 35, {
+  base: 'engine/layout-values-on-rows-two-data', route: 'applescript',
+  lines: t => [hideData(t, UNITS), toData(t, 'Units')],
+  markers: [/<dataFields count="2">/],
+  delta: [{ kind: 'removeDataField', dataIndex: 1 }, { kind: 'addDataField', field: 'Units' }],
+  measures: '2 → 1 → 2 data fields when Values was previously on Rows (dataOnRows="1"): pins whether 1 → 2 restores Values to Rows or defaults to Columns',
+})
+add('s4-data-add-numeric-vs-text', 35, {
+  route: 'applescript', lines: t => [toData(t, 'Net Amount'), toData(t, 'Channel')],
+  markers: [/<dataFields count="4">/, /<dataField [^>]*fld="7"/, /<dataField [^>]*fld="6"[^>]*subtotal="count"|<dataField [^>]*subtotal="count"[^>]*fld="6"/],
+  delta: [{ kind: 'addDataField', field: 'Net Amount' }, { kind: 'addDataField', field: 'Channel' }],
+  measures: 'default summary function rule: Net Amount (numbers + blanks) → sum ("加總 - Net Amount"); Channel (mixed text/number/blank) → count ("計數 - Channel")',
+})
+add('s4-data-add-duplicate-field', 35, {
+  route: 'applescript', probe: 'add-duplicate-data-field',
+  lines: t => [toData(t, 'Sales'), toData(t, 'Sales')],
+  markers: [/<dataFields count="4">/, /<dataField [^>]*name="[^"]*Sales2"/],
+  delta: [{ kind: 'addDataField', field: 'Sales' }, { kind: 'addDataField', field: 'Sales' }],
+  measures: 'adding Sales when "Sum of Sales" exists ("加總 - Sales") and again when "加總 - Sales" exists ("加總 - Sales2"): pins duplicate suffix rule',
+})
+add('s4-data-reorder', 35, {
+  route: 'applescript', probe: 'data-field-position',
+  lines: t => [`set position of ${dataField(t, SALES)} to 2`],
+  markers: [/<dataFields count="2"><dataField [^>]*fld="4"[^>]*\/><dataField [^>]*fld="3"/],
+  delta: [{ kind: 'moveDataField', dataIndex: 0, toIndex: 1 }],
+  measures: 'reorder data fields (Sum of Sales ↔ Sum of Units)',
+})
+add('s4-data-reorder-remap-measure', 35, {
+  base: 'engine/filter-top-count-ties', route: 'applescript', probe: 'data-field-position',
+  lines: t => [autoSort(t, 'Product', 'descending', UNITS), `set position of ${dataField(t, UNITS)} to 1`],
+  markers: [/<dataFields count="2"><dataField [^>]*fld="4"[^>]*\/><dataField [^>]*fld="3"/, /<filter [^>]*iMeasureFld="0"/],
+  delta: [{ kind: 'sort', field: 'Product', order: 'descending', byData: 1 }, { kind: 'moveDataField', dataIndex: 1, toIndex: 0 }],
+  measures: 'moveDataField(1 → 0) with an active top-10 filter and value sort on Sum of Units: pins iMeasureFld and autoSortScope remapping',
+})
+add('s4-data-remove-all', 35, {
+  route: 'applescript', lines: t => [hideData(t, UNITS), hideData(t, SALES)],
+  markers: [rowField(F.Region), colField(F.Year)], absent: [/<dataFields /],
+  delta: [{ kind: 'removeDataField', dataIndex: 1 }, { kind: 'removeDataField', dataIndex: 0 }],
+  measures: 'remove both data fields (0 data fields, Row and Column fields kept): pins 0-data layout cells and location',
+})
+add('s4-empty-pivot-all-removed', 35, {
+  route: 'applescript', lines: t => [hideData(t, UNITS), hideData(t, SALES), hide(t, 'Year'), hide(t, 'Product'), hide(t, 'Region')],
+  markers: [/<location /], absent: [/<rowFields /, /<colFields /, /<pageFields /, /<dataFields /],
+  delta: [
+    { kind: 'removeDataField', dataIndex: 1 },
+    { kind: 'removeDataField', dataIndex: 0 },
+    { kind: 'moveField', field: 'Year', axis: 'none' },
+    { kind: 'moveField', field: 'Product', axis: 'none' },
+    { kind: 'moveField', field: 'Region', axis: 'none' },
+  ],
+  measures: 'all row, column, page and data fields removed (0 fields on all axes): pins empty-pivot cells and location (place.ts:35)',
+})
+add('s4-move-units-only-rows', 35, {
+  route: 'applescript', lines: t => onlyRows(t, 'Units'),
+  markers: [/<rowFields count="1"><field x="4"\/><\/rowFields>/, /<dataFields count="2">/],
+  delta: [
+    { kind: 'moveField', field: 'Product', axis: 'none' },
+    { kind: 'moveField', field: 'Region', axis: 'none' },
+    { kind: 'moveField', field: 'Units', axis: 'row' },
+  ],
+  measures: 'inline numeric field Units moved onto Rows while Sum of Units remains in Values (also start base for Units number grouping)',
+})
+add('s4-move-sales-only-rows', 35, {
+  route: 'applescript', lines: t => onlyRows(t, 'Sales'),
+  markers: [/<rowFields count="1"><field x="3"\/><\/rowFields>/, /<dataFields count="2">/],
+  delta: [
+    { kind: 'moveField', field: 'Product', axis: 'none' },
+    { kind: 'moveField', field: 'Region', axis: 'none' },
+    { kind: 'moveField', field: 'Sales', axis: 'row' },
+  ],
+  measures: 'inline numeric field Sales (with 3 blanks and 3 negatives) moved onto Rows while Sum of Sales remains in Values (base for Sales number grouping)',
+})
+add('s4-chart-values-to-rows', 35, {
+  seed: 'chart-seed', chart: true, route: 'applescript',
+  lines: t => [`set pivot field orientation of data pivot field of ${t.p} to orient as row field`],
+  markers: [/ dataOnRows="1"/, rowField(-2)],
+  delta: [{ kind: 'moveField', field: 'Values', axis: 'row' }],
+  measures: 'chart-linked pivot after moving Values (-2) to Rows as a Stage 4 delta',
+})
+add('s4-chart-remove-second-data', 35, {
+  seed: 'chart-seed', chart: true, route: 'applescript',
+  lines: t => [hideDataAt(t, 2)],
+  markers: [/<dataFields count="1">/], absent: [colField(-2)],
+  delta: [{ kind: 'removeDataField', dataIndex: 1 }],
+  measures: 'chart-linked pivot reduced from 2 data fields to 1 (Values -2 removed from Columns, single series)',
+})
+
+// ---- Stage 4: Value field settings & GETPIVOTDATA follow (Task 36) ------------------------------------------
+add('s4-values-no-totals-base', 36, {
+  setup: 'Product removed from rows and rowGrandTotals="0" colGrandTotals="0" so hasTotals is false (S2-AA)',
+  route: 'applescript',
+  lines: t => [hide(t, 'Product'), `set column grand of ${t.p} to false`, `set row grand of ${t.p} to false`],
+  markers: [/<rowFields count="1"><field x="0"\/><\/rowFields>/, / rowGrandTotals="0"/, / colGrandTotals="0"/],
+  delta: [],
+  measures: 'single-row-field total-less base (hasTotals === false) for S2-AA stdDev/stdDevp/var/varp valueSettings oracles',
+})
+for (const [slug, fnName, asFn] of [
+  ['stdev', 'stdDev', 'standard deviation'],
+  ['stdevp', 'stdDevp', 'standard deviation p'],
+  ['var', 'var', 'var'],
+  ['varp', 'varp', 'var p'],
+] as const) {
+  add(`s4-values-fn-${slug}-no-totals`, 36, {
+    base: 'interaction/s4-values-no-totals-base', route: 'applescript',
+    lines: t => [`set function of ${dataField(t, SALES)} to do ${asFn}`],
+    markers: [new RegExp(`<dataField [^>]*subtotal="${fnName}"`)],
+    delta: [{ kind: 'valueSettings', dataIndex: 0, fn: fnName }],
+    measures: `${fnName} on a total-less pivot (hasTotals === false, allowed under S2-AA) with zh-TW default data-field caption`,
+  })
+}
+add('s4-values-custom-name', 36, {
+  route: 'applescript',
+  lines: t => [`set function of ${dataField(t, SALES)} to do average`, `set name of data field 1 of ${t.p} to "Revenue"`],
+  markers: [/<dataField [^>]*name="Revenue"[^>]*fld="3"[^>]*subtotal="average"/],
+  delta: [{ kind: 'valueSettings', dataIndex: 0, fn: 'average', name: 'Revenue' }],
+  measures: 'valueSettings changing summary function to average with explicit custom name "Revenue"',
+})
+add('s4-values-numfmt-currency-percent', 36, {
+  route: 'applescript', probe: 'data-field-number-format',
+  lines: t => [
+    `set number format of ${dataField(t, SALES)} to "#,##0.00"`,
+    `set calculation of ${dataField(t, UNITS)} to pivot field calculation percent of total`,
+    `set number format of ${dataField(t, UNITS)} to "0.00%"`,
+  ],
+  markers: [
+    /<dataField [^>]*name="Sum of Sales"[^>]*fld="3"[^>]*numFmtId="4"/,
+    /<dataField [^>]*name="Sum of Units"[^>]*fld="4"[^>]*showDataAs="percentOfTotal"[^>]*numFmtId="10"/,
+  ],
+  delta: [
+    { kind: 'valueSettings', dataIndex: 0, numFmtId: 4 },
+    { kind: 'valueSettings', dataIndex: 1, showAs: 'percentOfTotal', numFmtId: 10 },
+  ],
+  measures: 'built-in number formats numFmtId=4 (#,##0.00) on Sum of Sales and numFmtId=10 (0.00%) with percentOfTotal on Sum of Units',
+})
+add('s4-values-showas-previous-next', 36, {
+  route: 'applescript',
+  lines: t => [
+    `set calculation of ${dataField(t, SALES)} to pivot field calculation difference from`,
+    `set base field of ${dataField(t, SALES)} to "Year"`,
+    `set base item of ${dataField(t, SALES)} to "(previous)"`,
+    `set calculation of ${dataField(t, UNITS)} to pivot field calculation percent difference from`,
+    `set base field of ${dataField(t, UNITS)} to "Year"`,
+    `set base item of ${dataField(t, UNITS)} to "(next)"`,
+  ],
+  markers: [
+    /<dataField [^>]*fld="3"[^>]*showDataAs="difference"[^>]*baseField="2"[^>]*baseItem="1048828"/,
+    /<dataField [^>]*fld="4"[^>]*showDataAs="percentDiff"[^>]*baseField="2"[^>]*baseItem="1048829"/,
+  ],
+  delta: [
+    { kind: 'valueSettings', dataIndex: 0, showAs: 'difference', baseField: 'Year', baseItem: '(previous)' },
+    { kind: 'valueSettings', dataIndex: 1, showAs: 'percentDiff', baseField: 'Year', baseItem: '(next)' },
+  ],
+  measures: 'difference from (previous) (1048828) and % difference from (next) (1048829) applied together across the two data fields',
+})
+add('s4-gpd-rename-and-move', 36, {
+  seed: 'getpivotdata-seed', route: 'applescript',
+  lines: t => [toRows(t, 'Year'), `set function of ${dataField(t, UNITS)} to do average`, `set name of data field 2 of ${t.p} to "Avg Units"`],
+  markers: [rowField(F.Year), /<dataField [^>]*name="Avg Units"[^>]*fld="4"[^>]*subtotal="average"/],
+  sheetMarkers: [{ sheet: GPD_SHEET, re: /<f>GETPIVOTDATA\(/ }],
+  delta: [
+    { kind: 'moveField', field: 'Year', axis: 'row' },
+    { kind: 'valueSettings', dataIndex: 1, fn: 'average', name: 'Avg Units' },
+  ],
+  measures: 'GETPIVOTDATA formulas after Year moves from Columns to Rows and "Sum of Units" is renamed to "Avg Units" (average)',
+})
+
+// ---- Stage 4: Grouping, regrouping & ungrouping (Task 37) ---------------------------------------------------
+add('s4-group-date-single-months', 37, {
+  base: 'interaction/interaction-filter-date-base', route: 'applescript',
+  lines: t => [`group ${groupCell(t, 'Date')} periods ${allPeriods('months')}`],
+  markers: [rowField(12)], cacheMarkers: [/<rangePr [^>]*groupBy="months"/, /<cacheField [^>]*databaseField="0"/],
+  delta: [{ kind: 'groupDate', field: 'Date', periods: ['months'] }],
+  measures: 'single-period date grouping (months) on Date-on-rows: creates 1 virtual cacheField ("月 (Date)", x="12") with <fieldGroup base="5"> and blank bucket',
+})
+add('s4-group-date-days-single', 37, {
+  base: 'interaction/interaction-filter-date-base', route: 'applescript', probe: 'group-days-interval',
+  lines: t => [`group ${groupCell(t, 'Date')} periods ${allPeriods('days')}`],
+  markers: [rowField(12)], cacheMarkers: [/<rangePr [^>]*groupBy="days"/, /<cacheField [^>]*databaseField="0"/],
+  delta: [{ kind: 'groupDate', field: 'Date', periods: ['days'] }],
+  measures: '1-day date grouping (groupBy="days", groupInterval=1, virtual field "天 (Date)"): leap-year 366-day calendar table and zh-TW day captions',
+})
+add('s4-group-date-days-7', 37, {
+  base: 'interaction/interaction-filter-date-base', route: 'applescript', probe: 'group-days-interval',
+  lines: t => [`group ${groupCell(t, 'Date')} by 7 periods ${allPeriods('days')}`],
+  markers: [rowField(12)],
+  cacheMarkers: [/<rangePr [^>]*groupBy="days"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"[^>]*groupInterval="7"/],
+  delta: [{ kind: 'groupDate', field: 'Date', periods: ['days'], daysInterval: 7 }],
+  measures: '7-day interval grouping (groupBy="days" groupInterval="7"): exact 7-day range captions, end clamping and blank bucket',
+})
+add('s4-group-date-time-hms', 37, {
+  base: 'engine/quirk-dates-1900-rows', route: 'applescript', probe: 'group-time-hms',
+  lines: t => [`group ${groupCell(t, 'Stamp')} periods ${allPeriods('seconds', 'minutes', 'hours')}`],
+  markers: [/<rowFields count="3">/],
+  cacheMarkers: [/<rangePr [^>]*groupBy="hours"/, /<rangePr [^>]*groupBy="minutes"/, /<rangePr [^>]*groupBy="seconds"/],
+  delta: [{ kind: 'groupDate', field: 'Stamp', periods: ['seconds', 'minutes', 'hours'] }],
+  measures: 'Stamp grouped by hours/minutes/seconds: pins serials 0.5, 1, 59 (1900-02-28), 60 (fictitious 1900-02-29), 61, 45000.25 and blanks under S2-H',
+})
+add('s4-group-date-multi-yqm', 37, {
+  base: 'interaction/interaction-filter-date-base', route: 'applescript',
+  lines: t => [`group ${groupCell(t, 'Date')} periods ${allPeriods('months', 'quarters', 'years')}`],
+  markers: [/<rowFields count="3"><field x="14"\/><field x="13"\/><field x="12"\/><\/rowFields>/],
+  cacheMarkers: [
+    /<rangePr [^>]*groupBy="months"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+    /<rangePr [^>]*groupBy="quarters"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+    /<rangePr [^>]*groupBy="years"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+  ],
+  delta: [{ kind: 'groupDate', field: 'Date', periods: ['months', 'quarters', 'years'] }],
+  measures: 'Date grouped from ungrouped items into Years › Quarters › Months: pins virtual cacheField/pivotField creation, zh-TW names and par/base links',
+})
+add('s4-group-date-manual-bounds', 37, {
+  base: 'interaction/interaction-filter-date-base', route: 'applescript',
+  lines: t => [`group ${groupCell(t, 'Date')} start 43831 end 45291 periods ${allPeriods('quarters', 'years')}`],
+  markers: [
+    /<rowFields count="2"><field x="13"\/><field x="12"\/><\/rowFields>/,
+    /<rowItems count="22">/,
+  ],
+  cacheMarkers: [
+    /<rangePr [^>]*autoStart="0"[^>]*autoEnd="0"[^>]*groupBy="quarters"[^>]*startDate="2020-01-01T00:00:00"[^>]*endDate="2023-12-31T00:00:00"/,
+    /<rangePr [^>]*autoStart="0"[^>]*autoEnd="0"[^>]*groupBy="years"[^>]*startDate="2020-01-01T00:00:00"[^>]*endDate="2023-12-31T00:00:00"/,
+    /<groupItems count="6"><s v="&lt;2020\/1\/1"/,
+    /<s v=">2023\/12\/31"\/>/,
+  ],
+  delta: [{ kind: 'groupDate', field: 'Date', periods: ['quarters', 'years'], startDate: 43831, endDate: 45291 }],
+  measures: 'multi-level date grouping (Years › Quarters) with manual bounds 2020-01-01..2023-12-31 inside 2019..2024: pins <start, >end and blank buckets',
+})
+add('s4-regroup-date-yqm-to-ym', 37, {
+  base: 'interaction/s4-group-date-multi-yqm', route: 'applescript',
+  lines: t => [`group ${firstRowGroupCell(t)} periods ${allPeriods('months', 'years')}`],
+  markers: [/<rowFields count="2"><field x="13"\/><field x="12"\/><\/rowFields>/],
+  cacheMarkers: [
+    /<rangePr [^>]*groupBy="months"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+    /<rangePr [^>]*groupBy="years"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+  ],
+  cacheAbsent: [/<rangePr [^>]*groupBy="quarters"/],
+  delta: [{ kind: 'groupDate', field: 'Date', periods: ['months', 'years'] }],
+  measures: 'regrouping Years › Quarters › Months down to Years › Months: pins removal of the Quarters virtual cacheField and pivotField',
+})
+add('s4-ungroup-date-multi', 37, {
+  base: 'interaction/s4-group-date-multi-yqm', route: 'applescript', probe: 'ungroup',
+  lines: t => [`ungroup ${firstRowGroupCell(t)}`],
+  markers: [/<rowFields count="1"><field x="5"\/><\/rowFields>/],
+  cacheAbsent: [/<fieldGroup /],
+  delta: [{ kind: 'ungroup', field: 'Date' }],
+  measures: 'ungrouping a 3-level date hierarchy back to ungrouped Date items: pins removal of virtual fields and restoration of Date on Rows',
+})
+add('s4-ungroup-date-single', 37, {
+  base: 'interaction/s4-group-date-single-months', route: 'applescript', probe: 'ungroup',
+  lines: t => [`ungroup ${firstRowGroupCell(t)}`],
+  markers: [/<rowFields count="1"><field x="5"\/><\/rowFields>/],
+  cacheAbsent: [/<fieldGroup /],
+  delta: [{ kind: 'ungroup', field: 'Date' }],
+  measures: 'ungrouping a 1-level date group (months, virtual field "月 (Date)") back to ungrouped Date items',
+})
+add('s4-group-number-units-auto', 37, {
+  base: 'interaction/s4-move-units-only-rows', route: 'applescript', probe: 'group-number-auto',
+  lines: t => [`group ${groupCell(t, 'Units')} by 25`],
+  markers: [rowField(F.Units), /<rowItems count="7">/],
+  cacheMarkers: [
+    /<rangePr [^>]*startNum="-5"[^>]*endNum="233"[^>]*groupInterval="25"/,
+    /<groupItems count="12"><s v="&lt;-5"/,
+    /<s v=">245"\/>/,
+  ],
+  delta: [{ kind: 'groupNumber', field: 'Units', by: 25 }],
+  measures: 'Units grouped by 25 with automatic min/max bounds (-5..233): pins autoStart/autoEnd startNum/endNum and bucket labels',
+})
+add('s4-group-number-sales-blanks-manual', 37, {
+  base: 'interaction/s4-move-sales-only-rows', route: 'applescript',
+  lines: t => [`group ${groupCell(t, 'Sales')} start 0 end 5000 by 1000`],
+  markers: [rowField(F.Sales), /<rowItems count="8">/],
+  cacheMarkers: [
+    /<rangePr [^>]*autoStart="0"[^>]*autoEnd="0"[^>]*startNum="0"[^>]*endNum="5000"[^>]*groupInterval="1000"/,
+    /<groupItems count="7"><s v="&lt;0 或 \(空白\)"\/><s v="0-1000"\/>/,
+    /<s v=">5000"\/>/,
+  ],
+  delta: [{ kind: 'groupNumber', field: 'Sales', start: 0, end: 5000, by: 1000 }],
+  measures: 'Sales (3 blanks, 3 negatives, values >5000) grouped with manual 0..5000 by 1000: pins <0 或 (空白), >5000 and lower-bound blank bucket placement (groups.ts:175)',
+})
+add('s4-regroup-number-units', 37, {
+  base: 'interaction/s4-group-number-units-auto', route: 'applescript',
+  lines: t => [`group ${numberGroupCell(t, 'Units')} by 50`],
+  markers: [rowField(F.Units), /<rowItems count="5">/],
+  cacheMarkers: [
+    /<rangePr [^>]*startNum="-5"[^>]*endNum="233"[^>]*groupInterval="50"/,
+    /<groupItems count="7"><s v="&lt;-5"/,
+    /<s v=">245"\/>/,
+  ],
+  delta: [{ kind: 'groupNumber', field: 'Units', by: 50 }],
+  measures: 'regrouping Units from interval 25 to interval 50',
+})
+add('s4-ungroup-number-units', 37, {
+  base: 'interaction/s4-group-number-units-auto', route: 'applescript', probe: 'ungroup',
+  lines: t => [`ungroup ${numberGroupCell(t, 'Units')}`],
+  markers: [rowField(F.Units)], cacheAbsent: [/<fieldGroup /],
+  delta: [{ kind: 'ungroup', field: 'Units' }],
+  measures: 'ungrouping numeric range group on Units back to distinct numeric items',
+})
+add('s4-ungroup-manual-discrete', 37, {
+  base: 'engine/group-manual', route: 'applescript', probe: 'ungroup',
+  lines: t => [`ungroup ${firstRowGroupCell(t)}`],
+  markers: [/<rowFields count="1"><field x="1"\/><\/rowFields>/], cacheAbsent: [/<discretePr /],
+  delta: [{ kind: 'ungroup', field: 'Product2' }],
+  measures: 'ungrouping saved manual discrete group (Product2 over Product) back to Product alone on Rows',
+})
+
 export const INTERACTION_CASES: readonly InteractionCase[] = CASES
 
 /** Probes for the incantations Stage 2 did not confirm (`build-engine.ts --interaction --probes`). */
@@ -573,6 +1052,14 @@ export const INTERACTION_PROBES: Record<string, string> = {
   'make-worksheet': '`set s to make new worksheet at end of <workbook>` then `set name of s to …` (GETPIVOTDATA seed)',
   'refresh-on-file-open': '`set refresh on file open of (pivot cache of <pivot>) to true` (Excel.sdef pivot cache property)',
   'save-data': '`set save data of <pivot> to false` (Excel.sdef pivot table property)',
+  'field-position': '`set position of <pivot field | data pivot field> to 1` (1-based axis reorder)',
+  'data-field-position': '`set position of <data field> to 1|2` (1-based Values reorder)',
+  'add-duplicate-data-field': '`set pivot field orientation of <pivot field> to orient as data field` when the source column is already in Values',
+  'data-field-number-format': '`set number format of <data field> to "#,##0.00"` (built-in numFmtId on <dataField>)',
+  'group-days-interval': '`group <cell> [by 7] periods {false, false, false, true, false, false, false}` (1-day and 7-day intervals)',
+  'group-time-hms': '`group <cell> periods {true, true, true, false, false, false, false}` (hours, minutes, seconds)',
+  'group-number-auto': '`group <cell> by 25` (numeric grouping with automatic min/max bounds)',
+  'ungroup': '`ungroup <cell>` on single-level date, multi-level date, number and manual discrete groups',
 }
 
 /** The file a case starts from, relative to tests/fixtures/xlsx-pivots (without .xlsx). */

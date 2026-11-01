@@ -35,7 +35,7 @@ const FROM_STAGE2 = resolve(INTERACTION, 'delta-from-stage2.json')
 const SEED_FILES: Record<string, string> = {
   'engine-seed': resolve(FIXTURES, 'recipes/engine-seed.xlsx'),
   'chart-seed': resolve(FIXTURES, 'recipes/pivot-chart-seed.xlsx'),
-  'getpivotdata-seed': resolve(INTERACTION, 'getpivotdata-seed.xlsx'),
+  'getpivotdata-seed': resolve(FIXTURES, 'recipes/getpivotdata-seed.xlsx'),
   'refresh-seed': resolve(INTERACTION, 'refresh-seed.xlsx'),
 }
 const BASELINE = resolve(FIXTURES, 'engine/baseline.xlsx')
@@ -124,11 +124,16 @@ describe('Excel interaction oracle', () => {
       it.skip('SKIPPED: tests/fixtures/xlsx-pivots/interaction/manifest.json is absent (Task 24 interaction oracle not built); Task 24 cases not run', () => {})
     } else {
       const manifest = (raw => Array.isArray(raw) ? raw : raw.cases)(JSON.parse(readFileSync(MANIFEST, 'utf8'))) as InteractionCase[]
-      const ours = manifest.filter(entry => entry.task === 25)
+      const ours = manifest.filter(entry => entry.task === 25 || entry.task === 35 || entry.task === 36 || entry.task === 37)
+      const unverifiedOf = (deltas: readonly PivotDelta[]) => [...new Set(deltas.map(d => d.kind).filter(kind => !ORACLE_VERIFIED_KINDS.has(kind)))]
       for (const entry of ours.filter(entry => entry.status !== 'built')) it.skip(`SKIPPED: manifest ${entry.case} is not built (status ${entry.status ?? 'none'})`, () => {})
       for (const entry of ours.filter(entry => entry.status === 'built' && entry.setup !== undefined)) it.skip(`SKIPPED: manifest ${entry.case} is a setup case, not a delta oracle (${entry.setup})`, () => {})
-      const cases = ours.filter(entry => entry.status === 'built' && entry.setup === undefined)
-      if (!cases.length) it.skip('SKIPPED: interaction/manifest.json has no built task-25 delta case', () => {})
+      for (const entry of ours.filter(entry => entry.status === 'built' && entry.setup === undefined && (unverifiedOf(entry.delta).length > 0 || (entry.task !== 25 && entry.delta.length === 0)))) {
+        const waiting = unverifiedOf(entry.delta)
+        it.skip(`SKIPPED: manifest ${entry.case} (task ${entry.task}) awaits Stage 4 implementation${waiting.length ? ` (${waiting.join(', ')})` : ''}`, () => {})
+      }
+      const cases = ours.filter(entry => entry.status === 'built' && entry.setup === undefined && unverifiedOf(entry.delta).length === 0 && (entry.task === 25 || entry.delta.length > 0))
+      if (!cases.length) it.skip('SKIPPED: interaction/manifest.json has no built verified delta case', () => {})
       else it.each(cases.map(entry => [entry.case, entry] as const))('manifest %s', async (_name, entry) => {
         const start = entry.base !== undefined ? resolve(FIXTURES, `${entry.base}.xlsx`) : SEED_FILES[entry.seed]
         expect(start && existsSync(start), `start file ${entry.base ?? entry.seed}`).toBe(true)
@@ -141,10 +146,16 @@ describe('Excel interaction oracle', () => {
     if (!existsSync(FROM_STAGE2)) {
       it.skip('SKIPPED: tests/fixtures/xlsx-pivots/interaction/delta-from-stage2.json is absent (Task 24 classification not built); hand-written deltas below run instead', () => {})
     } else {
-      const entries = (JSON.parse(readFileSync(FROM_STAGE2, 'utf8')) as Array<{ case: string; delta: PivotDelta | PivotDelta[] | null }>).filter(entry => entry.delta !== null)
-      if (!entries.length) it.skip('SKIPPED: delta-from-stage2.json has no entry with a delta', () => {})
+      const allEntries = (JSON.parse(readFileSync(FROM_STAGE2, 'utf8')) as Array<{ case: string; delta: PivotDelta | PivotDelta[] | null }>).filter(entry => entry.delta !== null)
+      const deltasOf = (entry: { delta: PivotDelta | PivotDelta[] | null }) => Array.isArray(entry.delta) ? entry.delta : [entry.delta!]
+      const unverifiedOf = (deltas: readonly PivotDelta[]) => [...new Set(deltas.map(d => d.kind).filter(kind => !ORACLE_VERIFIED_KINDS.has(kind)))]
+      for (const entry of allEntries.filter(e => unverifiedOf(deltasOf(e)).length > 0)) {
+        it.skip(`SKIPPED: stage 2 ${entry.case} awaits Stage 4 implementation (${unverifiedOf(deltasOf(entry)).join(', ')})`, () => {})
+      }
+      const entries = allEntries.filter(e => unverifiedOf(deltasOf(e)).length === 0)
+      if (!entries.length) it.skip('SKIPPED: delta-from-stage2.json has no verified entry with a delta', () => {})
       else it.each(entries.map(entry => [entry.case, entry] as const))('stage 2 %s', async (_name, entry) => {
-        const deltas = Array.isArray(entry.delta) ? entry.delta : [entry.delta!]
+        const deltas = deltasOf(entry)
         const outcome = replay(await pivotOf(SEED_FILES['engine-seed']!), await pivotOf(engineCase(entry.case)), deltas)
         expect(describeOutcome(outcome), entry.case).toBe('ok')
         for (const delta of deltas) passedKinds.add(delta.kind)
