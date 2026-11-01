@@ -8,8 +8,7 @@
  * - **resident** (`createResidentPivotClient`): the session runs on the main thread over the runtime the main-thread
  *   parse retained (`pivotRuntimeFor(doc)`), its store leased against the viewer's main ledger;
  * - **remote** (`createRemotePivotClient`, the Task 27 seam): a typed adapter over the worker protocol's
- *   `RemotePivotSessions`. Until that port exists, a paged or worker-parsed workbook gets `unavailablePivotClient`:
- *   its buttons are painted and named "not interactive", honestly.
+ *   `RemotePivotSessions`, for a paged or worker-parsed workbook (`remotePivotPort`).
  *
  * `sheetId` in this interface is the sheet's position in `doc.sheets` (the plan's `number`), not the viewer's string
  * sheet id; the viewer maps between them.
@@ -140,6 +139,8 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
   // The cells each open pivot shows (its last committed or opened layout): the "before" of the next change's autofit,
   // charged while kept; one the budget refuses is not kept (that pivot's next change is not autofitted).
   const shown = new Map<string, PivotShownLayout>(), serial = ++fitMemorySerial
+  // The port's own lifetime: a reopen it makes on its own (a session the workbook released) ends with it (minor 14).
+  const lifetime = new AbortController()
   const owner = (k: string) => `pivot-shown:${serial}:${k}`
   const keep = (k: string, layout: PivotShownLayout | undefined) => {
     if (layout && (!memory || memory.set(owner(k), estimatePayloadBytes(layout.cells)))) { shown.set(k, layout); return }
@@ -163,7 +164,7 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       if (id === undefined) return refusedAs('pivot-remote-unavailable', REMOTE_PIVOTS_UNAVAILABLE.message)
       let result = await sessions.apply(id, pivot, delta)
       if (result.kind === 'refused' && result.message === OPEN_FIRST) {
-        const reopened = await sessions.open(id, pivot, new AbortController().signal)
+        const reopened = await sessions.open(id, pivot, lifetime.signal)
         if (reopened.kind === 'refused') return refusedAs('pivot-remote-refused', reopened.message)
         keep(key(sheetId, pivot), reopened.cells ? { def: reopened.def, cells: reopened.cells } : undefined)
         result = await sessions.apply(id, pivot, delta)
@@ -189,7 +190,7 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
         item: (field, item) => model.fields.find(entry => entry.index === field)?.items.find(entry => entry.index === item)?.label,
       }
     },
-    dispose() { for (const k of [...opened]) { const [sheetId, pivot] = k.split(':').map(Number) as [number, number]; port.release(sheetId, pivot) } },
+    dispose() { lifetime.abort(); for (const k of [...opened]) { const [sheetId, pivot] = k.split(':').map(Number) as [number, number]; port.release(sheetId, pivot) } },
   }
   return port
 }
@@ -207,17 +208,8 @@ export function createRemotePivotClient(port: RemotePivotPort, install: (commit:
     dispose: () => port.dispose?.(),
   }
 }
-/** Not interactive here, with one reason (the paged path until Task 27's port lands). */
-export function unavailablePivotClient(feature: string, message: string): PivotClient {
-  const diagnostic: PivotDiagnostic = { kind: 'unsupported', feature, message }
-  return {
-    open: async () => ({ ok: false, diagnostic }),
-    apply: async () => ({ ok: false, diagnostic }),
-    release: () => {},
-    preflight: () => diagnostic,
-  }
-}
-export const REMOTE_PIVOTS_UNAVAILABLE = { feature: 'pivot-remote-unavailable', message: 'Pivot tables are shown as saved: changing them is not available in the large-file view yet.' } as const
+/** A sheet the worker cannot address (no numeric sheet id): its pivots stay as saved. */
+const REMOTE_PIVOTS_UNAVAILABLE = { feature: 'pivot-remote-unavailable', message: 'Pivot tables on this sheet are shown as saved: the large-file view cannot address the sheet.' } as const
 
 // ---- the menu model --------------------------------------------------------------------------------------------------
 

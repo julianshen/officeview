@@ -25,7 +25,7 @@ import type { PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './
 import { PivotFieldMenu } from './PivotFieldMenu'
 import { PivotPageMenu } from './PivotPageMenu'
 
-export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort, unavailablePivotClient, REMOTE_PIVOTS_UNAVAILABLE } from './pivotClient'
+export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind, PivotShownLayout, PendingPivotFits, PivotFitMemory } from './pivotClient'
 
 export type PivotUiState =
@@ -94,7 +94,11 @@ export class PivotController {
   }
   /** A button's use: opens the pivot if needed, then applies a ± change or opens the button's menu. */
   async activate(sheet: number, pivot: number, button: ButtonPlacement, invoker: HTMLElement, anchor?: HTMLElement): Promise<void> {
+    const known = this.state(sheet, pivot).status === 'refused'
     const state = await this.open(sheet, pivot)
+    // A pivot that is not interactive says why when its control is used (click, Alt+↓, Alt+→/←), not nothing. The use
+    // that finds out shows the reason as the sheet's notice (§7.6); a later use announces it.
+    if (state.status === 'refused') { if (known) this.host.announce(`Not available: ${state.diagnostic.message}`); return }
     if (state.status !== 'open') return
     if (button.kind === 'expand' || button.kind === 'collapse') {
       if (!state.verified.has('collapse') || button.item === undefined) { this.host.announce('Expanding and collapsing this pivot table is not available.'); return }

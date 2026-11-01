@@ -366,6 +366,10 @@ describe('the interactive viewer', () => {
     const text = status(ui.container)
     expect(text.split('cannot follow its changes').length - 1).toBe(1)
     expect(ui.queryByRole('dialog')).toBeNull()
+    // Used again, by pointer or from its gridcell, the control says why it does nothing (final review minor 6).
+    fireEvent.click(buttons[1]!)
+    await waitFor(() => expect(status(ui.container)).toMatch(/Not available: .*cannot follow its changes/))
+    expect(ui.queryByRole('dialog')).toBeNull()
   })
 
   it('in the viewer a pivot chart repaints with its pivot: the committed chart is installed, reset and unmount restore the saved one', async () => {
@@ -705,6 +709,22 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
     await waitFor(() => expect(h.posted.some(command => command.kind === 'pivotRelease')).toBe(true))
   }, 60_000)
 
+  it('a reopen the port makes on its own (the worker released the session) ends when the viewer unmounts', async () => {
+    const { remotePivotPort } = await import('../src/components/xlsx/pivot/pivotClient')
+    let reopenSignal: AbortSignal | undefined
+    const sessions = {
+      open: (_sheet: number, _pivot: number, signal: AbortSignal) => { reopenSignal = signal; return new Promise<never>(() => {}) },
+      apply: async () => ({ kind: 'refused' as const, message: 'Open the pivot before changing it.' }),
+      release: () => {},
+    }
+    const port = remotePivotPort(sessions, { id: sheet => sheet, sheet: () => undefined })
+    void port.apply(0, 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
+    await waitFor(() => expect(reopenSignal).toBeDefined())
+    expect(reopenSignal!.aborted).toBe(false)
+    port.dispose?.()
+    expect(reopenSignal!.aborted).toBe(true)
+  })
+
   it('Ruling S3-AK: a change stays shown after switching to another sheet and back, and its menu still says so', async () => {
     const h = workerHarness()
     const ui = await renderPaged(h, BASELINE)
@@ -799,5 +819,8 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
       expect(other.getAttribute('aria-disabled')).toBe('true')
     }
     expect(status(ui.container).split('cannot follow its changes').length - 1).toBe(1)
+    // Used again, the control says why it does nothing (final review minor 6).
+    fireEvent.click(button)
+    await waitFor(() => expect(status(ui.container)).toMatch(/Not available: .*cannot follow its changes/), FIRST_PAINT_WAIT)
   }, 60_000)
 })

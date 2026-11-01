@@ -159,8 +159,8 @@ export function PivotFieldMenu(props: PivotMenuProps): ReactElement {
           return { kind: 'filter', field: field.index, filter: valueFilter(field.index, id, valueData, rule.op as ValueOp, rule.first, rule.second) } })}>Apply value filter</MenuButton>
       </div>}
       {model.data.length > 0 && <fieldset><legend>Top 10</legend>
-        {/* Bottom refuses until measured: Excel's top/bottom field offers Top only here. */}
-        <label>Show <select aria-label="Top or bottom" className={SELECT_CLS} style={controlTarget} value="top" onChange={() => {}}><option value="top">Top</option></select></label>
+        {/* Bottom refuses until measured, so Excel's Top/Bottom choice is shown as text: Top only. */}
+        <p>Show the top items</p>
         <label>Count <input aria-label="Top 10 count" inputMode="decimal" className={CONTROL_CLS} style={controlTarget} value={top.count} onChange={event => setTop({ ...top, count: event.target.value })} /></label>
         <label>Of <select aria-label="Top 10 kind" className={SELECT_CLS} style={controlTarget} value={top.kind} onChange={event => setTop({ ...top, kind: event.target.value as typeof top.kind })}>
           <option value="count">Items</option><option value="percent">Percent</option><option value="sum">Sum</option></select></label>
