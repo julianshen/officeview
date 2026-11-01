@@ -9,6 +9,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
 import { chartWorkbook } from './helpers/xlsx-chart-fixture'
+import { patchedSeed } from './helpers/xlsx-pivots-dependent-patched'
 
 const SEED = resolve(__dirname, 'fixtures/xlsx-pivots/recipes/getpivotdata-seed.xlsx')
 const load = async () => parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEED))))
@@ -194,4 +195,29 @@ it('a search running when a pivot changes finds the recomputed values, as a new 
   fireEvent.change(search, { target: { value: '161104.2' } })
   await waitFor(() => expect(count()).toMatch(/ of /), { timeout: 10_000 })
   expect(running).toBe(count())
+}, 60_000)
+
+// ---- the per-cell stale indicator (Ruling S3-AM, spec §7.5): a subtle mark with a tooltip, also told to AT ---------
+it('a formula a pivot change leaves stale carries a corner mark with a tooltip and the same text in its cell description', async () => {
+  const doc = await patchedSeed([{ row: 1, col: 'D', formula: 'GETPIVOTDATA("Sum of Sales",Pivot!$A$3,"Channel","Web")', cached: 5 }])
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  await filterRegion(ui, 'West')
+  await waitFor(() => expect(value(doc, 'B1')).toBeCloseTo(161104.2, 6), { timeout: 10_000 })
+  pickSheet(ui, 'Formulas')
+  const gridcell = (row: number, col: number) => ui.container.querySelector(`[role=row][aria-rowindex="${row + 2}"] [role=gridcell][aria-colindex="${col + 2}"]`)
+  const marks = () => [...ui.container.querySelectorAll<HTMLElement>('[data-officeview-ui="stale-mark"]')]
+  // D1 (an unmeasured GETPIVOTDATA shape, S3-T) keeps its saved value and is marked; B1, recomputed, is not.
+  await waitFor(() => expect(gridcell(0, 3)?.getAttribute('aria-description')).toMatch(/Shows its saved value: it reads a changed pivot table/), { timeout: 10_000 })
+  expect(gridcell(0, 1)?.getAttribute('aria-description') ?? '').not.toMatch(/changed pivot table/)
+  expect(marks()).toHaveLength(1)
+  expect(marks()[0]!.title).toBe(gridcell(0, 3)!.getAttribute('aria-description'))
+  expect(marks()[0]!.getAttribute('aria-hidden')).toBe('true')
+  // Back to the saved view, the mark goes with the notice.
+  pickSheet(ui, 'Pivot')
+  fireEvent.click(await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 }))
+  fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Reset to saved view' }))
+  pickSheet(ui, 'Formulas')
+  await waitFor(() => expect(marks()).toHaveLength(0), { timeout: 10_000 })
+  expect(gridcell(0, 3)?.getAttribute('aria-description') ?? '').not.toMatch(/changed pivot table/)
 }, 60_000)

@@ -16,8 +16,12 @@ import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
 import { fade, Pop, Presence } from '../motion/presets'
 
 /** `expanded`: the cell carries a pivot ± button (spec §8: expanded/collapsed state on row headers). `control`: the
- * cell's control and its key, announced in the cell's description (a pivot button, Ruling S3-J). */
-export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable'; expanded?: boolean; control?: string }
+ * cell's control and its key, announced in the cell's description (a pivot button, Ruling S3-J). `stale`: the cell's
+ * value may be out of date (a formula reading a changed pivot, Ruling S3-AM): a subtle corner mark with this text as
+ * its tooltip, and the same text in the cell's description for assistive technology. */
+export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable'; expanded?: boolean; control?: string; stale?: string }
+/** The stale-value corner mark's size, CSS px (Excel's own cell indicators are about this size). */
+const STALE_MARK_PX = 7
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
 export interface GridPopup {
   content: ReactNode; invoker: HTMLElement | null; close: () => void; /** Accessible name of the popup (default "Column filter"). */ label?: string
@@ -365,6 +369,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
   const rowShift = rowFrameShift(-scroll.logicalOrigin.x * scroll.zoom)
+  // Stale-value marks of the rendered cells (Ruling S3-AM), collected while the rows render and drawn above them.
+  const staleMarks: ReactNode[] = []
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
@@ -421,15 +427,22 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             const column = rowLocalColumn(gridHeaderBox(projection, scroll, 'column', col), viewport, pinned ? 0 : rowShift)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             const isSelected = cellSelected(selection.ranges, at)
+            if (value.stale && !offscreen) {
+              const cellBox = viewportHeaderBox(projection, scroll, viewport, 'column', col)
+              if (cellBox.width > 0 && box.height > 0) staleMarks.push(<span key={`${row}:${col}`} data-officeview-ui="stale-mark" aria-hidden="true" title={value.stale}
+                style={{ position: 'absolute', left: cellBox.x + cellBox.width - Math.min(STALE_MARK_PX, cellBox.width), top: box.y, width: Math.min(STALE_MARK_PX, cellBox.width), height: Math.min(STALE_MARK_PX, box.height),
+                  background: 'var(--ov-color-accent, #0f6cbd)', clipPath: 'polygon(0 0, 100% 0, 100% 100%)', pointerEvents: 'auto' }} />)
+            }
             // Name from contents: the visually hidden text IS the name, so VoiceOver
             // reads the value once (no label + contents) and never "blank" (S13 V1/V5).
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
-              aria-selected={isSelected} aria-expanded={value.expanded} aria-description={[value.state, multiSelected && isSelected ? 'selected' : '', value.control].filter(Boolean).join(', ') || undefined}
+              aria-selected={isSelected} aria-expanded={value.expanded} aria-description={[value.state, multiSelected && isSelected ? 'selected' : '', value.control, value.stale].filter(Boolean).join(', ') || undefined}
               style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
           })}
         </div>
       })}
     </div>
+    {staleMarks.length > 0 && <div data-officeview-ui="stale-marks" style={{ position: 'absolute', left: gutter, top: headerHeight, width: viewport.width, height: viewport.height, overflow: 'hidden', pointerEvents: 'none', zIndex: 3 }}>{staleMarks}</div>}
     {props.cellControls && <div style={{ position: 'absolute', left: gutter, top: headerHeight, width: viewport.width, height: viewport.height, pointerEvents: 'none', zIndex: 3 }}>{props.cellControls}</div>}
     {/* Bounded by the cell area (below the header row, above the status line): a taller popup scrolls
         instead of losing its controls. Anchored at the top under its column: content that arrives later

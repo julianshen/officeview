@@ -34,7 +34,7 @@ import type {
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
-import { columnToLetters, parseA1, validateCoordinate } from '../../xlsx/view/coordinates'
+import { columnToLetters, MAX_COLS, parseA1, validateCoordinate } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
@@ -243,6 +243,9 @@ function loadFailureNotice(message: string, code?: string): string {
   return `This sheet could not be fully loaded: ${message}.${recovery}`
 }
 /** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
+/** The tooltip (and cell description) of a formula a pivot change left stale (Ruling S3-AM, spec §7.5). */
+const STALE_UNSUPPORTED = 'Shows its saved value: it reads a changed pivot table in a way the viewer cannot recalculate.'
+const STALE_OUTDATED = 'May be out of date: it reads a changed pivot table, and recalculating it would take too long.'
 const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
 /** Print rules scoped to one viewer instance: its screen and floating chrome
@@ -499,15 +502,28 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pendingDependentRects = useRef(new Map<string, { r0: number; r1: number; c0: number; c1: number }[]>()).current
   /** Which pivots' commits refilled each dependent chart: a reset puts back only the charts no other live pivot feeds. */
   const dependentChartOwners = useRef(new Map<XlsxDrawing, Set<string>>()).current
-  /** The resident stale marks each pivot's commits caused, by sheet index: `unsupported` readers keep their saved
-   * value (S3-T, S3-Z); `outdated` ones were over the work budget and keep whatever they showed (S3-AE, M-4). */
-  const dependentStaleMarks = useRef(new Map<string, { unsupported: Set<number>; /** reader key → its sheet index */ outdated: Map<string, number> }>()).current
+  /** The resident stale marks each pivot's commits caused, reader key (`sheet!col:row`) → its sheet index:
+   * `unsupported` readers keep their saved value (S3-T, S3-Z); `outdated` ones were over the work budget and keep
+   * whatever they showed (S3-AE, M-4). Each marked cell shows a subtle indicator with a tooltip (Ruling S3-AM). */
+  const dependentStaleMarks = useRef(new Map<string, { unsupported: Map<string, number>; outdated: Map<string, number> }>()).current
   const [pagedDependentNoticeSheets, setPagedDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
-  const [residentDependentNotices, setResidentDependentNotices] = useState<{ unsupported: ReadonlySet<number>; outdated: ReadonlySet<number> }>(() => ({ unsupported: new Set(), outdated: new Set() }))
+  const [residentDependentNotices, setResidentDependentNotices] = useState<{ unsupported: ReadonlySet<number>; outdated: ReadonlySet<number>; /** By sheet index: the marked cells (`row * MAX_COLS + col`) and why. */ cells: ReadonlyMap<number, ReadonlyMap<number, 'unsupported' | 'outdated'>> }>(() => ({ unsupported: new Set(), outdated: new Set(), cells: new Map() }))
   const publishDependentNotices = () => {
-    const unsupported = new Set<number>(), outdated = new Set<number>()
-    for (const marks of dependentStaleMarks.values()) { for (const index of marks.unsupported) unsupported.add(index); for (const index of marks.outdated.values()) outdated.add(index) }
-    setResidentDependentNotices({ unsupported, outdated })
+    const unsupported = new Set<number>(), outdated = new Set<number>(), cells = new Map<number, Map<number, 'unsupported' | 'outdated'>>()
+    const mark = (key: string, index: number, kind: 'unsupported' | 'outdated') => {
+      const at = /!(\d+):(\d+)$/.exec(key)
+      if (!at) return
+      let sheetCells = cells.get(index)
+      if (!sheetCells) cells.set(index, sheetCells = new Map())
+      const id = Number(at[2]) * MAX_COLS + Number(at[1])
+      // An unsupported reader keeps its saved value whatever later commits do: that reason wins.
+      if (kind === 'unsupported' || !sheetCells.has(id)) sheetCells.set(id, kind)
+    }
+    for (const marks of dependentStaleMarks.values()) {
+      for (const [key, index] of marks.unsupported) { unsupported.add(index); mark(key, index, 'unsupported') }
+      for (const [key, index] of marks.outdated) { outdated.add(index); mark(key, index, 'outdated') }
+    }
+    setResidentDependentNotices({ unsupported, outdated, cells })
   }
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
@@ -643,7 +659,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     pivotFormulaContexts.clear(); pivotFormulaGens.clear(); pendingDependentRects.clear(); dependentChartOwners.clear(); dependentStaleMarks.clear()
     for (const index of restoreDependentFormulaValues(doc)) { const id = sheetIds[index]; if (id !== undefined) valuesChanged(id) }
     dropDependentChartTiles(restoreDependentCharts(savedDependentCharts))
-    if (!unmounting.current) setResidentDependentNotices({ unsupported: new Set(), outdated: new Set() })
+    if (!unmounting.current) setResidentDependentNotices({ unsupported: new Set(), outdated: new Set(), cells: new Map() })
   }
   /** A reader sheet's formula values changed in place (recomputed, or put back): its value generation moves, so every
    * value-keyed consumer of it re-reads (its filter value lists, find, copy, geometry), and its tiles go. */
@@ -1509,11 +1525,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // Stale marks are this pivot's: a change adds them; a reset recomputes against saved cells, so only an
       // over-budget reset leaves readers out of date (an unsupported reader keeps its saved value, which is right now).
       if (result.stale.length && (result.overBudget || !commit.reset)) {
-        const marks = dependentStaleMarks.get(contextKey) ?? { unsupported: new Set<number>(), outdated: new Map<string, number>() }
+        const marks = dependentStaleMarks.get(contextKey) ?? { unsupported: new Map<string, number>(), outdated: new Map<string, number>() }
         for (const key of result.stale) {
           const index = sheetOf(key)
           if (index < 0) continue
-          if (result.overBudget) marks.outdated.set(key, index); else marks.unsupported.add(index)
+          if (result.overBudget) marks.outdated.set(key, index); else marks.unsupported.set(key, index)
           marksChanged = true
         }
         if (marks.unsupported.size || marks.outdated.size) dependentStaleMarks.set(contextKey, marks)
@@ -1793,6 +1809,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Pivots on the active sheet (Task 28): load-time pivot-* diagnostics, and one notice per pivot not interactive.
   const activeIndex = sheetIds.indexOf(activeSheetId)
   const activePivots = entry?.sheet.pivotTables
+  const activeStaleCells = remote ? undefined : residentDependentNotices.cells.get(activeIndex)
   const pivotCellText = (row: number, col: number): string => { if (!entry) return ''; const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }
   const pivotNotices = entry ? [...new Set([
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
@@ -2379,10 +2396,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
                 const shown = cell ? presentCell(cell) : { text: '' }
-                if (!pivotUi || !pivotController || !activePivots?.length) return shown
+                // Ruling S3-AM: a formula a pivot change left stale carries its mark and tooltip (resident only).
+                const why = activeStaleCells?.get(at.row * MAX_COLS + at.col)
+                const stale = why ? { ...shown, stale: why === 'unsupported' ? STALE_UNSUPPORTED : STALE_OUTDATED } : shown
+                if (!pivotUi || !pivotController || !activePivots?.length) return stale
                 const expanded = pivotUi.expandedAt(activePivots, at.row, at.col)
                 const control = pivotUi.cellControlDescription(pivotController, activeIndex, activePivots, at.row, at.col, pivotCellText)
-                return { ...shown, ...(expanded !== undefined ? { expanded } : {}), ...(control ? { control } : {}) }
+                return { ...stale, ...(expanded !== undefined ? { expanded } : {}), ...(control ? { control } : {}) }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
