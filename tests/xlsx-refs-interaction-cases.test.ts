@@ -7,7 +7,7 @@ import {
   INTERACTION_CASES, INTERACTION_PROBES, SEED_BUILDS, SEED_FILES, resolveDelta, startOf, startShapeOf, type InteractionCase, type PivotDelta,
 } from '../scripts/xlsx-refs/interaction-cases'
 import { classify } from '../scripts/xlsx-refs/classify-stage2'
-import { interactionDryRun, verifyInteraction } from '../scripts/xlsx-refs/build-engine'
+import { interactionDryRun, verifyInteraction, verifyXmlRecomputation } from '../scripts/xlsx-refs/build-engine'
 
 const PIVOTS = join(__dirname, 'fixtures/xlsx-pivots')
 const fixture = (rel: string) => join(PIVOTS, `${rel}.xlsx`)
@@ -401,6 +401,20 @@ describe('verifyInteraction recomputation and strengthened markers', () => {
     const c = INTERACTION_CASES.find(x => x.id === 's4-values-showas-previous-next')!
     const startFile = fixture(startOf(c))
     await expect(verifyInteraction(c, startFile)).rejects.toThrow(/identical to start file|no-op interaction/)
+  })
+  it('rejects an XML refresh where the saved pivot cells in the location range are unchanged', async () => {
+    const fixtureFile = fixture('interaction/s4-filtered-row-base')
+    await expect(verifyXmlRecomputation(fixtureFile, fixtureFile)).rejects.toThrow(
+      /saved pivot cells in location range .* are unchanged from edited input \(no recomputation\)/,
+    )
+  })
+  it('proves XML recomputation on s4-filtered-row-base with cell diffs against the start file', async () => {
+    const c = INTERACTION_CASES.find(x => x.id === 's4-filtered-row-base')!
+    const startFile = fixture(startOf(c))
+    const out = fixture(`interaction/${c.id}`)
+    const recomputed = await verifyXmlRecomputation(startFile, out)
+    expect(recomputed.cellDiffs).toBeGreaterThan(0)
+    expect(recomputed.locChanged).toBe(true)
   })
   it('verifies built fixtures with their full measured deltas', async () => {
     for (const id of [

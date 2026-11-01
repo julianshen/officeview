@@ -40,7 +40,7 @@ import {
 import {
   INTERACTION_CASES, INTERACTION_PROBES, SEED_BUILDS, resolveDelta, startOf, startShapeOf, type InteractionCase, type PivotDelta, type SeedBuild, type SheetMarker,
 } from './interaction-cases'
-import { CHART_RE, fixturePath, loadPivot, sheetXml } from './pivot-files'
+import { CHART_RE, fixturePath, loadPivot, sharedStrings, sheetCells, sheetXml } from './pivot-files'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const PIVOT_DIR = join(ROOT, 'tests/fixtures/xlsx-pivots')
@@ -448,20 +448,56 @@ export async function buildInteractionSeed(s: SeedBuild, fallback = true): Promi
   }
 }
 
-async function verifyXmlRecomputation(edited: string, out: string): Promise<void> {
-  const [editedParts, outParts] = await Promise.all([readParts(edited), readParts(out)])
-  const locChanged = /<location\b[^>]*\bref="([^"]*)"/.exec(editedParts.pivot)?.[1] !== /<location\b[^>]*\bref="([^"]*)"/.exec(outParts.pivot)?.[1]
-  const rowsChanged = /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(editedParts.pivot)?.[1] !== /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(outParts.pivot)?.[1]
-  const [editedZip, outZip] = await Promise.all([loadZip(edited), loadZip(out)])
-  const sheetName = Object.keys(outZip.files).find(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
-  const [editedSheet, outSheet] = await Promise.all([
-    sheetName ? editedZip.file(sheetName)?.async('string') : '',
-    sheetName ? outZip.file(sheetName)?.async('string') : '',
-  ])
-  const sheetChanged = editedSheet !== outSheet
-  if (!locChanged && !rowsChanged && !sheetChanged) {
-    throw new Error('XML route: saved output was not recomputed by Excel (location, rowItems, and sheet cells identical to edited input)')
+async function pivotSheetXml(zip: JSZip, pivotPartName: string): Promise<string> {
+  const pivotBase = basename(pivotPartName)
+  for (const name of Object.keys(zip.files)) {
+    if (/^xl\/worksheets\/_rels\/.*\.rels$/.test(name)) {
+      const rels = await zip.file(name)!.async('string')
+      if (rels.includes(pivotBase)) {
+        const sheetPartName = name.replace('/_rels/', '/').replace(/\.rels$/, '')
+        const sheet = await zip.file(sheetPartName)?.async('string')
+        if (sheet) return sheet
+      }
+    }
   }
+  const firstSheet = Object.keys(zip.files).find(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+  return (firstSheet ? await zip.file(firstSheet)?.async('string') : '') ?? ''
+}
+
+export async function readPivotLocationCells(file: string): Promise<{ loc: string; cells: Map<string, string> }> {
+  const zip = await loadZip(file)
+  const strings = await sharedStrings(zip)
+  const pName = Object.keys(zip.files).find(n => PIVOT_RE.test(n))
+  if (!pName) throw new Error(`${file}: no pivotTable part`)
+  const pXml = await zip.file(pName)!.async('string')
+  const loc = /<location\b[^>]*\bref="([^"]*)"/.exec(pXml)?.[1]
+  if (!loc) throw new Error(`${file}: pivot has no location ref`)
+  const [tl, br = tl] = loc.split(':') as [string, string?]
+  const toCoord = (s: string) => {
+    const [, letters, digits] = /^([A-Z]+)(\d+)$/.exec(s) ?? []
+    const col = [...letters!].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1
+    const row = Number(digits) - 1
+    return { row, col }
+  }
+  const p1 = toCoord(tl), p2 = toCoord(br)
+  const r1 = Math.min(p1.row, p2.row), c1 = Math.min(p1.col, p2.col), r2 = Math.max(p1.row, p2.row), c2 = Math.max(p1.col, p2.col)
+  const sXml = await pivotSheetXml(zip, pName)
+  const inLoc = sheetCells(sXml, strings).filter(c => c.row >= r1 && c.row <= r2 && c.col >= c1 && c.col <= c2)
+  return { loc, cells: new Map(inLoc.map(c => [c.ref, c.value ?? ''])) }
+}
+
+export async function verifyXmlRecomputation(edited: string, out: string): Promise<{ cellDiffs: number; locChanged: boolean }> {
+  const [editedPivot, outPivot] = await Promise.all([readPivotLocationCells(edited), readPivotLocationCells(out)])
+  const locChanged = editedPivot.loc !== outPivot.loc
+  const allRefs = new Set([...editedPivot.cells.keys(), ...outPivot.cells.keys()])
+  let cellDiffs = 0
+  for (const ref of allRefs) {
+    if (editedPivot.cells.get(ref) !== outPivot.cells.get(ref)) cellDiffs++
+  }
+  if (cellDiffs === 0) {
+    throw new Error(`XML route: saved pivot cells in location range (${outPivot.loc}) are unchanged from edited input (no recomputation)`)
+  }
+  return { cellDiffs, locChanged }
 }
 
 async function runInteraction(c: InteractionCase, route: 'applescript' | 'xml', out: string): Promise<void> {
@@ -490,17 +526,14 @@ export async function verifyInteraction(c: InteractionCase, out: string): Promis
       throw new Error(`saved pivot is identical to start file ${startOf(c)}: no-op interaction`)
     }
     if (c.route === 'xml') {
-      const [startZip, outZip] = await Promise.all([loadZip(startFile), loadZip(out)])
-      const sheetName = Object.keys(outZip.files).find(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
-      const [startSheet, outSheet] = await Promise.all([
-        sheetName ? startZip.file(sheetName)?.async('string') : '',
-        sheetName ? outZip.file(sheetName)?.async('string') : '',
-      ])
-      const locChanged = /<location\b[^>]*\bref="([^"]*)"/.exec(startParts.pivot)?.[1] !== /<location\b[^>]*\bref="([^"]*)"/.exec(outParts.pivot)?.[1]
-      const rowsChanged = /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(startParts.pivot)?.[1] !== /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(outParts.pivot)?.[1]
-      const sheetChanged = startSheet !== outSheet
-      if (!locChanged && !rowsChanged && !sheetChanged) {
-        throw new Error(`XML route: saved output was not recomputed (location, rowItems, and sheet cells unchanged from start ${startOf(c)})`)
+      const [startPivot, outPivot] = await Promise.all([readPivotLocationCells(startFile), readPivotLocationCells(out)])
+      const allRefs = new Set([...startPivot.cells.keys(), ...outPivot.cells.keys()])
+      let cellDiffs = 0
+      for (const ref of allRefs) {
+        if (startPivot.cells.get(ref) !== outPivot.cells.get(ref)) cellDiffs++
+      }
+      if (cellDiffs === 0) {
+        throw new Error(`XML route: saved pivot cells in location range (${outPivot.loc}) are unchanged from start ${startOf(c)} (no recomputation)`)
       }
     }
   }
