@@ -29,7 +29,6 @@
  *   `installPivotCharts` walks them.
  */
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
-import type { StyledValueOverlayCell } from '../../../xlsx/view/viewport'
 import type { ChartModel } from '../../../charts/model'
 import type { ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/view/contracts'
 import type { SourceRect } from '../../../xlsx/view/coordinates'
@@ -241,17 +240,22 @@ function layoutArea(layout: PivotLayout): SourceRect[] {
 /** `style`: the style a cell of the layout paints with (alignment, font, fill), its number format aside. */
 interface PivotPart { saved: readonly SourceRect[]; current: readonly SourceRect[]; layout: PivotLayout; style?: (row: number, col: number) => XlsxCellStyle | undefined }
 function overlayCell(part: PivotPart): (row: number, col: number) => ValueOverlayCell | null {
-  const cells = new Map<number, Map<number, StyledValueOverlayCell>>()
-  for (const cell of part.layout.cells) {
-    const value = cell.value
-    if (value.kind === 'empty') continue
-    let line = cells.get(cell.row)
-    if (!line) cells.set(cell.row, line = new Map())
-    const style = part.style?.(cell.row, cell.col)
-    line.set(cell.col, value.kind === 'error' ? { value: value.value, valueIsError: true, ...(style ? { style } : {}) }
-      : { value: value.value, ...(cell.numFmtId !== undefined ? { numFmtId: cell.numFmtId } : {}), ...(style ? { style } : {}) })
+  // PivotLayout.cells is emitted in row/column order. Read it directly so a resident overlay does not retain a second
+  // per-cell Map alongside the already-owned layout (the remote path has its own explicitly charged index).
+  const cells = part.layout.cells
+  return (row, col) => {
+    let low = 0, high = cells.length
+    while (low < high) {
+      const mid = low + ((high - low) >>> 1), cell = cells[mid]!
+      if (cell.row < row || (cell.row === row && cell.col < col)) low = mid + 1
+      else high = mid
+    }
+    const cell = cells[low]
+    if (!cell || cell.row !== row || cell.col !== col || cell.value.kind === 'empty') return null
+    const value = cell.value, style = part.style?.(row, col)
+    return value.kind === 'error' ? { value: value.value, valueIsError: true, ...(style ? { style } : {}) }
+      : { value: value.value, ...(cell.numFmtId !== undefined ? { numFmtId: cell.numFmtId } : {}), ...(style ? { style } : {}) }
   }
-  return (row, col) => cells.get(row)?.get(col) ?? null
 }
 /** A pivot cell's role for its style (Task 28): its place in the header rows, or its column and its row line's kind
  * and depth in the body; page cells by their offset. */

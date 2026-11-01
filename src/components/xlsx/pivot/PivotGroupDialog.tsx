@@ -63,10 +63,11 @@ export function PivotGroupDialog({ field, date1904, onApply, onClose }: PivotGro
         const selected = PERIODS.filter(([period]) => periods.includes(period)).map(([period]) => period)
         if (!selected.length) throw new RangeError('Choose at least one date period.')
         if (selected.includes('days') && selected.length > 1 && Number(days) !== 1) throw new RangeError('Number of days must be 1 when Days is combined with another period.')
+        const daysInterval = selected.includes('days') ? Number(days) : 1
         const start = autoStart ? undefined : dateSerial(startDate, date1904), end = autoEnd ? undefined : dateSerial(endDate, date1904)
         if (start !== undefined && end !== undefined && start > end) throw new RangeError('Starting at must not be after Ending at.')
-        if (!Number.isInteger(Number(days)) || Number(days) < 1 || Number(days) > 32767) throw new RangeError('Number of days must be between 1 and 32767.')
-        const result = await onApply({ kind: 'groupDate', field: info.baseField, periods: selected, ...(start !== undefined ? { startDate: start } : {}), ...(end !== undefined ? { endDate: end } : {}), daysInterval: Number(days) })
+        if (selected.includes('days') && (!Number.isInteger(daysInterval) || daysInterval < 1 || daysInterval > 32767)) throw new RangeError('Number of days must be between 1 and 32767.')
+        const result = await onApply({ kind: 'groupDate', field: info.baseField, periods: selected, ...(start !== undefined ? { startDate: start } : {}), ...(end !== undefined ? { endDate: end } : {}), daysInterval })
         if (result) onClose()
         else setError('Grouping could not be applied.')
       } else {

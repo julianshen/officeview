@@ -36,6 +36,30 @@ async function openInteraction(name: string) {
 }
 
 describe('Task 35 field list deltas', () => {
+  it('keeps an off-axis field visible without serializing its item values', async () => {
+    const loaded = (await loadAll(BASELINE))[0]!
+    const count = 100_000
+    const fieldIndex = loaded.cache.fields.length
+    const added = { name: 'Unused high-cardinality field', databaseField: true,
+      sharedItems: { inline: false, items: Array.from({ length: count }, (_, index) => ({ type: 'string' as const, value: `item-${index}` })) } }
+    const cache = { ...loaded.cache, fields: [...loaded.cache.fields, added] } as unknown as typeof loaded.cache
+    const def = { ...loaded.def, fields: [...loaded.def.fields, { ...loaded.def.fields[0]!, items: Array.from({ length: count }, (_, x) => ({
+      type: 'data' as const, x, hidden: false, char: false, showDetails: true, calculated: false, missing: false,
+      childItems: false, expanded: false, drillAcross: false,
+    })) }] } as unknown as typeof loaded.def
+    const view = initialViewState(def, cache)
+
+    const offAxis = pivotMenuModel(def, cache, view, loaded.date1904).fields.find(field => field.index === fieldIndex)!
+    expect(offAxis.axis).toBe('none')
+    expect(offAxis.items).toEqual([])
+    expect(offAxis.name).toBe('Unused high-cardinality field')
+
+    const onAxis = pivotMenuModel(def, cache, { ...view, rows: [...view.rows, fieldIndex] }, loaded.date1904)
+      .fields.find(field => field.index === fieldIndex)!
+    expect(onAxis.items).toHaveLength(count)
+    expect(onAxis.items[0]?.label).toBe('item-0')
+  })
+
   it('builds date-group menu periods with a bounded single pass over cache fields', async () => {
     const loaded = (await loadAll(BASELINE))[0]!
     const count = 512

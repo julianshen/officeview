@@ -110,11 +110,14 @@ export function pivotMenuModel(def: PivotTableDefinition, cache: PivotCacheDefin
   const fields = order.map((field): PivotMenuField => {
     const state = view.fields[field]
     const list = def.fields[field]?.items
-    const indices = list ? list.flatMap((item, k) => item.type === 'data' ? [k] : []) : (state?.hidden ?? []).map((_, k) => k)
+    const axis = axisOf(field)
+    // The field list needs off-axis field names and drag permissions, not their item labels. They can be very high
+    // cardinality; defer constructing this list until the field is actually placed on an axis/page.
+    const indices = axis === 'none' ? [] : list ? list.flatMap((item, k) => item.type === 'data' ? [k] : []) : (state?.hidden ?? []).map((_, k) => k)
     const scope = state?.autoSortScope?.references.find(ref => ref.field === PIVOT_VALUES_FIELD)?.x[0]
     const page = pageByField.get(field)
     return {
-      index: field, sourceOrder: field, name: pivotFieldName(def, cache, field), axis: axisOf(field),
+      index: field, sourceOrder: field, name: pivotFieldName(def, cache, field), axis,
       items: indices.map(k => ({ index: k, ...pivotMenuItemLabel(def, cache, field, k, date1904), hidden: state?.hidden[k] ?? false, collapsed: state?.collapsed[k] ?? false })),
       sort: state?.sortType ?? 'manual', ...(scope !== undefined ? { byData: scope } : {}),
       filters: filtersByField.get(field) ?? [], values: valuesOf(cache, field),

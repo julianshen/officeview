@@ -119,4 +119,17 @@ describe('pivot grouping UI', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('By must be greater than zero')
     expect(onApply).not.toHaveBeenCalled()
   })
+
+  it('ignores a stale day interval after Days is deselected', async () => {
+    const onApply = vi.fn().mockResolvedValue(true)
+    render(<PivotFieldList model={model} pivot={0} verified={new Set(['groupDate'])} onApply={onApply} onClose={vi.fn()} />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Actions for Date' }), { target: { value: 'group' } })
+    fireEvent.click(screen.getByLabelText('Days'))
+    fireEvent.change(screen.getByLabelText('Number of days'), { target: { value: '0' } })
+    fireEvent.click(screen.getByLabelText('Days'))
+    fireEvent.click(screen.getByLabelText('Months'))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'OK' })) })
+    await vi.waitFor(() => expect(onApply).toHaveBeenCalledWith({ kind: 'groupDate', field: 0, periods: ['months'], daysInterval: 1 }))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

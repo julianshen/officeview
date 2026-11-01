@@ -99,11 +99,14 @@ function combineHolds(candidate: PivotMemoryHold | undefined, layout: PivotCandi
     release() { if (released) return; released = true; candidate?.release(); layout?.release() },
   }
 }
-function retainedLayoutBytes(store: RecordStore, layout: PivotLayout): number {
+export function retainedLayoutBytes(store: RecordStore, layout: PivotLayout): number {
   let textBytes = 0
   for (const cell of layout.cells) if (cell.value.kind === 'text' || cell.value.kind === 'error') textBytes += cell.value.value.length * 2 + 24
+  let axisItemSlots = 0
+  for (const line of layout.axes.rows) axisItemSlots += line.items.length
+  for (const line of layout.axes.cols) axisItemSlots += line.items.length
   const bytes = store.count * 8 + layout.axes.rows.length * 96 + layout.axes.cols.length * 96
-    + layout.cells.length * 160 + layout.merges.length * 48 + (layout.captionSlots?.length ?? 0) * 32 + textBytes + 1024
+    + axisItemSlots * 16 + layout.cells.length * 160 + layout.merges.length * 48 + (layout.captionSlots?.length ?? 0) * 32 + textBytes + 1024
   return Number.isSafeInteger(bytes) ? bytes : Number.POSITIVE_INFINITY
 }
 function sameFlags(a: readonly boolean[], b: readonly boolean[]): boolean {

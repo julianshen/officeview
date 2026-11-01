@@ -307,4 +307,27 @@ describe('Task 37 grouping', () => {
     expect(ungrouped.value.cache.fields[3]?.fieldGroup).toBeUndefined()
     expect(session.commit(ungrouped.value)).toBe(true)
   })
+
+  it('admits cloned auto-sort reference arrays before ungrouping', async () => {
+    const loaded = (await loadAll(interaction('s4-move-sales-only-rows')))[0]!
+    const groupedField = 3
+    const base = groupingContext(loaded.def, loaded.cache, loaded.store, initialViewState(loaded.def, loaded.cache), loaded.date1904)
+    const grouped = applyGrouping(base, { kind: 'groupNumber', field: groupedField, start: 0, end: 5000, by: 1000 })
+    expect(grouped.ok).toBe(true)
+    if (!grouped.ok) return
+    const retainedField = 0
+    const referenceCount = 20_000
+    const references = Array.from({ length: referenceCount }, (_, index) => ({
+      field: undefined, selected: true, byPosition: false, relative: false, defaultSubtotal: false, subtotals: [], x: [index],
+    }))
+    const def = { ...grouped.value.def, fields: grouped.value.def.fields.map((field, index) => index === retainedField
+      ? { ...field, autoSortScope: { type: 'normal' as const, dataOnly: false, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false,
+        outline: false, collapsedLevelsAreSubtotals: false, references } } : field) }
+    const ctx = groupingContext(def, grouped.value.cache, grouped.value.store, grouped.value.view, loaded.date1904)
+    let admittedBytes = 0
+    const result = applyGrouping({ ...ctx, admitCandidateBytes(bytes) { admittedBytes = bytes; return { bytes, release() {} } } }, { kind: 'ungroup', field: groupedField })
+    expect(result.ok).toBe(true)
+    expect(admittedBytes).toBeGreaterThanOrEqual(referenceCount * 80)
+    if (result.ok) expect(result.value.def.fields[retainedField]?.autoSortScope?.references).toHaveLength(referenceCount)
+  })
 })

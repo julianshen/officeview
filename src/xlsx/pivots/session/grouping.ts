@@ -160,8 +160,12 @@ function allocation(ctx: PivotDeltaContext, bytes: number): { hold?: PivotMemory
 function fieldCandidateBytes(ctx: PivotDeltaContext): number {
   const fields = Math.max(ctx.cache.fields.length, ctx.def.fields.length, ctx.view.fields.length)
   const vectors = ctx.cache.fields.length + ctx.def.fields.length + ctx.view.fields.length
-  // Covers the cloned field/state objects and the three retained pointer vectors, including nested sort references.
-  const bytes = fields * 256 + vectors * 16 + 512
+  // removeGroupFields remaps each retained auto-sort scope in both the definition and view. It allocates a fresh
+  // references array and one fresh object per reference, while the reference's x vector remains shared.
+  const referenceCount = ctx.def.fields.reduce((sum, field) => sum + (field.autoSortScope?.references.length ?? 0), 0)
+    + ctx.view.fields.reduce((sum, field) => sum + (field.autoSortScope?.references.length ?? 0), 0)
+  // The filter+map peak can hold both the intermediate pointer vector and the final vector/object copies at once.
+  const bytes = fields * 256 + vectors * 16 + referenceCount * 96 + 512
   return Number.isSafeInteger(bytes) ? bytes : Number.POSITIVE_INFINITY
 }
 function groupedAxisSet(cache: PivotCacheDefinition, base: number): Set<number> {
