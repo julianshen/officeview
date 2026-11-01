@@ -851,3 +851,34 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
     await waitFor(() => expect(status(ui.container)).toMatch(/Not available: .*cannot follow its changes/), FIRST_PAINT_WAIT)
   }, 60_000)
 })
+
+describe('a refreshed resident pivot (PR #57 review: labels from the session cache)', () => {
+  it('after its first change, its collapse buttons name their own items, and hiding North hides North', async () => {
+    const doc = await load(`${FIXTURES}recipes/refresh-seed.xlsx`)
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const WORDS = ['East', 'North', 'South', 'West', 'Central', 'Apples', 'Bananas', 'Cherries', 'Elderberries']
+    // Each row's label in column A, as the word it shows (the gridcell's text also carries its accessible prefix).
+    const columnA = () => Array.from({ length: 30 }, (_, row) => { const text = cellText(ui.container, row, 0) ?? ''; return WORDS.find(word => new RegExp(`\\b${word}\\b`).test(text)) })
+    // The first change refreshes the pivot (its rebuilt cache moves North ahead of East).
+    fireEvent.click(await ui.findByRole('button', { name: 'Collapse South (Region)' }, { timeout: 10_000 }))
+    await ui.findByRole('button', { name: 'Expand South (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(columnA()).toContain('East'))
+    const east = columnA().indexOf('East'), north = columnA().indexOf('North')
+    expect(columnA()[east + 1]).toBe('Apples')
+    expect(columnA()[north + 1]).toBe('Apples')
+    // "Collapse North" collapses North, not East.
+    fireEvent.click(ui.getByRole('button', { name: 'Collapse North (Region)' }))
+    await waitFor(() => expect(columnA()[north + 1]).toBe('South'), { timeout: 10_000 })
+    expect(columnA()[east + 1]).toBe('Apples')
+    expect(ui.getByRole('button', { name: 'Collapse East (Region)' })).toBeDefined()
+    expect(ui.getByRole('button', { name: 'Expand North (Region)' })).toBeDefined()
+    // Hiding North in the checklist hides North.
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    const list = await ui.findByRole('dialog', { name: 'Region' })
+    fireEvent.click(within(list).getByRole('checkbox', { name: 'North' }))
+    fireEvent.click(within(list).getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(columnA()).not.toContain('North'), { timeout: 10_000 })
+    expect(columnA()).toContain('East')
+    ui.unmount()
+  }, 30_000)
+})

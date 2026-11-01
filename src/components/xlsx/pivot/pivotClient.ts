@@ -420,13 +420,17 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
   // Ruling S3-Q: an unqualified source naming same-named pivots on several sheets links none, and they refuse.
   const linkedCharts = (def: PivotTableDefinition) => linkPivotCharts(doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)), { sheet: def.sheet, name: String(def.name ?? '') },
     doc.sheets.flatMap(sheet => (sheet.pivotTables ?? []).map(table => ({ sheet: table.sheet, name: String(table.name ?? '') }))))
+  /** The cache each live definition this client installed indexes (its session's), for labels read off the sheet. */
+  const liveCaches = new WeakMap<PivotTableDefinition, PivotCacheDefinition>()
   const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.cache, entry.session.view, entry.date1904)
 
   const client: PivotClient = {
     preflight,
     labels(sheetId, pivot) {
       const def = sheetOf(sheetId)?.pivotTables?.[pivot]
-      const cache = def ? pivotRuntimeFor(doc)?.cache(def) : undefined
+      // A live definition indexes its session's cache (a refreshOnLoad pivot's rebuilt one, PR #57 review); the saved
+      // definition, the runtime's.
+      const cache = def ? liveCaches.get(def) ?? pivotRuntimeFor(doc)?.cache(def) : undefined
       if (!def) return undefined
       const date1904 = pivotRuntimeFor(doc)?.date1904 ?? false
       return {
@@ -524,6 +528,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         layout: result.layout, cache: entry.cache, date1904: entry.date1904,
         changedRects: [...entry.saved, ...before, ...entry.current], allSaved: ![...open.values()].some(shows),
         ...(result.charts.length ? { charts: result.charts } : {}) }
+      liveCaches.set(session.def, entry.cache)
       options.install(commit)
       return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit, ...(result.notice ? { notice: result.notice } : {}) }
     },
