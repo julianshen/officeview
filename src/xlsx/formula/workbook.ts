@@ -1196,7 +1196,12 @@ function evaluateWorkbookFormulasInternal(
     const key = makeCellKey(name, address.col, address.row)
     const cell=cellMap.get(key),saved=cell&&eligibleSaved.get(cell)
     if(saved&&activeSavedOwners.has(saved.anchor))return false
-    return formulaKeys.has(key) || inputKeys.has(key)
+    if (formulaKeys.has(key)) return true
+    // A live pivot cell is the overlay's: a value it shows is an original occupant (read through the overlay, never as a
+    // spill's follower); a cell it vacated is not, even over a saved input (PR #57).
+    const shown = options?.readCellValue?.(name, address.col, address.row)
+    if (shown !== undefined) return shown !== null
+    return inputKeys.has(key)
   }
 
   /** True when the region contains at least one non-original cell (so a spill
@@ -1232,6 +1237,11 @@ function evaluateWorkbookFormulasInternal(
     if (tableCovers(address.sheetId, address.col, address.row)) return 'table'
     if (mergeKeys.has(key)) return 'merged-cell'
     if (formulaKeys.has(key)) return 'formula-cell'
+    // A committed pivot's live cells (the view overlay, PR #57): a value it shows blocks a spill as any input does
+    // (#SPILL! at the anchor, as Excel); a cell it vacated (null) is empty, whatever the saved sheet still holds there.
+    const shown = options?.readCellValue?.(name, address.col, address.row)
+    if (shown === null) return undefined
+    if (shown !== undefined) return 'input-cell'
     const savedCell=cellMap.get(key),saved=savedCell&&eligibleSaved.get(savedCell)
     if(saved&&activeSavedOwners.has(saved.anchor))return undefined
     if (inputKeys.has(key)) return 'input-cell'

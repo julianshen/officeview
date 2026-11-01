@@ -329,3 +329,48 @@ describe('readers of a dependent spill\'s cells, with numeric sheet ids', () => 
     expect(commit(doc, 20).charts).toEqual([0])
   })
 })
+
+describe('a dependent spill and the live pivot cells it would cover', () => {
+  const at = (ref: string, col: number, row: number, extra: Partial<XlsxCell> = {}): XlsxCell => ({ ref, col, row, value: null, styleIndex: 0, hasCachedValue: false, ...extra })
+  /** Pivot!B3 is a pivot value (1); A6 = SEQUENCE(1,B3,10) spills right; D1 reads B6. `b6` is the saved B6 (blank by default). */
+  function blockerDoc(b6?: number): XlsxDocument {
+    const pivot: XlsxSheet = { name: 'Pivot', sheetId: '1', workbookIndex: 0, cols: [], merges: [], mergeRanges: [], rows: [
+      { index: 0, cells: [at('D1', 3, 0, { formula: 'B6*2' })] },
+      { index: 2, cells: [at('B3', 1, 2, { value: 1, hasCachedValue: true })] },
+      { index: 5, cells: [at('A6', 0, 5, { formula: 'SEQUENCE(1,B3,10)', dynamicArray: true }), ...(b6 === undefined ? [] : [at('B6', 1, 5, { value: b6, hasCachedValue: true })])] },
+    ] }
+    const doc: XlsxDocument = { sheets: [pivot], definedNames: [], tables: [] }
+    evaluateWorkbookFormulas(doc, { forceRecalc: true, arrayMode: 'dynamic' })
+    return doc
+  }
+  const cell = (doc: XlsxDocument, ref: string) => doc.sheets[0]!.rows.flatMap(row => row.cells).find(candidate => candidate.ref === ref)
+  /** The commit: B3 becomes 2 and B6 is a pivot cell showing `b6` (null: a cell the pivot vacated). */
+  const commit = (doc: XlsxDocument, b6: number | null) => recomputeDependents(doc, [{ sheetId: 0, rect: { minRow: 2, maxRow: 5, minCol: 1, maxCol: 1 } }], {
+    arrayMode: 'dynamic',
+    readCellValue: (name, col, row) => name !== 'Pivot' || col !== 1 ? undefined : row === 2 ? 2 : row === 5 ? b6 : row > 2 && row < 5 ? null : undefined,
+  })
+
+  it('a live pivot value blocks the spill: the anchor shows #SPILL! and a reader of the cell sees the pivot\'s value', () => {
+    const doc = blockerDoc()
+    expect([cell(doc, 'A6')?.value, cell(doc, 'D1')?.value]).toEqual([10, 0])
+    commit(doc, 99)
+    expect(cell(doc, 'A6')).toMatchObject({ value: '#SPILL!', valueIsError: true })
+    expect(cell(doc, 'B6')?.value ?? null).toBeNull()   // the spill claimed nothing; B6 shows the pivot's 99 through the overlay
+    expect(cell(doc, 'D1')?.value).toBe(198)
+    // Print and the restore still give the saved cells.
+    const saved = savedDependentCells(doc)!.get(doc.sheets[0]!)!
+    expect(saved.get(5)!.get(0)).toMatchObject({ value: 10 })
+    expect(saved.get(0)!.get(3)).toMatchObject({ value: 0 })
+    restoreDependentFormulaValues(doc)
+    expect([cell(doc, 'A6')?.value, cell(doc, 'A6')?.valueIsError ?? false, cell(doc, 'D1')?.value]).toEqual([10, false, 0])
+  })
+
+  it('a cell the pivot vacated does not block the spill, even where the saved sheet still holds the old pivot output', () => {
+    const doc = blockerDoc(5)
+    expect(cell(doc, 'D1')?.value).toBe(10)
+    commit(doc, null)
+    expect([cell(doc, 'A6')?.value, cell(doc, 'B6')?.value, cell(doc, 'D1')?.value]).toEqual([10, 11, 22])
+    restoreDependentFormulaValues(doc)
+    expect([cell(doc, 'A6')?.value, cell(doc, 'B6')?.value, cell(doc, 'D1')?.value]).toEqual([10, 5, 10])
+  })
+})
