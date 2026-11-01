@@ -18,6 +18,7 @@ import { useEffect, useState, type CSSProperties, type ReactElement } from 'reac
 import type { CacheIdentity } from '../../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../../xlsx/view/projection'
 import { logicalToViewport, type ViewportSize } from '../../../xlsx/view/scrollWindow'
+import { paneRegions } from '../../../xlsx/view/frozenPanes'
 import type { ScrollWindow } from '../../../xlsx/view/contracts'
 import type { PivotDiagnostic, PivotTableDefinition } from '../../../xlsx/pivots/model'
 import { drillBox, dropdownBox, pivotButtons, PX_PER_PT, savedPivotLayout, type ButtonPlacement } from '../../../xlsx/pivots/index'
@@ -215,6 +216,18 @@ export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | n
   const [, setTick] = useState(0)
   useEffect(() => controller.subscribe(() => setTick(tick => tick + 1)), [controller])
   const zoom = scroll.zoom, ppt = PX_PER_PT * zoom
+  // PR #57 (P2): each target is clipped to its cell's pane region, as the canvas clips the body under the pinned
+  // strips: a part scrolled under a frozen strip has no target (a click there reaches the pinned cell).
+  // Only the strips' edges cut a target: at the pane's own edges the layer's overflow clips it, as before (a 44 px
+  // touch target beside the first column keeps its width).
+  const regions = new Map(paneRegions(scroll.frozen, scroll.logicalOrigin, zoom, viewport).map(region => {
+    const { x, y, width, height } = region.clip
+    return [region.kind, { x0: x <= 0 ? -Infinity : x, y0: y <= 0 ? -Infinity : y, x1: x + width >= viewport.width ? Infinity : x + width, y1: y + height >= viewport.height ? Infinity : y + height }]
+  }))
+  const regionOf = (x: number, y: number) => {
+    const rowPinned = Boolean(scroll.frozen && y < scroll.frozen.top), colPinned = Boolean(scroll.frozen && x < scroll.frozen.left)
+    return regions.get(rowPinned ? (colPinned ? 'corner' : 'top') : (colPinned ? 'left' : 'body'))
+  }
   const targets: Target[] = []
   defs.forEach((def, pivot) => {
     const state = controller.state(sheet, pivot)
@@ -224,7 +237,9 @@ export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | n
       if (!logical) continue
       const at = logicalToViewport(scroll, { x: logical.x, y: logical.y })
       const cell = { x: at.x, y: at.y, width: logical.width * zoom, height: logical.height * zoom }
-      if (cell.x >= viewport.width || cell.y >= viewport.height || cell.x + cell.width <= 0 || cell.y + cell.height <= 0) continue
+      const clip = regionOf(logical.x, logical.y)
+      if (!clip || cell.x >= viewport.width || cell.y >= viewport.height || cell.x + cell.width <= 0 || cell.y + cell.height <= 0
+        || cell.x >= clip.x1 || cell.y >= clip.y1 || cell.x + cell.width <= clip.x0 || cell.y + cell.height <= clip.y0) continue
       let box = button.kind === 'expand' || button.kind === 'collapse' ? drillBox(cell, ppt) : dropdownBox(cell, ppt)
       if (touch) {
         // 44 px wide; as tall as 44 px within the cell's own row band, so the next row's target never covers it.
@@ -232,6 +247,11 @@ export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | n
         const top = Math.max(cell.y, box.y + box.height / 2 - TOUCH / 2), bottom = Math.min(cell.y + cell.height, box.y + box.height / 2 + TOUCH / 2)
         box = { x: box.x + box.width / 2 - width / 2, y: Math.min(top, box.y), width, height: Math.max(bottom, box.y + box.height) - Math.min(top, box.y) }
       }
+      // Partly hidden: only the visible part; wholly hidden: no target.
+      const x0 = Math.max(box.x, clip.x0), y0 = Math.max(box.y, clip.y0)
+      const x1 = Math.min(box.x + box.width, clip.x1), y1 = Math.min(box.y + box.height, clip.y1)
+      if (x1 <= x0 || y1 <= y0) continue
+      box = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
       targets.push({ key: `${pivot}:${button.row}:${button.col}`, pivot, button, box, action: actionName(controller, sheet, pivot, button, props.cellText),
         ...(state.status === 'refused' ? { refused: state.diagnostic.message } : {}) })
     }

@@ -2402,6 +2402,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 const drill = found.find(entry => entry.button.kind === 'expand' || entry.button.kind === 'collapse')
                 const target = action === 'open' ? found.find(entry => entry.button.kind === 'filter' || entry.button.kind === 'page') : drill
                 if (!target) return false
+                // The cell comes into view first, as the cursor does (PR #57: a cell under a frozen strip has no target).
+                const shown = scrollIntoView(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection } }, at)
+                if (shown !== scroll) setWindow(activeSheetId, shown)
                 if (action !== 'open' && target.button.kind !== action) { setAnnouncement(action === 'expand' ? 'Already expanded.' : 'Already collapsed.'); return true }
                 const anchor = rootRef.current?.querySelector<HTMLElement>(`[data-pivot-key="${target.pivot}:${at.row}:${at.col}"]`) ?? undefined
                 void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
