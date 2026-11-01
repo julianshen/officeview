@@ -72,8 +72,14 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
     event.stopPropagation()
     const source = dragging ?? { kind: 'field' as const, field: Number(event.dataTransfer.getData('text/plain')) }
     if (source.kind === 'chip' && source.area === 'data' && area === 'data') {
-      onApply({ kind: 'moveDataField', dataIndex: source.index, toIndex: index })
-    } else if (Number.isInteger(source.field) && (source.field >= 0 || source.field === -2)) move(source.field, area, index)
+      const toIndex = Math.max(0, Math.min(model.data.length - 1, index))
+      onApply({ kind: 'moveDataField', dataIndex: source.index, toIndex })
+    } else if (Number.isInteger(source.field) && (source.field >= 0 || source.field === -2)) {
+      const targetLength = chips(area).length
+      const targetIndex = source.kind === 'chip' && source.area === area
+        ? Math.max(0, Math.min(targetLength - 1, index)) : index
+      move(source.field, area, targetIndex)
+    }
     setDragging(null)
   }
   const close = () => { onClose(); requestAnimationFrame(() => invoker?.focus()) }

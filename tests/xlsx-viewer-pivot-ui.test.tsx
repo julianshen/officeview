@@ -13,7 +13,8 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
-import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import InteractiveSheetDoc, { pivotCellMatch } from '../src/components/xlsx/InteractiveSheetDoc'
+import { PivotFieldList } from '../src/components/xlsx/pivot/PivotFieldList'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
@@ -81,6 +82,42 @@ const status = (container: HTMLElement) => [...container.querySelectorAll('[role
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('resident pivot client (headless)', () => {
+  it('uses the rowItems measure index for a data-on-rows value cell', async () => {
+    const doc = await load(chartCase('s4-move-values-to-rows-first'))
+    const def = doc.sheets.flatMap(sheet => sheet.pivotTables ?? []).find(candidate => candidate.dataOnRows)!
+    expect(def.dataFields).toHaveLength(2)
+    const row = def.rowItems!.findIndex((item, index) => item.type === 'data' && item.i === 1 && index % def.dataFields!.length !== 1)
+    expect(row).toBeGreaterThanOrEqual(0)
+    const rowStart = 2 + (def.location.firstDataRow ?? 1)
+    const col = 0 + (def.location.firstDataCol ?? 1)
+    expect(pivotCellMatch([def], rowStart + row, col)).toEqual({ pivot: 0, dataIndex: def.rowItems![row]!.i })
+  })
+
+  it('normalizes same-area drops at the end to valid post-removal positions', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const doc = await load(BASELINE)
+    const sheet = pivotSheet(doc)
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: () => {} })
+    const opened = await client.open(sheet, 0, signal())
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const applied: any[] = []
+    const { container } = render(<PivotFieldList model={opened.model} pivot={0} verified={opened.verifiedKinds} onApply={delta => { applied.push(delta) }} onClose={() => {}} />)
+    const transfer = { setData: vi.fn(), getData: vi.fn(() => '') }
+    const rowsArea = container.querySelector<HTMLElement>('fieldset[aria-label="Rows"]')!
+    const rowField = opened.model.fields.find(field => opened.model.rows.includes(field.index))!
+    fireEvent.dragStart(within(rowsArea).getByText(rowField.name).closest('[draggable="true"]') as HTMLElement, { dataTransfer: transfer })
+    fireEvent.drop(rowsArea as HTMLElement, { dataTransfer: transfer })
+    expect(applied.at(-1)).toMatchObject({ kind: 'moveField', field: rowField.index, axis: 'row', index: opened.model.rows.length - 1 })
+
+    const valuesArea = container.querySelector<HTMLElement>('fieldset[aria-label="Values"]')!
+    fireEvent.dragStart(within(valuesArea).getByText(opened.model.data[0]!.name).closest('[draggable="true"]') as HTMLElement, { dataTransfer: transfer })
+    fireEvent.drop(valuesArea as HTMLElement, { dataTransfer: transfer })
+    expect(applied.at(-1)).toMatchObject({ kind: 'moveDataField', dataIndex: 0, toIndex: opened.model.data.length - 1 })
+    cleanup()
+    client.release(sheet, 0)
+  })
+
   it('applies a delta as source data: the live definition and a cumulative overlay, reset gives the saved cells back', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await load(BASELINE), sheet = pivotSheet(doc), source = createObjectWorkbookSource(doc, 'pivot-client')

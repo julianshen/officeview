@@ -2617,7 +2617,7 @@ function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.Pi
   return (state.status === 'open' ? state.model.fields.find(field => field.index === request.field)?.name : undefined) ?? 'Pivot table field'
 }
 
-function pivotCellMatch(defs: readonly import('../../xlsx/pivots/model').PivotTableDefinition[] | undefined, row: number, col: number): { pivot: number; dataIndex: number } | null {
+export function pivotCellMatch(defs: readonly import('../../xlsx/pivots/model').PivotTableDefinition[] | undefined, row: number, col: number): { pivot: number; dataIndex: number } | null {
   if (!defs) return null
   for (let pivot = 0; pivot < defs.length; pivot++) {
     const def = defs[pivot]!
@@ -2630,9 +2630,11 @@ function pivotCellMatch(defs: readonly import('../../xlsx/pivots/model').PivotTa
       let dataIndex = 0
       if (dataCount > 1) {
         if (def.colFields?.includes(-2)) {
-          dataIndex = Math.max(0, (col - dataCol0) % dataCount)
+          const item = def.colItems?.[col - dataCol0]
+          dataIndex = item && item.i >= 0 && item.i < dataCount ? item.i : Math.max(0, (col - dataCol0) % dataCount)
         } else if (def.rowFields?.includes(-2)) {
-          dataIndex = Math.max(0, (row - dataRow0) % dataCount)
+          const item = def.rowItems?.[row - dataRow0]
+          dataIndex = item && item.i >= 0 && item.i < dataCount ? item.i : Math.max(0, (row - dataRow0) % dataCount)
         }
       }
       return { pivot, dataIndex }

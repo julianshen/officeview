@@ -359,6 +359,44 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
+  it('worker keeps a materialized cache/store charge through the next layout-only commit', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const session = kernel.session(docId)!
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const field = opened.menu.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
+    const def = sheet.pivotTables![0]!
+    const runtime = pivotRuntimeFor(doc)!
+    const cache = runtime.cache(def)!
+    const records = await runtime.records(cache, new AbortController().signal)
+    expect(records.ok).toBe(true)
+    if (!records.ok) return
+    expect(cache.fields[field.index]!.sharedItems?.inline).toBe(true)
+    const materializedUpper = records.store.count * (4 + 96 + 8) + 256
+    const openedBytes = session.memoryStats().sourceBytes
+
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'moveField', field: field.index, axis: 'row' }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision })
+    const firstCommitBytes = session.memoryStats().sourceBytes
+    expect(firstCommitBytes).toBeGreaterThanOrEqual(openedBytes + materializedUpper)
+
+    const sorted = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 1, revision: 2,
+      delta: { kind: 'sort', field: field.index, order: 'ascending' }, grantBytes: 16 * 1024 * 1024 }))
+    if (sorted.kind !== 'pivotApply') throw new Error(JSON.stringify(sorted))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: sorted.revision })
+    const secondCommitBytes = session.memoryStats().sourceBytes
+    expect(secondCommitBytes).toBeGreaterThanOrEqual(firstCommitBytes - materializedUpper / 2)
+    await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('Task 35: candidate and overlay bytes share the per-apply grant', async () => {
     const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))

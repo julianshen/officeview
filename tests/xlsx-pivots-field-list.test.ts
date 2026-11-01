@@ -9,6 +9,8 @@ import { PIVOT_DELTA_KINDS } from '../src/xlsx/pivots/session/delta'
 import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
 import { pivotMenuModel } from '../src/xlsx/pivots/session/menu'
+import { applyDeltaState } from '../src/xlsx/pivots/session/delta'
+import { VALUE_TAG } from '../src/xlsx/pivots/engine/records'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const BASELINE = resolve(FIXTURES, 'engine/baseline.xlsx')
@@ -94,6 +96,55 @@ describe('Task 35 field list deltas', () => {
     expect(result.value.store.columns[field]?.kind).toBe('shared')
     expect(loaded.store.columns[field]).toBe(originalColumn)
     expect(session.cache).toBe(loaded.cache)
+  })
+
+  it('keeps inline date time fractions when materializing the shared item list', async () => {
+    const loaded = (await loadAll(BASELINE))[0]!
+    const field = loaded.cache.fields.findIndex(cacheField => cacheField.sharedItems?.inline)
+    const original = loaded.cache.fields[field]!.sharedItems!
+    const sharedItems = { ...original, inline: true, containsDate: true, containsNumber: false, containsString: false, items: [] }
+    const cacheFields = [...loaded.cache.fields]
+    cacheFields[field] = { ...cacheFields[field]!, sharedItems }
+    const cache = { ...loaded.cache, fields: cacheFields }
+    const columns = [...loaded.store.columns]
+    const count = loaded.store.count
+    const tag = new Uint8Array(count); tag.fill(VALUE_TAG.missing)
+    const num = new Float64Array(count)
+    const textIndex = new Uint32Array(count)
+    tag[0] = VALUE_TAG.date; num[0] = 45292.25
+    tag[1] = VALUE_TAG.date; num[1] = 45292.75
+    columns[field] = { kind: 'inline', tag, num, textIndex, text: [] }
+    const store = { ...loaded.store, columns }
+    const def = { ...loaded.def, fields: loaded.def.fields.map((pivotField, index) => {
+      if (index !== field) return pivotField
+      const { items: _items, ...rest } = pivotField
+      return rest
+    }) }
+    const view = initialViewState(def, cache)
+    const result = applyDeltaState({ def, cache, store, view, date1904: loaded.date1904 }, { kind: 'moveField', field, axis: 'row' })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.cache.fields[field]!.sharedItems!.items.filter(item => item.type === 'date').map(item => item.value)).toEqual([
+      '2024-01-01T06:00:00', '2024-01-01T18:00:00',
+    ])
+  })
+
+  it('keeps committed cache/store allocation charged across a later layout-only commit', async () => {
+    const { loaded, session } = await openBaseline()
+    const field = loaded.cache.fields.findIndex(cacheField => cacheField.sharedItems?.inline)
+    let released = 0
+    const first = session.apply({ kind: 'moveField', field, axis: 'row' }, { admitCandidateBytes: bytes => ({ bytes, release: () => { released++ } }) })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(session.commit(first.value)).toBe(true)
+
+    const second = session.apply({ kind: 'sort', field, order: 'ascending' })
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(session.commit(second.value)).toBe(true)
+    expect(released).toBe(0)
+
+    session.release()
+    expect(released).toBe(1)
   })
 
   it('reorders a row field to its exact requested position', async () => {

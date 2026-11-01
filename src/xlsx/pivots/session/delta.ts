@@ -65,7 +65,14 @@ function inlineValue(column: Extract<RecordColumn, { kind: 'inline' }>, row: num
     const decoded = decodeSerial(column.num[row]!, date1904 ? '1904' : '1900')
     if ('civil' in decoded) {
       const { year, month, day } = decoded.civil
-      return { type: 'date', value: `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` }
+      const date = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      if (decoded.fraction === 0) return { type: 'date', value: date }
+      const seconds = decoded.fraction * 86_400
+      const wholeSeconds = Math.floor(seconds)
+      const decimal = (seconds - wholeSeconds).toFixed(12).slice(1).replace(/0+$/, '')
+      const fraction = decimal.length > 1 ? decimal : ''
+      const hours = Math.floor(wholeSeconds / 3_600), minutes = Math.floor(wholeSeconds / 60) % 60, second = wholeSeconds % 60
+      return { type: 'date', value: `${date}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(second).padStart(2, '0')}${fraction}` }
     }
     return { type: 'error', value: '#VALUE!' }
   }

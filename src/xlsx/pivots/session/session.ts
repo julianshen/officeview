@@ -91,6 +91,7 @@ export interface PivotSession {
   /** Ends the session and releases its store lease (once). Later applies refuse `pivot-session-released`. */
   release(): void
 }
+interface ResultOwnership { data?: { release(): void }; layout?: PivotMemoryHold }
 
 function combineHolds(candidate: PivotMemoryHold | undefined, layout: PivotCandidateHold | undefined): PivotMemoryHold {
   let released = false
@@ -297,7 +298,9 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
   const issued = new WeakSet<PivotApplyResult>()
   const areas = new WeakMap<PivotLayout, SheetRect[]>()
   const areaFor = (layout: PivotLayout) => { let area = areas.get(layout); if (!area) areas.set(layout, area = areaOf(layout)); return area }
+  const ownership = new WeakMap<PivotApplyResult, ResultOwnership>()
   let state: PivotApplyResult = { revision: 0, view: view0, def: def0, cache, store, layout: layout0, vacated: [], charts: charts0.value }
+  ownership.set(state, { ...(hold ? { data: hold } : {}) })
   /** The area the sheet shows: the saved area until the first commit. */
   let shown: SheetRect[] = savedArea
   let notice = notice0
@@ -371,6 +374,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
         const spilled = spillLayout(layout.value)
         const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: spillDefinition(live, layout.value, overlap.spill), cache: candidate.cache, store: candidate.store, layout: spilled,
           vacated: subtract(current, areaFor(spilled)), charts: [], ...((candidate.hold || layoutHold) ? { hold: combineHolds(candidate.hold, layoutHold) } : {}), spill: overlap.spill, notice: [notice, pivotSpillNotice(String(def.name ?? ''), row, col, def.sheet)].filter(Boolean).join(' ') }
+        ownership.set(result, { ...(candidate.hold ? { data: candidate.hold } : {}), ...(layoutHold ? { layout: layoutHold } : {}) })
         issued.add(result)
         return { ok: true, value: result }
       }
@@ -378,14 +382,22 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       if (!charts.ok) return discard(charts)
       const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: live, cache: candidate.cache, store: candidate.store, layout: layout.value, vacated: subtract(current, area), charts: charts.value,
         ...((candidate.hold || layoutHold) ? { hold: combineHolds(candidate.hold, layoutHold) } : {}), ...(notice ? { notice } : {}) }
+      ownership.set(result, { ...(candidate.hold ? { data: candidate.hold } : {}), ...(layoutHold ? { layout: layoutHold } : {}) })
       issued.add(result)
       return { ok: true, value: result }
     },
     commit(result) {
       if (released || !issued.has(result) || result.revision !== state.revision + 1) return false
-      const priorHold = state.hold
+      const previous = ownership.get(state), next = ownership.get(result)
+      // A layout candidate is revision-scoped. A materialized cache/store is data used by later revisions, so its
+      // admission follows the cache/store until those references are replaced or the session ends.
+      previous?.layout?.release()
+      let data = next?.data
+      if (data) { if (previous?.data !== data) previous?.data?.release() }
+      else if (state.cache === result.cache && state.store === result.store) data = previous?.data
+      else previous?.data?.release()
+      ownership.set(result, { ...(data ? { data } : {}), ...(next?.layout ? { layout: next.layout } : {}) })
       state = result
-      if (priorHold && priorHold !== result.hold) priorHold.release()
       shown = areaFor(result.layout)
       notice = undefined
       return true
@@ -405,8 +417,9 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       if (released) return
       released = true
       lease?.release()
-      hold?.release()
-      state.hold?.release()
+      const current = ownership.get(state)
+      current?.layout?.release()
+      current?.data?.release()
     },
   }
   return { ok: true, value: session }
