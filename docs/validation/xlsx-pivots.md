@@ -772,3 +772,163 @@ The recipes are in `xlsx-pivots-recipes-stage3.md`. The orchestrator ran them th
 - **Sheet switch.** A changed pivot keeps its change when you switch sheets and back, on every path. On the worker paths only pivots at their saved view are released; a changed pivot's session and overlay stay charged until it is reset or the document closes (S3-AK).
 - **refreshOnLoad.** A source given as a defined name or a table refuses (S3-R).
 - **Charts.** An unqualified `pivotSource` that names pivots on more than one sheet links to none (S3-Q).
+
+## Stage 4 interaction oracle and measurements
+
+Measurements recorded from Excel for Mac 16.114 (zh-TW UI locale) across all 46 Stage 4 interaction cases (`tests/fixtures/xlsx-pivots/interaction/s4-*.xlsx`, built 2026-11-01).
+
+### 1. Off-axis inline field to axis materialization
+When an inline field (a column present in the source data and cached in `pivotCacheRecords` without shared items in `pivotCacheDefinition`) is moved onto Rows, Columns, or Page:
+- **Shared items creation (`pivotCacheDefinition`):**
+  - Unique items from the source column are collected in **first-appearance order** (as encountered scanning the source records top-to-bottom on sheet Data).
+  - Mixed types and blanks are preserved: in `s4-move-inline-text-to-row` (`Channel`, field 6), `cacheField 6` gains `<sharedItems count="4"><s v="Online"/><s v="Retail"/><m/><n v="42"/></sharedItems>` (with `containsBlank="1" containsMixedTypes="1" containsNumber="1" containsInteger="1"`).
+  - In `s4-move-inline-date-to-col` (`Date`, field 5), `cacheField 5` materializes 53 date entries `<d v="..."/>` plus `<m/>` in first appearance order (`count="53"`).
+  - In `s4-move-inline-to-page` (`Month`, field 9), `cacheField 9` materializes 12 text month items (`<sharedItems count="12"><s v="Dec"/><s v="Apr"/>...</sharedItems>`).
+- **Pivot field `<items>` generation (`pivotTableDefinition`):**
+  - The `<pivotField>` element gains an `<items>` list containing one `<item x="..."/>` for each shared item referencing its 0-based shared item index, followed by a terminating default subtotal item `<item t="default"/>`.
+  - For Row fields (`s4-move-inline-text-to-row`): `pivotField 6` has `axis="axisRow" showAll="0"` with `<items count="5"><item x="3"/><item x="0"/><item x="1"/><item x="2"/><item t="default"/></items>`.
+  - For Column fields (`s4-move-inline-date-to-col`): `pivotField 5` has `axis="axisCol" showAll="0"` with `<items count="54">...<item t="default"/></items>`.
+  - For Page/Filter fields (`s4-move-inline-to-page`): `pivotField 9` has `axis="axisPage" showAll="0"` with `<items count="13">...<item t="default"/></items>`. Page selection defaults to `(All)`.
+- **Default field flags:**
+  - Newly materialized axis fields have `showAll="0"` (or omitted).
+  - Subtotal and layout flags (`defaultSubtotal`, `subtotalTop`, `compact`, `outline`, `x14:fillDownLabels`) are **omitted by default** in `<pivotField>`: the table-level defaults govern until explicitly set.
+- **Axis insertion order:**
+  - Moving to Columns when `Values` (`-2`) is already present on Columns (`s4-move-inline-date-to-col`) appends the new field at the end of `colFields`: `<colFields count="3"><field x="2"/><field x="-2"/><field x="5"/></colFields>`.
+
+### 2. Cross-axis move retention vs clearing (`S4-E`)
+Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hidden item `West` `h="1"`, collapsed item `East` `sd="0"`, `sortType="descending"`, and label filter `captionGreaterThan "D"`):
+- **Row ↔ Column move (`s4-move-row-to-col`, `s4-move-row-to-col-and-back`):**
+  - Moving `Region` to Columns (`s4-move-row-to-col`): `sortType="descending"` is **preserved**; hidden item `x="3"` (`West`) with `h="1"` is **preserved**; collapsed item `x="0"` (`East`) with `sd="0"` is **preserved**; label filter `<filter fld="0" type="captionGreaterThan" ...>` is **preserved**.
+  - Moving back to Rows (`s4-move-row-to-col-and-back`): exact start state is restored with all filter, sort, hidden, and collapsed flags intact.
+  - **Ruling S4-E**: Row ↔ Column transitions preserve item visibility, collapsed state, filters, and sorts.
+- **Row → Page move (`s4-move-filtered-field-to-page`):**
+  - `pivotField 0` gains `axis="axisPage" multipleItemSelectionAllowed="1" sortType="descending"`.
+  - Hidden item `x="3"` (`West`) `h="1"` is **preserved** (represented as multi-item page selection excluding West).
+  - Collapsed state `sd="0"` is kept in `<items>`.
+  - Label filter `<filter fld="0" ...>` is **cleared/removed**: page fields do not support label/value filters.
+- **Row → None removal (`s4-move-remove-filtered-field`):**
+  - `pivotField 0` becomes `<pivotField showAll="0" sortType="descending"/>`: `<items>` is stripped; item-level flags (`h="1"`, `sd="0"`) are **cleared**.
+  - Cache shared items on off-axis fields without data or group roles are cleared back to `<sharedItems/>`.
+  - Label filter in `<filters>` remains scoped to the field index or is cleared when explicitly dropped (`quirk-off-axis-hidden-item`).
+
+### 3. Values (`PIVOT_VALUES_FIELD = -2`) lifecycle, measure remapping, and empty pivots (`S4-F`)
+- **`2 → 1` data field removal (`s4-data-remove-to-single`):**
+  - Removing `Sum of Units` leaves `Sum of Sales` as the single measure.
+  - `colFields`: `<colFields count="2"><field x="2"/><field x="-2"/></colFields>` → `<colFields count="1"><field x="2"/></colFields>`.
+  - `Values` (`-2`) is **completely removed** from `colFields` (and is not placed on `rowFields`).
+  - `location`: moves from `A3:I24` (firstDataRow 3) to `A3:E23` (firstDataRow 2) because the values header row is collapsed.
+- **`1 → 2` data field addition (`s4-data-add-second-default-axis`):**
+  - Adding a second data field to a 1-measure pivot appends `Values` (`-2`) to `colFields` by default: `<colFields count="2"><field x="2"/><field x="-2"/></colFields>`.
+  - `dataOnRows` is omitted (defaults to false).
+- **`2 → 1 → 2` after `dataOnRows="1"` (`s4-data-add-second-after-values-on-rows`):**
+  - Starting from `layout-values-on-rows-two-data` where `Values` was on Rows (`rowFields: [0, 1, -2]`, `dataOnRows="1"`):
+  - When reduced to 1 data field and then increased back to 2, `dataOnRows="1"` is preserved and `Values` (`-2`) is placed back on `rowFields: [0, 1, -2]`, not Columns.
+- **Moving `Values` to first row position (`s4-move-values-to-rows-first`):**
+  - Moving `Values` to row position 1 sets `dataOnRows="1"` and `dataPosition="0"` on `<pivotTableDefinition>`.
+  - `rowFields` becomes `<rowFields count="3"><field x="-2"/><field x="0"/><field x="1"/></rowFields>`.
+  - `location` updates to `A3:E44` with `firstDataRow="2"`.
+- **Data field reordering and measure index remapping (`s4-data-reorder`, `s4-data-reorder-remap-measure`):**
+  - In `s4-data-reorder`: moving `Sum of Sales` (fld 3) after `Sum of Units` (fld 4) changes `dataFields` order from `[3, 4]` to `[4, 3]`.
+  - In `s4-data-reorder-remap-measure`: starting with a top-10 filter on `Sum of Units` (`iMeasureFld="1"`) and a value sort on `Product` with `autoSortScope` reference `x v="1"`:
+    - When `Sum of Units` moves `1 → 0`, Excel re-indexes `<filter>` attribute `iMeasureFld="1"` → `iMeasureFld="0"`.
+    - `<autoSortScope>` reference updates `<reference field="4294967294" ...><x v="1"/></reference>` → `<x v="0"/>`.
+- **Zero data fields (`s4-data-remove-all`):**
+  - With both data fields removed and axis fields kept (`Region` on Rows, `Year` on Columns):
+  - `<dataFields>` element is **completely omitted**.
+  - `colFields` has `<field x="2"/>` (count 1, `-2` removed).
+  - `location`: `A3:E23`, `firstHeaderRow="1" firstDataRow="2" firstDataCol="1"`.
+  - **Grid cells:** Row headers (`A5:A22`) and Column headers (`B4:D4`) are displayed; data cells (`B5:D22`) are completely empty (no numbers, no blanks). Grand total row `A23` has caption "Grand Total", and `B23:D23` are empty.
+- **Empty pivot with all fields removed (`s4-empty-pivot-all-removed`, closing `place.ts:35`):**
+  - Removing all row, column, page, and data fields:
+  - `<rowFields>`, `<colFields>`, `<pageFields>`, and `<dataFields>` elements are **all omitted**.
+  - `location`: `<location ref="A3:C20" firstHeaderRow="1" firstDataRow="1" firstDataCol="0"/>`.
+  - **Grid cells:** 0 cells populated in sheet `Pivot` (empty canvas).
+
+### 4. Value field settings, captions, and number formats (`S4-H`, `S4-I`)
+- **Default summary function rule (`s4-data-add-numeric-vs-text`):**
+  - Numeric-only column (even with blanks): `Net Amount` (fld 7, `containsNumber="1" containsBlank="1" containsString="0"`) defaults to **`sum`** (`subtotal="sum"` / omitted in XML) with caption `"加總 - Net Amount"`.
+  - Column containing text, dates, or mixed types: `Channel` (fld 6, `containsMixedTypes="1"`) defaults to **`count`** (`subtotal="count"`) with caption `"計數 - Channel"`.
+- **Duplicate caption naming rule (`s4-data-add-duplicate-field`):**
+  - Adding `Sales` to Values when `Sum of Sales` already exists creates `"加總 - Sales"`.
+  - Adding `Sales` again creates `"加總 - Sales2"`. Subsequent duplicates append digits `3`, `4`, etc.
+- **Custom caption and function (`s4-values-custom-name`):**
+  - Setting function `average` and custom name `"Revenue"` saves `<dataField name="Revenue" fld="3" subtotal="average" baseField="0" baseItem="0"/>`.
+- **Built-in number formats (`s4-values-numfmt-currency-percent`):**
+  - Number format `#,##0.00` saves `numFmtId="4"` on `<dataField>`.
+  - `showDataAs="percentOfTotal"` with format `0.00%` saves `numFmtId="10"` and `showDataAs="percentOfTotal"`.
+  - Setting percent calculation automatically defaults `numFmtId="10"` if unset.
+- **Show Values As previous / next sentinels (`s4-values-showas-previous-next`):**
+  - `showAs="difference"` with `(previous)` item saves `showDataAs="difference" baseField="2" baseItem="1048828"`.
+  - `showAs="percentDiff"` with `(next)` item saves `showDataAs="percentDiff" baseField="2" baseItem="1048829"`.
+- **Variance and standard deviation without totals (`S2-AA` / `s4-values-fn-*-no-totals`):**
+  - On a total-less pivot (`rowGrandTotals="0" colGrandTotals="0"`):
+    - `stdDev`: `subtotal="stdDev"`, caption `"標準差 - Sales"`.
+    - `stdDevp`: `subtotal="stdDevp"`, caption `"母體標準差 - Sales"`.
+    - `var`: `subtotal="var"`, caption `"變異數 - Sales"`.
+    - `varp`: `subtotal="varp"`, caption `"母體變異數 - Sales"`.
+    - Calculated values match Excel 16.114 to 15 decimal digits.
+
+### 5. Grouping, regrouping, and ungrouping (`S4-J`)
+- **Single-period vs multi-period date grouping:**
+  - **Single-period date group (`s4-group-date-single-months`, `s4-group-date-days-single`, `s4-group-date-days-7`):**
+    - In-place grouping on base field 5 (`Date`) creates **1 virtual field** `12` (`"月 (Date)"` or `"天 (Date)"` or `"Date2"`) with `databaseField="0"`.
+    - `cacheField 12` has `<fieldGroup base="5"><rangePr .../><groupItems .../></fieldGroup>`.
+    - Base `cacheField 5` gets `<fieldGroup par="12"/>`.
+    - `rowFields` holds `<field x="12"/>` (the virtual grouped field replaces the base field).
+  - **Multi-period date group (`s4-group-date-multi-yqm`):**
+    - Date grouped into `['months', 'quarters', 'years']` expands `cacheFields count="12"` to `15` with **3 virtual fields**:
+      - `12`: `"月 (Date)"` with `<fieldGroup base="5">`
+      - `13`: `"季 (Date)"` with `<fieldGroup par="12" base="5">`
+      - `14`: `"年 (Date)"` with `<fieldGroup par="13" base="5">`
+    - Base field `5` has `<fieldGroup par="14"/>`.
+    - `rowFields count="3"` has `[14, 13, 12]` (hierarchy: Years › Quarters › Months).
+  - **Virtual field naming in zh-TW Excel 16.114:**
+    - `years` → `"年 (Date)"`
+    - `quarters` → `"季 (Date)"`
+    - `months` → `"月 (Date)"`
+    - `days` (single) → `"天 (Date)"`
+    - `days` (interval > 1) → `"Date2"`
+    - `hours` → `"小時 (Stamp)"`
+    - `minutes` → `"分 (Stamp)"`
+    - `seconds` → `"秒 (Stamp)"`
+- **1-day and 7-day interval grouping:**
+  - `s4-group-date-days-single`: `groupBy="days"` with `groupInterval="1"`. Generates a 366-day leap-year calendar table (`groupItems count="368"`): `<2019/1/15`, `1月1日` … `12月31日` (including `2月29日`), and `>2024/12/21`.
+  - `s4-group-date-days-7`: `groupBy="days"` with `groupInterval="7"`. Generates 312 7-day range buckets: `<2019/1/15`, `2019/1/15-2019/1/21`, ..., `2024/12/17-2024/12/21` (end-clamped to `endDate`!), and `>2024/12/21`.
+- **Time grouping across 1900 leap-year bug boundaries (`s4-group-date-time-hms`, `S2-H`):**
+  - `Stamp` grouped by `['seconds', 'minutes', 'hours']`:
+  - Hours: `<1899/12/30 12:00`, `00` … `23`, `>2023/3/15 06:00`.
+  - Minutes/Seconds: `<1899/12/30 12:00`, `00` … `59`, `>2023/3/15 06:00`.
+  - Source values `0.5`, `1`, `59` (1900-02-28), `60` (fictitious 1900-02-29), `61` (1900-03-01), and `45000.25` map into their respective time-of-day buckets.
+  - Source blanks are placed into a separate `(空白)` row item at the bottom of the group.
+- **Manual bounds and boundary buckets (`s4-group-date-manual-bounds`):**
+  - Grouping `Date` with `startDate="2020-01-01T00:00:00"` and `endDate="2023-12-31T00:00:00"` (`autoStart="0" autoEnd="0"`):
+  - Pivot items: `<2020/1/1` (aggregates 2019 records), `2020`, `2021`, `2022`, `2023`, and `>2023/12/31` (aggregates 2024 records), plus `(空白)` row item for blank dates.
+- **Regrouping date hierarchy (`s4-regroup-date-yqm-to-ym`):**
+  - Regrouping `Years › Quarters › Months` down to `Years › Months`:
+  - `Quarters` (`季 (Date)`) is **completely deleted** from `cacheFields` (count drops 15 → 14) and `pivotFields`.
+  - `rowFields` drops to `[13, 12]` (`count="2"`).
+- **Number grouping with blanks and negatives (`s4-group-number-sales-blanks-manual`, `s4-group-number-units-auto`):**
+  - Number grouping operates **in-place** on the source field: no virtual fields created (`cacheFields` count stays 12).
+  - In `s4-group-number-units-auto` (`Units` grouped by 25):
+    - Auto bounds: `startNum="-5" endNum="233" groupInterval="25"`.
+    - Buckets: `<-5`, `-5-19`, `20-44`, `45-69`, `70-94`, `95-119`, `120-144`, `145-169`, `170-194`, `195-219`, `220-244`, `>245`.
+  - In `s4-group-number-sales-blanks-manual` (`Sales` with 3 blanks, 3 negatives, manual bounds `0..5000` by `1000`):
+    - `rangePr autoStart="0" autoEnd="0" startNum="0" endNum="5000" groupInterval="1000"`.
+    - Buckets in Pivot rows: `A5` = `<0` (aggregates negative sales), `A6` = `0-999`, `A7` = `1000-1999`, `A8` = `2000-2999`, `A9` = `3000-3999`, `A10` = `4000-4999`, `A11` = `>5000`, and `A12` = `(空白)` (for the 3 blank records).
+    - **Resolution for `groups.ts:175`**: blank source records in numeric grouping are placed in a final `(空白)` bucket below `>end`, not dropped or coalesced into `<start` or `0`.
+- **Regrouping and ungrouping numbers (`s4-regroup-number-units`, `s4-ungroup-number-units`):**
+  - `s4-regroup-number-units`: updating `by: 25` → `by: 50` updates `groupInterval="50"` and re-bins items (`<-5`, `-5-44`, `45-94`, `95-144`, `145-194`, `195-244`, `>245`).
+  - `s4-ungroup-number-units`: removes `<fieldGroup>` from `cacheField 4`. All distinct numeric items and the default subtotal item are restored in `<items>`.
+- **Ungrouping manual discrete groups (`s4-ungroup-manual-discrete`):**
+  - Starting from `engine/group-manual` (`Product2` discrete group over `Product`):
+  - Ungrouping deletes the virtual `cacheField 12` (`Product2`) and its corresponding `pivotField 12`.
+  - `rowFields` restores `<field x="1"/>` (`Product` alone on Rows).
+  - `<fieldGroup>` link on `Product` is removed.
+
+### 6. Linked pivot chart and GETPIVOTDATA follow (`S4-L`)
+- **Pivot chart (`s4-chart-values-to-rows`, `s4-chart-remove-second-data`):**
+  - Moving `Values` (`-2`) to Rows (`dataOnRows="1"`): chart categories become row leaves (Region × Product × Values), and series correspond to Column leaves (Year 2022, 2023, 2024).
+  - Removing a data field (`2 → 1`): chart series drop from 6 to 3 (one per Year for the remaining `Sum of Sales` measure).
+- **`GETPIVOTDATA` follow (`s4-gpd-rename-and-move`):**
+  - Moving `Year` to Rows and renaming `Sum of Units` (`fn: 'average'`, `name: "Avg Units"`):
+  - Dependent formulas on sheet `Formulas` evaluate cleanly: `=GETPIVOTDATA("Avg Units", ...)` returns expected averages matching the renamed measure.

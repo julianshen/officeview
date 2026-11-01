@@ -1052,5 +1052,954 @@
     "base": "recipes/refresh-seed-nodata",
     "route": "applescript",
     "status": "built"
+  },
+  {
+    "case": "s4-move-inline-text-to-row",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-inline-text-to-row.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 6,
+        "axis": "row"
+      }
+    ],
+    "measures": "inline mixed text/number/blank field (Channel) moved to Rows: materialises sharedItems, <items> and default field flags",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-inline-date-to-col",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-inline-date-to-col.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 5,
+        "axis": "col"
+      }
+    ],
+    "measures": "inline date field with blanks (Date) moved to Columns: materialises sharedItems and pins default insertion index relative to Values (-2)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-inline-to-page",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-inline-to-page.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 9,
+        "axis": "page"
+      }
+    ],
+    "measures": "inline text field (Month) moved to Filters/Page: materialises sharedItems/<items> and defaults selection to (All)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-reorder-rows",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-reorder-rows.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 1,
+        "axis": "row",
+        "index": 0
+      }
+    ],
+    "measures": "reorder within Rows: Product moved above Region ([1, 0])",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-values-to-rows-first",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-values-to-rows-first.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": -2,
+        "axis": "row",
+        "index": 0
+      }
+    ],
+    "measures": "Values (-2) moved to Rows at index 0 (dataOnRows=\"1\" dataPosition=\"0\")",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-filtered-row-base",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-filtered-row-base.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": [
+          3
+        ]
+      },
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      },
+      {
+        "kind": "sort",
+        "field": 0,
+        "order": "descending"
+      },
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "captionGreaterThan",
+          "evalOrder": -1,
+          "id": 101,
+          "stringValue1": "D",
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "greaterThan",
+                      "val": "D"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "measures": "Region on Rows carrying hidden West, collapsed East, descending sort and label filter >\"D\" (excludes Central): start state for cross-axis retention tests",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-row-to-col",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-row-to-col.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "col"
+      }
+    ],
+    "measures": "Row → Column move of a field with hidden item, collapsed item, label filter and descending sort: pins cross-axis retention (S4-E)",
+    "base": "interaction/s4-filtered-row-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-row-to-col-and-back",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-row-to-col-and-back.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "col"
+      },
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "row",
+        "index": 0
+      }
+    ],
+    "measures": "Row → Column → Row round-trip of a filtered/hidden/collapsed/sorted field: pins S4-E preservation vs reset",
+    "base": "interaction/s4-filtered-row-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-filtered-field-to-page",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-filtered-field-to-page.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "page"
+      }
+    ],
+    "measures": "Row → Page move of a field carrying hidden item, collapsed item, label filter and descending sort",
+    "base": "interaction/s4-filtered-row-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-remove-filtered-field",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-remove-filtered-field.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "none"
+      }
+    ],
+    "measures": "Row → none removal of a field carrying hidden item, collapsed item, label filter and descending sort: pins what Excel clears on removal",
+    "base": "interaction/s4-filtered-row-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-remove-to-single",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-remove-to-single.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "removeDataField",
+        "dataIndex": 1
+      }
+    ],
+    "measures": "2 → 1 data fields removes Values (-2) from Columns",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-add-second-default-axis",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-add-second-default-axis.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "addDataField",
+        "field": 4
+      }
+    ],
+    "measures": "1 → 2 data fields from a single-data pivot: Values (-2) axis & default position and zh-TW default data-field caption",
+    "base": "interaction/s4-data-remove-to-single",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-add-second-after-values-on-rows",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-add-second-after-values-on-rows.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "removeDataField",
+        "dataIndex": 1
+      },
+      {
+        "kind": "addDataField",
+        "field": 4
+      }
+    ],
+    "measures": "2 → 1 → 2 data fields when Values was previously on Rows (dataOnRows=\"1\"): pins whether 1 → 2 restores Values to Rows or defaults to Columns",
+    "base": "engine/layout-values-on-rows-two-data",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-add-numeric-vs-text",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-add-numeric-vs-text.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "addDataField",
+        "field": 7
+      },
+      {
+        "kind": "addDataField",
+        "field": 6
+      }
+    ],
+    "measures": "default summary function rule: Net Amount (numbers + blanks) → sum (\"加總 - Net Amount\"); Channel (mixed text/number/blank) → count (\"計數 - Channel\")",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-add-duplicate-field",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-add-duplicate-field.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "addDataField",
+        "field": 3
+      },
+      {
+        "kind": "addDataField",
+        "field": 3
+      }
+    ],
+    "measures": "adding Sales when \"Sum of Sales\" exists (\"加總 - Sales\") and again when \"加總 - Sales\" exists (\"加總 - Sales2\"): pins duplicate suffix rule",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-reorder",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-reorder.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveDataField",
+        "dataIndex": 0,
+        "toIndex": 1
+      }
+    ],
+    "measures": "reorder data fields (Sum of Sales ↔ Sum of Units)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-reorder-remap-measure",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-reorder-remap-measure.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 1,
+        "order": "descending",
+        "byData": 1
+      },
+      {
+        "kind": "moveDataField",
+        "dataIndex": 1,
+        "toIndex": 0
+      }
+    ],
+    "measures": "moveDataField(1 → 0) with an active top-10 filter and value sort on Sum of Units: pins iMeasureFld and autoSortScope remapping",
+    "base": "engine/filter-top-count-ties",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-data-remove-all",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-data-remove-all.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "removeDataField",
+        "dataIndex": 1
+      },
+      {
+        "kind": "removeDataField",
+        "dataIndex": 0
+      }
+    ],
+    "measures": "remove both data fields (0 data fields, Row and Column fields kept): pins 0-data layout cells and location",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-empty-pivot-all-removed",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-empty-pivot-all-removed.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "removeDataField",
+        "dataIndex": 1
+      },
+      {
+        "kind": "removeDataField",
+        "dataIndex": 0
+      },
+      {
+        "kind": "moveField",
+        "field": 2,
+        "axis": "none"
+      },
+      {
+        "kind": "moveField",
+        "field": 1,
+        "axis": "none"
+      },
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "none"
+      }
+    ],
+    "measures": "all row, column, page and data fields removed (0 fields on all axes): pins empty-pivot cells and location (place.ts:35)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-units-only-rows",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-units-only-rows.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 1,
+        "axis": "none"
+      },
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "none"
+      },
+      {
+        "kind": "moveField",
+        "field": 4,
+        "axis": "row"
+      }
+    ],
+    "measures": "inline numeric field Units moved onto Rows while Sum of Units remains in Values (also start base for Units number grouping)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-move-sales-only-rows",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-move-sales-only-rows.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 1,
+        "axis": "none"
+      },
+      {
+        "kind": "moveField",
+        "field": 0,
+        "axis": "none"
+      },
+      {
+        "kind": "moveField",
+        "field": 3,
+        "axis": "row"
+      }
+    ],
+    "measures": "inline numeric field Sales (with 3 blanks and 3 negatives) moved onto Rows while Sum of Sales remains in Values (base for Sales number grouping)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-chart-values-to-rows",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-chart-values-to-rows.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": -2,
+        "axis": "row"
+      }
+    ],
+    "measures": "chart-linked pivot after moving Values (-2) to Rows as a Stage 4 delta",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-chart-remove-second-data",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-chart-remove-second-data.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 35,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "removeDataField",
+        "dataIndex": 1
+      }
+    ],
+    "measures": "chart-linked pivot reduced from 2 data fields to 1 (Values -2 removed from Columns, single series)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-no-totals-base",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-no-totals-base.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "single-row-field total-less base (hasTotals === false) for S2-AA stdDev/stdDevp/var/varp valueSettings oracles",
+    "setup": "Product removed from rows and rowGrandTotals=\"0\" colGrandTotals=\"0\" so hasTotals is false (S2-AA)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-fn-stdev-no-totals",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-fn-stdev-no-totals.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "fn": "stdDev"
+      }
+    ],
+    "measures": "stdDev on a total-less pivot (hasTotals === false, allowed under S2-AA) with zh-TW default data-field caption",
+    "base": "interaction/s4-values-no-totals-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-fn-stdevp-no-totals",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-fn-stdevp-no-totals.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "fn": "stdDevp"
+      }
+    ],
+    "measures": "stdDevp on a total-less pivot (hasTotals === false, allowed under S2-AA) with zh-TW default data-field caption",
+    "base": "interaction/s4-values-no-totals-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-fn-var-no-totals",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-fn-var-no-totals.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "fn": "var"
+      }
+    ],
+    "measures": "var on a total-less pivot (hasTotals === false, allowed under S2-AA) with zh-TW default data-field caption",
+    "base": "interaction/s4-values-no-totals-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-fn-varp-no-totals",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-fn-varp-no-totals.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "fn": "varp"
+      }
+    ],
+    "measures": "varp on a total-less pivot (hasTotals === false, allowed under S2-AA) with zh-TW default data-field caption",
+    "base": "interaction/s4-values-no-totals-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-custom-name",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-custom-name.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "fn": "average",
+        "name": "Revenue"
+      }
+    ],
+    "measures": "valueSettings changing summary function to average with explicit custom name \"Revenue\"",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-numfmt-currency-percent",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-numfmt-currency-percent.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "numFmtId": 4
+      },
+      {
+        "kind": "valueSettings",
+        "dataIndex": 1,
+        "showAs": "percentOfTotal",
+        "numFmtId": 10
+      }
+    ],
+    "measures": "built-in number formats numFmtId=4 (#,##0.00) on Sum of Sales and numFmtId=10 (0.00%) with percentOfTotal on Sum of Units",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-values-showas-previous-next",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-values-showas-previous-next.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "valueSettings",
+        "dataIndex": 0,
+        "showAs": "difference",
+        "baseField": 2,
+        "baseItem": 1048828
+      },
+      {
+        "kind": "valueSettings",
+        "dataIndex": 1,
+        "showAs": "percentDiff",
+        "baseField": 2,
+        "baseItem": 1048829
+      }
+    ],
+    "measures": "difference from (previous) (1048828) and % difference from (next) (1048829) applied together across the two data fields",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-gpd-rename-and-move",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-gpd-rename-and-move.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 36,
+    "seed": "getpivotdata-seed",
+    "delta": [
+      {
+        "kind": "moveField",
+        "field": 2,
+        "axis": "row"
+      },
+      {
+        "kind": "valueSettings",
+        "dataIndex": 1,
+        "fn": "average",
+        "name": "Avg Units"
+      }
+    ],
+    "measures": "GETPIVOTDATA formulas after Year moves from Columns to Rows and \"Sum of Units\" is renamed to \"Avg Units\" (average)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-date-single-months",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-date-single-months.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 5,
+        "periods": [
+          "months"
+        ]
+      }
+    ],
+    "measures": "single-period date grouping (months) on Date-on-rows: creates 1 virtual cacheField (\"月 (Date)\", x=\"12\") with <fieldGroup base=\"5\"> and blank bucket",
+    "base": "interaction/interaction-filter-date-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-date-days-single",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-date-days-single.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 5,
+        "periods": [
+          "days"
+        ]
+      }
+    ],
+    "measures": "1-day date grouping (groupBy=\"days\", groupInterval=1, virtual field \"天 (Date)\"): leap-year 366-day calendar table and zh-TW day captions",
+    "base": "interaction/interaction-filter-date-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-date-days-7",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-date-days-7.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 5,
+        "periods": [
+          "days"
+        ],
+        "daysInterval": 7
+      }
+    ],
+    "measures": "7-day interval grouping (groupBy=\"days\" groupInterval=\"7\"): exact 7-day range captions, end clamping and blank bucket",
+    "base": "interaction/interaction-filter-date-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-date-time-hms",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-date-time-hms.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 11,
+        "periods": [
+          "seconds",
+          "minutes",
+          "hours"
+        ]
+      }
+    ],
+    "measures": "Stamp grouped by hours/minutes/seconds: pins serials 0.5, 1, 59 (1900-02-28), 60 (fictitious 1900-02-29), 61, 45000.25 and blanks under S2-H",
+    "base": "engine/quirk-dates-1900-rows",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-date-multi-yqm",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-date-multi-yqm.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 5,
+        "periods": [
+          "months",
+          "quarters",
+          "years"
+        ]
+      }
+    ],
+    "measures": "Date grouped from ungrouped items into Years › Quarters › Months: pins virtual cacheField/pivotField creation, zh-TW names and par/base links",
+    "base": "interaction/interaction-filter-date-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-date-manual-bounds",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-date-manual-bounds.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 5,
+        "periods": [
+          "quarters",
+          "years"
+        ],
+        "startDate": 43831,
+        "endDate": 45291
+      }
+    ],
+    "measures": "multi-level date grouping (Years › Quarters) with manual bounds 2020-01-01..2023-12-31 inside 2019..2024: pins <start, >end and blank buckets",
+    "base": "interaction/interaction-filter-date-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-regroup-date-yqm-to-ym",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-regroup-date-yqm-to-ym.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupDate",
+        "field": 5,
+        "periods": [
+          "months",
+          "years"
+        ]
+      }
+    ],
+    "measures": "regrouping Years › Quarters › Months down to Years › Months: pins removal of the Quarters virtual cacheField and pivotField",
+    "base": "interaction/s4-group-date-multi-yqm",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-ungroup-date-multi",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-ungroup-date-multi.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "ungroup",
+        "field": 5
+      }
+    ],
+    "measures": "ungrouping a 3-level date hierarchy back to ungrouped Date items: pins removal of virtual fields and restoration of Date on Rows",
+    "base": "interaction/s4-group-date-multi-yqm",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-ungroup-date-single",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-ungroup-date-single.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "ungroup",
+        "field": 5
+      }
+    ],
+    "measures": "ungrouping a 1-level date group (months, virtual field \"月 (Date)\") back to ungrouped Date items",
+    "base": "interaction/s4-group-date-single-months",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-number-units-auto",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-number-units-auto.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupNumber",
+        "field": 4,
+        "by": 25
+      }
+    ],
+    "measures": "Units grouped by 25 with automatic min/max bounds (-5..233): pins autoStart/autoEnd startNum/endNum and bucket labels",
+    "base": "interaction/s4-move-units-only-rows",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-group-number-sales-blanks-manual",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-group-number-sales-blanks-manual.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupNumber",
+        "field": 3,
+        "start": 0,
+        "end": 5000,
+        "by": 1000
+      }
+    ],
+    "measures": "Sales (3 blanks, 3 negatives, values >5000) grouped with manual 0..5000 by 1000: pins <0, >5000 and blank bucket placement (groups.ts:175)",
+    "base": "interaction/s4-move-sales-only-rows",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-regroup-number-units",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-regroup-number-units.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "groupNumber",
+        "field": 4,
+        "by": 50
+      }
+    ],
+    "measures": "regrouping Units from interval 25 to interval 50",
+    "base": "interaction/s4-group-number-units-auto",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-ungroup-number-units",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-ungroup-number-units.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "ungroup",
+        "field": 4
+      }
+    ],
+    "measures": "ungrouping numeric range group on Units back to distinct numeric items",
+    "base": "interaction/s4-group-number-units-auto",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "s4-ungroup-manual-discrete",
+    "file": "tests/fixtures/xlsx-pivots/interaction/s4-ungroup-manual-discrete.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 37,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "ungroup",
+        "field": 12
+      }
+    ],
+    "measures": "ungrouping saved manual discrete group (Product2 over Product) back to Product alone on Rows",
+    "base": "engine/group-manual",
+    "route": "applescript",
+    "status": "built"
   }
 ]
