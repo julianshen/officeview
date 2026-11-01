@@ -760,7 +760,10 @@ The recipes are in `xlsx-pivots-recipes-stage3.md`. The orchestrator ran them th
 - **Dependent formulas.**
   - A recompute over the work budget (2×10⁶ estimated range-cell visits) leaves its readers marked "may be out of date" (S3-AE).
   - `GETPIVOTDATA` shapes that were never measured keep their saved value (S3-T).
+  - On the resident path, each such stale reader shows a small corner mark with a tooltip. Its cell description gives the same text (S3-AM).
   - `INDIRECT`/`OFFSET` readers always recompute (S3-Z).
   - Paged workbooks don't recompute. They show a sheet-level notice once the worker's formula scan finds formulas (S3-S, S3-AA, S3-AG).
+- **Print.** A printout shows a changed pivot as saved. So do the formula cells and charts that read it: they print their saved values, and the print note says so (S3-AL, §7.10).
+- **Sheet switch.** A changed pivot keeps its change when you switch sheets and back, on every path. On the worker paths only pivots at their saved view are released; a changed pivot's session and overlay stay charged until it is reset or the document closes (S3-AK).
 - **refreshOnLoad.** A source given as a defined name or a table refuses (S3-R).
 - **Charts.** An unqualified `pivotSource` that names pivots on more than one sheet links to none (S3-Q).

@@ -70,6 +70,8 @@ in git history.
     do the charts on those cells.
     - When a formula can't be recomputed, it keeps its value and the sheet says it may be out of date. That covers
       formulas whose recompute is over a work limit, and `GETPIVOTDATA` arguments of a shape Excel was not measured on.
+      Each such cell also gets a small corner mark; its tooltip, and the cell's description for screen readers, say
+      why.
     - Large workbooks opened through the viewer worker don't recompute formulas. They show that notice instead.
   - **Refusals.**
     - A change that would grow a pivot over a value, a merged cell, a spill range, a noted cell or another pivot is
@@ -77,7 +79,8 @@ in git history.
     - Sheet sort refuses on a range that touches a pivot, with Excel's message.
     - Sheet filter refuses on a range inside a pivot. A filter beside a pivot is allowed, as in Excel.
   - **Large workbooks.** Workbooks opened through the viewer worker change their pivots in the worker, with the same
-    results.
+    results. A change stays when you switch sheets and back.
+  - **Print** shows a changed pivot as saved, and the formulas and charts that read it print their saved values too.
   - **Checked against Excel.** The changes are checked against 57 Excel-saved interaction cases built by driving
     Excel for Mac 16.114, plus 7 hand-run recipes: every expand, collapse, filter, sort and page case matches Excel's
     saved layout, and so do the chart, autofit, `GETPIVOTDATA` and refresh cases. Details are in
