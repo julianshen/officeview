@@ -902,7 +902,7 @@ Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hi
   - Source blanks are placed into a separate `(空白)` row item at the bottom of the group.
 - **Manual bounds and boundary buckets (`s4-group-date-manual-bounds`):**
   - Grouping `Date` with `startDate="2020-01-01T00:00:00"` and `endDate="2023-12-31T00:00:00"` (`autoStart="0" autoEnd="0"`):
-  - Pivot items: `<2020/1/1` (aggregates 2019 records), `2020`, `2021`, `2022`, `2023`, and `>2023/12/31` (aggregates 2024 records), plus `(空白)` row item for blank dates.
+  - Pivot items: `<2020/1/1` (aggregates 2019 records), `2020年`, `2021年`, `2022年`, `2023年`, and `>2023/12/31` (aggregates 2024 records).
 - **Regrouping date hierarchy (`s4-regroup-date-yqm-to-ym`):**
   - Regrouping `Years › Quarters › Months` down to `Years › Months`:
   - `Quarters` (`季 (Date)`) is **completely deleted** from `cacheFields` (count drops 15 → 14) and `pivotFields`.
@@ -914,8 +914,8 @@ Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hi
     - Buckets: `<-5`, `-5-19`, `20-44`, `45-69`, `70-94`, `95-119`, `120-144`, `145-169`, `170-194`, `195-219`, `220-244`, `>245`.
   - In `s4-group-number-sales-blanks-manual` (`Sales` with 3 blanks, 3 negatives, manual bounds `0..5000` by `1000`):
     - `rangePr autoStart="0" autoEnd="0" startNum="0" endNum="5000" groupInterval="1000"`.
-    - Buckets in Pivot rows: `A5` = `<0` (aggregates negative sales), `A6` = `0-999`, `A7` = `1000-1999`, `A8` = `2000-2999`, `A9` = `3000-3999`, `A10` = `4000-4999`, `A11` = `>5000`, and `A12` = `(空白)` (for the 3 blank records).
-    - **Resolution for `groups.ts:175`**: blank source records in numeric grouping are placed in a final `(空白)` bucket below `>end`, not dropped or coalesced into `<start` or `0`.
+    - Buckets in Pivot rows: `A6` = `<0 或 (空白)` (aggregates negative sales and blank sales), `A7` = `0-1000`, `A8` = `1000-2000`, `A9` = `2000-3000`, `A10` = `3000-4000`, `A11` = `4000-5000`, `A12` = `>5000` (`rowItems count="8"`).
+    - **Resolution for `groups.ts:175`**: blank source records in numeric grouping are coalesced into the lower-bound bucket (`<start 或 (空白)`), not placed in a separate trailing `(空白)` row item.
 - **Regrouping and ungrouping numbers (`s4-regroup-number-units`, `s4-ungroup-number-units`):**
   - `s4-regroup-number-units`: updating `by: 25` → `by: 50` updates `groupInterval="50"` and re-bins items (`<-5`, `-5-44`, `45-94`, `95-144`, `145-194`, `195-244`, `>245`).
   - `s4-ungroup-number-units`: removes `<fieldGroup>` from `cacheField 4`. All distinct numeric items and the default subtotal item are restored in `<items>`.

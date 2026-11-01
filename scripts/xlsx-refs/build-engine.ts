@@ -448,6 +448,22 @@ export async function buildInteractionSeed(s: SeedBuild, fallback = true): Promi
   }
 }
 
+async function verifyXmlRecomputation(edited: string, out: string): Promise<void> {
+  const [editedParts, outParts] = await Promise.all([readParts(edited), readParts(out)])
+  const locChanged = /<location\b[^>]*\bref="([^"]*)"/.exec(editedParts.pivot)?.[1] !== /<location\b[^>]*\bref="([^"]*)"/.exec(outParts.pivot)?.[1]
+  const rowsChanged = /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(editedParts.pivot)?.[1] !== /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(outParts.pivot)?.[1]
+  const [editedZip, outZip] = await Promise.all([loadZip(edited), loadZip(out)])
+  const sheetName = Object.keys(outZip.files).find(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+  const [editedSheet, outSheet] = await Promise.all([
+    sheetName ? editedZip.file(sheetName)?.async('string') : '',
+    sheetName ? outZip.file(sheetName)?.async('string') : '',
+  ])
+  const sheetChanged = editedSheet !== outSheet
+  if (!locChanged && !rowsChanged && !sheetChanged) {
+    throw new Error('XML route: saved output was not recomputed by Excel (location, rowItems, and sheet cells identical to edited input)')
+  }
+}
+
 async function runInteraction(c: InteractionCase, route: 'applescript' | 'xml', out: string): Promise<void> {
   const start = fixturePath(startOf(c))
   if (!existsSync(start)) throw new Error(`start file ${startOf(c)}.xlsx is not built`)
@@ -460,11 +476,34 @@ async function runInteraction(c: InteractionCase, route: 'applescript' | 'xml', 
     if (c.xmlPrep) { session(input, prepped, c.xmlPrep); source = prepped }
     await writeEdited(source, edited, c.xmlEdit)
     session(edited, out, c.post ?? (() => []))
+    await verifyXmlRecomputation(edited, out)
   } finally {
     for (const f of [input, prepped, edited]) rmSync(f, { force: true })
   }
 }
-async function verifyInteraction(c: InteractionCase, out: string): Promise<string> {
+export async function verifyInteraction(c: InteractionCase, out: string): Promise<string> {
+  const startFile = fixturePath(startOf(c))
+  if (existsSync(startFile)) {
+    const startParts = await readParts(startFile)
+    const outParts = await readParts(out)
+    if (c.delta.length > 0 && startParts.pivot === outParts.pivot && startParts.cache === outParts.cache) {
+      throw new Error(`saved pivot is identical to start file ${startOf(c)}: no-op interaction`)
+    }
+    if (c.route === 'xml') {
+      const [startZip, outZip] = await Promise.all([loadZip(startFile), loadZip(out)])
+      const sheetName = Object.keys(outZip.files).find(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+      const [startSheet, outSheet] = await Promise.all([
+        sheetName ? startZip.file(sheetName)?.async('string') : '',
+        sheetName ? outZip.file(sheetName)?.async('string') : '',
+      ])
+      const locChanged = /<location\b[^>]*\bref="([^"]*)"/.exec(startParts.pivot)?.[1] !== /<location\b[^>]*\bref="([^"]*)"/.exec(outParts.pivot)?.[1]
+      const rowsChanged = /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(startParts.pivot)?.[1] !== /<rowItems\b[^>]*\bcount="([^"]*)"/.exec(outParts.pivot)?.[1]
+      const sheetChanged = startSheet !== outSheet
+      if (!locChanged && !rowsChanged && !sheetChanged) {
+        throw new Error(`XML route: saved output was not recomputed (location, rowItems, and sheet cells unchanged from start ${startOf(c)})`)
+      }
+    }
+  }
   const pivot = await verify(out, c.markers, c.cacheMarkers, c.absent, c.cacheAbsent)
   if (c.recordMarkers) await verifyRecords(out, c.recordMarkers)
   await verifySheets(out, c.sheetMarkers)

@@ -688,7 +688,12 @@ add('s4-filtered-row-base', 35, {
   route: 'xml',
   xmlPrep: t => [hideItem(t, 'Region', 'West'), showDetail(t, 'Region', 'East', false), autoSort(t, 'Region', 'descending', 'Region')],
   xmlEdit: p => ({ ...p, pivot: labelFilter(p.pivot, F.Region, 'captionGreaterThan', 'D') }),
-  markers: [hiddenItem(F.Region), collapsedItem(F.Region), fieldAttr(F.Region, 'sortType', 'descending'), /<filter [^>]*type="captionGreaterThan"/],
+  markers: [
+    /<location ref="A3:I15" firstHeaderRow="1" firstDataRow="3" firstDataCol="1"\/>/,
+    /<rowItems count="10">/,
+    hiddenItem(F.Region), collapsedItem(F.Region), fieldAttr(F.Region, 'sortType', 'descending'),
+    /<filter [^>]*fld="0"[^>]*type="captionGreaterThan"/,
+  ],
   delta: [
     { kind: 'items', field: 'Region', hidden: ['West'] },
     { kind: 'collapse', field: 'Region', item: 'East', collapsed: true },
@@ -847,7 +852,7 @@ for (const [slug, fnName, asFn] of [
 add('s4-values-custom-name', 36, {
   route: 'applescript',
   lines: t => [`set function of ${dataField(t, SALES)} to do average`, `set name of data field 1 of ${t.p} to "Revenue"`],
-  markers: [/<dataField [^>]*name="Revenue"/, /<dataField [^>]*subtotal="average"/],
+  markers: [/<dataField [^>]*name="Revenue"[^>]*fld="3"[^>]*subtotal="average"/],
   delta: [{ kind: 'valueSettings', dataIndex: 0, fn: 'average', name: 'Revenue' }],
   measures: 'valueSettings changing summary function to average with explicit custom name "Revenue"',
 })
@@ -858,7 +863,10 @@ add('s4-values-numfmt-currency-percent', 36, {
     `set calculation of ${dataField(t, UNITS)} to pivot field calculation percent of total`,
     `set number format of ${dataField(t, UNITS)} to "0.00%"`,
   ],
-  markers: [/<dataField [^>]*numFmtId="4"/, /<dataField [^>]*showDataAs="percentOfTotal"/, /<dataField [^>]*numFmtId="10"/],
+  markers: [
+    /<dataField [^>]*name="Sum of Sales"[^>]*fld="3"[^>]*numFmtId="4"/,
+    /<dataField [^>]*name="Sum of Units"[^>]*fld="4"[^>]*showDataAs="percentOfTotal"[^>]*numFmtId="10"/,
+  ],
   delta: [
     { kind: 'valueSettings', dataIndex: 0, numFmtId: 4 },
     { kind: 'valueSettings', dataIndex: 1, showAs: 'percentOfTotal', numFmtId: 10 },
@@ -875,7 +883,10 @@ add('s4-values-showas-previous-next', 36, {
     `set base field of ${dataField(t, UNITS)} to "Year"`,
     `set base item of ${dataField(t, UNITS)} to "(next)"`,
   ],
-  markers: [/<dataField [^>]*baseItem="1048828"/, /<dataField [^>]*baseItem="1048829"/],
+  markers: [
+    /<dataField [^>]*fld="3"[^>]*showDataAs="difference"[^>]*baseField="2"[^>]*baseItem="1048828"/,
+    /<dataField [^>]*fld="4"[^>]*showDataAs="percentDiff"[^>]*baseField="2"[^>]*baseItem="1048829"/,
+  ],
   delta: [
     { kind: 'valueSettings', dataIndex: 0, showAs: 'difference', baseField: 'Year', baseItem: '(previous)' },
     { kind: 'valueSettings', dataIndex: 1, showAs: 'percentDiff', baseField: 'Year', baseItem: '(next)' },
@@ -885,7 +896,7 @@ add('s4-values-showas-previous-next', 36, {
 add('s4-gpd-rename-and-move', 36, {
   seed: 'getpivotdata-seed', route: 'applescript',
   lines: t => [toRows(t, 'Year'), `set function of ${dataField(t, UNITS)} to do average`, `set name of data field 2 of ${t.p} to "Avg Units"`],
-  markers: [rowField(F.Year), /<dataField [^>]*name="Avg Units"/],
+  markers: [rowField(F.Year), /<dataField [^>]*name="Avg Units"[^>]*fld="4"[^>]*subtotal="average"/],
   sheetMarkers: [{ sheet: GPD_SHEET, re: /<f>GETPIVOTDATA\(/ }],
   delta: [
     { kind: 'moveField', field: 'Year', axis: 'row' },
@@ -913,7 +924,7 @@ add('s4-group-date-days-7', 37, {
   base: 'interaction/interaction-filter-date-base', route: 'applescript', probe: 'group-days-interval',
   lines: t => [`group ${groupCell(t, 'Date')} by 7 periods ${allPeriods('days')}`],
   markers: [rowField(12)],
-  cacheMarkers: [/<rangePr [^>]*groupBy="days"[^>]*groupInterval="7"|<rangePr [^>]*groupInterval="7"[^>]*groupBy="days"/],
+  cacheMarkers: [/<rangePr [^>]*groupBy="days"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"[^>]*groupInterval="7"/],
   delta: [{ kind: 'groupDate', field: 'Date', periods: ['days'], daysInterval: 7 }],
   measures: '7-day interval grouping (groupBy="days" groupInterval="7"): exact 7-day range captions, end clamping and blank bucket',
 })
@@ -928,24 +939,39 @@ add('s4-group-date-time-hms', 37, {
 add('s4-group-date-multi-yqm', 37, {
   base: 'interaction/interaction-filter-date-base', route: 'applescript',
   lines: t => [`group ${groupCell(t, 'Date')} periods ${allPeriods('months', 'quarters', 'years')}`],
-  markers: [/<rowFields count="3">/],
-  cacheMarkers: [/<rangePr [^>]*groupBy="years"/, /<rangePr [^>]*groupBy="quarters"/, /<rangePr [^>]*groupBy="months"/],
+  markers: [/<rowFields count="3"><field x="14"\/><field x="13"\/><field x="12"\/><\/rowFields>/],
+  cacheMarkers: [
+    /<rangePr [^>]*groupBy="months"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+    /<rangePr [^>]*groupBy="quarters"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+    /<rangePr [^>]*groupBy="years"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+  ],
   delta: [{ kind: 'groupDate', field: 'Date', periods: ['months', 'quarters', 'years'] }],
   measures: 'Date grouped from ungrouped items into Years › Quarters › Months: pins virtual cacheField/pivotField creation, zh-TW names and par/base links',
 })
 add('s4-group-date-manual-bounds', 37, {
   base: 'interaction/interaction-filter-date-base', route: 'applescript',
   lines: t => [`group ${groupCell(t, 'Date')} start 43831 end 45291 periods ${allPeriods('quarters', 'years')}`],
-  markers: [/<rowFields count="2">/],
-  cacheMarkers: [/<rangePr [^>]*autoStart="0"/, /<rangePr [^>]*autoEnd="0"/, /<rangePr [^>]*groupBy="years"/, /<rangePr [^>]*groupBy="quarters"/],
+  markers: [
+    /<rowFields count="2"><field x="13"\/><field x="12"\/><\/rowFields>/,
+    /<rowItems count="22">/,
+  ],
+  cacheMarkers: [
+    /<rangePr [^>]*autoStart="0"[^>]*autoEnd="0"[^>]*groupBy="quarters"[^>]*startDate="2020-01-01T00:00:00"[^>]*endDate="2023-12-31T00:00:00"/,
+    /<rangePr [^>]*autoStart="0"[^>]*autoEnd="0"[^>]*groupBy="years"[^>]*startDate="2020-01-01T00:00:00"[^>]*endDate="2023-12-31T00:00:00"/,
+    /<groupItems count="6"><s v="&lt;2020\/1\/1"/,
+    /<s v=">2023\/12\/31"\/>/,
+  ],
   delta: [{ kind: 'groupDate', field: 'Date', periods: ['quarters', 'years'], startDate: 43831, endDate: 45291 }],
   measures: 'multi-level date grouping (Years › Quarters) with manual bounds 2020-01-01..2023-12-31 inside 2019..2024: pins <start, >end and blank buckets',
 })
 add('s4-regroup-date-yqm-to-ym', 37, {
   base: 'interaction/s4-group-date-multi-yqm', route: 'applescript',
   lines: t => [`group ${firstRowGroupCell(t)} periods ${allPeriods('months', 'years')}`],
-  markers: [/<rowFields count="2">/],
-  cacheMarkers: [/<rangePr [^>]*groupBy="years"/, /<rangePr [^>]*groupBy="months"/],
+  markers: [/<rowFields count="2"><field x="13"\/><field x="12"\/><\/rowFields>/],
+  cacheMarkers: [
+    /<rangePr [^>]*groupBy="months"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+    /<rangePr [^>]*groupBy="years"[^>]*startDate="2019-01-15T00:00:00"[^>]*endDate="2024-12-21T00:00:00"/,
+  ],
   cacheAbsent: [/<rangePr [^>]*groupBy="quarters"/],
   delta: [{ kind: 'groupDate', field: 'Date', periods: ['months', 'years'] }],
   measures: 'regrouping Years › Quarters › Months down to Years › Months: pins removal of the Quarters virtual cacheField and pivotField',
@@ -969,21 +995,36 @@ add('s4-ungroup-date-single', 37, {
 add('s4-group-number-units-auto', 37, {
   base: 'interaction/s4-move-units-only-rows', route: 'applescript', probe: 'group-number-auto',
   lines: t => [`group ${groupCell(t, 'Units')} by 25`],
-  markers: [rowField(F.Units)], cacheMarkers: [/<rangePr [^>]*groupInterval="25"/],
+  markers: [rowField(F.Units), /<rowItems count="7">/],
+  cacheMarkers: [
+    /<rangePr [^>]*startNum="-5"[^>]*endNum="233"[^>]*groupInterval="25"/,
+    /<groupItems count="12"><s v="&lt;-5"/,
+    /<s v=">245"\/>/,
+  ],
   delta: [{ kind: 'groupNumber', field: 'Units', by: 25 }],
   measures: 'Units grouped by 25 with automatic min/max bounds (-5..233): pins autoStart/autoEnd startNum/endNum and bucket labels',
 })
 add('s4-group-number-sales-blanks-manual', 37, {
   base: 'interaction/s4-move-sales-only-rows', route: 'applescript',
   lines: t => [`group ${groupCell(t, 'Sales')} start 0 end 5000 by 1000`],
-  markers: [rowField(F.Sales)], cacheMarkers: [/<rangePr [^>]*groupInterval="1000"/],
+  markers: [rowField(F.Sales), /<rowItems count="8">/],
+  cacheMarkers: [
+    /<rangePr [^>]*autoStart="0"[^>]*autoEnd="0"[^>]*startNum="0"[^>]*endNum="5000"[^>]*groupInterval="1000"/,
+    /<groupItems count="7"><s v="&lt;0 或 \(空白\)"\/><s v="0-1000"\/>/,
+    /<s v=">5000"\/>/,
+  ],
   delta: [{ kind: 'groupNumber', field: 'Sales', start: 0, end: 5000, by: 1000 }],
-  measures: 'Sales (3 blanks, 3 negatives, values >5000) grouped with manual 0..5000 by 1000: pins <0, >5000 and blank bucket placement (groups.ts:175)',
+  measures: 'Sales (3 blanks, 3 negatives, values >5000) grouped with manual 0..5000 by 1000: pins <0 或 (空白), >5000 and lower-bound blank bucket placement (groups.ts:175)',
 })
 add('s4-regroup-number-units', 37, {
   base: 'interaction/s4-group-number-units-auto', route: 'applescript',
   lines: t => [`group ${numberGroupCell(t, 'Units')} by 50`],
-  markers: [rowField(F.Units)], cacheMarkers: [/<rangePr [^>]*groupInterval="50"/],
+  markers: [rowField(F.Units), /<rowItems count="5">/],
+  cacheMarkers: [
+    /<rangePr [^>]*startNum="-5"[^>]*endNum="233"[^>]*groupInterval="50"/,
+    /<groupItems count="7"><s v="&lt;-5"/,
+    /<s v=">245"\/>/,
+  ],
   delta: [{ kind: 'groupNumber', field: 'Units', by: 50 }],
   measures: 'regrouping Units from interval 25 to interval 50',
 })

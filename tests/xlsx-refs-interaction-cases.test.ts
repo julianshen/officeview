@@ -7,7 +7,7 @@ import {
   INTERACTION_CASES, INTERACTION_PROBES, SEED_BUILDS, SEED_FILES, resolveDelta, startOf, startShapeOf, type InteractionCase, type PivotDelta,
 } from '../scripts/xlsx-refs/interaction-cases'
 import { classify } from '../scripts/xlsx-refs/classify-stage2'
-import { interactionDryRun } from '../scripts/xlsx-refs/build-engine'
+import { interactionDryRun, verifyInteraction } from '../scripts/xlsx-refs/build-engine'
 
 const PIVOTS = join(__dirname, 'fixtures/xlsx-pivots')
 const fixture = (rel: string) => join(PIVOTS, `${rel}.xlsx`)
@@ -394,4 +394,28 @@ describe('build-engine --interaction --dry-run', () => {
     // Stage 2 cases keep their own dry run (ids do not collide).
     expect(ENGINE_CASES.some(c => INTERACTION_CASES.some(i => i.id === c.id))).toBe(false)
   }, 60_000)
+})
+
+describe('verifyInteraction recomputation and strengthened markers', () => {
+  it('rejects an unchanged / no-op pivot identical to its start file', async () => {
+    const c = INTERACTION_CASES.find(x => x.id === 's4-values-showas-previous-next')!
+    const startFile = fixture(startOf(c))
+    await expect(verifyInteraction(c, startFile)).rejects.toThrow(/identical to start file|no-op interaction/)
+  })
+  it('verifies built fixtures with their full measured deltas', async () => {
+    for (const id of [
+      's4-values-showas-previous-next',
+      's4-group-date-manual-bounds',
+      's4-group-number-sales-blanks-manual',
+      's4-filtered-row-base',
+      's4-group-number-units-auto',
+      's4-regroup-number-units',
+    ]) {
+      const c = INTERACTION_CASES.find(x => x.id === id)!
+      const out = fixture(`interaction/${id}`)
+      if (existsSync(out)) {
+        await expect(verifyInteraction(c, out)).resolves.toBeTruthy()
+      }
+    }
+  })
 })
