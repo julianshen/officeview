@@ -201,3 +201,81 @@ describe('S3-AO: GETPIVOTDATA on a spilled pivot', () => {
     expect(result.stale).toEqual(expect.arrayContaining(['formulas!25:0']))
   })
 })
+
+describe('GETPIVOTDATA on an axis that carries Values', () => {
+  const ON_ROWS = `${F}engine/layout-values-on-rows-two-data.xlsx`, ON_COLS = `${F}engine/layout-classic-two-data.xlsx`
+  async function evaluateOn(file: string, formulas: Array<[ref: string, formula: string]>, change?: (session: Awaited<ReturnType<typeof liveContext>>['session']) => void) {
+    const doc = await load(file)
+    formulas.forEach(([ref, formula], row) => addCell(doc, 'Pivot', ref, 20, row, formula, -123456789))
+    evaluateWorkbookFormulas(doc, { forceRecalc: true })
+    const live = await liveContext(undefined, file)
+    change?.(live.session)
+    const ctx = { ...live.ctx, def: live.session.def, layout: live.session.layout, rects: [live.savedRect, live.session.layout.rect].map(r => ({ r0: r.minRow, r1: r.maxRow, c0: r.minCol, c1: r.maxCol })) }
+    const result = recomputeDependents(doc, changedOf(doc, 'Pivot', ctx.rects), {
+      getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData([ctx], args, evaluate, currentSheet, markStale),
+      readCellValue: viewerReadCellValue([ctx]),
+    })
+    return { doc, result, value: (ref: string) => cellAt(doc, 'Pivot', ref)!.value }
+  }
+  const saved = async (file: string, ref: string) => cellAt(await load(file), 'Pivot', ref)!.value as number
+  const sortRegionDescending = (session: Awaited<ReturnType<typeof liveContext>>['session']) => {
+    const sorted = session.apply({ kind: 'sort', field: 0, order: 'descending' })
+    if (!sorted.ok) throw new Error(sorted.diagnostic.message)
+    expect(session.commit(sorted.value)).toBe(true)
+  }
+
+  it('Values on rows: a Region alone is its visible subtotal line, a Region and Product the item\'s line, as Excel saved them', async () => {
+    const formulas: Array<[string, string]> = [
+      ['U1', 'GETPIVOTDATA("Sum of Sales",$A$3,"Region","East")'],
+      ['U2', 'GETPIVOTDATA("Sum of Units",$A$3,"Region","East")'],
+      ['U3', 'GETPIVOTDATA("Sum of Sales",$A$3,"Region","East","Product","Apples")'],
+      ['U4', 'GETPIVOTDATA("Sum of Sales",$A$3,"Region","East","Year",2023)'],
+    ]
+    for (const change of [undefined, sortRegionDescending]) {
+      const { value } = await evaluateOn(ON_ROWS, formulas, change)
+      expect(value('U1')).toBeCloseTo(await saved(ON_ROWS, 'E15'), 6)   // "East Sum of Sales", 48118.96
+      expect(value('U1')).toBeCloseTo(48118.96, 6)
+      expect(value('U2')).toBe(await saved(ON_ROWS, 'E16'))
+      expect(value('U3')).toBeCloseTo(await saved(ON_ROWS, 'E7'), 6)
+      expect(value('U4')).toBeCloseTo(await saved(ON_ROWS, 'C15'), 6)
+    }
+  })
+
+  it('Values on columns: a Region\'s grand total and its cell under a Year, as Excel saved them', async () => {
+    // Row 6 is East's; H is the Sales grand-total column and E the 2023 Units column (Values inside Year).
+    expect(cellAt(await load(ON_COLS), 'Pivot', 'A6')!.value).toBe('East')
+    for (const change of [undefined, sortRegionDescending]) {
+      const { value } = await evaluateOn(ON_COLS, [
+        ['U1', 'GETPIVOTDATA("Sum of Sales",$A$3,"Region","East")'],
+        ['U2', 'GETPIVOTDATA("Sum of Units",$A$3,"Region","East","Year",2023)'],
+      ], change)
+      expect(value('U1')).toBeCloseTo(await saved(ON_COLS, 'H6'), 6)
+      expect(value('U2')).toBe(await saved(ON_COLS, 'E6'))
+    }
+  })
+
+  it('S3-T: no unmeasured shape is #REF!: each resolves to its cell, or keeps its saved value and is flagged stale', async () => {
+    const shapes: Array<[string, string, string]> = [
+      // Values on rows with a partial field list: the inner item alone, and a field on no axis.
+      [ON_ROWS, 'U1', 'GETPIVOTDATA("Sum of Sales",$A$3,"Product","Apples")'],
+      [ON_ROWS, 'U2', 'GETPIVOTDATA("Sum of Sales",$A$3,"Product","Apples","Year",2023)'],
+      [ON_ROWS, 'U3', 'GETPIVOTDATA("Sum of Sales",$A$3,"Channel","Web")'],
+      // Two data fields, and a data_field that matches neither.
+      [ON_COLS, 'U1', 'GETPIVOTDATA("Sum of Price",$A$3,"Region","East")'],
+      [ON_COLS, 'U2', 'GETPIVOTDATA("Average of Sales",$A$3)'],
+      // A page field in the arguments.
+      [`${F}engine/quirk-page-single.xlsx`, 'U1', 'GETPIVOTDATA("Sum of Sales",$A$3,"Product","Apples")'],
+      [`${F}engine/quirk-page-single.xlsx`, 'U2', 'GETPIVOTDATA("Sum of Sales",$A$3,"Product","Bananas")'],
+    ]
+    for (const file of new Set(shapes.map(([file]) => file))) {
+      const own = shapes.filter(([candidate]) => candidate === file)
+      const { value, result } = await evaluateOn(file, own.map(([, ref, formula]) => [ref, formula]))
+      for (const [, ref, formula] of own) {
+        const label = `${formula} on ${file.slice(file.lastIndexOf('/') + 1)}`
+        expect(value(ref), label).not.toBe('#REF!')
+        if (value(ref) === -123456789) expect(result.stale, label).toContain(`pivot!20:${Number(ref.slice(1)) - 1}`)
+        else expect(typeof value(ref), label).toBe('number')
+      }
+    }
+  })
+})

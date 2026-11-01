@@ -59,53 +59,66 @@ function lineMatches(context: LivePivotDataContext, axis: readonly number[], lin
   return true
 }
 
-/** The value GETPIVOTDATA reads, or `UNRESOLVED` for a layout shape the measured rules do not cover (Ruling S3-T: the
- * formula keeps its saved value, never an invented #REF!). */
-const UNRESOLVED = Symbol('unresolved')
-function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: ReadonlyMap<number, EvaluationValue>): EvaluationValue | typeof UNRESOLVED {
+/**
+ * What GETPIVOTDATA resolves to (Ruling S3-T): the one layout cell it reads; #REF! only for the visible-layout rules
+ * Excel was measured on; or unresolved, which keeps the formula's saved value and marks it stale. Every failure that is
+ * not one of the measured rules is unresolved, so a shape nobody measured never invents a #REF!.
+ */
+type Resolution =
+  | { kind: 'cell'; value: EvaluationValue }
+  /** Measured #REF! (gpd-hide-item, gpd-collapse-item, gpd-filter-out, the saved "Cherries" case): `not-visible`, the
+   * requested items are on no line of the layout (hidden, filtered out, or under a collapsed parent); `inner-without-line`,
+   * an inner item asked for without its parent has no line of its own (it repeats under several parents). */
+  | { kind: 'ref'; rule: 'not-visible' | 'inner-without-line' }
+  | { kind: 'unresolved'; reason: string }
+type AxisLines = { kind: 'lines'; lines: Array<{ line: PivotLayout['axes']['rows'][number]; index: number }> }
+
+function resolvePivotData(context: LivePivotDataContext, dataIndex: number, pairs: ReadonlyMap<number, EvaluationValue>): Resolution {
   const { def, layout } = context
   // Ruling S3-AO: a spilled pivot's GETPIVOTDATA was never measured; the formula keeps its saved value (S3-T).
-  if (def.spill) return UNRESOLVED
-  let unresolved = false
-  const matches = (fields: readonly number[], lines: PivotLayout['axes']['rows']) => {
+  if (def.spill) return { kind: 'unresolved', reason: 'spilled pivot' }
+  const axis = (fields: readonly number[], lines: PivotLayout['axes']['rows']): AxisLines | Exclude<Resolution, { kind: 'cell' }> => {
+    const all = lines.map((line, index) => ({ line, index }))
     // An axis with no fields (a single data field and no column fields, or no row fields) lays out one line holding
-    // every value: its sole data line is the cell, as the measured Values-only column axis (I4) generalises. Any other
-    // shape of such an axis was never measured.
-    if (!fields.length) {
-      if (lines.length === 1 && lines[0]!.data === dataIndex) return [{ line: lines[0]!, index: 0 }]
-      unresolved = true
-      return []
-    }
+    // every value: its sole data line is the cell, as the measured Values-only column axis (I4) generalises.
+    if (!fields.length) return lines.length === 1 && lines[0]!.data === dataIndex ? { kind: 'lines', lines: all } : { kind: 'unresolved', reason: 'axis without fields' }
+    const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
+    // A line that holds values of the requested data field: on an axis carrying Values, its own data field, and not a
+    // label-only parent line (a data line above the Values level only names its items; its subtotal is a total line).
+    const holdsValues = (line: PivotLayout['axes']['rows'][number]) => line.type !== 'blank'
+      && (valuesLevel < 0 || (line.data === dataIndex && !(line.type === 'data' && line.items.length <= valuesLevel)))
+    const depth = (line: PivotLayout['axes']['rows'][number]) => line.items.filter((item, level) => item >= 0 && level !== valuesLevel).length
     const axisPairs = new Map([...pairs].filter(([field]) => fields.includes(field)))
-    if (fields.includes(PIVOT_VALUES_FIELD)) return lines.map((line, index) => ({ line, index }))
-      .filter(({ line }) => line.data === dataIndex && (axisPairs.size ? lineMatches(context, fields, line, axisPairs) : (fields.length === 1 ? true : line.type === 'grand')))
-    const candidates = lines.map((line, index) => ({ line, index })).filter(({ line }) => axisPairs.size
-      ? lineMatches(context, fields, line, axisPairs) : line.type === 'grand')
-    // An omitted axis field means its visible grand-total line; never sum or
-    // synthesize a value that is not a cell in the current layout.
-    if (!axisPairs.size) return candidates
-    // Prefer the shallowest visible total/item line for the specified prefix.
-    const depth = Math.min(...candidates.map(({ line }) => line.items.filter(item => item >= 0).length))
-    return Number.isFinite(depth) ? candidates.filter(({ line }) => line.items.filter(item => item >= 0).length === depth) : []
+    if (!axisPairs.size) {
+      // No item of this axis asked for: its grand-total line (on an axis of Values alone, the data field's line).
+      const found = all.filter(({ line }) => holdsValues(line) && (valuesLevel >= 0 && fields.length === 1 ? true : line.type === 'grand'))
+      return found.length === 1 ? { kind: 'lines', lines: found } : { kind: 'unresolved', reason: found.length ? 'several total lines' : 'no total line' }
+    }
+    const carrying = all.filter(({ line }) => line.type !== 'blank' && lineMatches(context, fields, line, axisPairs))
+    if (!carrying.length) return { kind: 'ref', rule: 'not-visible' }
+    const candidates = carrying.filter(({ line }) => holdsValues(line))
+    if (!candidates.length) return { kind: 'unresolved', reason: 'no line holds values' }
+    // The shallowest visible line for the requested prefix: a parent's subtotal, else its item line.
+    const shallowest = Math.min(...candidates.map(({ line }) => depth(line)))
+    const at = candidates.filter(({ line }) => depth(line) === shallowest)
+    const innerWithoutParent = [...axisPairs.keys()].some(field => {
+      const level = fields.indexOf(field)
+      return fields.slice(0, level).some(parent => parent !== PIVOT_VALUES_FIELD && !pairs.has(parent))
+    })
+    if (at.length === 1) return innerWithoutParent ? { kind: 'unresolved', reason: 'inner item with one parent' } : { kind: 'lines', lines: at }
+    // Measured only on an axis without Values: an inner item repeated under several parents is #REF!.
+    return innerWithoutParent && valuesLevel < 0 ? { kind: 'ref', rule: 'inner-without-line' } : { kind: 'unresolved', reason: 'several lines' }
   }
-  const rows = matches(def.rowFields, layout.axes.rows)
-  const cols = matches(def.colFields, layout.axes.cols)
-  if (unresolved) return UNRESOLVED
-  const candidates: Array<{ row: number; col: number }> = []
-  for (const row of rows) for (const col of cols) {
-    const sheetRow = layout.rect.minRow + def.location.firstDataRow + row.index
-    const sheetCol = layout.rect.minCol + def.location.firstDataCol + col.index
-    candidates.push({ row: sheetRow, col: sheetCol })
-  }
-  // If Values is on an axis, its line index already selects the data field;
-  // otherwise the cell grid's data dimension follows the column lines.
-  const cells = cellsOf(context)
-  const visible = candidates.map(position => cells.get(`${position.row}:${position.col}`)).filter(Boolean)
-  if (visible.length !== 1) return formulaError('#REF!')
-  const value = visible[0]!.value
-  if (value.kind === 'error') return formulaError(value.value as Parameters<typeof formulaError>[0])
-  if (value.kind === 'number' || value.kind === 'text') return value.value
-  return null
+  const rows = axis(def.rowFields, layout.axes.rows)
+  if (rows.kind !== 'lines') return rows
+  const cols = axis(def.colFields, layout.axes.cols)
+  if (cols.kind !== 'lines') return cols
+  const row = layout.rect.minRow + def.location.firstDataRow + rows.lines[0]!.index
+  const col = layout.rect.minCol + def.location.firstDataCol + cols.lines[0]!.index
+  const cell = cellsOf(context).get(`${row}:${col}`)
+  if (!cell) return { kind: 'unresolved', reason: 'no cell at the lines' }
+  const value = cell.value
+  return { kind: 'cell', value: value.kind === 'error' ? formulaError(value.value as Parameters<typeof formulaError>[0]) : value.kind === 'number' || value.kind === 'text' ? value.value : null }
 }
 
 export function getPivotData(contexts: readonly LivePivotDataContext[], args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet?: string, markStale?: (feature: string) => void): EvaluationValue {
@@ -144,16 +157,11 @@ export function getPivotData(contexts: readonly LivePivotDataContext[], args: re
     const index = page.item
     if (index === undefined || !labelMatches(context, page.fld, index, requested!)) return formulaError('#NAME?')
   }
-  const resolved = pivotValue(context, dataIndex, pairs)
-  if (resolved === UNRESOLVED) { markStale?.('GETPIVOTDATA'); return formulaError('#NAME?') }
-  const value = resolved
-  const innerWithoutParent = [...pairs.keys()].some(field => {
-    const axis = context.def.rowFields.includes(field) ? context.def.rowFields : context.def.colFields
-    const level = axis.indexOf(field)
-    return level > 0 && axis.slice(0, level).some(parent => !pairs.has(parent))
-  })
-  if (innerWithoutParent && !(typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'formula-error')) return formulaError('#NAME?')
-  return value
+  const resolved = resolvePivotData(context, dataIndex, pairs)
+  if (resolved.kind === 'cell') return resolved.value
+  if (resolved.kind === 'ref') return formulaError('#REF!')
+  markStale?.('GETPIVOTDATA')
+  return formulaError('#NAME?')
 }
 
 export function registerGetPivotData(): void {
