@@ -74,7 +74,9 @@ export interface PivotSession {
   readonly cache: PivotCacheDefinition
   apply(delta: PivotDelta): EngineResult<PivotApplyResult>   // pure: does not change the session
   commit(result: PivotApplyResult): boolean                   // false when result.revision !== revision + 1
-  reset(): PivotApplyResult                                    // back to the saved state, as the next revision
+  /** Back to the saved state, as the next revision; refused `pivot-overlap` when that layout would now cover another
+   * pivot's or the sheet's cells (a refreshed pivot's saved view is its refreshed layout, which may be larger). */
+  reset(): EngineResult<PivotApplyResult>
   /** Ends the session and releases its store lease (once). Later applies refuse `pivot-session-released`. */
   release(): void
 }
@@ -239,6 +241,17 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
   let notice = notice0
   let released = false
 
+  /** Ruling §7.1/S3-U: the first cell of `area` outside this pivot's own (saved ∪ shown) area that `occupied` holds. */
+  const overlapOf = (area: readonly SheetRect[]): { ok: false; diagnostic: PivotDiagnostic } | undefined => {
+    const own = [...savedArea, ...shown]
+    for (const rect of area) for (let row = rect.minRow; row <= rect.maxRow; row++) {
+      for (const [c0, c1] of uncovered(row, rect.minCol, rect.maxCol, own)) for (let col = c0; col <= c1; col++) {
+        if (occupied(row, col)) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
+      }
+    }
+    return undefined
+  }
+
   const session: PivotSession = {
     get revision() { return state.revision },
     get view() { return state.view },
@@ -255,12 +268,8 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       const layout = resolveCaptions(next.value, rule)
       if (!layout.ok) return layout
       const area = areaFor(layout.value), current = shown
-      const own = [...savedArea, ...current]
-      for (const rect of area) for (let row = rect.minRow; row <= rect.maxRow; row++) {
-        for (const [c0, c1] of uncovered(row, rect.minCol, rect.maxCol, own)) for (let col = c0; col <= c1; col++) {
-          if (occupied(row, col)) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
-        }
-      }
+      const overlap = overlapOf(area)
+      if (overlap) return overlap
       const live = liveDefinition(def, view.value, next.value.axes, layout.value)
       const charts = gate(layout.value, live)
       if (!charts.ok) return charts
@@ -276,9 +285,14 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       return true
     },
     reset() {
+      if (released) return refuse('pivot-session-released', `the session of pivot table ${def.name} was released`)
+      // The saved route's layout0 covers exactly the saved area (nothing to check); a refreshed one may reach further
+      // (final review minor 1: checked like any change).
+      const overlap = overlapOf(areaFor(layout0))
+      if (overlap) return overlap
       const result: PivotApplyResult = { revision: state.revision + 1, view: view0, def: def0, layout: layout0, vacated: subtract(shown, areaFor(layout0)), charts: charts0.value, ...(notice ? { notice } : {}) }
       issued.add(result)
-      return result
+      return { ok: true, value: result }
     },
     release() {
       if (released) return

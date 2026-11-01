@@ -509,13 +509,9 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       const entry = open.get(key(sheetId, pivot))
       if (!entry) return refusal('pivot-session-released', `${nameOf(savedDefs[sheetId]?.[pivot])} has no open session`)
       const { session } = entry
-      let result
-      if (delta === 'reset') result = session.reset()
-      else {
-        const applied = session.apply(delta)
-        if (!applied.ok) return applied
-        result = applied.value
-      }
+      const applied = delta === 'reset' ? session.reset() : session.apply(delta)
+      if (!applied.ok) return applied
+      const result = applied.value
       if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
       // Ruling S3-AF: the dependents to recompute read the saved area, the area shown before this commit and the one
       // shown after (a shrink or reset vacates cells the previous layout filled).

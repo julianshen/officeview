@@ -1504,7 +1504,7 @@ export class DocumentSession {
     handle.staged?.entry.release()
     handle.staged = undefined
     let applied: ReturnType<typeof handle.session.apply>
-    try { applied = delta === 'reset' ? { ok: true as const, value: handle.session.reset() } : handle.session.apply(delta) }
+    try { applied = delta === 'reset' ? handle.session.reset() : handle.session.apply(delta) }
     catch (error) {
       if (error instanceof PivotIndexQuota) return { kind: 'quota', requiredBytes: error.requiredBytes, limitBytes: error.limitBytes }
       throw error

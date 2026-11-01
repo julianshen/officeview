@@ -512,7 +512,7 @@ describe('session', () => {
     const stale = ok(open(inputOf(p)).apply(COLLAPSE_EAST))
     expect(session.commit(stale)).toBe(false)
     expect(session.commit(first)).toBe(false)
-    const reset = session.reset()
+    const reset = ok(session.reset())
     expect(reset.revision).toBe(2)
     expect(reset.layout).toBe(saved.layout)
     expect(reset.view).toBe(saved.view)
@@ -536,7 +536,7 @@ describe('session', () => {
     const owned = open(inputOf(p, { occupied: (row, col) => row >= 2 && row <= 23 && col <= 8 }))
     expect(owned.commit(ok(owned.apply(COLLAPSE_EAST)))).toBe(true)
     expect(ok(owned.apply(EXPAND_EAST)).layout.rect.maxRow).toBe(23)
-    expect(session.reset().vacated).toEqual([])
+    expect(ok(session.reset()).vacated).toEqual([])
   })
 
   it('a change whose new cells cover a non-empty cell outside the pivot refuses as an overlap', async () => {
@@ -626,5 +626,20 @@ describe('session', () => {
     expect(releases).toBe(1)
     const after = session.apply(COLLAPSE_EAST)
     expect(after.ok ? 'ok' : after.diagnostic.feature).toBe('pivot-session-released')
+    const reset = session.reset()
+    expect(reset.ok ? 'ok' : reset.diagnostic.feature).toBe('pivot-session-released')
+  })
+
+  it('reset runs the overlap walk of a change: the saved view clears it, since it covers only the saved area', async () => {
+    const p = await baseline()
+    // Every cell outside the saved area A3:I24 is occupied; the saved area is the pivot's own.
+    const session = open(inputOf(p, { occupied: (row, col) => !(row >= 2 && row <= 23 && col <= 8) }))
+    expect(session.commit(ok(session.apply(COLLAPSE_EAST)))).toBe(true)
+    const reset = ok(session.reset())
+    expect(reset.layout.rect).toEqual({ minRow: 2, minCol: 0, maxRow: 23, maxCol: 8 })
+    // A cell of its own saved area never blocks it, even where the sheet holds a value (the saved cells are the pivot's).
+    const blocked = open(inputOf(p, { occupied: (row, col) => row === 23 && col === 0 }))
+    expect(blocked.commit(ok(blocked.apply(COLLAPSE_EAST)))).toBe(true)
+    expect(ok(blocked.reset()).layout.rect.maxRow).toBe(23)
   })
 })

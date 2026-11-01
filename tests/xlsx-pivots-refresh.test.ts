@@ -180,7 +180,8 @@ describe('session refresh route (§7.7)', () => {
     expect(session.value.commit(first.value)).toBe(true)
     const later = session.value.apply({ kind: 'collapse', field: REGION, item: EAST, collapsed: false })
     expect(later.ok && later.value.notice).toBeUndefined()
-    expect(session.value.reset().notice).toBeUndefined()
+    const resetResult = session.value.reset()
+    expect(resetResult.ok && resetResult.value.notice).toBeUndefined()
     // A pivot that does not refresh never shows it.
     const plain = await book('engine/baseline')
     const other = openPivotSession({ def: plain.def, cache: plain.cache, store: await savedStore(plain), date1904: false, saved: sheetCellReader(plain.sheet), occupied: () => false, linkedCharts: [] })

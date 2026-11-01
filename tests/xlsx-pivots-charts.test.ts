@@ -99,7 +99,9 @@ describe('pivot charts follow (Task 30)', () => {
         expect(target.charts).toHaveLength(1)
         // A setup case starts from its own saved state (the field move is Stage 4); the others replay their delta.
         const { session: s } = await session(entry.setup ? caseFile(entry) : startFile(entry))
-        let charts = s.reset().charts
+        const initial = s.reset()
+        if (!initial.ok) throw new Error(initial.diagnostic.message)
+        let charts = initial.value.charts
         for (const delta of entry.setup ? [] : entry.delta) {
           const applied = s.apply(delta)
           if (!applied.ok) throw new Error(`${entry.case}: ${applied.diagnostic.feature}: ${applied.diagnostic.message}`)
@@ -246,7 +248,9 @@ describe('pivot charts follow (Task 30)', () => {
       // What the sheet's chart list and painter read is the new model (9 points for 12).
       expect(chartDescription(shown[0]!)).not.toBe(chartDescription(b.charts[0]!))
       // Reset installs the saved state's charts again.
-      const reset = s.reset()
+      const resetResult = s.reset()
+      if (!resetResult.ok) throw new Error(resetResult.diagnostic.message)
+      const reset = resetResult.value
       expect(s.commit(reset)).toBe(true)
       installPivotCharts(b.doc, b.def.name, reset.charts)
       expect(chartData(b.doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings))[0]!)).toEqual(saved)
