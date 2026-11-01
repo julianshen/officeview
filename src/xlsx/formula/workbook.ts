@@ -523,6 +523,9 @@ function refreshRuntimeCellIndex(doc: XlsxDocument, runtime: NonNullable<DocSpil
 /** Conservative admission bound for subset recalculation. A range aggregate
  * currently scans all stored workbook cells in refs.ts; include that cost too. */
 export const MAX_DEPENDENT_CELL_VISITS = 2_000_000
+/** Passes a recompute makes after its spills grew or shrank, for the readers of the cells they moved over (a spill
+ * whose readers spill again counts once per level); past it those readers are marked stale. */
+const MAX_SPILL_FOLLOW_PASSES = 8
 
 /** The used extents and stored-cell count the estimate charges against. With the evaluated workbook's runtime index
  * (the normal case) they are exactly what the engine reads: whole-row/column references clip to its per-sheet maxima,
@@ -646,30 +649,42 @@ export function recomputeDependents(
   // Build the observed-edge reverse map once, then traverse it alongside the
   // cached spatial index. This is O(edges + visited readers), not readers × formulas.
   const dynamicReverse = prior?.reverseFormulaDeps ?? reverseFormulaEdges(prior?.formulaDeps ?? new Map())
-  const generatedByOwner = new Map<string, string[]>()
-  for (const generated of prior?.generated ?? []) {
-    const follower = makeCellKey(generated.sheet.name, generated.cell.col, generated.cell.row)
-    const owners = generatedByOwner.get(generated.ownerKey)
-    if (owners) owners.push(follower); else generatedByOwner.set(generated.ownerKey, [follower])
+  // Spill records key their owner by sheet identity (`spillCellKey`); the reader queue keys cells by lower-cased sheet
+  // name (`makeCellKey`). Followers are looked up by the owner's cell key, so a recomputed spill's cells, and so their
+  // readers, are always found (PR #57 review: with numeric sheet ids the two never met).
+  const ownerCellKey = spillOwnerCellKeys(doc)
+  const followersByOwner = (generated: readonly GeneratedCellRecord[]): Map<string, string[]> => {
+    const out = new Map<string, string[]>()
+    for (const record of generated) {
+      const owner = ownerCellKey(record.ownerKey)
+      if (owner === undefined) continue
+      const follower = makeCellKey(record.sheet.name, record.cell.col, record.cell.row)
+      const list = out.get(owner)
+      if (list) list.push(follower); else out.set(owner, [follower])
+    }
+    return out
   }
-  let cursor = 0
-  while (cursor < queue.length) {
-    const target = queue[cursor++]!
+  let generatedByOwner = followersByOwner(prior?.generated ?? [])
+  /** The formulas reading one cell: by the syntactic index and by the edges the last evaluation observed. */
+  const readersOfCell = (target: string, reverse: ReadonlyMap<string, ReadonlySet<string>>): string[] => {
+    const out: string[] = []
     const bang = target.lastIndexOf('!'), coords = /^(\d+):(\d+)$/.exec(target.slice(bang + 1))
     if (bang >= 0 && coords) {
       const col = Number(coords[1]), row = Number(coords[2])
-      for (const reader of queryReferences(index, target.slice(0, bang), { minRow: row, maxRow: row, minCol: col, maxCol: col })) enqueue(reader)
+      for (const reader of queryReferences(index, target.slice(0, bang), { minRow: row, maxRow: row, minCol: col, maxCol: col })) out.push(reader)
     }
-    for (const reader of dynamicReverse.get(target) ?? []) enqueue(reader)
-    for (const follower of generatedByOwner.get(target) ?? []) {
-      const match = /!(\d+):(\d+)$/.exec(follower)
-      if (match) {
-        const col = Number(match[1]), row = Number(match[2])
-        for (const reader of queryReferences(index, follower.slice(0, follower.lastIndexOf('!')), { minRow: row, maxRow: row, minCol: col, maxCol: col })) enqueue(reader)
-      }
-      for (const reader of dynamicReverse.get(follower) ?? []) enqueue(reader)
+    for (const reader of reverse.get(target) ?? []) out.push(reader)
+    return out
+  }
+  /** Drains `pending` into `add`: each target's readers, and the readers of the cells it spills. */
+  const drain = (pending: string[], add: (key: string) => void, followers: ReadonlyMap<string, readonly string[]>, reverse: ReadonlyMap<string, ReadonlySet<string>>) => {
+    for (let cursor = 0; cursor < pending.length; cursor++) {
+      const target = pending[cursor]!
+      for (const reader of readersOfCell(target, reverse)) add(reader)
+      for (const follower of followers.get(target) ?? []) for (const reader of readersOfCell(follower, reverse)) add(reader)
     }
   }
+  drain(queue, enqueue, generatedByOwner, dynamicReverse)
   if (!formulaKeys.size) return { recomputed: 0, charts: [], sheets: [], stale: [], readers: [] }
   const staleKeys = new Set<string>()
   const estimatedVisits = dependentWorkEstimate(doc, index, formulaKeys, prior?.runtimeIndex)
@@ -684,27 +699,62 @@ export function recomputeDependents(
   const recomputeKeys = formulaKeys
   let snapshots = liveFormulaSnapshots.get(doc)
   if (!snapshots) liveFormulaSnapshots.set(doc, snapshots = new Map())
-  for (const key of recomputeKeys) {
-    if (snapshots.has(key)) continue
-    const cell = prior?.runtimeIndex?.cellMap.get(key)
-    if (cell) snapshots.set(key, { cell, content: snapshotCell(cell) })
+  const snapshotFormulas = (keys: Iterable<string>) => {
+    for (const key of keys) {
+      if (snapshots!.has(key)) continue
+      const cell = prior?.runtimeIndex?.cellMap.get(key)
+      if (cell) snapshots!.set(key, { cell, content: snapshotCell(cell) })
+    }
   }
+  snapshotFormulas(recomputeKeys)
   // Ruling S3-AL: the saved state of every position the spill work writes or clears (a spill that grows or shrinks), so
   // print and the restore put back exactly the saved cells, and the restored cells are the saved generation's again.
   let images = liveSpillImages.get(doc)
   if (!images) liveSpillImages.set(doc, images = { positions: new Map(), generated: [...(prior?.generated ?? [])], createdRows: [...(prior?.createdRows ?? [])] })
   const positions = images.positions, runtime = prior?.runtimeIndex
-  spillImageRecorder = (sheet, col, row) => {
-    const key = makeCellKey(sheet.name, col, row)
-    if (positions.has(key)) return
-    const rowObj = sheet.rows.find(candidate => candidate.index === row)
-    const cell = rowObj?.cells.find(candidate => candidate.col === col)
-    const indexed = runtime?.cellMap.get(key), indexedSheet = runtime?.cellSheets.get(key)
-    positions.set(key, { sheet, row, col, ...(rowObj ? { rowObj } : {}), ...(cell ? { cell, content: snapshotCell(cell) } : {}),
-      ...(indexed ? { indexed } : {}), ...(indexedSheet !== undefined ? { indexedSheet } : {}), input: runtime?.inputKeys.has(key) ?? false })
+  const evaluateSubset = (keys: ReadonlySet<string>) => {
+    spillImageRecorder = (sheet, col, row) => {
+      const key = makeCellKey(sheet.name, col, row)
+      if (positions.has(key)) return
+      const rowObj = sheet.rows.find(candidate => candidate.index === row)
+      const cell = rowObj?.cells.find(candidate => candidate.col === col)
+      const indexed = runtime?.cellMap.get(key), indexedSheet = runtime?.cellSheets.get(key)
+      positions.set(key, { sheet, row, col, ...(rowObj ? { rowObj } : {}), ...(cell ? { cell, content: snapshotCell(cell) } : {}),
+        ...(indexed ? { indexed } : {}), ...(indexedSheet !== undefined ? { indexedSheet } : {}), input: runtime?.inputKeys.has(key) ?? false })
+    }
+    try { evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, keys) }
+    finally { spillImageRecorder = undefined }
   }
-  try { evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, recomputeKeys) }
-  finally { spillImageRecorder = undefined }
+  evaluateSubset(recomputeKeys)
+  // A spill that grew or shrank changed cells no formula reader was queued for (a cell it now covers, or one it left):
+  // their readers are recomputed after it, until no spill moves further (bounded; past the bound, or over the work
+  // budget, they keep their values and are marked stale).
+  const spilled = new Set<string>()
+  for (const owner of recomputeKeys) for (const follower of generatedByOwner.get(owner) ?? []) spilled.add(follower)
+  for (let pass = 0; ; pass++) {
+    const state = docSpillStates.get(doc)
+    const after = followersByOwner(state?.generated ?? [])
+    // Every cell a recomputed formula spilled before or spills now: its readers not yet recomputed are owed.
+    const touched = new Set<string>()
+    for (const owner of recomputeKeys) for (const follower of [...(generatedByOwner.get(owner) ?? []), ...(after.get(owner) ?? [])]) { touched.add(follower); spilled.add(follower) }
+    const extra = new Set<string>(), pending: string[] = []
+    const add = (key: string) => { if (index.byKey.has(key) && !recomputeKeys.has(key) && !extra.has(key)) { extra.add(key); pending.push(key) } }
+    const reverse = state?.reverseFormulaDeps ?? new Map<string, Set<string>>()
+    for (const cell of touched) for (const reader of readersOfCell(cell, reverse)) add(reader)
+    drain(pending, add, after, reverse)
+    generatedByOwner = after
+    if (!extra.size) break
+    if (pass >= MAX_SPILL_FOLLOW_PASSES || dependentWorkEstimate(doc, index, extra, prior?.runtimeIndex) > MAX_DEPENDENT_CELL_VISITS) {
+      const retained = state?.retainedUnsupportedKeys ?? new Set<string>()
+      for (const key of extra) { staleKeys.add(key); retained.add(key) }
+      if (state) state.retainedUnsupportedKeys = retained
+      break
+    }
+    snapshotFormulas(extra)
+    for (const key of extra) recomputeKeys.add(key)
+    evaluateSubset(extra)
+  }
+  const finalFollowers = followersByOwner(docSpillStates.get(doc)?.generated ?? [])
   const affectedSheets = [...new Set([...formulaKeys].map(key => {
     const bang = key.lastIndexOf('!')
     return doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, bang))
@@ -712,18 +762,15 @@ export function recomputeDependents(
   const retained = docSpillStates.get(doc)?.retainedUnsupportedKeys ?? new Set<string>()
   // A reader can become stale because an unsupported formula was first
   // discovered during this very subset evaluation. Propagate that result to
-  // its transitive readers and restore their own pre-run cached values.
+  // its transitive readers (the readers of its spilled cells included) and restore their own pre-run cached values.
   const newlyStale = [...recomputeKeys].filter(key => retained.has(key))
   const afterQueue = [...newlyStale]
   for (const key of newlyStale) staleKeys.add(key)
+  const finalReverse = docSpillStates.get(doc)?.reverseFormulaDeps ?? new Map<string, Set<string>>()
   for (let i = 0; i < afterQueue.length; i++) {
     const target = afterQueue[i]!
-    const bang = target.lastIndexOf('!'), coords = /^([0-9]+):([0-9]+)$/.exec(target.slice(bang + 1))
-    const readers = new Set(docSpillStates.get(doc)?.reverseFormulaDeps?.get(target) ?? [])
-    if (bang >= 0 && coords) {
-      const col = Number(coords[1]), row = Number(coords[2])
-      for (const reader of queryReferences(index, target.slice(0, bang), { minRow: row, maxRow: row, minCol: col, maxCol: col })) readers.add(reader)
-    }
+    const readers = new Set(readersOfCell(target, finalReverse))
+    for (const follower of finalFollowers.get(target) ?? []) for (const reader of readersOfCell(follower, finalReverse)) readers.add(reader)
     for (const reader of readers) if (index.byKey.has(reader) && !staleKeys.has(reader)) {
       staleKeys.add(reader); retained.add(reader)
       const original = snapshots.get(reader), formula = prior?.runtimeIndex?.cellMap.get(reader)
@@ -732,7 +779,8 @@ export function recomputeDependents(
     }
   }
   for (const key of staleKeys) retained.add(key)
-  return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
+  // A chart over the cells a recomputed formula spills (or spilled) follows it too, not only one over its anchor.
+  return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, new Set([...recomputeKeys, ...spilled])), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
 /** By sheet, row and column: the saved cell at every position a dependent recompute changed (a copy), or null where
@@ -908,20 +956,34 @@ export function evaluateWorkbookFormulas(
 
 /** A bounded subset run used only by recomputeDependents. `onlyKeys` also
  * scopes old spill cleanup and preserves unaffected dependency edges. */
-/** `keys` (cell keys, `makeCellKey`) as spill owner keys (`spillCellKey`: the sheet identity the spill engine uses,
- * as the identity sheets below name it), with the cell keys themselves kept too. */
-function spillOwnerKeys(doc: XlsxDocument, keys: ReadonlySet<string>): Set<string> {
-  const identities = new Map<string, string>()
+/** Each sheet's identity as the spill engine keys owners by it (`spillCellKey`: the workbook sheet id, as the
+ * evaluation's identity sheets name it), by lower-cased sheet name, and back. */
+function sheetIdentities(doc: XlsxDocument): { idOf: Map<string, string>; nameOf: Map<string, string> } {
+  const idOf = new Map<string, string>(), nameOf = new Map<string, string>()
   for (const sheet of doc.workbookSheets ?? doc.sheets.map(candidate => ({ sheetId: candidate.sheetId ?? candidate.name, name: candidate.name }))) {
-    const name = sheet.name.toLowerCase()
-    if (!identities.has(name)) identities.set(name, String(sheet.sheetId))
+    const name = sheet.name.toLowerCase(), id = String(sheet.sheetId)
+    if (!idOf.has(name)) idOf.set(name, id)
+    if (!nameOf.has(id)) nameOf.set(id, name)
   }
+  return { idOf, nameOf }
+}
+/** `keys` (cell keys, `makeCellKey`) as spill owner keys (`spillCellKey`), with the cell keys themselves kept too. */
+function spillOwnerKeys(doc: XlsxDocument, keys: ReadonlySet<string>): Set<string> {
+  const { idOf } = sheetIdentities(doc)
   const out = new Set<string>(keys)
   for (const key of keys) {
-    const bang = key.lastIndexOf('!'), id = identities.get(key.slice(0, bang))
+    const bang = key.lastIndexOf('!'), id = idOf.get(key.slice(0, bang))
     if (bang >= 0 && id !== undefined) out.add(`${id}${key.slice(bang)}`)
   }
   return out
+}
+/** A spill owner key (`spillCellKey`) as the owner's cell key (`makeCellKey`), the key every reader queue uses. */
+function spillOwnerCellKeys(doc: XlsxDocument): (ownerKey: string) => string | undefined {
+  const { nameOf } = sheetIdentities(doc)
+  return ownerKey => {
+    const bang = ownerKey.lastIndexOf('!'), name = nameOf.get(ownerKey.slice(0, bang))
+    return bang >= 0 && name !== undefined ? `${name}${ownerKey.slice(bang)}` : undefined
+  }
 }
 
 function evaluateWorkbookFormulasInternal(

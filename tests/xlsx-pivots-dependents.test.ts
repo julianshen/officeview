@@ -283,3 +283,49 @@ describe('a dependent spill that grows or shrinks (Ruling S3-AL)', () => {
     expect(column(doc)).toEqual(saved)
   })
 })
+
+describe('readers of a dependent spill\'s cells, with numeric sheet ids', () => {
+  const at = (ref: string, col: number, row: number, extra: Partial<XlsxCell> = {}): XlsxCell => ({ ref, col, row, value: null, styleIndex: 0, hasCachedValue: false, ...extra })
+  /** Excel's sheet ids are numbers: the spill engine keys owners by them, the reader queue by the sheet's name. */
+  function numericDoc(extraCalc: XlsxCell[] = []): XlsxDocument {
+    const pivot: XlsxSheet = { name: 'Pivot', sheetId: '1', workbookIndex: 0, cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [at('A1', 0, 0, { value: 10, hasCachedValue: true })] }] }
+    const calc: XlsxSheet = { name: 'Calc', sheetId: '2', workbookIndex: 1, cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [
+      at('A1', 0, 0, { formula: 'SEQUENCE(2,1,Pivot!A1)', dynamicArray: true }), at('C1', 2, 0, { formula: 'A2*2' }), ...extraCalc,
+    ] }] }
+    const doc: XlsxDocument = { sheets: [pivot, calc], definedNames: [], tables: [] }
+    evaluateWorkbookFormulas(doc, { forceRecalc: true, arrayMode: 'dynamic' })
+    return doc
+  }
+  const value = (doc: XlsxDocument, ref: string) => doc.sheets[1]!.rows.flatMap(row => row.cells).find(cell => cell.ref === ref)?.value
+  const commit = (doc: XlsxDocument, pivotA1: number) => recomputeDependents(doc, [{ sheetId: 0, rect: { minRow: 0, maxRow: 0, minCol: 0, maxCol: 0 } }],
+    { arrayMode: 'dynamic', readCellValue: (name, col, row) => name === 'Pivot' && row === 0 && col === 0 ? pivotA1 : undefined })
+
+  it('a formula reading a spilled cell recomputes with the spill', () => {
+    const doc = numericDoc()
+    expect([value(doc, 'A1'), value(doc, 'A2'), value(doc, 'C1')]).toEqual([10, 11, 22])
+    const result = commit(doc, 20)
+    expect([value(doc, 'A1'), value(doc, 'A2'), value(doc, 'C1')]).toEqual([20, 21, 42])
+    expect(result.readers).toEqual(expect.arrayContaining(['calc!2:0']))
+    // A later commit too (the spill's cells are now the recompute's own).
+    commit(doc, 30)
+    expect(value(doc, 'C1')).toBe(62)
+  })
+
+  it('a formula reading a cell the spill grows into, or leaves, recomputes too', () => {
+    const doc = numericDoc([at('D1', 3, 0, { formula: 'A3*2' })])
+    doc.sheets[1]!.rows[0]!.cells[0]!.formula = 'SEQUENCE(Pivot!A1/5,1)'   // 2 rows at 10, 4 at 20
+    evaluateWorkbookFormulas(doc, { forceRecalc: true, arrayMode: 'dynamic' })
+    expect([value(doc, 'A2'), value(doc, 'A3'), value(doc, 'D1')]).toEqual([2, undefined, 0])
+    commit(doc, 20)
+    expect([value(doc, 'A3'), value(doc, 'A4'), value(doc, 'D1')]).toEqual([3, 4, 6])
+    commit(doc, 10)
+    expect([value(doc, 'A3'), value(doc, 'D1')]).toEqual([undefined, 0])
+  })
+
+  it('a chart over a spilled cell only (not its anchor) is refilled', () => {
+    const doc = numericDoc()
+    const chartOnA2 = { groups: [{ series: [{ refs: { values: { sheet: 'Calc', r0: 1, c0: 0, r1: 1, c1: 0 } } }] }] }
+    doc.sheets[1]!.drawings = [{ content: { kind: 'xlsxChart', chart: chartOnA2 } } as never]
+    expect(commit(doc, 20).charts).toEqual([0])
+  })
+})
