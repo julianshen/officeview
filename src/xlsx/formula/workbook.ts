@@ -628,7 +628,7 @@ export function recomputeDependents(
   doc: XlsxDocument,
   changed: readonly ChangedSheetRect[],
   options?: WorkbookEvaluationOptions,
-): { recomputed: number; charts: readonly number[]; sheets: readonly number[]; stale: readonly string[]; /** Every reader this call covered: recomputed, or (over budget) left as it was. */ readers: readonly string[]; /** Over the work budget (S3-AE): nothing ran, and the stale readers keep whatever value they showed (maybe an earlier commit's live value), not necessarily the saved one (T31 r4 M-4). */ overBudget?: true } {
+): { recomputed: number; charts: readonly number[]; sheets: readonly number[]; /** Sheets whose cells the spill work wrote or cleared (their row set may have changed). */ spillSheets?: readonly number[]; stale: readonly string[]; /** Every reader this call covered: recomputed, or (over budget) left as it was. */ readers: readonly string[]; /** Over the work budget (S3-AE): nothing ran, and the stale readers keep whatever value they showed (maybe an earlier commit's live value), not necessarily the saved one (T31 r4 M-4). */ overBudget?: true } {
   if (workbookValuePolicy(doc) === 'cached') throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   const prior = docSpillStates.get(doc)
   const index = referenceIndexFor(doc)
@@ -712,8 +712,10 @@ export function recomputeDependents(
   let images = liveSpillImages.get(doc)
   if (!images) liveSpillImages.set(doc, images = { positions: new Map(), generated: [...(prior?.generated ?? [])], createdRows: [...(prior?.createdRows ?? [])] })
   const positions = images.positions, runtime = prior?.runtimeIndex
+  const spillSheets = new Set<XlsxSheet>()
   const evaluateSubset = (keys: ReadonlySet<string>) => {
     spillImageRecorder = (sheet, col, row) => {
+      spillSheets.add(sheet)
       const key = makeCellKey(sheet.name, col, row)
       if (positions.has(key)) return
       const rowObj = sheet.rows.find(candidate => candidate.index === row)
@@ -780,7 +782,8 @@ export function recomputeDependents(
   }
   for (const key of staleKeys) retained.add(key)
   // A chart over the cells a recomputed formula spills (or spilled) follows it too, not only one over its anchor.
-  return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, new Set([...recomputeKeys, ...spilled])), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
+  return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, new Set([...recomputeKeys, ...spilled])), sheets: affectedSheets,
+    ...(spillSheets.size ? { spillSheets: doc.sheets.flatMap((sheet, index) => spillSheets.has(sheet) ? [index] : []) } : {}), stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
 /** By sheet, row and column: the saved cell at every position a dependent recompute changed (a copy), or null where

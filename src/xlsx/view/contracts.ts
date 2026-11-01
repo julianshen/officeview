@@ -259,8 +259,9 @@ export interface SourceStore {
   setValueOverlay?(overlay: ValueOverlay | undefined): void
   /** Resident: the sheet's cell values changed in place (a dependent recompute after a pivot change wrote formula
    * results, or put the saved ones back); advances valueGen so value-keyed consumers (tiles, find, filter value
-   * lists) re-read. */
-  noteValuesChanged?(): void
+   * lists) re-read. `rows`: its row set changed too (a dependent spill grew into new rows or left rows empty), so the
+   * store takes its row inventory and used extent again. */
+  noteValuesChanged?(options?: { rows?: boolean }): void
   readCell(at: SourceCell, options: ReadOptions): Promise<CellRead>
   readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
   /** Ordering contract (§4.1; enforced by the worker session since S4.2): the

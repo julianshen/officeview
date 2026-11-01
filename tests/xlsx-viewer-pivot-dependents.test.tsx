@@ -3,12 +3,13 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
+import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { markSavedValuesOnly } from '../src/xlsx/formula/value-policy'
 import { chartWorkbook } from './helpers/xlsx-chart-fixture'
 import { patchedSeed } from './helpers/xlsx-pivots-dependent-patched'
@@ -174,6 +175,56 @@ it('a printout and the unmount show a dependent spill as saved, whether the chan
   expect(columnOf(formulas, 3)).toEqual(savedD)
   expect(columnOf(formulas, 4)).toEqual(savedE)
 }, 30_000)
+
+it('a dependent spill growing into rows the sheet did not have is read, found and copied there; shrunk back, the rows read empty', async () => {
+  const doc = await load()
+  const formulas = doc.sheets.find(s => s.name === 'Formulas')!
+  const last = Math.max(...formulas.rows.map(row => row.index))
+  // F<last> spills 1 row while the saved grand total (B1) is over 200,000, else 3: two rows past the sheet's last.
+  formulas.rows.find(r => r.index === last)!.cells.push({ ref: `F${last + 1}`, col: 5, row: last, value: null, formula: 'SEQUENCE(IF(B1>200000,1,3),1,1000)', dynamicArray: true, styleIndex: 0 } as never)
+  evaluateWorkbookFormulas(doc, { forceRecalc: true })
+  const source = createObjectWorkbookSource(doc, 'spill-rows')
+  const sheetId = String(formulas.sheetId)
+  const read = async (row: number) => {
+    const store = source.store(sheetId)
+    const got = await store.readCell({ row, col: 5 }, { signal: new AbortController().signal, stamp: store.stamp })
+    return got.kind === 'cell' ? got.cell.value : got.kind
+  }
+  const write = vi.fn(async (_text: string) => {})
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: write } })
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} showSearch />)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  // Formulas visited first: its store (and its row inventory) exists before the change.
+  pickSheet(ui, 'Formulas')
+  expect(await read(last + 2)).not.toBe(1002)
+  pickSheet(ui, 'Pivot')
+  await filterRegion(await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 }).then(() => ui), 'West')
+  await waitFor(() => expect(formulas.rows.some(row => row.index === last + 2)).toBe(true), { timeout: 10_000 })
+  pickSheet(ui, 'Formulas')
+  expect([await read(last), await read(last + 1), await read(last + 2)]).toEqual([1000, 1001, 1002])
+  const search = ui.getByRole('searchbox', { name: 'Search document' })
+  const count = () => ui.getByTestId('officeview-search-status').textContent ?? ''
+  fireEvent.change(search, { target: { value: '1002' } })
+  await waitFor(() => expect(count()).toMatch(/1 of 1/), { timeout: 10_000 })
+  fireEvent.change(search, { target: { value: '' } })
+  goTo(ui, `F${last + 1}`)
+  const grid = ui.getByRole('grid')
+  act(() => grid.focus())
+  fireEvent.keyDown(grid, { key: 'ArrowDown', shiftKey: true }); fireEvent.keyDown(grid, { key: 'ArrowDown', shiftKey: true })
+  await waitFor(() => expect(grid.getAttribute('aria-activedescendant')).toBeTruthy())
+  fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
+  await waitFor(() => expect(write).toHaveBeenCalled(), { timeout: 10_000 })
+  expect(write.mock.calls.at(-1)![0].split(/\r?\n/).filter(Boolean)).toEqual(['1000', '1001', '1002'])
+  // Back to the saved view: the spill shrinks to one cell and its rows go.
+  pickSheet(ui, 'Pivot')
+  fireEvent.click(await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 }))
+  fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Reset to saved view' }))
+  await waitFor(() => expect(formulas.rows.some(row => row.index === last + 2)).toBe(false), { timeout: 10_000 })
+  pickSheet(ui, 'Formulas')
+  expect([await read(last), await read(last + 1), await read(last + 2)]).toEqual([1000, 'blank', 'blank'])
+  fireEvent.change(search, { target: { value: '1002' } })
+  await waitFor(() => expect(count()).toMatch(/no matches/), { timeout: 10_000 })
+}, 60_000)
 
 it('a printout after every pivot is back to its saved view prints the document as it is, with no note', async () => {
   const doc = await load()

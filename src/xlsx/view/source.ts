@@ -184,11 +184,12 @@ interface OverlayState { overlay?: ValueOverlay; structureGen: number }
 const overlayStates = new WeakMap<object, OverlayState>()
 
 export class ObjectXlsxSheetAdapter implements SourceStore {
-  private readonly baseExtent: SourceStore['extent']
+  private baseExtent!: SourceStore['extent']
   private currentStamp: SourceStamp
-  private readonly rows: readonly XlsxRow[]
-  private readonly rowIndexes: readonly number[]
-  private readonly dynamicAnchors: readonly { row: number; col: number }[]
+  /** The sheet's row inventory, taken from its rows (`reindex`): again when a dependent spill adds or removes rows. */
+  private rows!: readonly XlsxRow[]
+  private rowIndexes!: readonly number[]
+  private dynamicAnchors!: readonly { row: number; col: number }[]
   private readonly savedPivots: readonly SourceRect[]
   private drawingCache?: DrawingAnchor[]
   private released = false
@@ -207,6 +208,21 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     private readonly pacing: StorePacing = {},
   ) {
     this.currentStamp = stamp
+    this.reindex()
+    // The saved pivots' guarded rectangles, taken once from the file's definitions (T26 m2, Task 33 perf): a commit
+    // replaces the live definitions with moved locations, and a structural query reparses nothing.
+    const groups = [
+      ...(sheet.pivotRegions ?? []).map(region => { const table = parseRange(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] }),
+      ...(sheet.pivotTables ?? []).map(pivot => {
+        const table = parseRange(pivot.location.ref), pages = pivot.pageFields?.length ?? 0
+        return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
+      }),
+    ]
+    this.savedPivots = Object.freeze(uniqueRectList(groups.flat()).map(rect => Object.freeze(rect)))
+  }
+  /** The row inventory, its index and the used extent, from the sheet's rows as they are now. */
+  private reindex(): void {
+    const sheet = this.sheet
     const rows = sheet.rows.filter(row => isValidCoordinate(row.index, 0) && row.cells.length)
       .sort((a, b) => a.index - b.index)
     this.rows = rows
@@ -240,16 +256,6 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       c0 = Math.min(c0, merge.minCol); c1 = Math.max(c1, merge.maxCol)
     }
     this.dynamicAnchors = dynamic
-    // The saved pivots' guarded rectangles, taken once from the file's definitions (T26 m2, Task 33 perf): a commit
-    // replaces the live definitions with moved locations, and a structural query reparses nothing.
-    const groups = [
-      ...(sheet.pivotRegions ?? []).map(region => { const table = parseRange(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] }),
-      ...(sheet.pivotTables ?? []).map(pivot => {
-        const table = parseRange(pivot.location.ref), pages = pivot.pageFields?.length ?? 0
-        return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
-      }),
-    ]
-    this.savedPivots = Object.freeze(uniqueRectList(groups.flat()).map(rect => Object.freeze(rect)))
     this.baseExtent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
   }
   get stamp(): SourceStamp { return this.currentStamp }
@@ -275,7 +281,11 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     overlayStates.set(this, { overlay, structureGen })
     this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 })
   }
-  noteValuesChanged(): void { this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 }) }
+  noteValuesChanged(options?: { rows?: boolean }): void {
+    // A spill that grew into rows the sheet did not have, or left rows empty: the inventory is taken again (PR #57).
+    if (options?.rows) this.reindex()
+    this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 })
+  }
   /** parse.ts turns an unreadable merge ref into an A1 merge; when the raw refs
    * are present, those are dropped (and diagnosed) exactly as the paged adapter does. */
   private validMerges(): XlsxSheet['mergeRanges'] {
