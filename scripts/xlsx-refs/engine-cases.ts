@@ -221,25 +221,25 @@ export function serialToIso(serial: number): string {
 
 /** What `lines` address: `p` the pivot, `ws` sheet Pivot, `wb` the workbook, `data` sheet Data. */
 export interface Target { p: string; ws: string; wb: string; data: string }
-const str = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+export const str = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 export const SALES = 'Sum of Sales', UNITS = 'Sum of Units'
-const field = (t: Target, name: string) => `pivot field ${str(name)} of ${t.p}`
-const dataField = (t: Target, name: string) => `data field ${str(name)} of ${t.p}`
+export const field = (t: Target, name: string) => `pivot field ${str(name)} of ${t.p}`
+export const dataField = (t: Target, name: string) => `data field ${str(name)} of ${t.p}`
 /** A data field by position (1-based): Excel names new data fields in its UI language (zh-TW here), so a field the
  * case adds is addressed by index and renamed to an English caption right away. */
 const dataFieldAt = (t: Target, index: number) => `data field ${index} of ${t.p}`
 type Orientation = 'row field' | 'column field' | 'page field' | 'data field' | 'hidden'
 const orient = (t: Target, name: string, o: Orientation) => `set pivot field orientation of ${field(t, name)} to orient as ${o}`
-const toRows = (t: Target, name: string) => orient(t, name, 'row field')
-const toCols = (t: Target, name: string) => orient(t, name, 'column field')
-const toPage = (t: Target, name: string) => orient(t, name, 'page field')
-const hide = (t: Target, name: string) => orient(t, name, 'hidden')
+export const toRows = (t: Target, name: string) => orient(t, name, 'row field')
+export const toCols = (t: Target, name: string) => orient(t, name, 'column field')
+export const toPage = (t: Target, name: string) => orient(t, name, 'page field')
+export const hide = (t: Target, name: string) => orient(t, name, 'hidden')
 /** Rows hold only `name`: Region and Product leave the row axis. */
-const onlyRows = (t: Target, name: string) => [hide(t, 'Product'), hide(t, 'Region'), toRows(t, name)]
+export const onlyRows = (t: Target, name: string) => [hide(t, 'Product'), hide(t, 'Region'), toRows(t, name)]
 const addData = (t: Target, name: string, index: number, caption: string) =>
   [orient(t, name, 'data field'), `set name of ${dataFieldAt(t, index)} to ${str(caption)}`]
-const form = (t: Target, f: 'compact' | 'outline' | 'tabular') => `row axis layout ${t.p} layout ${f} row`
-const subtotalsAt = (t: Target, where: 'top' | 'bottom') => `subtotal location ${t.p} location at ${where}`
+export const form = (t: Target, f: 'compact' | 'outline' | 'tabular') => `row axis layout ${t.p} layout ${f} row`
+export const subtotalsAt = (t: Target, where: 'top' | 'bottom') => `subtotal location ${t.p} location at ${where}`
 /** XLSubTotalType enumerators from Excel.sdef ('sum subtotal', 'count subtotal', 'average subtotal', …). */
 const namedSubtotals = (t: Target, name: string, kinds: readonly string[]) =>
   kinds.map(kind => `set subtotals ${field(t, name)} subtotal index ${kind} value true`)
@@ -247,12 +247,12 @@ const fn = (t: Target, name: string, f: string) => `set function of ${dataField(
 const calc = (t: Target, name: string, c: string) => `set calculation of ${dataField(t, name)} to pivot field calculation ${c}`
 const baseField = (t: Target, name: string, base: string) => `set base field of ${dataField(t, name)} to ${str(base)}`
 const baseItem = (t: Target, name: string, item: string) => `set base item of ${dataField(t, name)} to ${str(item)}`
-const hideItem = (t: Target, name: string, item: string) => `set visible of pivot item ${str(item)} of ${field(t, name)} to false`
-const showAll = (t: Target, name: string) => `set show all items of ${field(t, name)} to true`
-const autoSort = (t: Target, name: string, order: 'ascending' | 'descending', key: string) =>
+export const hideItem = (t: Target, name: string, item: string) => `set visible of pivot item ${str(item)} of ${field(t, name)} to false`
+export const showAll = (t: Target, name: string) => `set show all items of ${field(t, name)} to true`
+export const autoSort = (t: Target, name: string, order: 'ascending' | 'descending', key: string) =>
   `auto sort ${field(t, name)} sort order sort ${order} sort field ${str(key)}`
 /** Every `pivot filter` property is read-only in Excel.sdef, so `make new pivot filter` is unconfirmed (probe first). */
-const makeFilter = (t: Target, name: string, props: string) => `make new pivot filter at ${field(t, name)} with properties {${props}}`
+export const makeFilter = (t: Target, name: string, props: string) => `make new pivot filter at ${field(t, name)} with properties {${props}}`
 const autoShow = (t: Target, name: string, pos: 'top' | 'bottom', count: number, data: string) =>
   `auto show ${field(t, name)} type type_automatic range position ${pos} count ${count} field ${str(data)}`
 /** `group` takes a single cell of the field's item range (Excel.sdef); integer start/end/by; periods = seconds,
@@ -312,10 +312,10 @@ export const SEED_PIVOT_MARKERS = [/<rowFields count="2"><field x="0"\/><field x
 // ---------------------------------------------------------------------------------------------------------------
 
 export interface PivotParts { pivot: string; cache: string }
-interface El { name: string; start: number; openEnd: number; end: number; selfClosing: boolean }
+export interface El { name: string; start: number; openEnd: number; end: number; selfClosing: boolean }
 
 /** Top-level elements in xml[from, to). */
-function scan(xml: string, from: number, to: number): El[] {
+export function scan(xml: string, from: number, to: number): El[] {
   const tag = /<(\/?)([A-Za-z_][\w:.-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>|<\?[\s\S]*?\?>|<!--[\s\S]*?-->/g
   tag.lastIndex = from
   const out: El[] = [], stack: El[] = []
@@ -333,11 +333,11 @@ function scan(xml: string, from: number, to: number): El[] {
   }
   return out
 }
-const rootOf = (xml: string) => scan(xml, 0, xml.length)[0]!
-const childrenOf = (xml: string, el: El, name?: string) =>
+export const rootOf = (xml: string) => scan(xml, 0, xml.length)[0]!
+export const childrenOf = (xml: string, el: El, name?: string) =>
   el.selfClosing ? [] : scan(xml, el.openEnd, el.end - el.name.length - 3).filter(c => name === undefined || c.name === name)
 /** The element at `path` below the root (each step a tag name, or [name, index] for the nth such child). */
-function find(xml: string, path: ReadonlyArray<string | readonly [string, number]>): El | undefined {
+export function find(xml: string, path: ReadonlyArray<string | readonly [string, number]>): El | undefined {
   let el: El | undefined = rootOf(xml)
   for (const step of path) {
     if (!el) return undefined
@@ -346,13 +346,13 @@ function find(xml: string, path: ReadonlyArray<string | readonly [string, number
   }
   return el
 }
-const must = (el: El | undefined, what: string) => { if (!el) throw new Error(`xml edit: ${what} not found`); return el }
-const splice = (xml: string, start: number, end: number, insert: string) => xml.slice(0, start) + insert + xml.slice(end)
+export const must = (el: El | undefined, what: string) => { if (!el) throw new Error(`xml edit: ${what} not found`); return el }
+export const splice = (xml: string, start: number, end: number, insert: string) => xml.slice(0, start) + insert + xml.slice(end)
 export const escapeXml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-const unescapeXml = (v: string) => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+export const unescapeXml = (v: string) => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
 
 /** Sets (or, with null, removes) attributes on an element's start tag. */
-function setAttrs(xml: string, el: El, attrs: Record<string, string | null>): string {
+export function setAttrs(xml: string, el: El, attrs: Record<string, string | null>): string {
   let open = xml.slice(el.start, el.openEnd)
   for (const [name, value] of Object.entries(attrs)) {
     const re = new RegExp(`\\s${name.replace(/[.:]/g, '\\$&')}="[^"]*"`)
@@ -362,12 +362,12 @@ function setAttrs(xml: string, el: El, attrs: Record<string, string | null>): st
   }
   return splice(xml, el.start, el.openEnd, open)
 }
-const attrOf = (xml: string, el: El, name: string) => {
+export const attrOf = (xml: string, el: El, name: string) => {
   const m = new RegExp(`\\s${name}="([^"]*)"`).exec(xml.slice(el.start, el.openEnd))
   return m ? unescapeXml(m[1]!) : undefined
 }
 /** Inserts `fragment` as a child of `el`, before the first existing child named in `before` (schema order), else last. */
-function insertChild(xml: string, el: El, fragment: string, before: readonly string[] = []): string {
+export function insertChild(xml: string, el: El, fragment: string, before: readonly string[] = []): string {
   if (el.selfClosing) {
     const open = xml.slice(el.start, el.openEnd).replace(/\s*\/>$/, '>')
     return splice(xml, el.start, el.end, `${open}${fragment}</${el.name}>`)
@@ -382,10 +382,10 @@ function recount(xml: string, path: ReadonlyArray<string | readonly [string, num
   return el ? setAttrs(xml, el, { count: String(childrenOf(xml, el).length) }) : xml
 }
 
-const PIVOT_ORDER = ['location', 'pivotFields', 'rowFields', 'rowItems', 'colFields', 'colItems', 'pageFields', 'dataFields', 'formats',
+export const PIVOT_ORDER = ['location', 'pivotFields', 'rowFields', 'rowItems', 'colFields', 'colItems', 'pageFields', 'dataFields', 'formats',
   'conditionalFormats', 'chartFormats', 'pivotHierarchies', 'pivotTableStyleInfo', 'filters', 'rowHierarchiesUsage', 'colHierarchiesUsage', 'extLst']
 const CACHE_ORDER = ['cacheSource', 'cacheFields', 'cacheHierarchies', 'kpis', 'tupleCache', 'calculatedItems', 'calculatedMembers', 'dimensions', 'measureGroups', 'maps', 'extLst']
-const after = (order: readonly string[], name: string) => order.slice(order.indexOf(name) + 1)
+export const after = (order: readonly string[], name: string) => order.slice(order.indexOf(name) + 1)
 
 /** Cache field names in order. */
 export function cacheFieldNames(cache: string): string[] {
@@ -408,24 +408,24 @@ const sharedIndex = (cache: string, field: number, value: string) => {
   return index
 }
 
-function editRoot(xml: string, attrs: Record<string, string | null>): string { return setAttrs(xml, rootOf(xml), attrs) }
-function editPivotField(pivot: string, index: number, attrs: Record<string, string | null>): string {
+export function editRoot(xml: string, attrs: Record<string, string | null>): string { return setAttrs(xml, rootOf(xml), attrs) }
+export function editPivotField(pivot: string, index: number, attrs: Record<string, string | null>): string {
   return setAttrs(pivot, must(find(pivot, ['pivotFields', ['pivotField', index]]), `pivotField ${index}`), attrs)
 }
 /** Replaces a pivotField's `<items>` (or adds one). */
-function setFieldItems(pivot: string, index: number, items: string[]): string {
+export function setFieldItems(pivot: string, index: number, items: string[]): string {
   const fieldPath = ['pivotFields', ['pivotField', index]] as const
   const existing = find(pivot, [...fieldPath, 'items'])
   const block = `<items count="${items.length}">${items.join('')}</items>`
   if (existing) return splice(pivot, existing.start, existing.end, block)
   return insertChild(pivot, must(find(pivot, fieldPath), `pivotField ${index}`), block, ['autoSortScope', 'extLst'])
 }
-const fieldItems = (pivot: string, index: number) => {
+export const fieldItems = (pivot: string, index: number) => {
   const items = find(pivot, ['pivotFields', ['pivotField', index], 'items'])
   return items ? childrenOf(pivot, items, 'item').map(item => pivot.slice(item.start, item.end)) : []
 }
 /** Adds attributes to the pivot item pointing at shared item `x`. */
-function editItem(pivot: string, field: number, x: number, attrs: Record<string, string>): string {
+export function editItem(pivot: string, field: number, x: number, attrs: Record<string, string>): string {
   const items = must(find(pivot, ['pivotFields', ['pivotField', field], 'items']), `items of field ${field}`)
   const item = must(childrenOf(pivot, items, 'item').find(i => attrOf(pivot, i, 'x') === String(x) && !attrOf(pivot, i, 't')), `item x=${x} of field ${field}`)
   return setAttrs(pivot, item, attrs)
@@ -453,26 +453,26 @@ function dropAxisItems(pivot: string): string {
 }
 let filterId = 100
 /** Appends a pivot filter (Excel's form: an autoFilter over column 0 with customFilters or top10). */
-function addFilter(pivot: string, fld: number, type: string, body: string, extra: Record<string, string> = {}): string {
+export function addFilter(pivot: string, fld: number, type: string, body: string, extra: Record<string, string> = {}): string {
   const attrs = Object.entries({ fld: String(fld), type, evalOrder: '-1', id: String(++filterId), ...extra }).map(([k, v]) => ` ${k}="${escapeXml(v)}"`).join('')
   const filter = `<filter${attrs}><autoFilter ref="A1"><filterColumn colId="0">${body}</filterColumn></autoFilter></filter>`
   const existing = find(pivot, ['filters'])
   if (existing) return recount(insertChild(pivot, existing, filter), ['filters'])
   return insertChild(pivot, rootOf(pivot), `<filters count="1">${filter}</filters>`, after(PIVOT_ORDER, 'filters'))
 }
-const custom = (...filters: Array<[string | undefined, string]>) =>
+export const custom = (...filters: Array<[string | undefined, string]>) =>
   `<customFilters${filters.length > 1 ? ' and="1"' : ''}>${filters.map(([op, val]) => `<customFilter${op ? ` operator="${op}"` : ''} val="${escapeXml(val)}"/>`).join('')}</customFilters>`
-function labelFilter(pivot: string, fld: number, type: string, v1: string, v2?: string): string {
+export function labelFilter(pivot: string, fld: number, type: string, v1: string, v2?: string): string {
   const body = type === 'captionBetween' ? custom(['greaterThanOrEqual', v1], ['lessThanOrEqual', v2!])
     : type === 'captionBeginsWith' ? custom([undefined, `${v1}*`])
       : type === 'captionGreaterThan' ? custom(['greaterThan', v1]) : custom([undefined, v1])
   return addFilter(pivot, fld, type, body, v2 === undefined ? { stringValue1: v1 } : { stringValue1: v1, stringValue2: v2 })
 }
-function valueFilter(pivot: string, fld: number, measure: number, type: 'valueGreaterThan' | 'valueBetween', v1: number, v2?: number): string {
+export function valueFilter(pivot: string, fld: number, measure: number, type: 'valueGreaterThan' | 'valueBetween', v1: number, v2?: number): string {
   const body = type === 'valueBetween' ? custom(['greaterThanOrEqual', String(v1)], ['lessThanOrEqual', String(v2)]) : custom(['greaterThan', String(v1)])
   return addFilter(pivot, fld, type, body, { iMeasureFld: String(measure) })
 }
-function top10Filter(pivot: string, fld: number, measure: number, type: 'count' | 'percent' | 'sum', val: number): string {
+export function top10Filter(pivot: string, fld: number, measure: number, type: 'count' | 'percent' | 'sum', val: number): string {
   return addFilter(pivot, fld, type, `<top10 val="${val}"${type === 'percent' ? ' percent="1"' : ''}/>`, { iMeasureFld: String(measure) })
 }
 /** Named subtotals on a field: the `*Subtotal` flags and one `<item t=…>` per function instead of the default. */
@@ -601,7 +601,7 @@ export const rowField = (index: number) => new RegExp(String.raw`<rowFields\b[^>
 export const colField = (index: number) => new RegExp(String.raw`<colFields\b[^>]*>(?:<field x="-?\d+"\/>)*<field x="${index}"\/>`)
 const rowCount = (n: number) => new RegExp(`<rowFields count="${n}">`)
 const dataAttr = (attrs: string) => new RegExp(String.raw`<dataField [^>]*${attrs}`)
-const filterType = (type: string) => new RegExp(`<filter [^>]*type="${type}"`)
+export const filterType = (type: string) => new RegExp(`<filter [^>]*type="${type}"`)
 const COMPACT_OFF = /<pivotField [^>]*compact="0"/, OUTLINE_OFF = /<pivotField [^>]*outline="0"/
 const SUBTOTAL_BOTTOM = /<pivotField [^>]*subtotalTop="0"/
 const fieldGroupBy = (by: string) => new RegExp(`<fieldGroup [^>]*>\\s*<rangePr [^>]*groupBy="${by}"`)

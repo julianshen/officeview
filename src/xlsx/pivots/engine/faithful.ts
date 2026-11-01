@@ -55,7 +55,8 @@ export function engineEligibility(cache: PivotCacheDefinition, def: PivotTableDe
   const name = `Pivot table ${def.name}`
   if (cache.olap) return refuse('pivot-source-unsupported', `${name} uses an OLAP or data-model cache`)
   if (cache.source.type !== 'worksheet') return refuse('pivot-source-unsupported', `${name} has a ${cache.source.type} source`)
-  if (cache.source.worksheet?.relId !== undefined) return refuse('pivot-source-unsupported', `${name} has a source in another workbook`)
+  // A refreshOnLoad pivot whose source is another workbook cannot take the §7.7 route (Task 32).
+  if (cache.source.worksheet?.relId !== undefined) return refuse(cache.refreshOnLoad ? 'pivot-refresh-on-load' : 'pivot-source-unsupported', `${name} has a source in another workbook`)
   const records = cache.saveData && cache.recordsPartPath !== undefined
   if (cache.refreshOnLoad && opts.sourceReadable) return { ok: true, refresh: true }
   if (!records) return refuse('pivot-records-absent', `${name} was saved without its records (saveData="0")`)
@@ -189,7 +190,10 @@ export function sheetCellReader(sheet: Pick<XlsxSheet, 'rows'>): CellReader {
     rows ??= new Map(sheet.rows.map(entry => [entry.index, entry]))
     let line = cells.get(row)
     if (!line) {
-      line = new Map((rows.get(row)?.cells ?? []).map(cell => [cell.col, cell]))
+      // A row the sheet does not have reads blank without indexing (a sparse refresh source, Task 32).
+      const entry = rows.get(row)
+      if (!entry) return undefined
+      line = new Map(entry.cells.map(cell => [cell.col, cell]))
       cells.set(row, line)
     }
     const cell = line.get(col)
@@ -225,7 +229,12 @@ export const PAGED_CELL_LIMITS: Readonly<Record<ProfileId, number>> = Object.fre
  */
 export async function pagedCellReader(store: Pick<SourceStore, 'readRows'>, def: PivotTableDefinition, options: ReadOptions, profile: ProfileId,
   maxBytes: number = PAGED_CELL_LIMITS[profile]): Promise<CellReader> {
-  const area = cellArea(def)
+  return pagedRangeReader(store, cellArea(def), options, profile, maxBytes)
+}
+
+/** `pagedCellReader` over any area (Task 32: a refreshOnLoad pivot's source range), with the same caps and marks. */
+export async function pagedRangeReader(store: Pick<SourceStore, 'readRows'>, area: SheetRect | undefined, options: ReadOptions, profile: ProfileId,
+  maxBytes: number = PAGED_CELL_LIMITS[profile]): Promise<CellReader> {
   let cells = new Map<number, SavedCell>()
   let incomplete: CellReader['incomplete']
   let bytes = 0

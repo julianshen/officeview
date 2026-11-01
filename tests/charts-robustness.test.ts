@@ -287,7 +287,7 @@ describe('torture (c): external links and names pointing at another workbook', (
   it.each(['docx', 'pptx'] as const)('%s: an external externalData is never fetched; saved data still draws; external names and references are unavailable', async format => {
     const context = meteredContext('mobile')
     const objects: ChartDocObject[] = [
-      { name: 'external', part: officeChartXml(), externalWorkbook: 'file:///C:/Users/me/Book1.xlsx' },
+      { name: 'external', part: officeChartXml(), externalWorkbook: 'file:///C:/Data/Book1.xlsx' },
       { name: 'external, saved data', part: cached, externalWorkbook: 'https://example.com/book.xlsx' },
       { name: 'external name', part: officeChartXml('rId1', 'Ext'), workbook: linked },
       { name: 'external reference', part: officeChartXml('rId1', '[1]Sheet1!$B$2:$B$3'), workbook: linked },

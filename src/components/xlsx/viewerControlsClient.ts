@@ -142,6 +142,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
   const store = controlSourceStore(source.store(sheetId), memory)
   const { cache, runs } = resources
   const stamp = { ...store.stamp }
+  let structureStamp = { ...stamp }
+  let structureGeneration = store.structureGen ?? 0
   let structure: StructuralIndex
   try {
     const result = await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp })
@@ -478,12 +480,16 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     // A worker-backed sheet opens while its import still runs, so the snapshot
     // taken above can be 'loading'. Re-query until it is complete (or failed);
     // a stuck snapshot would refuse every later sort/filter as incomplete.
-    if (structure.completeness !== 'complete' && structure.failure === undefined) {
+    const currentStamp = store.stamp
+    if ((structure.completeness !== 'complete' && structure.failure === undefined)
+      || currentStamp.valueGen !== structureStamp.valueGen || (store.structureGen ?? 0) !== structureGeneration) {
       const result = await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } })
       abort.throwIfAborted()
       if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
       const stale = structure
       structure = hold(controlStructure(result, memory))
+      structureStamp = { ...store.stamp }
+      structureGeneration = store.structureGen ?? 0
       store.settle?.(result)
       letGo(stale)
         abort.throwIfAborted()

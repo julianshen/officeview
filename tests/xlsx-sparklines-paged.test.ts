@@ -69,6 +69,24 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
 }
 
 describe('paged sparkline transfer cache', () => {
+  it('reads referenced-sheet sparkline values through that sheet’s committed pivot overlay', async () => {
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(fixtureBytes('col-basic')).buffer as ArrayBuffer]) }, { docId: 'sparkline-overlay', profile: 'D' })
+    expect((await session.done).kind).toBe('complete')
+    const hostSheet = session.workbook.sheets[0] as any
+    const group = hostSheet.metadata.sparklineGroups[0] as XlsxSparklineGroup
+    hostSheet.metadata.sparklineGroups = [{ ...group, sparklines: [{ ...group.sparklines[0], data: { sheet: 'Data', r0: 0, r1: 0, c0: 0, c1: 1 } }] }]
+    ;(session.workbook.sheets as any).push({ ...hostSheet, sheetId: '2', name: 'Data', metadata: { ...hostSheet.metadata, sparklineGroups: [] } })
+    const source = createPagedWorkbookSource(session)
+    const dataStore: any = source.store('2')
+    dataStore.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 1 }], merges: [],
+      cell: (_row: number, col: number) => ({ value: col === 0 ? 7_000_001 : 11_000_009 }) })
+    const hostStore: any = source.store('1')
+    const result = await hostStore.readSparklines!({ signal: new AbortController().signal, stamp: hostStore.stamp }, 64 * 1024 * 1024, { set: () => true })
+    expect(result.sparklines).toHaveLength(1)
+    expect(result.sparklines[0].values).toEqual(new Float64Array([7_000_001, 11_000_009]))
+    await source.release()
+  })
+
   it('never captures colour-like elements other than the eight sparkline colours', async () => {
     const zip = await JSZip.loadAsync(fixtureBytes('line-basic'))
     const path = 'xl/worksheets/sheet1.xml'

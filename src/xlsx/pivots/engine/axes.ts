@@ -438,9 +438,11 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         for (let record = 0; record < store.count; record++) if (eligible[record] && keys[record] !== NO_LINE) hasRecords[keys[record]!] = 1
         if (hasRecords.some((present, item) => present && aggregate.value[item] === undefined))
           return unmeasured(`value sort for field ${field} has a blank aggregate for an item with records; its placement is not measured`)
+        // Exact ties keep item order descending and reverse it ascending (Task 24 interaction-sort-value-ascending-ties:
+        // South before North on Sum of Units; sort-value-ties: North before South): ascending is descending reversed.
         const scored = map.order.map(item => ({ item, value: aggregate.value[item], bound: bounds[item]! }))
           .filter((entry): entry is Scored => entry.value !== undefined)
-          .sort((a, b) => (state.sortType === 'descending' ? b.value - a.value : a.value - b.value) || a.item - b.item)
+          .sort((a, b) => state.sortType === 'descending' ? b.value - a.value || a.item - b.item : a.value - b.value || b.item - a.item)
         if (!settled(scored)) return close(`value sort for field ${field}`)
         const rankedItems = scored.map(entry => entry.item)
         const missing = map.order.filter(item => !state.hidden[item] && aggregate.value[item] === undefined)
@@ -483,6 +485,10 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
             return { item, value: aggregate.value[key], bound: bounds[key]! }
           }).sort((a, b) => ((state.sortType === 'descending' ? (b.value ?? -Infinity) - (a.value ?? -Infinity) : (a.value ?? Infinity) - (b.value ?? Infinity))) || a.item - b.item)
           if (!settled(scores.filter((entry): entry is Scored => entry.value !== undefined))) return close(`value sort for field ${field} under parent ${parent}`)
+          // Task 24 measured exact ties at the top level only (descending keeps item order, ascending reverses it);
+          // under a parent neither direction is measured, so a nested exact tie refuses.
+          if (scores.some((entry, k) => k > 0 && entry.value !== undefined && entry.value === scores[k - 1]!.value))
+            return unmeasured(`${state.sortType} value sort for field ${field} has an exact tie under parent ${parent}, whose order is not measured`)
           const ordered = scores.map(entry => entry.item)
           if (state.showAll) ordered.push(...missing)
           byParent.set(parent, ordered)

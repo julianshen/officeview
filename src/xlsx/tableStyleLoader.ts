@@ -9,6 +9,17 @@ let factory: RegionFactory | undefined
 let pending: Promise<void> | undefined
 
 export function registerTableStyleEngine(value: RegionFactory): void { factory = value }
+/** Drop a cached table/pivot region layer after the caller replaces live pivot definitions. */
+export function invalidateRegionStyles(sheet: XlsxSheet | { invalidateRegionStyles(sheetId: string): void }, sheetId?: string): void {
+  if ('invalidateRegionStyles' in sheet) {
+    // A worker-backed workbook keys its layers by sheet: without the id nothing could be dropped.
+    if (sheetId === undefined) throw new TypeError('invalidateRegionStyles: a worker-backed workbook needs a sheet id')
+    sheet.invalidateRegionStyles(sheetId)
+    return
+  }
+  sheet.regionStyles = undefined
+  sheet.regionStylesResolved = false
+}
 function load(): Promise<void> {
   return pending ??= import('./tableStyles/regionLayer').then(() => {}).catch(error => { pending = undefined; throw error })
 }

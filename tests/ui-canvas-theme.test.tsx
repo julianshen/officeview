@@ -98,6 +98,7 @@ it('TileCache keys differ by palette', () => {
   const surface = {width:10,height:10,close:vi.fn()}
   expect(cache.put(key,surface)).toBe(true)
   expect(cache.get({...key,paletteKey:'b'})).toBeUndefined()
+  expect(cache.get({...key,identity:{...identity,valueGen:identity.valueGen+1}})).toBeUndefined()
   expect(cache.get(key)).toBe(surface); cache.dispose()
 })
 it('a palette change misses the tile cache and drops old tiles after presenting', () => {

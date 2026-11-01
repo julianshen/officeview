@@ -18,7 +18,7 @@ import type { DrawingContentShape } from '../../drawing/content'
 import type {
   AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, CacheIdentity, CompactSourceRowSet, CompleteViewportContent, Completeness, IntervalSet, LogicalCellBox,
   LogicalViewport, OverviewDomain, OverviewGroup, RowOrder, RowPermutationBand, RowVisibility, SourceFailure, SourceStore, SparseRowPage,
-  ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
+  ValueOverlay, ValueOverlayCell, ViewportCell, ViewportOverviewGroup, ViewportResult, WorkerDiagnostic,
 } from './contracts'
 import { MAX_COLS, MAX_ROWS, isValidCoordinate, validateSourceRect, type SourceCell } from './coordinates'
 import { AxisMetricsError, createAxisMetrics, type AxisMetricsErrorCode, type SparseAxisMetrics } from './axes'
@@ -180,6 +180,19 @@ export interface SheetGeometryOptions {
   /** View-only session sizes (spec §5.6): rows by source row, columns by source
    * column, applied over authored sizes; authored-hidden lines stay collapsed. */
   sizes?: SessionSizes
+  /** Committed pivot values and structure owned by this geometry. */
+  overlay?: ValueOverlay
+}
+/** A resident overlay cell may carry the cell style it paints with (the pivot client keeps the saved cell's alignment,
+ * font and fill at that position, Task 28); its number format is always the overlay's (General when absent). */
+export interface StyledValueOverlayCell extends ValueOverlayCell { style?: XlsxCellStyle }
+function overlayCellStyle(value: StyledValueOverlayCell): { style?: XlsxCellStyle } {
+  const own = value.style
+  if (!own) return value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}
+  const numFmtId = value.numFmtId ?? 0
+  if (own.numFmtId === numFmtId) return { style: own }
+  const { formatCode: _code, ...rest } = own
+  return { style: { ...rest, numFmtId } }
 }
 /** Built once per geometry generation (sheet + order + visibility), never per paint. */
 export interface SheetGeometry {
@@ -356,8 +369,28 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
       indexedCells++
     }
   }
+  const overlay = options.overlay
+  if (overlay) {
+    for (const rect of overlay.rects) {
+      const r0 = Math.max(0, rect.r0), r1 = Math.min(MAX_ROWS - 1, rect.r1)
+      const c0 = Math.max(0, rect.c0), c1 = Math.min(MAX_COLS - 1, rect.c1)
+      for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) {
+        const value = overlay.cell(row, col)
+        if (value === undefined) continue
+        let cells = cellsByRow.get(row)
+        if (!cells) cellsByRow.set(row, cells = [])
+        const existing = cells.findIndex(cell => cell.row === row && cell.col === col)
+        if (existing >= 0) cells.splice(existing, 1)
+        if (value !== null) cells.push({ ref: `R${row}C${col}`, row, col, value: value.value, styleIndex: 0, ...overlayCellStyle(value), hasCachedValue: true, valueIsError: value.valueIsError } as XlsxCell)
+      }
+    }
+  }
+  for (const [row, cells] of cellsByRow) {
+    cells.sort((a, b) => a.col - b.col)
+    if (!cells.length) cellsByRow.delete(row)
+  }
+  indexedCells = [...cellsByRow.values()].reduce((sum, cells) => sum + cells.length, 0)
   // Stable: equal columns keep authored order, exactly as the static loop paints them.
-  for (const cells of cellsByRow.values()) cells.sort((a, b) => a.col - b.col)
   const { hidden, conflicting } = hiddenRowIndexes(sheet)
   const rowCollapsed = options.visibility ? [] : hidden.map(index => ({ start: index, end: index }))
   if (conflicting) diagnostics.push({ code: 'conflicting-row-metadata', message: `${conflicting} row index(es) carry both hidden and visible records; kept visible` })
@@ -403,7 +436,15 @@ export function buildSheetGeometry(sheet: XlsxSheet, options: SheetGeometryOptio
       diagnostics.push({ code: 'coordinate-outside-domain', message: 'merge range outside the worksheet domain ignored' })
       continue
     }
-    mergeEntries.push({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })
+    const rect = { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }
+    if (overlay?.rects.some(owned => rect.r0 <= owned.r1 && owned.r0 <= rect.r1 && rect.c0 <= owned.c1 && owned.c0 <= rect.c1)) continue
+    mergeEntries.push({ rect, value: range })
+  }
+  if (overlay) for (const merge of overlay.merges) {
+    if (isValidCoordinate(merge.r0, merge.c0) && isValidCoordinate(merge.r1, merge.c1) && merge.r0 <= merge.r1 && merge.c0 <= merge.c1) {
+      const value = { minRow: merge.r0, maxRow: merge.r1, minCol: merge.c0, maxCol: merge.c1 }
+      mergeEntries.push({ rect: { ...merge }, value })
+    }
   }
   const placed = sizedDrawings(sheet.drawings ?? [], options.sizes, rowOverrides, hidden.map(index => ({ start: index, end: index })), colOverrides, colCollapsed, columns.defaultWidthPx)
   const drawingsIn = drawingQuery(placed)

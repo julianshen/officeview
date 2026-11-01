@@ -123,6 +123,8 @@ export interface EvaluationContext {
    * - Must cooperate with cycle detection by delegating or tracking visited cells.
    */
   getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): EvaluationValue[][]
+  /** Supplied by the lazy pivot chunk only during a committed-pivot recompute. */
+  getPivotData?(args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet: string, markStale?: (feature: string) => void): EvaluationValue
   currentSheet?: string
   currentCell?: CellRef
   /** Resolved workbook identity; does not replace currentSheet/currentCell. */

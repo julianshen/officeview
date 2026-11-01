@@ -1,0 +1,884 @@
+[
+  {
+    "case": "baseline",
+    "delta": [],
+    "note": "identity: the seed refreshed with no change; an empty delta list is the trivial oracle (and the Reset target)"
+  },
+  {
+    "case": "layout-compact-three-rows",
+    "delta": null,
+    "reason": "field move (orientation); saved definition differs in rowFields, colFields, fields[2].axis"
+  },
+  {
+    "case": "layout-outline-three-rows",
+    "delta": null,
+    "reason": "field move (orientation); layout form; saved definition differs in compact, compactData, rowFields, colFields, fields[0].compact, fields[1].compact, fields[2].axis, fields[2].compact, fields[3].compact, fields[4].compact, fields[5].compact, fields[6].compact, fields[7].compact, fields[8].compact, fields[9].compact, fields[10].compact, fields[11].compact"
+  },
+  {
+    "case": "layout-tabular-three-rows",
+    "delta": null,
+    "reason": "field move (orientation); layout form; saved definition differs in compact, outline, outlineData, compactData, rowFields, colFields, fields[0].compact, fields[0].outline, fields[1].compact, fields[1].outline, fields[2].axis, fields[2].compact, fields[2].outline, fields[3].compact, fields[3].outline, fields[4].compact, fields[4].outline, fields[5].compact, fields[5].outline, fields[6].compact, fields[6].outline, fields[7].compact, fields[7].outline, fields[8].compact, fields[8].outline, fields[9].compact, fields[9].outline, fields[10].compact, fields[10].outline, fields[11].compact, fields[11].outline"
+  },
+  {
+    "case": "layout-collapsed-item",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ]
+  },
+  {
+    "case": "layout-collapsed-item-above-values",
+    "delta": null,
+    "reason": "field move (orientation); saved definition differs in dataOnRows, rowFields, colFields"
+  },
+  {
+    "case": "layout-subtotals-bottom-compact",
+    "delta": null,
+    "reason": "subtotal placement; saved definition differs in fields[0].subtotalTop, fields[1].subtotalTop, fields[2].subtotalTop, fields[3].subtotalTop, fields[4].subtotalTop, fields[5].subtotalTop, fields[6].subtotalTop, fields[7].subtotalTop, fields[8].subtotalTop, fields[9].subtotalTop, fields[10].subtotalTop, fields[11].subtotalTop"
+  },
+  {
+    "case": "layout-subtotals-top-outline",
+    "delta": null,
+    "reason": "layout form; subtotal placement; saved definition differs in compact, compactData, fields[0].compact, fields[1].compact, fields[2].compact, fields[3].compact, fields[4].compact, fields[5].compact, fields[6].compact, fields[7].compact, fields[8].compact, fields[9].compact, fields[10].compact, fields[11].compact"
+  },
+  {
+    "case": "layout-subtotals-bottom-outline",
+    "delta": null,
+    "reason": "layout form; subtotal placement; saved definition differs in compact, compactData, fields[0].compact, fields[0].subtotalTop, fields[1].compact, fields[1].subtotalTop, fields[2].compact, fields[2].subtotalTop, fields[3].compact, fields[3].subtotalTop, fields[4].compact, fields[4].subtotalTop, fields[5].compact, fields[5].subtotalTop, fields[6].compact, fields[6].subtotalTop, fields[7].compact, fields[7].subtotalTop, fields[8].compact, fields[8].subtotalTop, fields[9].compact, fields[9].subtotalTop, fields[10].compact, fields[10].subtotalTop, fields[11].compact, fields[11].subtotalTop"
+  },
+  {
+    "case": "layout-subtotals-top-tabular",
+    "delta": null,
+    "reason": "layout form; subtotal placement; saved definition differs in compact, outline, outlineData, compactData, fields[0].compact, fields[0].outline, fields[1].compact, fields[1].outline, fields[2].compact, fields[2].outline, fields[3].compact, fields[3].outline, fields[4].compact, fields[4].outline, fields[5].compact, fields[5].outline, fields[6].compact, fields[6].outline, fields[7].compact, fields[7].outline, fields[8].compact, fields[8].outline, fields[9].compact, fields[9].outline, fields[10].compact, fields[10].outline, fields[11].compact, fields[11].outline"
+  },
+  {
+    "case": "layout-grand-totals-row-only",
+    "delta": null,
+    "reason": "grand totals (layout option); saved definition differs in colGrandTotals"
+  },
+  {
+    "case": "layout-grand-totals-column-only",
+    "delta": null,
+    "reason": "grand totals (layout option); saved definition differs in rowGrandTotals"
+  },
+  {
+    "case": "layout-grand-totals-off",
+    "delta": null,
+    "reason": "grand totals (layout option); saved definition differs in rowGrandTotals, colGrandTotals"
+  },
+  {
+    "case": "layout-values-on-rows-two-data",
+    "delta": null,
+    "reason": "field move (orientation); saved definition differs in dataOnRows, rowFields, colFields"
+  },
+  {
+    "case": "layout-blank-rows-compact",
+    "delta": null,
+    "reason": "blank rows (layout option); saved definition differs in fields[0].insertBlankRow"
+  },
+  {
+    "case": "layout-blank-rows-tabular",
+    "delta": null,
+    "reason": "layout form; blank rows (layout option); saved definition differs in compact, outline, outlineData, compactData, fields[0].compact, fields[0].outline, fields[0].insertBlankRow, fields[1].compact, fields[1].outline, fields[2].compact, fields[2].outline, fields[3].compact, fields[3].outline, fields[4].compact, fields[4].outline, fields[5].compact, fields[5].outline, fields[6].compact, fields[6].outline, fields[7].compact, fields[7].outline, fields[8].compact, fields[8].outline, fields[9].compact, fields[9].outline, fields[10].compact, fields[10].outline, fields[11].compact, fields[11].outline"
+  },
+  {
+    "case": "layout-repeat-labels-tabular",
+    "delta": null,
+    "reason": "layout form; repeat labels (layout option); saved definition differs in compact, outline, outlineData, compactData, fields[0].compact, fields[0].outline, fields[0].x14, fields[1].compact, fields[1].outline, fields[2].compact, fields[2].outline, fields[3].compact, fields[3].outline, fields[4].compact, fields[4].outline, fields[5].compact, fields[5].outline, fields[6].compact, fields[6].outline, fields[7].compact, fields[7].outline, fields[8].compact, fields[8].outline, fields[9].compact, fields[9].outline, fields[10].compact, fields[10].outline, fields[11].compact, fields[11].outline"
+  },
+  {
+    "case": "layout-repeat-labels-outline",
+    "delta": null,
+    "reason": "layout form; repeat labels (layout option); saved definition differs in compact, compactData, fields[0].compact, fields[0].x14, fields[1].compact, fields[2].compact, fields[3].compact, fields[4].compact, fields[5].compact, fields[6].compact, fields[7].compact, fields[8].compact, fields[9].compact, fields[10].compact, fields[11].compact"
+  },
+  {
+    "case": "layout-named-subtotals-compact",
+    "delta": null,
+    "reason": "named subtotals (field setting); saved definition differs in fields[0].subtotals, fields[0].items (set)"
+  },
+  {
+    "case": "layout-named-subtotals-tabular",
+    "delta": null,
+    "reason": "layout form; named subtotals (field setting); saved definition differs in compact, outline, outlineData, compactData, fields[0].compact, fields[0].outline, fields[0].subtotals, fields[0].items (set), fields[1].compact, fields[1].outline, fields[2].compact, fields[2].outline, fields[3].compact, fields[3].outline, fields[4].compact, fields[4].outline, fields[5].compact, fields[5].outline, fields[6].compact, fields[6].outline, fields[7].compact, fields[7].outline, fields[8].compact, fields[8].outline, fields[9].compact, fields[9].outline, fields[10].compact, fields[10].outline, fields[11].compact, fields[11].outline"
+  },
+  {
+    "case": "layout-merge-labels",
+    "delta": null,
+    "reason": "layout form; merge labels (layout option); saved definition differs in mergeItem, compact, outline, outlineData, compactData, fields[0].compact, fields[0].outline, fields[1].compact, fields[1].outline, fields[2].compact, fields[2].outline, fields[3].compact, fields[3].outline, fields[4].compact, fields[4].outline, fields[5].compact, fields[5].outline, fields[6].compact, fields[6].outline, fields[7].compact, fields[7].outline, fields[8].compact, fields[8].outline, fields[9].compact, fields[9].outline, fields[10].compact, fields[10].outline, fields[11].compact, fields[11].outline"
+  },
+  {
+    "case": "layout-classic-two-data",
+    "delta": null,
+    "reason": "classic layout; layout form; saved definition differs in gridDropZones"
+  },
+  {
+    "case": "quirk-hidden-row-item",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": [
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "case": "quirk-page-single",
+    "delta": null,
+    "reason": "field move (orientation); saved definition differs in rowFields, pageFields, fields[1].axis"
+  },
+  {
+    "case": "quirk-page-single-showall",
+    "delta": null,
+    "reason": "field move (orientation); show items with no data (field setting); saved definition differs in rowFields, pageFields, fields[0].showAll, fields[1].axis"
+  },
+  {
+    "case": "quirk-page-multiple",
+    "delta": null,
+    "reason": "field move (orientation); built through the xml route; saved definition differs in rowFields, pageFields, fields[1].axis, fields[1].multipleItemSelectionAllowed"
+  },
+  {
+    "case": "quirk-cross-hidden-item",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 1,
+        "hidden": [
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "case": "quirk-cross-hidden-item-showall",
+    "delta": null,
+    "reason": "show items with no data (field setting); saved definition differs in fields[0].showAll"
+  },
+  {
+    "case": "quirk-off-axis-hidden-item",
+    "delta": null,
+    "reason": "field move (orientation)"
+  },
+  {
+    "case": "values-fn-sum",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-count",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-average",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-max",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-min",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-product",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-countnums",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-stdev",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-stdevp",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-var",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-varp",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-countnums-mixed",
+    "delta": null,
+    "reason": "field move (orientation); renamed field or item; value field function; saved definition differs in dataFields, fields[6].dataField"
+  },
+  {
+    "case": "values-average-hidden-item",
+    "delta": null,
+    "reason": "value field function; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-fn-max-of-date",
+    "delta": null,
+    "reason": "field move (orientation); renamed field or item; value field function; saved definition differs in dataFields, fields[5].dataField"
+  },
+  {
+    "case": "values-addition-order",
+    "delta": null,
+    "reason": "field move (orientation); renamed field or item; saved definition differs in dataFields, fields[7].dataField"
+  },
+  {
+    "case": "values-showas-difference-previous",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-difference-next",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-difference-item",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-item",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-diff-zero-base",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-row",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-column",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-total",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-row-zero-total",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-index",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-index-zero-total",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-running-total-year",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-running-total-region",
+    "delta": null,
+    "reason": "show values as; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-parent-row-two-levels",
+    "delta": null,
+    "reason": "field move (orientation); built through the xml route; saved definition differs in rowFields, colFields, dataFields, fields[2].axis"
+  },
+  {
+    "case": "values-showas-percent-of-parent-column",
+    "delta": null,
+    "reason": "built through the xml route; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-percent-of-parent-region",
+    "delta": null,
+    "reason": "field move (orientation); built through the xml route; saved definition differs in rowFields, colFields, dataFields, fields[2].axis"
+  },
+  {
+    "case": "values-showas-percent-running-total",
+    "delta": null,
+    "reason": "built through the xml route; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-rank-descending-ties",
+    "delta": null,
+    "reason": "built through the xml route; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-rank-ascending",
+    "delta": null,
+    "reason": "built through the xml route; saved definition differs in dataFields"
+  },
+  {
+    "case": "values-showas-on-named-subtotals",
+    "delta": null,
+    "reason": "named subtotals (field setting); show values as; saved definition differs in dataFields, fields[0].subtotals, fields[0].items (set)"
+  },
+  {
+    "case": "sort-text-ascending",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 1,
+        "order": "ascending"
+      }
+    ]
+  },
+  {
+    "case": "sort-text-descending",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 1,
+        "order": "descending"
+      }
+    ]
+  },
+  {
+    "case": "sort-number-descending",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 2,
+        "order": "descending"
+      }
+    ]
+  },
+  {
+    "case": "sort-value-top-level",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 0,
+        "order": "descending",
+        "byData": 0
+      }
+    ]
+  },
+  {
+    "case": "sort-value-within-groups",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 1,
+        "order": "descending",
+        "byData": 0
+      }
+    ]
+  },
+  {
+    "case": "sort-value-ties",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 0,
+        "order": "descending",
+        "byData": 1
+      }
+    ]
+  },
+  {
+    "case": "sort-value-showall-no-data",
+    "delta": null,
+    "reason": "show items with no data (field setting); saved definition differs in fields[1].showAll"
+  },
+  {
+    "case": "filter-label-begins-with",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "captionBeginsWith",
+          "evalOrder": -1,
+          "id": 101,
+          "stringValue1": "B",
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "equal",
+                      "val": "B*"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-label-wildcard",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "captionEqual",
+          "evalOrder": -1,
+          "id": 102,
+          "stringValue1": "*an?s",
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "equal",
+                      "val": "*an?s"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-label-between",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "captionBetween",
+          "evalOrder": -1,
+          "id": 103,
+          "stringValue1": "B",
+          "stringValue2": "D",
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": true,
+                  "filters": [
+                    {
+                      "operator": "greaterThanOrEqual",
+                      "val": "B"
+                    },
+                    {
+                      "operator": "lessThanOrEqual",
+                      "val": "D"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-label-renamed-item",
+    "delta": null,
+    "reason": "renamed field or item; built through the xml route; saved definition differs in fields[1].items[x=0].name"
+  },
+  {
+    "case": "filter-label-cross-field",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "captionBeginsWith",
+          "evalOrder": -1,
+          "id": 107,
+          "stringValue1": "A",
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "equal",
+                      "val": "A*"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-label-cross-field-showall",
+    "delta": null,
+    "reason": "show items with no data (field setting); built through the xml route; saved definition differs in fields[0].showAll"
+  },
+  {
+    "case": "filter-value-greater-than",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "valueGreaterThan",
+          "evalOrder": -1,
+          "id": 109,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "greaterThan",
+                      "val": "56030"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-value-between",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "valueBetween",
+          "evalOrder": -1,
+          "id": 110,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": true,
+                  "filters": [
+                    {
+                      "operator": "greaterThanOrEqual",
+                      "val": "24522"
+                    },
+                    {
+                      "operator": "lessThanOrEqual",
+                      "val": "60050"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-value-showall",
+    "delta": null,
+    "reason": "show items with no data (field setting); built through the xml route; saved definition differs in fields[0].showAll"
+  },
+  {
+    "case": "filter-value-nested",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "valueGreaterThan",
+          "evalOrder": -1,
+          "id": 112,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "greaterThan",
+                      "val": "17399"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-top-count",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "count",
+          "evalOrder": -1,
+          "id": 113,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "top10": {
+                  "top": true,
+                  "percent": false,
+                  "val": 2,
+                  "filterVal": 2
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-top-count-ties",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "count",
+          "evalOrder": -1,
+          "id": 114,
+          "iMeasureFld": 1,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "top10": {
+                  "top": true,
+                  "percent": false,
+                  "val": 2,
+                  "filterVal": 2
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-top-percent",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "percent",
+          "evalOrder": -1,
+          "id": 115,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "top10": {
+                  "top": true,
+                  "percent": true,
+                  "val": 50,
+                  "filterVal": 50
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-top-percent-30",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "percent",
+          "evalOrder": -1,
+          "id": 101,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "top10": {
+                  "top": true,
+                  "percent": true,
+                  "val": 30,
+                  "filterVal": 30
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-top-sum",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "sum",
+          "evalOrder": -1,
+          "id": 116,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "top10": {
+                  "top": true,
+                  "percent": false,
+                  "val": 90799,
+                  "filterVal": 90799
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  },
+  {
+    "case": "filter-top-nested",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "count",
+          "evalOrder": -1,
+          "id": 117,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "top10": {
+                  "top": true,
+                  "percent": false,
+                  "val": 1,
+                  "filterVal": 1
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "note": "built through the xml route (the AppleScript route was refused or ignored); the change is the UI dialog's, and the delta carries the filter as Excel saved it"
+  }
+]

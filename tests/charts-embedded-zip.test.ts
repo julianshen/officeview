@@ -110,7 +110,7 @@ describe('embedded workbook access (A3a)', () => {
   it('external targets and package-escaping paths are unavailable', async () => {
     const workbook = await embeddedXlsx()
     const cases: Array<[ChartEmbedSpec, string]> = [
-      [{ target: 'file:///C:/Users/me/Book1.xlsx', external: true, workbook }, 'chart-data-external'],
+      [{ target: 'file:///C:/Data/Book1.xlsx', external: true, workbook }, 'chart-data-external'],
       [{ target: 'https://example.com/book.xlsx', external: true }, 'chart-data-external'],
       [{ target: '../../../outside.xlsx', workbook }, 'chart-data-outside-package'],
       [{ target: '/../outside.xlsx', workbook }, 'chart-data-outside-package'],

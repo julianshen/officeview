@@ -26,13 +26,16 @@ import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
-import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
+import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues, savedDependentCells, type SavedDependentCells } from '../../xlsx/formula/workbook'
+import { workbookValuePolicy } from '../../xlsx/formula/value-policy'
+import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
-import { columnToLetters, validateCoordinate } from '../../xlsx/view/coordinates'
+import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
@@ -59,7 +62,11 @@ import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
-import { SheetImageCache, imageBudgetFor, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import { SheetImageCache, imageBudgetFor, installPivotCharts, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import type { ChartModel } from '../../charts/model'
+import { chartLinksPivot } from '../../xlsx/pivotChartLink'
+import { overlayChartCell, rememberDependentChart, restoreDependentCharts } from '../../xlsx/pivots/session/dependentCharts'
+import { mergeOwedRects } from '../../xlsx/pivots/session/dependentRects'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -93,10 +100,17 @@ import { DisplayHolds } from './displayHolds'
 import { SheetChartDescriptions, chartNotices, sheetCharts } from './sheetCharts'
 import type { XlsxFrozenPane } from '../../xlsx/frozenPane'
 import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/frozenPanes'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
+import type { ValueOverlay } from '../../xlsx/view/contracts'
+import { invalidateRegionStyles, regionStylesFor } from '../../xlsx/tableStyleLoader'
+import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
+// Type-only: the pivot controls (client, layer, menus) are a lazy chunk loaded on a sheet with pivots (Task 28).
+import type * as PivotUi from './pivot/PivotButtonLayer'
+import type { PivotDeltaKind } from '../../xlsx/pivots/session/delta'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -159,6 +173,8 @@ export interface InteractiveSheetDocProps {
   assetLoader?: typeof prepareSheetAssets
   /** @internal Static print unit factory (tests inject delayed units). */
   printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray & { refusedImages?: number[] }>
+  /** @internal The pivot interaction kinds the menus offer (default: the session's oracle-verified set). */
+  pivotVerifiedKinds?: ReadonlySet<PivotDeltaKind>
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -228,6 +244,9 @@ function loadFailureNotice(message: string, code?: string): string {
   return `This sheet could not be fully loaded: ${message}.${recovery}`
 }
 /** Worker-backed (paged) sheets have no main-thread cells or static drawing paint to print. */
+/** The tooltip (and cell description) of a formula a pivot change left stale (Ruling S3-AM, spec §7.5). */
+const STALE_UNSUPPORTED = 'Shows its saved value: it reads a changed pivot table in a way the viewer cannot recalculate.'
+const STALE_OUTDATED = 'May be out of date: it reads a changed pivot table, and recalculating it would take too long.'
 const PAGED_PRINT_MESSAGE = 'This spreadsheet cannot be printed from the large-file view: neither its cells nor its drawings are printed. Copy a selected range instead.'
 const MAX_FONT_NOTICE_FAMILIES = 3
 /** Print rules scoped to one viewer instance: its screen and floating chrome
@@ -281,8 +300,12 @@ interface SheetEntry {
   /** Generation of the worker-resolved table-style layer. */
   regionStyleGen: string
   revision: number
-  /** Worker-backed sheets: generation of the merged ranges the geometry holds. */
+  /** Generation of the merged ranges the geometry holds (worker merges; a resident pivot overlay's merges). */
   structureGen: number
+  /** The source store's value generation the geometry holds (a committed pivot overlay, spec §7.9). */
+  valueGen: number
+  /** Worker-backed sheets: the drawing generation the entry's sheet holds (a pivot chart swap changes only this). */
+  drawingGen: number
   /** View-only session size generation the geometry holds (spec §5.6). */
   resizeGen: number
   /** The view input this entry shows (rebuilt with it when only sizes change). */
@@ -389,7 +412,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     mainLedger.release('merges', 'caches')
   }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
-  useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
+  useMemo(() => {
+    if (remote) return
+    mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc))
+    // Ruling S3-F: the pivot runtime's retained records copy (Ruling S3-E) is charged from mount, not first lease.
+    if (doc.sheets.some(sheet => sheet.pivotTables?.length)) pivotRuntimeFor(doc)?.chargeRetained(mainLedger)
+  }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
@@ -403,6 +431,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [remote, entries])
   // Tiles painted under an older worker layout/merge generation are stale (§10.1).
   const structureGens = useRef(new Map<string, number>()).current
+  const presentedLease = useRef<{ sheetId: string; lease: SheetAssetsLease } | null>(null)
+  // The drawing generation each sheet's cached tiles were painted under: a worker sheet's drawings can change while
+  // it is not shown (its pivot chart replaced by a commit on another sheet), and its tiles are then stale.
+  const paintedDrawingGens = useRef(new Map<string, number>()).current
   // View-only session sizes per sheet (spec §5.6): they outlive scroll, zoom,
   // sort/filter commits and sheet switches, and end with the viewer.
   const sheetSizes = useRef(new Map<string, SheetSizes>()).current
@@ -418,6 +450,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // admitted replacement has committed; only then is it disposed (§10.1).
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
   const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number } | null>(null)
+  const [residentDrawingGen, setResidentDrawingGen] = useState(0)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
   // Transferred chart models are charged to this viewer's live main-thread budget (spec 6.4), like its drawings.
@@ -448,7 +481,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -458,6 +491,215 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { committedLease.current?.dispose(); committedLease.current = null }, [])
   // The published font generation; a sheet switch (lease pending) never resets it.
   const fontGen = fontGenRef.current.gen
+
+  // ---- pivots (Task 28): committed overlays per resident sheet; the saved definitions the host's document gets back ----
+  const pivotOverlays = useRef(new Map<string, ValueOverlay>()).current
+  const pivotFormulaContexts = useRef(new Map<string, { sheet: string; def: import('../../xlsx/pivots/model').PivotTableDefinition; cache: import('../../xlsx/pivots/model').PivotCacheDefinition; layout: import('../../xlsx/pivots/engine/place').PivotLayout; layoutCells: Map<string, import('../../xlsx/pivots/engine/place').PivotLayout['cells'][number]>; date1904: boolean; rects: readonly { r0: number; r1: number; c0: number; c1: number }[]; /** A pivot reset to its saved view while others are live (S3-AF): its saved layout answers GETPIVOTDATA; its cells are the sheet's own. */ saved?: true }>()).current
+  /** Document-wide dependent generation: a restore of every pivot drops all in-flight dependent work. */
+  const pivotLifecycle = useRef(0)
+  /** Per-pivot dependent generation (S3-AF): a pivot's newer commit or reset drops only that pivot's in-flight work. */
+  const pivotFormulaGens = useRef(new Map<string, number>()).current
+  /** Changed rectangles whose recompute a newer commit of the same pivot dropped: the newer one recomputes them too. */
+  const pendingDependentRects = useRef(new Map<string, { r0: number; r1: number; c0: number; c1: number }[]>()).current
+  /** Which pivots' commits refilled each dependent chart: a reset puts back only the charts no other live pivot feeds. */
+  const dependentChartOwners = useRef(new Map<XlsxDrawing, Set<string>>()).current
+  /** The resident stale marks each pivot's commits caused, reader key (`sheet!col:row`) → its sheet index:
+   * `unsupported` readers keep their saved value (S3-T, S3-Z); `outdated` ones were over the work budget and keep
+   * whatever they showed (S3-AE, M-4). Each marked cell shows a subtle indicator with a tooltip (Ruling S3-AM). */
+  const dependentStaleMarks = useRef(new Map<string, { unsupported: Map<string, number>; outdated: Map<string, number> }>()).current
+  const [pagedDependentNoticeSheets, setPagedDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
+  const [residentDependentNotices, setResidentDependentNotices] = useState<{ unsupported: ReadonlySet<number>; outdated: ReadonlySet<number>; /** By sheet index: the marked cells (`row * MAX_COLS + col`) and why. */ cells: ReadonlyMap<number, ReadonlyMap<number, 'unsupported' | 'outdated'>> }>(() => ({ unsupported: new Set(), outdated: new Set(), cells: new Map() }))
+  const publishDependentNotices = () => {
+    const unsupported = new Set<number>(), outdated = new Set<number>(), cells = new Map<number, Map<number, 'unsupported' | 'outdated'>>()
+    const mark = (key: string, index: number, kind: 'unsupported' | 'outdated') => {
+      const at = /!(\d+):(\d+)$/.exec(key)
+      if (!at) return
+      let sheetCells = cells.get(index)
+      if (!sheetCells) cells.set(index, sheetCells = new Map())
+      const id = Number(at[2]) * MAX_COLS + Number(at[1])
+      // An unsupported reader keeps its saved value whatever later commits do: that reason wins.
+      if (kind === 'unsupported' || !sheetCells.has(id)) sheetCells.set(id, kind)
+    }
+    for (const marks of dependentStaleMarks.values()) {
+      for (const [key, index] of marks.unsupported) { unsupported.add(index); mark(key, index, 'unsupported') }
+      for (const [key, index] of marks.outdated) { outdated.add(index); mark(key, index, 'outdated') }
+    }
+    setResidentDependentNotices({ unsupported, outdated, cells })
+  }
+  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
+  const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
+  const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
+  // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
+  const savedPivotCharts = useRef(new Map<string, { sheet: string; name: string; charts: ChartModel[] }>()).current
+  // Non-pivot chart models rebuilt from dependent formulas are restored with the
+  // saved workbook on pivot-client teardown, just like pivot-linked charts.
+  const savedDependentCharts = useRef(new Map<XlsxDrawing, ChartModel>()).current
+  /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
+   * outlives the sessions that made it (unmount, or a new client). */
+  /** Columns a pivot autofit sized, per sheet, in characters (Task 29): their widths are the "current" a later
+   * autofit compares with, and they go back to the workbook's when the pivots do. */
+  const pivotAutofitChars = useRef(new Map<string, Map<number, number>>()).current
+  /** Resizes the changed pivot's columns; returns why it did not, when memory refused it (announced by the caller). */
+  const autofitPivot = (sheetId: string, sheet: XlsxSheet, before: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['before'], after: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['after'], shownChars?: (col: number) => number | undefined): string | undefined => {
+    // No laid-out sheet to resize (it is not shown): the change keeps the widths.
+    if (!pivotUi || !entries.get(sheetId)) return undefined
+    const mdw = sheet.columnMetrics?.maxDigitWidthPx ?? 7, sizes = sizesOf(sheetId)
+    let fitted = pivotAutofitChars.get(sheetId)
+    if (!fitted) pivotAutofitChars.set(sheetId, fitted = new Map())
+    const authored = shownChars ?? ((col: number) => sheet.cols.find(spec => col >= spec.min && col <= spec.max)?.widthChars)
+    // The measurement, as a fit gesture's (codex review T29-4): a per-fit context whose texts and shaping are admitted
+    // to the main ledger as they grow, released when the fit ends; the context goes with it.
+    let heldHeap = 0, heldNative = 0
+    const fit = createFitMeasure({ sheet, admit: ({ heap, native }) => {
+      if (mainLedger.bytes - heldHeap - heldNative + heap + native > MAIN_THREAD_BUDGETS[budgetProfile]) return false
+      mainLedger.set('layout', 'pivot-autofit-measure', heldHeap = heap)
+      mainLedger.set('canvasText', 'pivot-autofit-measure', heldNative = native)
+      return true
+    } })
+    let widths: Map<number, number>
+    try {
+      widths = pivotUi.pivotAutofitColumns({ sheet, before, after, mdwPx: mdw,
+        measure: fit.measure,
+        font: style => cellFont(style).font,
+        current: col => fitted!.get(col) ?? authored(col),
+        userSet: col => sizes.userSet('col', col) })
+    } catch (error) {
+      if (!(error instanceof AutoFitRefusedError)) throw error
+      return PIVOT_FIT_REFUSED
+    } finally { mainLedger.release('layout', 'pivot-autofit-measure'); mainLedger.release('canvasText', 'pivot-autofit-measure') }
+    if (!widths.size) return undefined
+    // Like a resize (codex review T29-5): the geometry for the new sizes is reserved and admitted before it is built,
+    // and published only if it fits; the sizes are never user-set.
+    const { sizes: prospective, kept } = sizes.previewMany('col', [...widths].map(([col, chars]) => [col, columnWidthPx(chars, mdw)] as const))
+    if (!kept.size) return undefined
+    // A hidden column keeps its fitted size for when it is shown; while hidden it projects to 0, which is not a refusal.
+    const hiddenBefore = entries.get(sheetId)!.metrics.cols
+    let unrepresentable = false
+    const candidate = admitCandidate(sheetId, prospective, 'The pivot table\'s column width', shown => {
+      const ok = [...kept].every(([col, px]) => { const size = shown.cols.size(col); return size === px || (size === 0 && hiddenBefore.size(col) === 0) })
+      unrepresentable = !ok
+      return ok
+    }, '', true)
+    if (!candidate) return unrepresentable ? PIVOT_FIT_UNREPRESENTABLE : PIVOT_FIT_REFUSED
+    for (const col of kept.keys()) if (sizes.set('col', col, kept.get(col)!, 'autofit')) fitted.set(col, widths.get(col)!)
+    publishEntry(candidate, sizes.gen)
+    return undefined
+  }
+  /** A resident autofit's refusal, said with the change's own announcement (it is made during the commit). */
+  const autofitNotice = useRef<string | undefined>(undefined)
+  /** Paged commits waiting for their sheet's refreshed pivot display before the autofit (Task 29). */
+  // One per pivot, so a second pivot's commit before the refresh does not drop the first's fit (codex review T29-6).
+  const pendingPagedFits = useRef<PivotUi.PendingPivotFits<ReturnType<typeof pivotStyleAt>> | null>(null)
+  /** The paged fit cells the main thread keeps (a port's shown layouts, waiting fits), admitted to the main ledger. */
+  const pivotFitMemory: PivotUi.PivotFitMemory = {
+    set: (owner, bytes) => {
+      mainLedger.release('layout', owner)
+      if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return false
+      mainLedger.set('layout', owner, bytes)
+      return true
+    },
+    release: owner => mainLedger.release('layout', owner),
+  }
+  useEffect(() => {
+    const pending = pendingPagedFits.current
+    if (!remote || !pivotUi || !pending?.size) return
+    for (const sheetId of pending.sheets()) {
+      const shownEntry = entries.get(sheetId)
+      if (!shownEntry) continue
+      if (!shownEntry.sheet.regionStyles) {
+        // The sheet's refreshed styles cannot arrive any more (every read of them failed for good): its waiting fits
+        // are dropped with their charges, as a fit past the payload cap is (final review minor 12), not kept until close.
+        const layout = remote.layout(sheetId)
+        const contents = [...(layout.hasRegionStyles ? [remote.regionStyles(sheetId)] : []), ...(layout.hasPivotDisplay ? [remote.pivotDisplay(sheetId)] : [])]
+        if (contents.every(content => content.state === 'failed')) pending.discard(sheetId)
+        continue
+      }
+      const ready = pending.take(sheetId, shownEntry.regionStyleGen)
+      if (!ready.length) continue
+      const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7
+      try {
+        for (const { fit: { before, after }, styleAt } of ready) {
+          const metrics = entries.get(sheetId)!.metrics
+          const refused = autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(styleAt ? { styleAt } : {}) },
+            { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
+            col => metrics.cols.size(col) / mdw)
+          if (refused) setAnnouncement(refused)
+        }
+      } finally { for (const fit of ready) fit.release() }   // charged through the fit (codex re-review T29-R2-3)
+      dropTiles(sheetId, null)
+      rerender()
+    }
+  })
+  const restorePivots = () => {
+    pivotLifecycle.current++
+    pendingPagedFits.current?.clear()
+    // The autofit widths go back to the workbook's, admitted like a reset (codex re-review T29-R2-1): a shown sheet's
+    // geometry for the restored sizes is reserved and admitted before it is built; refused, the widths stay (as
+    // session sizes "Reset sizes" can restore). Unmounting rebuilds nothing: the sizes go with the viewer.
+    if (!unmounting.current) for (const [sheetId, fitted] of pivotAutofitChars) {
+      const sizes = sheetSizes.get(sheetId)
+      const cols = sizes ? [...fitted.keys()].filter(col => !sizes.userSet('col', col) && sizes.get('col', col) !== undefined) : []
+      if (!sizes || !cols.length) continue
+      if (entries.get(sheetId)) {
+        const candidate = admitCandidate(sheetId, sizes.previewWithout('col', cols), 'The pivot table\'s column width', () => true, '', true)
+        if (!candidate) { setAnnouncement('The pivot table\'s fitted column widths were kept: not enough memory to lay the sheet out again (main memory budget).'); continue }
+        for (const col of cols) sizes.restore('col', col, undefined)
+        publishEntry(candidate, sizes.gen)
+        dropTiles(sheetId, null)
+      } else for (const col of cols) sizes.restore('col', col, undefined)
+    }
+    pivotAutofitChars.clear()
+    restoreAllDependents()
+    doc.sheets.forEach((sheet, index) => {
+      if (sheet.pivotTables === savedPivotDefs[index]) return
+      sheet.pivotTables = savedPivotDefs[index]
+      sheet.pivotRegions = savedPivotRegions[index]
+      invalidateRegionStyles(sheet)
+    })
+    for (const sheetId of pivotOverlays.keys()) { try { source.store(sheetId).setValueOverlay?.(undefined) } catch { /* released with the viewer */ } }
+    pivotOverlays.clear()
+    for (const { sheet, name, charts } of savedPivotCharts.values()) for (const index of installPivotCharts(doc, name, charts, sheet)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+    savedPivotCharts.clear()
+  }
+  /** The document-wide restore (S3-AF): every saved formula value and dependent chart back, every stale mark gone,
+   * every in-flight dependent recompute dropped. Only when every pivot is back to its saved view, or on teardown. */
+  const restoreAllDependents = () => {
+    pivotLifecycle.current++
+    pivotFormulaContexts.clear(); pivotFormulaGens.clear(); pendingDependentRects.clear(); dependentChartOwners.clear(); dependentStaleMarks.clear()
+    // The restore may put back or remove rows a dependent spill changed: those sheets take their row inventory again.
+    for (const index of restoreDependentFormulaValues(doc)) { const id = sheetIds[index]; if (id !== undefined) valuesChanged(id, true) }
+    dropDependentChartTiles(restoreDependentCharts(savedDependentCharts))
+    if (!unmounting.current) setResidentDependentNotices({ unsupported: new Set(), outdated: new Set(), cells: new Map() })
+  }
+  /** A reader sheet's formula values changed in place (recomputed, or put back): its value generation moves, so every
+   * value-keyed consumer of it re-reads (its filter value lists, find, copy, geometry), and its tiles go. */
+  const valuesChanged = (sheetId: string, rows?: boolean) => {
+    try { source.store(sheetId).noteValuesChanged?.(rows ? { rows: true } : undefined) } catch { /* released with the viewer */ }
+    dropTiles(sheetId, null)
+  }
+  const dropDependentChartTiles = (restored: readonly XlsxDrawing[]) => {
+    if (!restored.length) return
+    for (const [index, sheet] of doc.sheets.entries()) if (restored.some(node => sheet.drawings?.includes(node))) {
+      const id = sheetIds[index]
+      if (id !== undefined) dropTiles(id, null)
+    }
+    if (!unmounting.current) setResidentDrawingGen(generation => generation + 1)
+  }
+  /** One pivot back to its saved view while others stay live (S3-AF): its stale marks go, and the dependent charts only
+   * it fed get their saved models back; charts another live pivot also feeds are refilled by the reset's recompute. */
+  const releaseDependentsOf = (key: string) => {
+    if (dependentStaleMarks.delete(key)) publishDependentNotices()
+    const restored: XlsxDrawing[] = []
+    for (const [node, owners] of [...dependentChartOwners]) {
+      owners.delete(key)
+      if (owners.size) continue
+      dependentChartOwners.delete(node)
+      const saved = savedDependentCharts.get(node)
+      savedDependentCharts.delete(node)
+      if (saved && node.content?.kind === 'xlsxChart') { node.content.chart = saved; restored.push(node) }
+    }
+    dropDependentChartTiles(restored)
+  }
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
   const localViews = useRef(new Map<string, SheetViewInput>()).current
@@ -488,7 +730,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   /** A sheet entry built off to the side: nothing is charged, held or published. */
   interface Candidate {
-    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
+    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; valueGen: number; drawingGen: number; previous: SheetEntry | undefined
     order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
     built: SheetGeometry & { readonly chargeBytes?: number }
     /** Exactly what publishing charges (the entry charge functions). */
@@ -512,13 +754,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (sparklineContent) sheet = sheetWithSparklines(sheet, sparklineContent)
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
-    const structureGen = remote ? remote.merges(sheetId).gen : 0
+    // A resident pivot overlay (Task 28) moves the store's value and merge generations: the geometry is rebuilt over it.
+    const structureGen = remote ? remote.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
+    const valueGen = remote ? 0 : source.store(sheetId).stamp.valueGen
+    const drawingGen = remote ? remote.drawings(sheetId).gen : 0
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
-    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen && previous.sparklineGen === sparklineGen && previous.regionStyleGen === regionStyleGen) return { entry: previous }
+    const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.drawingGen === drawingGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
+    if (!override && previous && previous.revision === input.revision && same(previous)) return { entry: previous }
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
       // that changed since are still applied, to the view already shown.
-      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen && previous.sparklineGen === sparklineGen && previous.regionStyleGen === regionStyleGen) return { entry: previous }
+      if (!override && same(previous)) return { entry: previous }
       input = previous.input
     }
     // A rebuild for session sizes alone keeps the view buffers it already shows
@@ -536,16 +782,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       : input.visibility ? (remote && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
         : authored()
     const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
+    const overlay = remote ? undefined : pivotOverlays.get(sheetId)
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
     const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
-    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
+    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, drawingGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
    * retires the previous entry on the next display commit. */
   const publishEntry = (candidate: Candidate, resizeGen: number): SheetEntry => {
-    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
+    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, drawingGen, previous, order, baseHidden, visibility, built } = candidate
     bindOverflowCache(built, overflowFor())
     // A resident geometry is charged for its lifetime: the row projection (it
     // keeps its own copied segments; the build's row axis is dropped), the
@@ -564,7 +811,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, drawingGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
@@ -593,7 +840,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   })
   const ownerRef = useRef(ownerOf)
   ownerRef.current = ownerOf
-  const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(revisionOf)])
+  // Value generations too: a committed pivot change re-runs find (and every owner-keyed consumer) over the new values.
+  const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(revisionOf), sheetIds.map(sheetId => source.store(sheetId).stamp.valueGen)])
   const sparklineViewKey = hasResolvedSparklines ? ownerKey : ''
   const sparklineViewKeyRef = useRef(sparklineViewKey)
 
@@ -885,6 +1133,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     const seenGen = structureGens.get(activeSheetId)
     if (seenGen !== undefined && seenGen !== frame.structureGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    // A new asset lease for the same sheet (a worker sheet's drawings arrived, a pivot's charts were replaced) may paint
+    // what an older one could not (the lazy chart painter, pictures): tiles painted under the older lease are stale.
+    const drawingGen = entry?.drawingGen ?? 0, paintedGen = paintedDrawingGens.get(activeSheetId)
+    if (paintedGen !== undefined && paintedGen !== drawingGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    paintedDrawingGens.set(activeSheetId, drawingGen)
+    const leased = presentedLease.current
+    if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
@@ -1192,8 +1448,238 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => abort.abort()
   }, [activeSheetId, source])
   useEffect(() => () => { for (const port of controlPorts.values()) port.dispose(); controlPorts.clear(); controlResources.current?.dispose(); controlResources.current = null }, [])
-  const [popup, setPopup] = useState<{ kind: 'filter' | 'sort'; col: number; invoker: HTMLElement } | null>(null)
+  const [popup, setPopup] = useState<{ kind: 'filter' | 'sort'; col: number; invoker: HTMLElement } | { kind: 'pivot'; request: PivotUi.PivotMenuRequest; invoker: HTMLElement } | null>(null)
   const closePopup = () => setPopup(null)
+
+  // ---- pivot controls (Task 28): a lazy chunk with the client, the button layer and the menus ----
+  const [pivotUi, setPivotUi] = useState<typeof PivotUi | null>(null)
+  // A paged shell's pivots arrive with the worker's display parts: the active sheet's entry says so.
+  const wantsPivotUi = hasPivots || Boolean(entry?.sheet.pivotTables?.length)
+  useEffect(() => {
+    if (!wantsPivotUi) return
+    let live = true
+    import('./pivot/PivotButtonLayer').then(module => { if (live) setPivotUi(module) }, () => { /* buttons stay painted, display only */ })
+    return () => { live = false }
+  }, [wantsPivotUi])
+  /** Each sheet's committed composite overlay, by lower-cased sheet name, as installed now (every pivot of the sheet). */
+  const overlaysByName = () => {
+    const out = new Map<string, ValueOverlay>()
+    doc.sheets.forEach((owner, index) => { const id = sheetIds[index], overlay = id === undefined ? undefined : pivotOverlays.get(id); if (overlay) out.set(owner.name.toLocaleLowerCase(), overlay) })
+    return out
+  }
+  const overlayValue = (cell: NonNullable<ReturnType<ValueOverlay['cell']>>) => cell.valueIsError ? formulaError(String(cell.value) as Parameters<typeof formulaError>[0]) : cell.value
+  /** Task 31 resident dependents of one pivot commit (Ruling S3-AF). A change recomputes the readers of the pivot's
+   * saved and shown areas against every pivot's live layout. A reset does the same with this pivot's overlay gone (its
+   * cells are the sheet's own again; its saved layout answers GETPIVOTDATA) while the other pivots stay live: only
+   * the charts and stale marks this pivot caused go, and no other pivot's in-flight work is dropped. When every pivot
+   * is back to its saved view, the document-wide restore runs instead. */
+  const installDependents = (commit: PivotUi.PivotCommit, sheet: XlsxSheet, layout: NonNullable<PivotUi.PivotCommit['layout']>, cache: NonNullable<PivotUi.PivotCommit['cache']>, changedRects: NonNullable<PivotUi.PivotCommit['changedRects']>) => {
+    const contextKey = `${commit.sheetId}:${commit.pivot}`
+    const generation = (pivotFormulaGens.get(contextKey) ?? 0) + 1
+    pivotFormulaGens.set(contextKey, generation)
+    if (commit.reset && commit.allSaved) { restoreAllDependents(); return }
+    pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache, layout, layoutCells: new Map(layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])), date1904: commit.date1904 ?? false, rects: changedRects, ...(commit.reset ? { saved: true as const } : {}) })
+    if (commit.reset) releaseDependentsOf(contextKey)
+    // A superseded commit's rectangles stay owed until a recompute of this pivot runs: one canonical set, without
+    // duplicates or contained rectangles, so repeated over-budget retries stay bounded (codex r5 finding 1).
+    const rects = mergeOwedRects(pendingDependentRects.get(contextKey) ?? [], changedRects)
+    pendingDependentRects.set(contextKey, rects)
+    const changed = rects.map(rect => ({ sheetId: commit.sheetId, rect: { minRow: rect.r0, minCol: rect.c0, maxRow: rect.r1, maxCol: rect.c1 } }))
+    const lifecycle = pivotLifecycle.current
+    const current = () => lifecycle === pivotLifecycle.current && pivotFormulaGens.get(contextKey) === generation
+    // The viewer's pivot chunk is already loaded here; keep formula support out
+    // of the eager graph by resolving its adapter from a lazy import.
+    void import('../../xlsx/pivots/session/getpivotdata').then(({ getPivotData }) => {
+      if (!current()) return
+      pendingDependentRects.delete(contextKey)
+      // The pivots as they are when this runs (a later commit of another pivot included).
+      const contexts = [...pivotFormulaContexts.values()], live = contexts.filter(context => !context.saved), overlays = overlaysByName()
+      const overlayEntries = live.flatMap(context => context.layout.cells.map(cell => ({ sheetName: context.sheet, col: cell.col, row: cell.row, value: cell.value.kind === 'error' ? formulaError(cell.value.value as Parameters<typeof formulaError>[0]) : cell.value.kind === 'empty' ? null : cell.value.value })))
+      const result = recomputeDependents(doc, changed, {
+        getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData(contexts, args, evaluate, currentSheet, markStale),
+        overlayEntries,
+        readCellValue: (name, col, row) => {
+          const lower = name.toLocaleLowerCase()
+          // The sheet's composite overlay, sheet-scoped: never a same-coordinate cell of another worksheet (R2-1).
+          const shown = overlays.get(lower)?.cell(row, col)
+          if (shown !== undefined) return shown === null ? null : overlayValue(shown)
+          for (const context of live) {
+            if (context.sheet.toLocaleLowerCase() !== lower) continue
+            const cell = context.layoutCells.get(`${row}:${col}`)
+            if (!cell) {
+              if (context.rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)) return null
+              continue
+            }
+            if (cell.value.kind === 'empty') return null
+            if (cell.value.kind === 'error') return formulaError(cell.value.value as Parameters<typeof formulaError>[0])
+            return cell.value.value
+          }
+          return undefined
+        },
+      })
+      // Over the budget nothing ran: the rectangles stay owed to this pivot's next recompute. Nothing was owed meanwhile
+      // (the recompute is synchronous after the delete above), so this is the same canonical set, not a copy appended.
+      if (result.overBudget) pendingDependentRects.set(contextKey, mergeOwedRects(pendingDependentRects.get(contextKey) ?? [], rects))
+      const sheetOf = (key: string) => {
+        const bang = key.lastIndexOf('!')
+        return doc.sheets.findIndex(candidate => candidate.name.toLocaleLowerCase() === key.slice(0, bang))
+      }
+      let marksChanged = false
+      // A recompute within budget ran every reader it covered against every live pivot: whichever pivot's over-budget
+      // commit marked those readers out of date, they are current now (codex r5 finding 2). Readers it did not cover
+      // keep their marks.
+      if (!result.overBudget) for (const [owner, marks] of dependentStaleMarks) {
+        for (const key of result.readers) if (marks.outdated.delete(key)) marksChanged = true
+        if (!marks.unsupported.size && !marks.outdated.size) dependentStaleMarks.delete(owner)
+      }
+      // Stale marks are this pivot's: a change adds them; a reset recomputes against saved cells, so only an
+      // over-budget reset leaves readers out of date (an unsupported reader keeps its saved value, which is right now).
+      if (result.stale.length && (result.overBudget || !commit.reset)) {
+        const marks = dependentStaleMarks.get(contextKey) ?? { unsupported: new Map<string, number>(), outdated: new Map<string, number>() }
+        for (const key of result.stale) {
+          const index = sheetOf(key)
+          if (index < 0) continue
+          if (result.overBudget) marks.outdated.set(key, index); else marks.unsupported.set(key, index)
+          marksChanged = true
+        }
+        if (marks.unsupported.size || marks.outdated.size) dependentStaleMarks.set(contextKey, marks)
+      }
+      if (marksChanged) publishDependentNotices()
+      if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) valuesChanged(id, result.spillSheets?.includes(index)) }
+      if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges, refillChartModel }) => {
+        if (!current()) return
+        const wanted = new Set(result.charts), changedSheets = new Set<number>(), chartOverlays = overlaysByName()
+        let chartIndex = 0
+        const refill = (nodes: XlsxSheet['drawings'], sheetIndex: number) => {
+          for (const node of nodes ?? []) {
+            if (node.content?.kind === 'xlsxChart' && node.content.chart) {
+              const owners = dependentChartOwners.get(node)
+              // A reset refills only the charts another live pivot still feeds; the rest show their saved models.
+              if (wanted.has(chartIndex) && (!commit.reset || owners?.size)) {
+                const ownerSheet = doc.sheets[sheetIndex]!
+                const sourceChart = node.content.chart
+                const pendingChart = { ...sourceChart,
+                  categoryPending: sourceChart.categoryRef ?? sourceChart.categoryPending,
+                  groups: sourceChart.groups.map(group => ({ ...group, series: group.series.map(series => ({ ...series, pending: series.refs ?? series.pending })) })),
+                }
+                const refilled = refillChartModel(sourceChart, () => fillChartRanges(pendingChart, ownerSheet.name, (name, row, col, needsText) => {
+                  const target = doc.sheets.find(candidate => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())
+                  const shown = chartOverlays.get(name.toLocaleLowerCase())?.cell(row, col)
+                  if (shown === null) return { value: null }
+                  const cell = target?.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
+                  if (shown && target) {
+                    return overlayChartCell(target, row, col, shown.value, shown.valueIsError ? String(shown.value) : undefined, needsText)
+                  }
+                  if (!cell) return undefined
+                  const style = cell.style
+                  return { value: cell.value, ...(cell.valueIsError ? { error: String(cell.value) } : {}),
+                    ...(style?.formatCode ? { formatCode: style.formatCode } : {}),
+                    ...(needsText ? { text: cellDisplayText(target!, { value: cell.value, style }) } : {}) }
+                }))
+                rememberDependentChart(savedDependentCharts, node, sourceChart)
+                if (!commit.reset) { if (owners) owners.add(contextKey); else dependentChartOwners.set(node, new Set([contextKey])) }
+                mainLedger.chargeWhileReachable('drawings', [refilled], estimatePayloadBytes(refilled))
+                node.content.chart = refilled
+                changedSheets.add(sheetIndex)
+              }
+              chartIndex++
+            }
+            if (node.children?.length) refill(node.children, sheetIndex)
+          }
+        }
+        doc.sheets.forEach((owner, index) => refill(owner.drawings, index))
+        for (const index of changedSheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+        if (changedSheets.size) setResidentDrawingGen(generation => generation + 1)
+        rerender()
+      }).catch(() => setAnnouncement('Some charts that depend on this pivot may still show saved values.'))
+      rerender()
+    }).catch(() => setAnnouncement('Some formulas that depend on this pivot may still show saved values.'))
+  }
+  /** The rectangles pivot definitions cover (their locations), for the sheet-level formula notice. */
+  const pivotRectsOf = (defs: readonly import('../../xlsx/pivots/model').PivotTableDefinition[]) => defs.flatMap(def => {
+    const rect = parseA1Range(def.location.ref)
+    return rect ? [{ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 }] : []
+  })
+  /** Whether any sheet of a resident saved-values-only workbook has a formula outside its pivots (computed once). */
+  const cachedFormulaFlagRef = useRef<boolean | undefined>(undefined)
+  const cachedFormulaFlag = () => cachedFormulaFlagRef.current ??= doc.sheets.some((candidate, index) => markPagedDependentsStale(new Set(), index, candidate, pivotRectsOf(candidate.pivotTables ?? [])).size > 0)
+  /** Installs a committed pivot change (spec §7.9): 1. the sheet's live definition; 2. its region styles rebuilt;
+   * 3. the overlay on the source store (resident), which 4. bumps the store's valueGen (tiles, find, copy and the
+   * geometry re-key); 5. the sheet's tiles dropped. The paged path's overlay is the worker's (Task 27). */
+  const installPivot = (commit: PivotUi.PivotCommit) => {
+    const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
+    if (sheetId === undefined) return
+    // Paged: the workbook already published the worker's commit (merges, extent, valueGen, pivot display and charts).
+    if (remote) {
+      const defs = [...(sheet?.pivotTables ?? [])]
+      defs[commit.pivot] = commit.def
+      if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRectsOf(defs), remote.hasFormulaCellsOutsidePivots ?? false))
+      // §7.8 (Task 29): autofit once the worker's new pivot display (its styles) has arrived; the old styles now.
+      const shownEntry = entries.get(sheetId)
+      if (pivotUi && commit.fit && shownEntry) (pendingPagedFits.current ??= pivotUi.pendingPivotFits(pivotFitMemory)).add(sheetId, { pivot: commit.pivot, fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
+      cancelCopy(); dropTiles(sheetId, null); rerender(); return
+    }
+    if (!sheet?.pivotTables) return
+    // §7.8 (Task 29): the cells and pivot styles shown before the change, read before they go.
+    const beforeFit = pivotUi ? { def: sheet.pivotTables[commit.pivot]!, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) } : undefined
+    const defs = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def), saved = savedPivotDefs[commit.sheetId]
+    // Every pivot of the sheet back to its saved definition (a reset): the sheet gets the saved arrays themselves, so
+    // print and teardown see it as saved again (final review minor 13).
+    const allSaved = saved !== undefined && defs.length === saved.length && defs.every((def, index) => def === saved[index])
+    sheet.pivotTables = allSaved ? saved : defs
+    // The pivot's region (gridlines hidden inside it, regionGrid) follows its live location.
+    if (sheet.pivotRegions) sheet.pivotRegions = allSaved ? savedPivotRegions[commit.sheetId] : sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
+    invalidateRegionStyles(sheet)
+    regionStylesFor(sheet)
+    // Task 30: the refilled pivot charts replace their saved models (charts may sit on other sheets: their tiles go too).
+    if (commit.charts?.length) {
+      const name = String(commit.def.name ?? ''), key = JSON.stringify([commit.def.sheet, name])
+      if (!savedPivotCharts.has(key)) savedPivotCharts.set(key, { sheet: commit.def.sheet, name, charts: linkedPivotCharts(doc, commit.def.sheet, name) })
+      for (const index of installPivotCharts(doc, name, commit.charts, commit.def.sheet)) { const id = sheetIds[index]; if (id !== undefined && id !== sheetId) dropTiles(id, null) }
+    }
+    if (!remote && commit.overlay !== undefined) {
+      if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
+      source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
+    }
+    if (pivotUi && beforeFit) autofitNotice.current = autofitPivot(sheetId, sheet, beforeFit, { def: commit.def, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) })
+    // A saved-values-only workbook never evaluates its formulas (final review minor 4): no recompute, which would refuse,
+    // but the sheet notice, as on the paged path, when the workbook has formulas outside its pivots.
+    if (commit.layout && commit.cache && commit.changedRects?.length) {
+      if (workbookValuePolicy(doc) === 'cached') setPagedDependentNoticeSheets(current => current.has(commit.sheetId) ? current
+        : markPagedDependentsStale(current, commit.sheetId, sheet, pivotRectsOf(sheet.pivotTables ?? []), cachedFormulaFlag()))
+      else installDependents(commit, sheet, commit.layout, commit.cache, commit.changedRects)
+    }
+    cancelCopy()
+    dropTiles(sheetId, null)
+    rerender()
+  }
+  const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup })
+  pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
+  // Declared before the pivot controller's effect, so on unmount this cleanup runs first (restorePivots reads it).
+  const unmounting = useRef(false)
+  useEffect(() => { unmounting.current = false; return () => { unmounting.current = true } }, [])
+  const pivotKinds = props.pivotVerifiedKinds
+  // One controller (and client, with its sessions) per mount of these inputs; created in an effect so a StrictMode
+  // re-run gets a fresh one instead of a disposed one.
+  const [pivotController, setPivotController] = useState<PivotUi.PivotController | null>(null)
+  useEffect(() => {
+    if (!pivotUi) return
+    // A resident workbook parsed on this thread has its runtime; a paged or worker-parsed one runs its sessions in
+    // the worker (Task 27's RemotePivotSessions, addressed by the worker's numeric sheet id).
+    const client = remote ? pivotUi.createRemotePivotClient(pivotUi.remotePivotPort(remote.pivots, {
+      id: index => { const id = Number(sheetIds[index]); return Number.isSafeInteger(id) ? id : undefined },
+      sheet: index => doc.sheets[index],
+    }, pivotFitMemory), commit => pivotHost.current.installPivot(commit))
+      : pivotUi.createResidentPivotClient({ doc, saved: savedPivotDefs, ledger: mainLedger, profile: budgetProfile, install: commit => pivotHost.current.installPivot(commit), ...(pivotKinds ? { verifiedKinds: pivotKinds } : {}) })
+    const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu() })
+    setPivotController(controller)
+    return () => {
+      controller.dispose()
+      pivotHost.current.restore()
+      setPivotController(current => current === controller ? null : current)
+    }
+  }, [pivotUi, doc, remote, mainLedger, budgetProfile, pivotKinds])
+  useEffect(() => pivotController?.subscribe(rerender), [pivotController, rerender])
   const controlJob = useRef<AbortController | null>(null)
   // The header sort in flight (spec §12.2 acknowledgment): shown with the click,
   // cleared when its own job ends; any newer job or a sheet switch replaces it.
@@ -1335,6 +1821,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pagedDrawingNotices = activeDrawings ? drawingNotices(activeDrawings) : []
   const activeCharts = entry ? sheetCharts(entry.sheet.drawings) : []
   const fontNotices = fontNotice(assets && assets.sheetId === activeSheetId ? assets.lease.fontDiagnostics : [])
+  // Pivots on the active sheet (Task 28): load-time pivot-* diagnostics, and one notice per pivot not interactive.
+  const activeIndex = sheetIds.indexOf(activeSheetId)
+  const activePivots = entry?.sheet.pivotTables
+  const activeStaleCells = remote ? undefined : residentDependentNotices.cells.get(activeIndex)
+  const pivotCellText = (row: number, col: number): string => { if (!entry) return ''; const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }
+  const pivotNotices = entry ? [...new Set([
+    ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
+    ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
+    ...(pagedDependentNoticeSheets.has(activeIndex) || Boolean(activeSheetId && remote?.pivotFormulaNoticeSheets.has(activeSheetId)) ? [remote ? 'Formulas outside this pivot may still show saved values (paged workbook).' : 'Formulas outside this pivot still show saved values (this workbook shows saved formula values only).'] : []),
+    ...(residentDependentNotices.unsupported.has(activeIndex) ? ['Some formulas still show saved values because their pivot reference is unsupported.'] : []),
+    // M-4: over the work budget a reader keeps what it showed, which may be an earlier change's live value.
+    ...(residentDependentNotices.outdated.has(activeIndex) ? ['Some formulas that depend on a pivot may be out of date: recalculating them would take too long.'] : []),
+  ])] : []
 
   // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
@@ -1528,6 +2027,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Every publication re-checks its request token, permission and mount (§10.1).
   const [printPages, setPrintPages] = useState<ReadonlyArray<{ name: string; page: Paintable | null; scale: number; refusedImages: number }> | null>(null)
   const printLease = useRef<PaintableArray | null>(null)
+  const [printPivotNote, setPrintPivotNote] = useState('')
   const printToken = useRef(0)
   const allowPrintRef = useRef(allowPrint)
   allowPrintRef.current = allowPrint
@@ -1539,7 +2039,26 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const token = ++printToken.current
     const loader = props.printLoader ?? preparePrintUnits
     let pages: Awaited<ReturnType<typeof loader>>
-    try { pages = await loader(doc, {
+    // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
+    const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
+    // Ruling S3-AL: so do its dependents. The formula cells Task 31 recomputed print their saved values, and the charts
+    // it refilled their saved models, so the paper never shows a saved pivot beside live numbers that read it.
+    const savedCells = savedDependentCells(doc)
+    // Its linked charts print as saved too: each live chart model maps back to the saved one it replaced.
+    const savedChart = new Map<ChartModel, ChartModel>()
+    let dependentsSaved = Boolean(savedCells)
+    for (const [node, saved] of savedDependentCharts) if (node.content?.kind === 'xlsxChart' && node.content.chart && node.content.chart !== saved) { savedChart.set(node.content.chart, saved); dependentsSaved = true }
+    // A pivot chart's saved model (captured before any refill) wins over a dependent refill's snapshot of the same chart.
+    for (const { sheet, name, charts } of savedPivotCharts.values()) linkedPivotCharts(doc, sheet, name).forEach((live, k) => { const saved = charts[k]; if (saved && saved !== live) savedChart.set(live, saved) })
+    setPrintPivotNote(dependentsSaved ? 'Printing shows the pivot, and the values that depend on it, as saved.' : changed ? 'Printing shows the pivot as saved.' : '')
+    const printed = changed || savedChart.size || savedCells ? { ...doc, sheets: doc.sheets.map((sheet, index) => {
+      const drawings = savedChart.size ? withSavedCharts(sheet.drawings, savedChart) : sheet.drawings
+      const savedOfSheet = savedCells?.get(sheet)
+      const rows = savedOfSheet ? withSavedCells(sheet.rows, savedOfSheet) : sheet.rows
+      if (sheet.pivotTables === savedPivotDefs[index] && drawings === sheet.drawings && rows === sheet.rows) return sheet
+      return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(rows !== sheet.rows ? { rows } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
+    }) } : doc
+    try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
     }) } catch (error) {
       if (token === printToken.current && allowPrintRef.current) setAnnouncement(error instanceof Error ? error.message : 'Print unavailable; try again.')
@@ -1711,9 +2230,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * next display commits). A candidate that does not fit, or does not show the
    * size, is discarded unpublished and the refusal is announced.
    */
-  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string): Candidate | null => {
+  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string, quiet = false): Candidate | null => {
     const budget = MAIN_THREAD_BUDGETS[budgetProfile], current = entries.get(sheetId)!
-    const refuse = () => { setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`); return null }
+    const refuse = () => { if (!quiet) setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`); return null }
     // 1. Provisional reservation BEFORE construction: an upper bound of what
     //    building the candidate allocates, derived from its inputs alone.
     const upper = constructionUpperBytes(sheetId, current, sizes)
@@ -1725,7 +2244,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if ('candidate' in prepared) candidate = prepared.candidate
     } finally { if (!candidate) mainLedger.release('geometry', 'resize-candidate') }
     if (!candidate) return null
-    if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
+    if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); if (!quiet) setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
     // 2. Exact admission: the candidate's measured charge plus the semantic DOM
     //    it reveals, beside everything held now. Repaint memory (layout records,
     //    formatted text) is admitted per record where it is built (LayoutCache
@@ -1871,14 +2390,38 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
+              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
+                : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
+              cellControls={pivotUi && pivotController && activePivots?.length && scroll ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
+                cellText={pivotCellText} /> : undefined}
+              onCellControl={pivotUi && pivotController && activePivots?.length ? (at, action, grid) => {
+                // Ruling S3-J: the keyboard route to a cell's pivot control (focus returns to the grid).
+                const found = pivotUi.controlsAt(activePivots, at.row, at.col)
+                const drill = found.find(entry => entry.button.kind === 'expand' || entry.button.kind === 'collapse')
+                const target = action === 'open' ? found.find(entry => entry.button.kind === 'filter' || entry.button.kind === 'page') : drill
+                if (!target) return false
+                // The cell comes into view first, as the cursor does (PR #57: a cell under a frozen strip has no target).
+                const shown = scrollIntoView(scroll, { metrics: entry.metrics, viewport, view: { ...entry.view, selection } }, at)
+                if (shown !== scroll) setWindow(activeSheetId, shown)
+                if (action !== 'open' && target.button.kind !== action) { setAnnouncement(action === 'expand' ? 'Already expanded.' : 'Already collapsed.'); return true }
+                const anchor = rootRef.current?.querySelector<HTMLElement>(`[data-pivot-key="${target.pivot}:${at.row}:${at.col}"]`) ?? undefined
+                void pivotController.activate(activeIndex, target.pivot, target.button, grid, anchor)
+                return true
+              } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
-                return cell ? presentCell(cell) : { text: '' }
+                const shown = cell ? presentCell(cell) : { text: '' }
+                // Ruling S3-AM: a formula a pivot change left stale carries its mark and tooltip (resident only).
+                const why = activeStaleCells?.get(at.row * MAX_COLS + at.col)
+                const stale = why ? { ...shown, stale: why === 'unsupported' ? STALE_UNSUPPORTED : STALE_OUTDATED } : shown
+                if (!pivotUi || !pivotController || !activePivots?.length) return stale
+                const expanded = pivotUi.expandedAt(activePivots, at.row, at.col)
+                const control = pivotUi.cellControlDescription(pivotController, activeIndex, activePivots, at.row, at.col, pivotCellText)
+                return { ...stale, ...(expanded !== undefined ? { expanded } : {}), ...(control ? { control } : {}) }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
@@ -1897,6 +2440,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           <div data-officeview-sheet-print="" aria-hidden="true">
             {!printPages && <p data-testid="officeview-sheet-print-notice">{remote ? PAGED_PRINT_MESSAGE : 'To print this spreadsheet, press Ctrl/Cmd+P inside the viewer.'}</p>}
             <div data-testid="officeview-sheet-print-pages">
+              {printPages && printPivotNote && <p>{printPivotNote}</p>}
               {printPages?.map((unit, index) => unit.page
                 ? <div key={index} style={index > 0 ? { breakBefore: 'page', pageBreakBefore: 'always' } : undefined}>
                     <h2 data-officeview-print-sheet-title="">{unit.name}</h2>
@@ -2024,4 +2568,86 @@ function lastVisibleRowLabel(metrics: ProjectedSheetMetrics, window: ScrollWindo
   let last = 0
   for (const run of rows.runs) last = Math.max(last, run.end + 1)
   return last || 1
+}
+
+/** A pivot menu's accessible name: its field's. */
+function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.PivotMenuRequest): string {
+  const state = controller.state(request.sheet, request.pivot)
+  return (state.status === 'open' ? state.model.fields.find(field => field.index === request.field)?.name : undefined) ?? 'Pivot table field'
+}
+
+/** A pivot's linked charts in `installPivotCharts`' order (sheets, then drawing order), by the name after the last `!`. */
+function linkedPivotCharts(doc: XlsxDocument, sheetName: string, name: string): ChartModel[] {
+  return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chartLinksPivot(chart, sheetName, name))
+}
+
+/** Rows with the saved cells put back at every position a dependent recompute changed (Ruling S3-AL): a recomputed
+ * formula's saved value, a spill follower it cleared, and no cell where a grown spill wrote one. Copies only the rows
+ * that change (a row emptied this way stays, empty: a row the recompute created carries nothing to print). */
+function withSavedCells(rows: XlsxSheet['rows'], saved: NonNullable<ReturnType<SavedDependentCells['get']>>): XlsxSheet['rows'] {
+  const out: XlsxSheet['rows'] = []
+  const seen = new Set<number>()
+  const rebuilt = (cells: readonly XlsxCell[], positions: ReadonlyMap<number, XlsxCell | null>) => {
+    const kept = cells.filter(cell => !positions.has(cell.col))
+    for (const cell of positions.values()) if (cell) kept.push(cell)
+    return kept.sort((a, b) => a.col - b.col)
+  }
+  for (const row of rows) {
+    const positions = saved.get(row.index)
+    if (!positions) { out.push(row); continue }
+    seen.add(row.index)
+    out.push({ ...row, cells: rebuilt(row.cells, positions) })
+  }
+  for (const [index, positions] of saved) {
+    if (seen.has(index)) continue
+    const cells = rebuilt([], positions)
+    if (cells.length) out.push({ index, cells })
+  }
+  return out.sort((a, b) => a.index - b.index)
+}
+
+/** Drawing nodes with the given chart models swapped back (copies only along the changed paths; print of a changed pivot). */
+function withSavedCharts(nodes: XlsxSheet['drawings'], saved: ReadonlyMap<ChartModel, ChartModel>): XlsxSheet['drawings'] {
+  if (!nodes) return nodes
+  let changed = false
+  const out = nodes.map(node => {
+    const content = node.content?.kind === 'xlsxChart' ? saved.get(node.content.chart) : undefined
+    const children = node.children?.length ? withSavedCharts(node.children, saved) : node.children
+    if (!content && children === node.children) return node
+    changed = true
+    return { ...node, ...(content ? { content: { ...node.content!, chart: content } } : {}), ...(children !== node.children ? { children } : {}) } as typeof node
+  })
+  return changed ? out : nodes
+}
+
+/** The cells a resident pivot shows: its committed overlay's (value, number format and role style), else the sheet's. */
+function pivotShownReader(sheet: XlsxSheet, overlay: ValueOverlay | undefined): (row: number, col: number) => { value: unknown; style?: XlsxCellStyle } | undefined {
+  let rows: Map<number, XlsxSheet['rows'][number]> | undefined
+  return (row, col) => {
+    const shown = overlay?.cell(row, col)
+    if (shown === null) return undefined
+    if (shown !== undefined) {
+      const own = (shown as { style?: XlsxCellStyle }).style
+      const style = own ? { ...own, numFmtId: shown.numFmtId ?? 0 } : shown.numFmtId !== undefined ? { numFmtId: shown.numFmtId } : undefined
+      return { value: shown.value, ...(style ? { style } : {}) }
+    }
+    rows ??= new Map(sheet.rows.map(entry => [entry.index, entry]))
+    const cell = rows.get(row)?.cells.find(entry => entry.col === col)
+    return cell ? { value: cell.value, ...(cell.style ? { style: cell.style } : {}) } : undefined
+  }
+}
+const PIVOT_FIT_REFUSED = 'Its columns were not fitted: not enough memory to measure them or lay the sheet out again (main memory budget).'
+const PIVOT_FIT_UNREPRESENTABLE = 'Its columns were not fitted: the fitted widths cannot be represented beside this sheet\'s sizes.'
+/** A region style layer's resolution for screen, as a pivot autofit reads it. */
+function pivotStyleAt(layer: ReturnType<typeof regionStylesFor>): ((row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) | undefined {
+  return layer ? (row, col, own) => layer.styleAt(row, col, own, 'screen') ?? own : undefined
+}
+
+/** A worker reply's layout cells as a pivot autofit reads them (values and number formats; no own styles). */
+function pivotCellsReader(cells: readonly { row: number; col: number; value: { value: unknown; numFmtId?: number } | null }[]): (row: number, col: number) => { value: unknown; style?: XlsxCellStyle } | undefined {
+  const byCell = new Map(cells.map(cell => [`${cell.row},${cell.col}`, cell.value]))
+  return (row, col) => {
+    const shown = byCell.get(`${row},${col}`)
+    return shown ? { value: shown.value, ...(shown.numFmtId !== undefined ? { style: { numFmtId: shown.numFmtId } } : {}) } : undefined
+  }
 }

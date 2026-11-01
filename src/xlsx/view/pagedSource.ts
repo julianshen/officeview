@@ -14,15 +14,16 @@ import { defaultColumnWidthPx } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
   RangeCompletion, ReadOptions, RemotePivotDisplay, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
-  SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
+  SparseRowPage, SpillExtent, StructuralResult, ValueOverlay, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
 import { resolveDrawingAnchors } from './drawingBounds'
 import { PackageError } from '../../core/package-error'
-import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1Range, type SourceCell, type SourceRect } from './coordinates'
+import { uniqueRectList } from './rectIndex'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
-import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
+import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
-import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
+import { LaneBuilder, assertOverlayCellsProtected, overlayIncompleteColumnPage, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
 import {
   F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt, textPrefix,
   type CellPagePayload, type PageSummary,
@@ -45,6 +46,8 @@ import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
 import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
 import { estimatePayloadBytes } from './payloadBytes'
+import { savedPivotRects } from '../pivots/stub'
+import { SOURCE_ALLOCATION, adoptAllocation, type SourceAllocationOptions } from './allocationAccount'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -64,6 +67,20 @@ function lower(values: ArrayLike<number>, target: number, from = 0, to = values.
 function ended(failure: SourceFailure | undefined): SourceFailure | undefined {
   return failure && failure.retryable ? Object.freeze({ ...failure, retryable: false }) : failure
 }
+function sameOverlayMerges(a: readonly SourceRect[] | undefined, b: readonly SourceRect[] | undefined): boolean {
+  if (a === b) return true
+  const left = a ?? [], right = b ?? []
+  if (left.length !== right.length) return false
+  const key = (rect: SourceRect) => `${rect.r0},${rect.c0},${rect.r1},${rect.c1}`
+  const xOrder = [...left].map(key).sort(), yOrder = [...right].map(key).sort()
+  for (let i = 0; i < xOrder.length; i++) {
+    if (xOrder[i] !== yOrder[i]) return false
+  }
+  return true
+}
+interface OverlayState { overlay?: ValueOverlay; structureGen: number }
+const overlayStates = new WeakMap<object, OverlayState>()
+const workbookAdapters = new WeakMap<object, Map<string, PagedXlsxSheetAdapter>>()
 
 /** Conservative structured-clone size for the sparkline model, recursive; depth is bounded by the sparkline model.
  * Repeated references are counted again. */
@@ -87,16 +104,95 @@ function sparklinePayloadTreeBytes(value: unknown): number {
 
 export class PagedXlsxSheetAdapter implements SourceStore {
   readonly valuePolicy: ValuePolicy = 'cached'
+  private currentStamp: SourceStamp
   private released = false
   private drawingCache?: DrawingAnchor[]
   /** S13.2: the parsed drawing payload, retained (evictable) in the document pool so
    * repeated reads (stale retries, re-shown sheets) clone instead of re-parsing. */
   private drawingsCache?: { entry: PoolEntry; result: SheetDrawings; releaseCharts: () => void }
-  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }, private readonly pacing: StorePacing = {}) {}
+  constructor(stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }, private readonly pacing: StorePacing = {}, registerForWorkbookReads = true) {
+    this.currentStamp = stamp
+    if (registerForWorkbookReads) {
+      let adapters = workbookAdapters.get(workbook)
+      if (!adapters) workbookAdapters.set(workbook, adapters = new Map())
+      adapters.set(sheet.sheetId, this)
+    }
+  }
+
+  get stamp(): SourceStamp { return this.currentStamp }
+  private get valueOverlay(): ValueOverlay | undefined { return overlayStates.get(this)?.overlay }
+  get structureGen(): number { return overlayStates.get(this)?.structureGen ?? 0 }
+  setValueOverlay(overlay: ValueOverlay | undefined): void {
+    const previous = overlayStates.get(this)
+    // The overlay already installed is a no-op, checked before the (deferred T26 m1) assertion (Task 33 perf).
+    if (previous?.overlay === overlay || (!previous && overlay === undefined)) return
+    if (overlay) assertOverlayCellsProtected(overlay)
+    const structureGen = (previous?.structureGen ?? 0) + (sameOverlayMerges(previous?.overlay?.merges, overlay?.merges) ? 0 : 1)
+    overlayStates.set(this, { overlay, structureGen })
+    this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 })
+  }
 
   get extent(): SourceStore['extent'] {
     const used = this.sheet.state === 'complete' ? this.sheet.used : undefined
-    return used ? { rows: MAX_ROWS, cols: MAX_COLS, used: { ...used } } : { rows: MAX_ROWS, cols: MAX_COLS }
+    const overlay = this.valueOverlay
+    const bounds = overlay?.protectedRects ?? []
+    const extra = bounds.length ? bounds.reduce((all, rect) => ({ r0: Math.min(all.r0, rect.r0), r1: Math.max(all.r1, rect.r1), c0: Math.min(all.c0, rect.c0), c1: Math.max(all.c1, rect.c1) }), { ...bounds[0] }) : undefined
+    const merged = used && extra ? { r0: Math.min(used.r0, extra.r0), r1: Math.max(used.r1, extra.r1), c0: Math.min(used.c0, extra.c0), c1: Math.max(used.c1, extra.c1) } : used ?? extra
+    return merged ? { rows: MAX_ROWS, cols: MAX_COLS, used: { ...merged } } : { rows: MAX_ROWS, cols: MAX_COLS }
+  }
+  private overlayCell(row: number, col: number): ReturnType<ValueOverlay['cell']> {
+    const overlay = this.valueOverlay
+    if (!overlay) return undefined
+    for (const rect of overlay.rects) {
+      if (row < rect.r0 || row > rect.r1 || col < rect.c0 || col > rect.c1) continue
+      const cell = overlay.cell(row, col)
+      if (cell !== undefined) return cell
+    }
+    return undefined
+  }
+  overlayStyle(at: { row: number; col: number }): XlsxCellStyle | null | undefined {
+    const value = this.valueOverlay ? this.overlayCell(at.row, at.col) : undefined
+    return value && value !== null ? (value.numFmtId !== undefined ? { numFmtId: value.numFmtId } : null) : undefined
+  }
+  private overlayPayload(row: number, col: number, value: NonNullable<ReturnType<ValueOverlay['cell']>>): SingleCellPayload {
+    if (value === null) throw new RangeError('Blank overlay has no cell payload')
+    return { id: cellId(row, col), row, col, value: value.value, styleIndex: 0, hasCachedValue: true, valueIsError: value.valueIsError ?? false, valueProvenance: 'engine' }
+  }
+  private mergeOverlayRows(items: SparseRowPage[], range: SourceRect, beforeRow = range.r1 + 1, fromRow = range.r0): { items: SparseRowPage[]; nextRow?: number } {
+    const overlay = this.valueOverlay
+    if (!overlay) return { items }
+    const base = new Map(items.filter(item => item.row >= fromRow && item.row < beforeRow).map(item => [item.row, item]))
+    const output: SparseRowPage[] = []
+    let row = fromRow, visited = 0, cellCount = 0
+    const nextCandidate = (at: number): number => {
+      let next = Number.POSITIVE_INFINITY
+      for (const value of base.keys()) if (value >= at) next = Math.min(next, value)
+      for (const rect of overlay.rects) if (rect.r1 >= at && rect.c1 >= range.c0 && rect.c0 <= range.c1) next = Math.min(next, Math.max(at, rect.r0))
+      return Math.min(next, beforeRow, range.r1 + 1)
+    }
+    while (row < beforeRow && row <= range.r1) {
+      row = nextCandidate(row)
+      if (row > range.r1 || row >= beforeRow) break
+      if (visited >= READ_ROWS_PAGE_ROWS) return { items: output, nextRow: row }
+      const cells = new Map<number, AuthoritativeCell>()
+      for (const cell of base.get(row)?.cells ?? []) if (cell.col >= range.c0 && cell.col <= range.c1) cells.set(cell.col, cell)
+      for (const rect of overlay.rects) {
+        if (row < rect.r0 || row > rect.r1) continue
+        for (let col = Math.max(range.c0, rect.c0); col <= Math.min(range.c1, rect.c1); col++) {
+          const value = overlay.cell(row, col)
+          if (value === undefined) continue
+          cells.delete(col)
+          if (value !== null) cells.set(col, this.overlayPayload(row, col, value))
+        }
+      }
+      const rowCells = [...cells.values()].sort((a, b) => a.col - b.col)
+      if (rowCells.length > READ_ROWS_MAX_CELLS) return { items: [], nextRow: row }
+      if (visited > 0 && cellCount + rowCells.length > READ_ROWS_MAX_CELLS) return { items: output, nextRow: row }
+      visited++; cellCount += rowCells.length
+      if (rowCells.length) output.push({ row, cells: rowCells })
+      row++
+    }
+    return { items: output }
   }
   coverageDiagnostics(): WorkerDiagnostic[] {
     const out: WorkerDiagnostic[] = []
@@ -197,6 +293,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const error = this.guard(options)
     if (error) return { kind: 'error', code: error.code, retryable: error.retryable }
     if (!isValidCoordinate(at.row, at.col)) return { kind: 'error', code: 'invalid-coordinate', retryable: false }
+    const overlay = this.overlayCell(at.row, at.col)
+    if (overlay !== undefined) return overlay === null ? { kind: 'blank' } : { kind: 'cell', cell: this.overlayPayload(at.row, at.col, overlay) }
     const status = this.status(at.row)
     if (status.kind === 'unknown') return { kind: 'unknown', pageId: status.pageId }
     if (status.kind === 'error') return { kind: 'error', code: status.failure.code, retryable: status.failure.retryable }
@@ -221,6 +319,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const error = this.guard(options)
     if (error) return { kind: 'error', code: error.code, retryable: error.retryable }
     if (!isValidCoordinate(at.row, at.col)) return { kind: 'error', code: 'invalid-coordinate', retryable: false }
+    const overlay = this.overlayCell(at.row, at.col)
+    if (overlay !== undefined) return overlay === null ? { kind: 'blank' } : { kind: 'cell', cell: this.overlayPayload(at.row, at.col, overlay) }
     const status = this.status(at.row)
     if (status.kind === 'unknown') return { kind: 'unknown', pageId: status.pageId }
     if (status.kind === 'error') return { kind: 'error', code: status.failure.code, retryable: status.failure.retryable }
@@ -281,7 +381,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           }
           if (visited >= READ_ROWS_PAGE_ROWS || (items.length && cells + rowCells.length > READ_ROWS_MAX_CELLS)) {
             await budget.finish()
-            return { items, completeness: 'complete', stamp: this.stamp, nextCursor: `${key}${r}` }
+            const merged = this.mergeOverlayRows(items, range, r, row)
+            return { items: merged.items, completeness: 'complete', stamp: this.stamp, nextCursor: `${key}${merged.nextRow ?? r}` }
           }
           visited++
           cells += rowCells.length
@@ -300,9 +401,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     if (status.kind === 'unknown') {
       // Committed rows are answered; the rest waits for the import frontier.
       const frontier = this.sheet.importedThroughRow + 1
-      return { items, completeness: 'loading', stamp: this.stamp, nextCursor: `${key}${Math.max(row, frontier)}` }
+      const end = Math.max(row, frontier)
+      const merged = this.mergeOverlayRows(items, range, end, row)
+      return { items: merged.items, completeness: 'loading', stamp: this.stamp, nextCursor: `${key}${merged.nextRow ?? end}` }
     }
-    return { items, completeness: 'complete', stamp: this.stamp }
+    const merged = this.mergeOverlayRows(items, range, range.r1 + 1, row)
+    return { items: merged.items, completeness: 'complete', stamp: this.stamp, ...(merged.nextRow !== undefined ? { nextCursor: `${key}${merged.nextRow}` } : {}) }
   }
 
   async queryColumn(request: ColumnQuery, options: ReadOptions): Promise<Page<ColumnEntry>> {
@@ -326,6 +430,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       }
       at = i; row = r
     }
+    const startAt = at, startRow = row
+    const overlay = this.valueOverlay
     const lanes = request.encoding === 'lanes'
     const items: ColumnEntry[] = []
     let budget = request.limit
@@ -351,13 +457,34 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         if (lanes) {
           const r1 = Math.min(ready, row + budget - 1)
           const builder = new LaneBuilder()
-          for (const page of this.pagesFor(row, r1)) {
-            if (page.aggregate.records === 0 || request.col < page.c0 || request.col > page.c1) continue
-            const p = await this.load(page, options.signal)
-            for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= r1; i++) {
-              if (p.cols[i] !== request.col) continue
-              builder.add(p.rows[i], await this.valueOf(p, i), (p.flags[i] & F_ERROR) !== 0, p.styles[i], this.isUnavailable(p, i))
+          if (!overlay) {
+            for (const page of this.pagesFor(row, r1)) {
+              if (page.aggregate.records === 0 || request.col < page.c0 || request.col > page.c1) continue
+              const p = await this.load(page, options.signal)
+              for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= r1; i++) {
+                if (p.cols[i] !== request.col) continue
+                builder.add(p.rows[i], await this.valueOf(p, i), (p.flags[i] & F_ERROR) !== 0, p.styles[i], this.isUnavailable(p, i))
+              }
             }
+          } else {
+            const values = new Map<number, { value: string | number | boolean | null; error: boolean; style: number; unavailable: boolean }>()
+            for (const page of this.pagesFor(row, r1)) {
+              if (page.aggregate.records === 0 || request.col < page.c0 || request.col > page.c1) continue
+              const p = await this.load(page, options.signal)
+              for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= r1; i++) {
+                if (p.cols[i] !== request.col) continue
+                values.set(p.rows[i], { value: await this.valueOf(p, i), error: (p.flags[i] & F_ERROR) !== 0, style: p.styles[i], unavailable: this.isUnavailable(p, i) })
+              }
+            }
+            for (const rect of overlay.rects) if (request.col >= rect.c0 && request.col <= rect.c1) {
+              for (let current = Math.max(row, rect.r0); current <= Math.min(r1, rect.r1); current++) {
+                const value = overlay.cell(current, request.col)
+                if (value === undefined) continue
+                if (value === null) values.delete(current)
+                else values.set(current, { value: value.value, error: value.valueIsError ?? false, style: 0, unavailable: false })
+              }
+            }
+            for (const [current, value] of [...values].sort((a, b) => a[0] - b[0])) builder.add(current, value.value, value.error, value.style, value.unavailable)
           }
           items.push(builder.build(row, r1))
           budget -= r1 - row + 1
@@ -398,17 +525,69 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     } catch (cause) {
       return { items, completeness: 'incomplete', stamp: this.stamp, error: pageFailure(cause) }
     }
-    return {
+    const result: Page<ColumnEntry> = {
       items, completeness: loading ? 'loading' : 'complete', stamp: this.stamp,
       ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}),
     }
+    return overlay ? this.overlayColumnPage(result, request, intervals, startAt, startRow, prefix, overlay) : result
   }
 
-  scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>> {
+  private overlayColumnPage(page: Page<ColumnEntry>, request: ColumnQuery, intervals: readonly SourceRowInterval[], startAt: number, startRow: number, prefix: string, overlay: ValueOverlay): Page<ColumnEntry> {
+    if (!overlay || page.items.some(item => item.kind === 'lanes')) return page
+    if (page.completeness !== 'complete') return overlayIncompleteColumnPage(page, request, intervals, startAt, prefix, overlay, row => this.overlayCell(row, request.col), (row, value) => this.overlayPayload(row, request.col, value))
+    let endAt = intervals.length - 1, endRow = intervals[endAt]?.r1 ?? -1
+    if (page.nextCursor) {
+      const parts = page.nextCursor.split(':')
+      const i = Number(parts[1]), r = Number(parts[2])
+      if (parts.length === 3 && parts[0] === prefix && Number.isSafeInteger(i) && Number.isSafeInteger(r)) { endAt = i; endRow = r - 1 }
+    }
+    const cells = new Map<number, Extract<ColumnEntry, { kind: 'cell' | 'unavailable' }>>()
+    for (const item of page.items) if (item.kind === 'cell' || item.kind === 'unavailable') cells.set(item.row, item)
+    for (const rect of overlay.rects) {
+      if (request.col < rect.c0 || request.col > rect.c1) continue
+      for (let i = startAt; i <= endAt; i++) {
+        const interval = intervals[i]
+        if (!interval) continue
+        for (let row = Math.max(interval.r0, rect.r0, i === startAt ? startRow : interval.r0); row <= Math.min(interval.r1, rect.r1, i === endAt ? endRow : interval.r1); row++) {
+          const value = overlay.cell(row, request.col)
+          if (value === undefined) continue
+          if (value === null) cells.delete(row)
+          else cells.set(row, { kind: 'cell', row, cell: this.overlayPayload(row, request.col, value) })
+        }
+      }
+    }
+    const output: ColumnEntry[] = []
+    let continuation: { interval: number; row: number } | undefined
+    for (let i = startAt; i <= endAt && !continuation; i++) {
+      const interval = intervals[i]
+      if (!interval) continue
+      const r0 = Math.max(interval.r0, i === startAt ? startRow : interval.r0), r1 = Math.min(interval.r1, i === endAt ? endRow : interval.r1)
+      let row = r0
+      for (const entry of [...cells.values()].filter(cell => cell.row >= r0 && cell.row <= r1).sort((a, b) => a.row - b.row)) {
+        if (entry.row > row) {
+          if (output.length >= request.limit) { continuation = { interval: i, row }; break }
+          output.push({ kind: 'blank', r0: row, r1: entry.row - 1 })
+        }
+        if (output.length >= request.limit) { continuation = { interval: i, row: entry.row }; break }
+        output.push(entry); row = entry.row + 1
+      }
+      if (!continuation && row <= r1) {
+        if (output.length >= request.limit) continuation = { interval: i, row }
+        else output.push({ kind: 'blank', r0: row, r1 })
+      }
+    }
+    const nextCursor = continuation ? `${prefix}:${continuation.interval}:${continuation.row}` : page.nextCursor
+    const { nextCursor: _old, ...rest } = page
+    return { ...rest, items: output, ...(nextCursor ? { nextCursor } : {}) }
+  }
+
+  scanPopulated(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions): AsyncIterable<Page<AuthoritativeCell>> {
+    if (this.valueOverlay) return this.scanOverlay(request, options, cell => cell)
     return this.scan(request, options, (p, i) => this.rowCell(p, i))
   }
   /** Same cells, order and pages as scanPopulated; coordinates only, no payload decode. */
-  scanOccupied(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<SourceCell>> {
+  scanOccupied(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions): AsyncIterable<Page<SourceCell>> {
+    if (this.valueOverlay) return this.scanOverlay(request, options, cell => ({ row: cell.row, col: cell.col }))
     return this.scan(request, options, (p, i) => ({ row: p.rows[i], col: p.cols[i] }))
   }
   private async *scan<T>(request: PopulatedQuery, options: ReadOptions, item: (p: CellPagePayload, i: number) => T | Promise<T>): AsyncIterable<Page<T>> {
@@ -473,6 +652,35 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     yield { items, completeness: 'complete', stamp: this.stamp }
     } finally { budget.dispose() }
   }
+  private async *scanOverlay<T>(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions, item: (cell: AuthoritativeCell) => T): AsyncIterable<Page<T>> {
+    const error = this.guard(options)
+    if (error) { yield failedPage(this.stamp, error); return }
+    if (!isValidSourceRect(request.range) || !Number.isSafeInteger(request.limit) || request.limit <= 0) {
+      yield failedPage(this.stamp, failure('invalid-source-rect', 'Invalid populated query')); return
+    }
+    let cursor: string | undefined, items: T[] = []
+    let account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    const publish = (page: Page<T>) => {
+      if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+      account?.release(); account = undefined
+      return page
+    }
+    try { for (;;) {
+      const page = await this.readRows(request.range, cursor, options)
+      for (const row of page.items) for (const cell of row.cells) if (cell.value !== null || cell.formula !== undefined) {
+        account?.charge(typeof cell.value === 'string' ? 384 + cell.value.length * 2 : 384)
+        items.push(item(cell))
+        if (items.length >= request.limit) { yield publish({ items, completeness: 'complete', stamp: this.stamp }); items = []; account = options[SOURCE_ALLOCATION]?.reserve(); account?.charge(96) }
+      }
+      if (page.error) { yield publish({ items, completeness: 'incomplete', stamp: this.stamp, error: page.error }); return }
+      if (page.completeness !== 'complete') { yield publish({ items, completeness: page.completeness, stamp: this.stamp, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) }); return }
+      if (!page.nextCursor) break
+      cursor = page.nextCursor
+    }
+    yield publish({ items, completeness: 'complete', stamp: this.stamp })
+    } finally { account?.release() }
+  }
 
   async queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult> {
     const base = { stamp: this.stamp, merges: [], tables: [], spills: [], drawings: [] }
@@ -493,9 +701,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const c0 = Math.max(domain.c0, rect.c0), c1 = Math.min(domain.c1, rect.c1)
       if (r0 <= r1 && c0 <= c1) missing.push({ r0, r1, c0, c1 })
     }
+    const overlay = this.valueOverlay
     const merges = sheet.mergeRects
+      .filter(m => !overlay?.rects.some(rect => m.r0 <= rect.r1 && rect.r0 <= m.r1 && m.c0 <= rect.c1 && rect.c0 <= m.c1))
       .map(m => ({ id: `merge:${m.r0}:${m.c0}:${m.r1}:${m.c1}`, range: m, anchor: { row: m.r0, col: m.c0 } }))
       .filter(m => isValidSourceRect(m.range) && intersects(m.range, rect))
+    if (overlay) for (const merge of overlay.merges) if (intersects(merge, rect)) merges.push({ id: `pivot-merge:${merge.r0}:${merge.c0}:${merge.r1}:${merge.c1}`, range: merge, anchor: { row: merge.r0, col: merge.c0 } })
     const tables = (sheet.tables ?? [])
       .map(t => ({ id: t.id, range: { r0: t.extent.firstRow, r1: t.extent.firstRow + t.extent.rows - 1, c0: t.extent.firstCol, c1: t.extent.firstCol + t.extent.cols - 1 }, headerRows: t.headerRowCount, totalsRows: t.totalsRowCount }))
       .filter(t => isValidSourceRect(t.range) && intersects(t.range, rect))
@@ -519,7 +730,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         error: failure('unsupported', `${sheet.metadata.structuralIncomplete.join(', ')} metadata is wrapped in mc:AlternateContent and cannot be read`),
       }
     }
-    return { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
+    // Every saved pivot is guarded with its page-field cells, overlay or not (S3-G). Vacated cells read
+    // empty but stay guarded inside a saved area (S3-L): the guard is saved ∪ the overlay's protected
+    // bounds, whatever the producer names, never the overlay alone.
+    const groups = (sheet.metadata.pivotRegions ?? []).map(region => { const table = parseA1Range(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] })
+    const saved = uniqueRectList(groups.flat())
+    const pivots = uniqueRectList([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
+    return { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
   }
   /** Resolved once the sheet is complete (its row/column metadata is final), against the geometry the source publishes. */
   private drawings(): DrawingAnchor[] {
@@ -711,9 +928,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const stores = new Map<string, PagedXlsxSheetAdapter>()
     const sheetFor = (sheet: PagedSheet): PagedXlsxSheetAdapter => {
       let store = stores.get(sheet.sheetId)
-      if (!store) stores.set(sheet.sheetId, store = sheet.sheetId === this.sheet.sheetId ? this : new PagedXlsxSheetAdapter(
-        Object.freeze({ ...this.stamp, sheetId: sheet.sheetId }), this.workbook, sheet, this.drawingState, this.pacing,
-      ))
+      if (!store) {
+        const existing = workbookAdapters.get(this.workbook)?.get(sheet.sheetId)
+        store = existing && !existing.released ? existing : sheet.sheetId === this.sheet.sheetId ? this : new PagedXlsxSheetAdapter(
+          Object.freeze({ ...this.stamp, sheetId: sheet.sheetId }), this.workbook, sheet, this.drawingState, this.pacing, false,
+        )
+        stores.set(sheet.sheetId, store)
+      }
       return store
     }
     const cellsBySheet = new Map<string, Map<string, XlsxCell>>()
@@ -1111,6 +1332,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   }
   async release(): Promise<void> {
     this.released = true
+    const adapters = workbookAdapters.get(this.workbook)
+    if (adapters?.get(this.sheet.sheetId) === this) adapters.delete(this.sheet.sheetId)
     this.drawingsCache?.entry.release()
     this.drawingsCache?.releaseCharts()
     this.drawingsCache = undefined
@@ -1171,6 +1394,13 @@ function forEachChart(drawings: readonly XlsxDrawing[], visit: (chart: ChartMode
     if (node.children) forEachChart(node.children, visit)
   }
 }
+function collectPivotChartRefs(sheetId: string, drawings: readonly XlsxDrawing[], out: Array<{ sheetId: string; partPath: string; treePath: string; chart: ChartModel }>): void {
+  for (const node of drawings) {
+    // Only pivot charts (R2-4): the others are never linked, and would be held and charged with the assets.
+    if (node.content?.kind === 'xlsxChart' && node.content.chart.pivot) out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
+    if (node.children) collectPivotChartRefs(sheetId, node.children, out)
+  }
+}
 /** Whether a cell sits in an authored hidden row or column (chart `plotVisOnly` provenance, as buildGeometry reads them). */
 function hiddenCell(meta: SheetMetadata | undefined, row: number, col: number): boolean {
   if (!meta) return false
@@ -1186,6 +1416,10 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
   const displaySheet: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(workbook.formatting.dateSystem) }
   const stores = new Map<string, PagedXlsxSheetAdapter>()
   const geometries = new Map<string, SheetGeometry>()
+  const pivotAssetCache = new Map<string, { assets: WorkerPivotAssets; entry?: PoolEntry; refs: number; retired: boolean }>()
+  const currentPivotAssets = new Map<string, string>()
+  // One build per sheet and generation (R2-4): a concurrent miss waits for it instead of retaining the same pool key.
+  const pivotAssetBuilds = new Map<string, Promise<WorkerPivotAssets | undefined>>()
   const drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger(), ...(options.drawingPayloadBytes !== undefined ? { payloadBytes: options.drawingPayloadBytes } : {}) }
   const find = (sheetId: string) => {
     const found = workbook.sheets.find(s => s.sheetId === sheetId)
@@ -1199,6 +1433,132 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       stores.set(sheetId, store)
     }
     return store
+  }
+  /** Builds a sheet's pivot assets for its current generation (`pivotAssets` runs one build per key). */
+  const buildPivotAssets = async (sheetId: string, signal: AbortSignal, profile: ProfileId, memory: Parameters<NonNullable<WorkbookSource['pivotAssets']>>[3]): Promise<WorkerPivotAssets | undefined> => {
+      const sheet = find(sheetId)
+      if (signal.aborted || sheet.state !== 'complete' || !sheet.metadata.pivotRegions?.length) return undefined
+      const store = storeFor(sheetId)
+      const generation = store.stamp.valueGen
+      const cacheKey = JSON.stringify([sheetId, generation])
+      const cached = pivotAssetCache.get(cacheKey)
+      if (cached) {
+        if (memory && !memory.set(0)) return undefined
+        return cached.assets
+      }
+      const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
+      const parsed = await readPagedPivotDisplayParts(workbook.parts, { sheetId, sheetName: sheet.name,
+        pivotRegions: new Map([[sheet.name, sheet.metadata.pivotRegions]]) }, profile, signal, memory, workbook.pivotPartBytes)
+      if (memory && !memory.set(0)) return undefined
+      if (!parsed.pivotTables.length || !parsed.pivotCaches.size) return undefined
+      const { createPivotRuntime } = await import('../pivots/session/runtime')
+      const { openPart } = await import('../../core/zip-stream')
+      const runtime = createPivotRuntime(parsed.pivotCaches, (path, readSignal) => {
+        const entry = workbook.parts.inventory.find(path)
+        return entry ? openPart(workbook.parts.src, entry, { signal: readSignal, budget: { charge: () => {} } }) : undefined
+      }, () => workbook.formatting.dateSystem === '1904')
+      const used = sheet.used
+      if (!used || !store.scanOccupied) return undefined
+      const occupied = new Set<number>()
+      let cursor: string | undefined, count = 0
+      const readOptions = { signal, stamp: store.stamp }
+      do {
+        const pages = store.scanOccupied({ range: used, limit: 8192, ...(cursor ? { cursor } : {}) }, readOptions)
+        let next: string | undefined
+        for await (const page of pages) {
+          if (page.completeness !== 'complete' || page.error) return undefined
+          for (const cell of page.items) {
+            if (++count > 500_000) return undefined
+            if (memory && !memory.set(count * 32 + 512)) return undefined
+            occupied.add(cell.row * MAX_COLS + cell.col)
+          }
+          next = page.nextCursor
+        }
+        cursor = next
+      } while (cursor !== undefined)
+      const linkedCharts: Array<{ sheetId: string; partPath: string; treePath: string; chart: ChartModel }> = []
+      for (const chartSheet of workbook.sheets) {
+        if (chartSheet.state !== 'complete') return undefined
+        if (!chartSheet.metadata.drawingIds.length && !chartSheet.metadata.legacyDrawingIds?.length) continue
+        const chartStore = storeFor(chartSheet.sheetId)
+        if (!chartStore.readDrawings) return undefined
+        const drawings = await chartStore.readDrawings({ signal, stamp: chartStore.stamp }, profile, memory)
+        if (drawings.completeness !== 'complete' || signal.aborted) return undefined
+        collectPivotChartRefs(chartSheet.sheetId, drawings.drawings, linkedCharts)
+        if (memory && !memory.set(0)) return undefined
+      }
+      if (store.stamp.valueGen !== generation || signal.aborted) return undefined
+      const { pagedCellReader, pagedRangeReader } = await import('../pivots/engine/faithful')
+      const { RECORD_LIMITS } = await import('../pivots/engine/records')
+      // Merges, array and spill ranges and noted cells count too (S3-AC), charged with the metadata.
+      const { pagedBlockers, structuralOccupancy } = await import('../pivots/session/occupancy')
+      const structure = structuralOccupancy(pagedBlockers(sheet))
+      const metadataBytes = 512 + count * 32 + structure.bytes + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts })
+      const previousKey = currentPivotAssets.get(sheetId)
+      if (previousKey && previousKey !== cacheKey) {
+        const previous = pivotAssetCache.get(previousKey)
+        if (previous) {
+          previous.retired = true
+          if (previous.refs === 0) { previous.entry?.release(); pivotAssetCache.delete(previousKey) }
+        }
+      }
+      currentPivotAssets.set(sheetId, cacheKey)
+      const pool = drawingState.pool
+      let chargedMetadataBytes = metadataBytes
+      let entry: PoolEntry | undefined
+      if (pool) {
+        entry = pool.retain(`pivot-assets:${workbook.docId}:${sheetId}:${generation}`, {
+          tier: 'source', owner: sheetId, bytes: metadataBytes, evictable: false,
+          onRelease: () => {
+            pivotAssetCache.delete(cacheKey)
+            if (currentPivotAssets.get(sheetId) === cacheKey) currentPivotAssets.delete(sheetId)
+          },
+        }) ?? undefined
+        if (!entry) throw Object.assign(new Error('Pivot metadata exceeds the worker memory budget.'), {
+          code: 'resource-limit', requiredBytes: metadataBytes, limitBytes: pool.limitBytes,
+        })
+        chargedMetadataBytes = 0
+      }
+      const assets: WorkerPivotAssets = {
+        tables: parsed.pivotTables, date1904: runtime.date1904, retainedBytes: 0, metadataBytes: chargedMetadataBytes,
+        linkedCharts,
+        pivots: workbook.sheets.flatMap(candidate => (candidate.metadata.pivotRegions ?? []).map(region => ({ sheet: candidate.name, ...(region.name !== undefined ? { name: region.name } : {}) }))),
+        runtimeKey: runtime,
+        retain: () => {
+          const cachedAssets = pivotAssetCache.get(cacheKey)
+          if (!cachedAssets) return () => {}
+          cachedAssets.refs++
+          let released = false
+          return () => {
+            if (released) return
+            released = true
+            cachedAssets.refs--
+            // The last holder frees it (R2-2): an idle sheet keeps no pivot metadata charged; the next open rebuilds.
+            if (cachedAssets.refs === 0) {
+              cachedAssets.entry?.release()
+              pivotAssetCache.delete(cacheKey)
+            }
+          }
+        },
+        cache: def => runtime.cache(def),
+        records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),
+        saved: (def, readSignal) => pagedCellReader(store, def, { signal: readSignal, stamp: store.stamp }, profile),
+        // Task 32: a refreshOnLoad cache's source range, read page by page through that sheet's store (capped as the
+        // saved cells are; an incomplete read marks the reader, and the refresh refuses).
+        source: async (cache, readSignal) => {
+          const { worksheetSourceRange } = await import('../pivots/session/refresh')
+          const range = worksheetSourceRange(cache)
+          const target = range ? workbook.sheets.find(candidate => candidate.name === range.sheet) : undefined
+          if (!range || !target) return undefined
+          const sourceStore = storeFor(target.sheetId)
+          return pagedRangeReader(sourceStore, range.ref, { signal: readSignal, stamp: sourceStore.stamp }, profile)
+        },
+        occupied: (row, col) => occupied.has(row * MAX_COLS + col),
+        blocked: (row, col) => structure.occupied(row, col),
+        store: storeFor,
+      }
+      pivotAssetCache.set(cacheKey, { assets, ...(entry ? { entry } : {}), refs: 0, retired: false })
+      return assets
   }
   return {
     valuePolicy: 'cached',
@@ -1217,6 +1577,41 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
     hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
     pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
+    async scanFormulaCellsOutsidePivots(signal?: AbortSignal) {
+      for (const candidate of workbook.sheets) {
+        if (signal?.aborted) return undefined
+        if (candidate.state !== 'complete') return true // incomplete scan is conservative
+        const pivots = (candidate.metadata.pivotRegions ?? []).flatMap(region => { const rect = parseA1Range(region.ref); return rect ? [rect] : [] })
+        for (const summary of workbook.store.pages(candidate.sheetId)) {
+          if (signal?.aborted) return undefined
+          const lease = await workbook.store.pinnedPage(candidate.sheetId, summary.pageId)
+          try {
+            if (signal?.aborted) return undefined
+            for (const [record, meta] of lease.page.meta) {
+              if (signal?.aborted) return undefined
+              if (!meta.formula && !meta.sharedFormula) continue
+              const row = lease.page.rows[record]!, col = lease.page.cols[record]!
+              if (!pivots.some(r => row >= r.r0 && row <= r.r1 && col >= r.c0 && col <= r.c1)) return true
+            }
+          } finally { lease.release() }
+        }
+      }
+      return false
+    },
+    async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
+      const sheet = find(sheetId)
+      if (signal.aborted || sheet.state !== 'complete' || !sheet.metadata.pivotRegions?.length) return undefined
+      const key = JSON.stringify([sheetId, storeFor(sheetId).stamp.valueGen])
+      const building = pivotAssetBuilds.get(key)
+      if (building) {
+        const shared = await building
+        // A build its own caller abandoned (aborted) is retried by this one.
+        if (shared || signal.aborted) return shared
+      }
+      const build = buildPivotAssets(sheetId, signal, profile, memory)
+      pivotAssetBuilds.set(key, build)
+      try { return await build } finally { if (pivotAssetBuilds.get(key) === build) pivotAssetBuilds.delete(key) }
+    },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)
@@ -1233,11 +1628,16 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     // A styled table/pivot region resolves over the cell's own style, as the viewer paints it (worker Find).
     displayText: (cell, _sheetId, allocation, region) => {
       const own = workbook.formatting.styles[cell.styleIndex]
-      return cellDisplayText(displaySheet, { value: cell.value, style: region?.styleAt(cell.row, cell.col, own, 'screen') ?? own }, allocation)
+      const overlayStyle = storeFor(_sheetId).overlayStyle({ row: cell.row, col: cell.col })
+      const style = overlayStyle === null ? undefined : overlayStyle ?? own
+      return cellDisplayText(displaySheet, { value: cell.value, style: region?.styleAt(cell.row, cell.col, style, 'screen') ?? style }, allocation)
     },
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },
     async release() {
+      for (const cached of pivotAssetCache.values()) cached.entry?.release()
+      pivotAssetCache.clear()
+      currentPivotAssets.clear()
       await Promise.all([...stores.values()].map(store => store.release()))
       stores.clear()
       geometries.clear()

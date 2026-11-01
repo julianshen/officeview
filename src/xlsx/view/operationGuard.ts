@@ -68,6 +68,12 @@ function invalidRange(error: unknown): GuardOutcome {
   if (error instanceof RangeError) return { ok: false, refusal: { reason: 'invalid-range', message: error.message } }
   throw error
 }
+/** Excel's alert for a sheet sort over a pivot (Ruling S3-W, owner-sheet-sort O5; measured in zh-TW, given in Excel's
+ * English as the viewer's copy is English). A filter over a pivot (Excel disables the command) refuses with it too. */
+export const PIVOT_SHEET_CHANGE_MESSAGE = "We can't make this change for the selected cells because it will affect a PivotTable. Use the field list to change the report. If you are trying to insert or delete cells, move the PivotTable and try again."
+function pivotRefusal(range: SourceRect): OperationRefusal {
+  return { reason: 'pivot', range, message: PIVOT_SHEET_CHANGE_MESSAGE }
+}
 function mergeBands(bands: readonly SourceRowInterval[]): SourceRowInterval[] {
   const sorted = [...bands].sort((a, b) => a.r0 - b.r0 || a.r1 - b.r1)
   const out: SourceRowInterval[] = []
@@ -126,6 +132,8 @@ export async function guardSort(
       return { ok: false, refusal: incompleteRefusal(structure) }
     }
     const fullBand: SourceRect = { r0: band.r0, r1: band.r1, c0: 0, c1: MAX_COLS - 1 }
+    const pivot = structure.firstWhere(fullBand, hit => hit.kind === 'pivot')
+    if (pivot?.kind === 'pivot') return { ok: false, refusal: pivotRefusal(pivot.record) }
     const merge = structure.firstWhere(fullBand, hit => hit.kind === 'merge')
     if (merge !== undefined && merge.kind === 'merge') {
       return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }
@@ -237,6 +245,10 @@ export async function guardSort(
   for (const covered of mergeBands([band, ...changed])) {
     if (due()) await cooperate!.pause()
     const coveredBand: SourceRect = { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 }
+    // Ruling S3-X (owner-sheet-filter O6): a filter range intersecting a pivot refuses (Excel disables the command);
+    // a filter beside a pivot in its rows is allowed and may hide pivot rows, as Excel's does.
+    const pivot = structure.firstWhere({ r0: covered.r0, r1: covered.r1, c0: range.c0, c1: range.c1 }, hit => hit.kind === 'pivot')
+    if (pivot?.kind === 'pivot') return { ok: false, refusal: pivotRefusal(pivot.record) }
     const merge = structure.firstWhere(coveredBand, hit => hit.kind === 'merge')
     if (merge !== undefined && merge.kind === 'merge') {
       return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }

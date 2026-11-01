@@ -4,7 +4,13 @@ import type { PivotCacheDefinition, PivotDiagnostic, PivotValue } from '../model
 import type { ProfileId } from '../../view/contracts'
 import { daysFromCivil } from '../../formula/serial'
 
-export interface RecordLimits { maxBytes: number; maxRecords: number; maxInlineStrings: number }
+export interface RecordLimits {
+  maxBytes: number
+  maxRecords: number
+  maxInlineStrings: number
+  /** Optional live-pool admission for the decoder's current arrays and growth peak. */
+  admitBytes?: (bytes: number) => boolean
+}
 export const RECORD_LIMITS: Readonly<Record<ProfileId, RecordLimits>> = Object.freeze({
   D: Object.freeze({ maxBytes: 64 * 1024 * 1024, maxRecords: 4_000_000, maxInlineStrings: 1_048_576 }),
   M: Object.freeze({ maxBytes: 16 * 1024 * 1024, maxRecords: 1_000_000, maxInlineStrings: 262_144 }),
@@ -15,7 +21,7 @@ export type RecordColumn =
   | { kind: 'inline'; tag: Uint8Array; num: Float64Array; text: string[]; textIndex: Uint32Array }
 export const VALUE_TAG = Object.freeze({ missing: 0, number: 1, boolean: 2, error: 3, string: 4, date: 5 } as const)
 export interface RecordStore { readonly count: number; readonly columns: ReadonlyArray<RecordColumn | undefined>; readonly bytes: number }
-export type RecordResult = { ok: true; store: RecordStore } | { ok: false; diagnostic: PivotDiagnostic }
+export type RecordResult = { ok: true; store: RecordStore } | { ok: false; diagnostic: PivotDiagnostic; quota?: { requiredBytes: number; limitBytes: number } }
 
 const STRING_BYTES = 48 // retained JS string entry plus UTF-16 payload; matches the source-page estimate.
 const localName = (name: string) => name.slice(name.lastIndexOf(':') + 1)
@@ -92,7 +98,11 @@ interface MutableColumn {
 export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, date1904: boolean): { events: XmlEvents; finish(): RecordResult } {
   let diagnostic: PivotDiagnostic | undefined
   const dbFields = cache.fields.flatMap((field, index) => field.databaseField ? [index] : [])
-  const columns: Array<MutableColumn | undefined> = cache.fields.map(field => !field.databaseField ? undefined : field.sharedItems?.inline === false
+  let quota: { requiredBytes: number; limitBytes: number } | undefined
+  const initialBytes = dbFields.reduce((sum, index) => sum + 16 * (cache.fields[index]!.sharedItems?.inline === false ? 4 : 13), 0)
+  const initialAdmitted = limits.admitBytes?.(initialBytes) ?? true
+  if (!initialAdmitted) quota = { requiredBytes: initialBytes, limitBytes: limits.maxBytes }
+  const columns: Array<MutableColumn | undefined> = cache.fields.map(field => !field.databaseField || !initialAdmitted ? undefined : field.sharedItems?.inline === false
     ? { kind: 'shared', index: new Uint32Array(16) }
     : { kind: 'inline', tag: new Uint8Array(16), num: new Float64Array(16), textIndex: new Uint32Array(16), text: [], textLookup: new Map() })
   let count = 0, capacity = 16, rootSeen = false, rootClosed = false, declaredRecordCount: number | undefined, row: Array<number | InlineValue> | undefined
@@ -103,6 +113,7 @@ export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, 
     diagnostic ??= isLimit ? limitError(message) : parseError(message)
     throw new StopRecords(message)
   }
+  if (!initialAdmitted) diagnostic = { kind: 'unsupported', feature: 'pivot-worker-quota', message: 'Pivot record decode exceeds the worker memory budget.' }
   const attr = (names: readonly string[], values: readonly string[], n: string): string | undefined => {
     for (let i = 0; i < names.length; i++) if (localName(names[i]!) === n) return values[i]
     return undefined
@@ -129,6 +140,7 @@ export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, 
     for (const col of columns) if (col) n += nextCount * (col.kind === 'shared' ? 4 : 13)
     return n
   }
+  const arrayBytesAt = (arrayCapacity: number) => dbFields.reduce((sum, index) => sum + arrayCapacity * (cache.fields[index]!.sharedItems?.inline === false ? 4 : 13), 0)
   const appendRow = () => {
     if (!row) return
     if (rowChildCount !== dbFields.length) fail(`record has ${rowChildCount} values for ${dbFields.length} database fields`)
@@ -147,8 +159,20 @@ export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, 
       const col = columns[fieldIndex]!
       if (col.kind === 'inline' && col.text!.length + strings.size > limits.maxInlineStrings) fail(`pivot inline string count exceeds its limit in field ${fieldIndex}`, true)
     }
-    if (storeBytesAfterRow(count + 1, usedTextBytes + addedTextBytes) > limits.maxBytes) fail('pivot record storage exceeds its byte limit', true)
-    ensureCapacity(count + 1)
+    const nextCount = count + 1
+    if (storeBytesAfterRow(nextCount, usedTextBytes + addedTextBytes) > limits.maxBytes) fail('pivot record storage exceeds its byte limit', true)
+    let nextCapacity = capacity
+    while (nextCapacity < nextCount) nextCapacity = Math.min(Math.max(nextCapacity * 2, nextCount), limits.maxRecords + 1)
+    const growing = nextCapacity !== capacity
+    // During a capacity increase both the old and replacement typed arrays coexist.
+    // Reserve that peak, plus new strings, before ensureCapacity allocates them.
+    const admittedPeak = (growing ? arrayBytesAt(capacity) + arrayBytesAt(nextCapacity) : arrayBytesAt(capacity)) + usedTextBytes + addedTextBytes
+    if (limits.admitBytes && !limits.admitBytes(admittedPeak)) {
+      quota = { requiredBytes: admittedPeak, limitBytes: limits.maxBytes }
+      diagnostic ??= { kind: 'unsupported', feature: 'pivot-worker-quota', message: 'Pivot record decode exceeds the worker memory budget.' }
+      throw new StopRecords(diagnostic.message)
+    }
+    ensureCapacity(nextCount)
     for (let i = 0; i < dbFields.length; i++) {
       const cacheIndex = dbFields[i]!, col = columns[cacheIndex]!, value = row[i]!
       if (col.kind === 'shared') col.index![count] = value as number
@@ -221,10 +245,16 @@ export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, 
   return {
     events,
     finish(): RecordResult {
-      if (diagnostic) return { ok: false, diagnostic }
+      if (diagnostic) return { ok: false, diagnostic, ...(quota ? { quota } : {}) }
       if (!rootSeen || !rootClosed || row || stack.length) return { ok: false, diagnostic: parseError('pivot records XML is incomplete') }
       if (cache.recordCount !== undefined && cache.recordCount !== count) return { ok: false, diagnostic: parseError(`pivot record count ${count} does not match cache count ${cache.recordCount}`) }
       if (declaredRecordCount !== undefined && declaredRecordCount !== count) return { ok: false, diagnostic: parseError(`pivot records count ${count} does not match declared count ${declaredRecordCount}`) }
+      // finish() slices the retained arrays while the construction arrays still exist.
+      const finishPeak = arrayBytesAt(capacity) + arrayBytesAt(count) + usedTextBytes
+      if (limits.admitBytes && !limits.admitBytes(finishPeak)) {
+        quota = { requiredBytes: finishPeak, limitBytes: limits.maxBytes }
+        return { ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-worker-quota', message: 'Pivot record decode exceeds the worker memory budget.' }, quota }
+      }
       const resultColumns = columns.map(col => {
         if (!col) return undefined
         if (col.kind === 'shared') return { kind: 'shared' as const, index: col.index!.slice(0, count) }

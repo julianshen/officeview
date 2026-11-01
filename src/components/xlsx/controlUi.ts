@@ -31,7 +31,10 @@ export const CONTROL_PRIMARY_BTN_CLS = `ov:rounded-control ov:border ov:border-b
 /** The label text follows the box: keep a gap after it. */
 export const CHECKBOX_CLS = `ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-accent ov:p-0.5 ov:mr-2 ${CONTROL_FOCUS}`
 export function failureText(result: Exclude<ControlResult, { snapshot: ControlSnapshot }>): string {
-  if (result.kind === 'refused') return `Operation refused: ${'message' in result.refusal ? result.refusal.message : result.refusal.reason}.`
+  if (result.kind === 'refused') {
+    const detail = 'message' in result.refusal ? result.refusal.message : result.refusal.reason
+    return `Operation refused: ${detail}${/[.!?]$/.test(detail) ? '' : '.'}`
+  }
   return result.kind === 'incomplete' ? 'Source data is incomplete; wait and retry.' : result.kind === 'stale' ? 'Source or view changed; reopen and retry.' : 'Operation cancelled.'
 }
 export function useControlLifetime(props: ControlProps) {

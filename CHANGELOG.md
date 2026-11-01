@@ -48,6 +48,48 @@ in git history.
     guessed.
   - 1,000,000 records compute in about 140 ms (axes and values). The code is in the lazy pivots chunk; the eager
     bundle is unchanged.
+- **Pivot tables you can change, in the interactive viewer.** The ± buttons and field dropdowns now work, with the
+  mouse or the keyboard. The grid stays one Tab stop: move to a cell with a pivot control, then press Alt+↓ to
+  open its filter or report-filter menu, or Alt+→ / Alt+← to expand or collapse its item. The cell's description
+  names the control and its key.
+  - **What you can do:**
+    - expand and collapse an item, an entire field or everything;
+    - choose items;
+    - set a label, value, date or top-10 filter, or clear filters;
+    - sort by label or by value;
+    - pick a report-filter (page) item;
+    - go back with **Reset to saved view**.
+  - **Faithful pivots only.** Only pivots the engine proves faithful to the file's saved cells become interactive.
+    Others stay exactly as saved and say why.
+  - **The result is Excel's.**
+    - Captions are computed as Excel writes them, including the zh-TW ones.
+    - Linked pivot charts redraw, one series per column line.
+    - Columns autofit the way Excel does unless you resized them.
+    - A pivot that refreshes on open is rebuilt from its source range on its first change.
+  - **Formulas follow the change.** Cell references into a pivot, ranges over it and `GETPIVOTDATA` recompute, and so
+    do the charts on those cells.
+    - When a formula can't be recomputed, it keeps its value and the sheet says it may be out of date. That covers
+      formulas whose recompute is over a work limit, and `GETPIVOTDATA` arguments of a shape Excel was not measured on.
+      Each such cell also gets a small corner mark; its tooltip, and the cell's description for screen readers, say
+      why.
+    - Large workbooks opened through the viewer worker don't recompute formulas. They show that notice instead.
+  - **Refusals.**
+    - A change that would grow a pivot over a value or over another pivot commits as Excel 16.114 saves it. The pivot
+      shows one `#SPILL!` cell at its top-left, its other cells are empty, and the column widths are kept. The
+      announcement names the blocking cell. A later change that fits shows the pivot again, and Reset shows its
+      saved view.
+    - A change that would cover a merged cell, a spill range or a noted cell is still refused, with a message that
+      names the cell, because Excel was not measured on those. So is an overlapping change to a pivot with linked
+      charts or page fields.
+    - Sheet sort refuses on a range that touches a pivot, with Excel's message.
+    - Sheet filter refuses on a range inside a pivot. A filter beside a pivot is allowed, as in Excel.
+  - **Large workbooks.** Workbooks opened through the viewer worker change their pivots in the worker, with the same
+    results. A change stays when you switch sheets and back.
+  - **Print** shows a changed pivot as saved, and the formulas and charts that read it print their saved values too.
+  - **Checked against Excel.** The changes are checked against 57 Excel-saved interaction cases built by driving
+    Excel for Mac 16.114, plus 7 hand-run recipes: every expand, collapse, filter, sort and page case matches Excel's
+    saved layout, and so do the chart, autofit, `GETPIVOTDATA` and refresh cases. Details are in
+    `docs/validation/xlsx-pivots.md`.
 
 ## [0.10.0] - 2026-10-28
 

@@ -28,7 +28,7 @@ import type {
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
 import type { OverflowCache } from '../xlsx/view/overflowCache'
-import { MainMemoryLedger, axisBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -50,12 +50,20 @@ import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } fro
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
 import { accountQueryBytes, ledgerPool, WORKER_QUERY_BYTES } from './viewerQueryBudget'
+import { RemotePivotSessions, type RemotePivotApplyPayload } from './viewerRemotePivots'
 
 export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
  * quarter of the main-thread profile budget (§12.4; D 16 MiB, M 8 MiB). */
 export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
 const DRAWING_MEMORY_MESSAGE = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
+function unionUsedRect(base: SourceRect | undefined, overlays: readonly SourceRect[]): SourceRect | undefined {
+  let used = base && { ...base }
+  for (const rect of overlays) used = used
+    ? { r0: Math.min(used.r0, rect.r0), r1: Math.max(used.r1, rect.r1), c0: Math.min(used.c0, rect.c0), c1: Math.max(used.c1, rect.c1) }
+    : { ...rect }
+  return used
+}
 /** FC-T2: no receiving grant fits now; nothing (more) is sent, and the cache may ask again. */
 const DRAWING_WORKER_MEMORY_MESSAGE = "This sheet's drawings could not be prepared within the viewer worker's free memory and are not shown yet"
 function drawingGrantRefusal(command: CommandOf<'read'>, message = DRAWING_MEMORY_MESSAGE): WorkerReply<'read'> {
@@ -116,6 +124,7 @@ export interface RemoteOpen {
   docId: string
   valuePolicy: ValuePolicy
   sheets: readonly { sheetId: string; name: string }[]
+  hasFormulaCellsOutsidePivots?: boolean
   diagnostics: readonly WorkerDiagnostic[]
   layouts: ReadonlyMap<string, SheetLayout>
   formatting?: WorkbookFormatting
@@ -136,7 +145,7 @@ type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns' |
 export async function openRemoteWorkbook(client: ViewerClient, docId: string, blob: Blob, profile: 'D' | 'M'): Promise<WorkerReply<'open'> | RemoteOpen> {
   const open = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId, source: { kind: 'blob', blob }, profile })
   if (open.kind !== 'complete' || open.result.kind !== 'open') return open
-  const { sheets, valuePolicy, formatting } = open.result
+  const { sheets, valuePolicy, formatting, hasFormulaCellsOutsidePivots } = open.result
   const layouts = new Map<string, SheetLayout>()
   const owner = initialWorkbookOwner(docId, sheets)
   for (const sheet of [...sheets.slice(1), ...sheets.slice(0, 1)]) {
@@ -147,7 +156,7 @@ export async function openRemoteWorkbook(client: ViewerClient, docId: string, bl
     }
     layouts.set(sheet.sheetId, active.result.layout)
   }
-  return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts, profile, ...(formatting ? { formatting } : {}) }
+  return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts, profile, ...(hasFormulaCellsOutsidePivots !== undefined ? { hasFormulaCellsOutsidePivots } : {}), ...(formatting ? { formatting } : {}) }
 }
 
 export function isRemoteWorkbook(source: WorkbookSource | undefined): source is RemoteWorkbook {
@@ -160,6 +169,8 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly latestQueries = new Map<string, string>()
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
+  hasFormulaCellsOutsidePivots?: boolean
+  readonly pivotFormulaNoticeSheets = new Set<string>()
   readonly openDiagnostics: readonly WorkerDiagnostic[]
   readonly docId: string
   readonly profile: ProfileId
@@ -183,7 +194,11 @@ export class RemoteWorkbook implements WorkbookSource {
   private columnMetrics = new WeakMap<SheetLayout, ReturnType<typeof createAxisMetrics>>()
   private readonly stores = new Map<string, RemoteSheetStore>()
   private readonly listeners = new Set<() => void>()
-  private readonly structures = new Map<string, { gen: number; merges: readonly XlsxMergeRange[]; state: 'loading' | 'done'; timer?: ReturnType<typeof setTimeout> }>()
+  private readonly structures = new Map<string, { gen: number; merges: readonly XlsxMergeRange[]; sourceMerges: readonly XlsxMergeRange[]; state: 'loading' | 'done'; timer?: ReturnType<typeof setTimeout> }>()
+  private readonly pivotMerges = new Map<string, Map<number, readonly XlsxMergeRange[]>>()
+  private readonly pivotUsedExtents = new Map<string, Map<number, SourceRect | null>>()
+  private readonly pivotProtectedRects = new Map<string, Map<number, readonly SourceRect[]>>()
+  private readonly pivotBaseUsed = new Map<string, SourceRect | undefined>()
   private readonly layouts: Map<string, SheetLayout>
   private statusInFlight = false
   private owner: WorkbookOwner
@@ -199,6 +214,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly sparklineCache: RemoteSparklineCache
   private readonly regionStyleCache: RemoteRegionStyleCache
   private readonly pivotDisplayCache: RemoteRegionStyleCache
+  readonly pivots: RemotePivotSessions
   private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
   private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
@@ -207,6 +223,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.docId = open.docId
     this.valuePolicy = open.valuePolicy
     this.sheets = open.sheets
+    this.hasFormulaCellsOutsidePivots = open.hasFormulaCellsOutsidePivots
     this.openDiagnostics = open.diagnostics.filter(d => d.code !== 'cached-value-policy')
     this.statusMessage = open.diagnostics.find(d => d.code === 'cached-value-policy')?.message
     this.owner = initialWorkbookOwner(open.docId, open.sheets)
@@ -292,11 +309,43 @@ export class RemoteWorkbook implements WorkbookSource {
     }
     this.regionStyleCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4)
     this.pivotDisplayCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4, 'pivotDisplay')
+    this.pivots = new RemotePivotSessions({
+      docId: this.docId, profile: this.profile, client: this.client, isClosed: () => this.closed,
+      // The fit cells' receiving grant (Task 29 r2): reserved before posting, then the reply is charged from arrival
+      // with its stamped size, as `request` charges replies (the grant adopted, any excess on top).
+      replyGrant: {
+        reserve: (owner, bytes) => {
+          if (this.closed || this.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.profile]) return false
+          this.mainLedger.set('replies', owner, bytes)
+          return true
+        },
+        settle: (owner, reply) => {
+          const targets = leaseTargets(reply), bytes = stampedBytes(reply, MAIN_THREAD_BUDGETS[this.profile])
+          const moved = Math.min(bytes, this.mainLedger.ownerBytes('replies', owner))
+          if (moved > 0) this.mainLedger.adoptWhileReachable('replies', owner, 'replies', targets, moved)
+          this.mainLedger.release('replies', owner)
+          if (bytes > moved) this.mainLedger.chargeWhileReachable('replies', targets, bytes - moved)
+        },
+        release: owner => this.mainLedger.release('replies', owner),
+      },
+      committed: (sheetId, pivot, result, valueGen) => this.publishPivotCommit(String(sheetId), pivot, result, valueGen),
+      formulaFlagChanged: (sheetId, hasFormulaCellsOutsidePivots) => {
+        this.hasFormulaCellsOutsidePivots = hasFormulaCellsOutsidePivots
+        if (hasFormulaCellsOutsidePivots) this.pivotFormulaNoticeSheets.add(String(sheetId))
+        else this.pivotFormulaNoticeSheets.delete(String(sheetId))
+        this.notify()
+      },
+      released: (sheetId, pivot) => this.withdrawPivotCommit(String(sheetId), pivot),
+      releaseAcknowledged: (sheetId, valueGen) => this.adoptPivotReleaseValueGen(String(sheetId), valueGen),
+    })
   }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
   regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
+  /** Drops the sheet's table/pivot region layer and its pivot display layer (banding, header and subtotal
+   * styles of the paged pivots): both are keyed on the pivot's placement, which a commit moves. */
+  invalidateRegionStyles(sheetId: string): void { this.regionStyleCache.invalidate(sheetId); this.pivotDisplayCache.invalidate(sheetId) }
   pivotDisplay(sheetId: string): PagedRegionStyleState { return this.pivotDisplayCache.get(sheetId) }
   subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
@@ -375,6 +424,8 @@ export class RemoteWorkbook implements WorkbookSource {
 
   /** The active sheet keeps its cache; inactive sheets' caches are released. */
   activate(sheetId: string): void {
+    const numeric = Number(sheetId)
+    if (Number.isSafeInteger(numeric)) this.pivots.releaseExcept(numeric)
     for (const [id, store] of this.stores) if (id !== sheetId) store.clear()
   }
   identity(sheetId: string): CacheIdentity { return this.identities.get(sheetId) ?? initialIdentity(this.docId, sheetId) }
@@ -442,10 +493,10 @@ export class RemoteWorkbook implements WorkbookSource {
   /** Merged ranges of a sheet from one whole-sheet structural read (bounded by
    * the sheet's merge records). `gen` grows when they arrive; until then, and
    * while the import has not reached the sheet's end, the list is empty. */
-  merges(sheetId: string): { gen: number; merges: readonly XlsxMergeRange[] } {
+  merges(sheetId: string): { gen: number; merges: readonly XlsxMergeRange[]; sourceMerges: readonly XlsxMergeRange[] } {
     let entry = this.structures.get(sheetId)
     if (!entry) {
-      this.structures.set(sheetId, entry = { gen: 0, merges: [], state: 'loading' })
+      this.structures.set(sheetId, entry = { gen: 0, merges: [], sourceMerges: [], state: 'loading' })
       void this.loadStructure(sheetId)
     }
     return entry
@@ -462,7 +513,8 @@ export class RemoteWorkbook implements WorkbookSource {
       const layout = await this.fetchLayout(sheetId)
       if (this.closed) return
       const relaid = layout !== undefined && this.setLayout(sheetId, layout)
-      if (result.merges.length) entry.merges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
+      entry.sourceMerges = result.merges.map(merge => ({ minRow: merge.range.r0, maxRow: merge.range.r1, minCol: merge.range.c0, maxCol: merge.range.c1 }))
+      this.refreshPivotMerges(sheetId, entry)
       if (relaid || result.merges.length) entry.gen++
       entry.state = 'done'
       this.completed.add(sheetId)
@@ -506,6 +558,87 @@ export class RemoteWorkbook implements WorkbookSource {
     this.geometries.delete(sheetId)
     this.stores.get(sheetId)?.relayout()
     return true
+  }
+  /** The worker is authoritative for committed pivot values; publish the same
+   * generation, merges and used extent to the main geometry before notifying. */
+  private publishPivotCommit(sheetId: string, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void {
+    if (this.closed || !this.sheets.some(sheet => sheet.sheetId === sheetId)) return
+    if (result.hasFormulaCellsOutsidePivots !== undefined) this.hasFormulaCellsOutsidePivots = result.hasFormulaCellsOutsidePivots
+    let pivots = this.pivotMerges.get(sheetId)
+    if (!pivots) this.pivotMerges.set(sheetId, pivots = new Map())
+    pivots.set(pivot, result.merges.map(rect => ({ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 })))
+    const current = this.layout(sheetId)
+    if (!this.pivotBaseUsed.has(sheetId)) this.pivotBaseUsed.set(sheetId, current.used)
+    let extents = this.pivotUsedExtents.get(sheetId)
+    if (!extents) this.pivotUsedExtents.set(sheetId, extents = new Map())
+    extents.set(pivot, result.overlayExtent)
+    let protectedByPivot = this.pivotProtectedRects.get(sheetId)
+    if (!protectedByPivot) this.pivotProtectedRects.set(sheetId, protectedByPivot = new Map())
+    protectedByPivot.set(pivot, result.protectedRects)
+    const used = unionUsedRect(this.pivotBaseUsed.get(sheetId), [...extents.values()].filter((rect): rect is SourceRect => rect !== null))
+    const { used: _oldUsed, ...withoutUsed } = current
+    this.setLayout(sheetId, { ...withoutUsed, ...(used ? { used } : {}) })
+    const entry = this.merges(sheetId)
+    this.refreshPivotMerges(sheetId, entry)
+    const old = this.identity(sheetId)
+    if (valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
+    this.owner = { ...this.owner, workbookValueGen: Math.max(this.owner.workbookValueGen + 1, valueGen), sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
+    this.stores.get(sheetId)?.clear()
+    // The replacement chart models live as long as the drawing cache shows them: charged to its pool (R2-4).
+    for (const { chart } of result.charts) if (!this.mainLedger.hasLifetime(chart)) this.mainLedger.chargeWhileReachable('drawings', [chart], estimatePayloadBytes(chart))
+    this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), result.charts)
+    entry.gen++
+    this.invalidateRegionStyles(sheetId)
+    this.notify()
+  }
+  private withdrawPivotCommit(sheetId: string, pivot: number): void {
+    if (this.closed) return
+    const hadExtent = this.pivotUsedExtents.has(sheetId)
+    const pivots = this.pivotMerges.get(sheetId)
+    pivots?.delete(pivot)
+    if (!pivots?.size) this.pivotMerges.delete(sheetId)
+    const extents = this.pivotUsedExtents.get(sheetId)
+    extents?.delete(pivot)
+    if (!extents?.size) this.pivotUsedExtents.delete(sheetId)
+    const protectedByPivot = this.pivotProtectedRects.get(sheetId)
+    protectedByPivot?.delete(pivot)
+    if (!protectedByPivot?.size) this.pivotProtectedRects.delete(sheetId)
+    const current = this.layout(sheetId), base = this.pivotBaseUsed.get(sheetId)
+    const used = unionUsedRect(base, [...(extents?.values() ?? [])].filter((rect): rect is SourceRect => rect !== null))
+    if (hadExtent) {
+      const { used: _oldUsed, ...withoutUsed } = current
+      this.setLayout(sheetId, { ...withoutUsed, ...(used ? { used } : {}) })
+    }
+    if (!extents?.size) this.pivotBaseUsed.delete(sheetId)
+    const entry = this.merges(sheetId)
+    this.refreshPivotMerges(sheetId, entry)
+    entry.gen++
+    this.stores.get(sheetId)?.clear()
+    this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), [])
+    this.invalidateRegionStyles(sheetId)
+    this.notify()
+  }
+  /** The worker's release reinstalled the sheet's overlay without the pivot: its values moved to `valueGen`. Only the
+   * value generation follows (the display was withdrawn when the release was sent, `withdrawPivotCommit`). */
+  private adoptPivotReleaseValueGen(sheetId: string, valueGen: number): void {
+    if (this.closed || !this.sheets.some(sheet => sheet.sheetId === sheetId)) return
+    const old = this.identity(sheetId)
+    if (valueGen <= old.valueGen) return
+    this.identities.set(sheetId, { ...old, valueGen })
+    this.owner = { ...this.owner, workbookValueGen: this.owner.workbookValueGen + 1, sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
+    this.stores.get(sheetId)?.clear()
+    this.notify()
+  }
+  private refreshPivotMerges(sheetId: string, entry: { merges: readonly XlsxMergeRange[]; sourceMerges?: readonly XlsxMergeRange[] }): void {
+    const additions = [...(this.pivotMerges.get(sheetId)?.values() ?? [])].flat()
+    const protectedRects = [...(this.pivotProtectedRects.get(sheetId)?.values() ?? [])].flat()
+    const seen = new Set<string>()
+    entry.merges = [...(entry.sourceMerges ?? entry.merges).filter(merge => !protectedRects.some(rect =>
+      merge.minRow <= rect.r1 && merge.maxRow >= rect.r0 && merge.minCol <= rect.c1 && merge.maxCol >= rect.c0)), ...additions].filter(merge => {
+      const key = JSON.stringify([merge.minRow, merge.maxRow, merge.minCol, merge.maxCol])
+      if (seen.has(key)) return false
+      seen.add(key); return true
+    })
   }
   /** Publishes a newer layout (the import's final metadata) and its generation. */
   publishLayout(sheetId: string, layout: SheetLayout): void {
@@ -865,6 +998,7 @@ export class RemoteWorkbook implements WorkbookSource {
   async release(): Promise<void> {}
   async close(): Promise<void> {
     if (this.closed) return
+    this.pivots.close()
     this.closed = true
     this.listeners.clear()
     this.sparklineEvictionListeners.clear()
@@ -889,6 +1023,8 @@ export class RemoteWorkbook implements WorkbookSource {
     this.columnMetrics = new WeakMap()
     this.layouts.clear()
     this.structures.clear()
+    this.pivotMerges.clear()
+    this.pivotUsedExtents.clear(); this.pivotProtectedRects.clear(); this.pivotBaseUsed.clear()
     this.latestQueries.clear()
     this.failures.clear()
     try {

@@ -242,6 +242,33 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     return refused
   } finally { if (owner) owner.workspace.release(copyTag) }
 }
+/**
+ * A refill from data built outside the range fill (plan Task 30: a pivot chart's series, categories and caches rebuilt
+ * from its pivot's current layout, whose points are the layout's lines, not a worksheet range's cells). `build` makes
+ * the next model from `model`, admitting every allocation through `charge` before it is made; the result is prepared
+ * (stage 1 axes, which charge their own record) and adopted under a fresh tag in the source model's chart workspace
+ * (else `options.workspace`; neither: uncharged, as an unowned fill is).
+ *
+ * Ruling (Task 30): the source keeps its own charge and its owner. It stays live beside every refill made from it (a
+ * pivot session rebuilds from the saved chart on each change and on reset, and an apply that is never committed is
+ * discarded), so a refill does not succeed it: each refill is a model of its own, refunded by `releaseChartModel` or
+ * on collection. A refused admission refunds what the refill charged and returns the source as a refused placeholder
+ * (`refused: true`), unowned, which the caller turns into its own refusal.
+ */
+export function refillChartModel(model: ChartModel, build: (charge: (bytes: number) => void) => ChartModel, options: { workspace?: ChartWorkspace } = {}): ChartModel {
+  const source = chartModelOwner(model)?.workspace ?? options.workspace
+  const owner = source ? modelOwner(source) : undefined
+  const charge = (bytes: number) => { if (owner && !owner.workspace.reserve(bytes, owner.tag)) throw new ChartRefusal() }
+  try {
+    const next = prepareChartAxes(build(charge), owner)
+    if (owner) adoptChartModel(next, owner)
+    return next
+  } catch (error) {
+    if (owner) owner.workspace.release(owner.tag)
+    if (!(error instanceof ChartRefusal)) throw error
+    return { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true }
+  }
+}
 /** The label bytes a ChartEx parse admitted (spec 7 budget): title, axis titles, series names and every cached
  * string level (series categories from a cache share those strings, so they are not counted twice). */
 function admittedLabelBytes(model: ChartModel): number {

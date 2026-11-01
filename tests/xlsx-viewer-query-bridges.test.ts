@@ -433,8 +433,16 @@ it('counts unavailable uncached engine formulas and excludes authored hidden col
 it('preserves optional occupancy and settlement capabilities in bounded stores', async () => {
   const source = createObjectWorkbookSource(document(), 'doc'), store = source.store('s')
   const settle = vi.fn(), scanOccupied = vi.fn(async function* () { yield { items: [{ row: 2, col: 0 }], stamp: store.stamp, completeness: 'complete' as const } })
-  const bounded = boundedQueryStore({ ...store, scanOccupied, settle }, 1024)
+  const setValueOverlay = vi.fn(), readRegionStyles = vi.fn()
+  // `stamp` is required by SourceStore but is a prototype getter, so copying the
+  // adapter into this plain test wrapper must preserve it explicitly.
+  const bounded = boundedQueryStore({ ...store, stamp: store.stamp, structureGen: store.structureGen, scanOccupied, settle, setValueOverlay, readRegionStyles }, 1024)
   expect(bounded.scanOccupied).toBeTypeOf('function')
+  expect(bounded.setValueOverlay).toBeTypeOf('function')
+  expect(bounded.readRegionStyles).toBeTypeOf('function')
+  expect(bounded.structureGen).toBe(store.structureGen)
+  bounded.setValueOverlay!(undefined)
+  expect(setValueOverlay).toHaveBeenCalledWith(undefined)
   const pages = []
   for await (const page of bounded.scanOccupied!({ range: { r0: 0, r1: 4, c0: 0, c1: 0 }, limit: 5 }, { signal: new AbortController().signal, stamp: store.stamp })) pages.push(page)
   expect(pages[0].items).toEqual([{ row: 2, col: 0 }])

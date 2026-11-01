@@ -7,8 +7,13 @@ import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/mode
 import type { TableMetadata } from '../formula/types'
 import type { DxfStyle, TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
+import type { PivotDelta } from '../pivots/session/delta'
+import type { ChartModel } from '../../charts/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
+/** The main-ledger grant a pivot open or apply reserves for its reply's fit cells (Task 29): the worker stops the
+ * cells within it (none when the grant is 0). */
+export const PIVOT_FIT_REPLY_BYTES = 4 * 1024 * 1024
 export const MAX_REGION_STYLE_TABLES = 512
 /** Largest built-in table-style descriptor measured across all 144 table/pivot
  * names: 25,154 B excluding the shared workbook theme; 32 KiB leaves 1.3x headroom. */
@@ -82,6 +87,39 @@ export type CellRead =
   | { kind: 'unavailable'; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
 
 export interface SourceStamp { docId: string; sheetId: string; valueGen: number }
+/** Pool estimate for each cell owned by a committed worker pivot overlay. */
+export const PAGED_CELL_BYTES_ESTIMATE = 128
+/** Committed pivot values. `undefined` means the coordinate is not owned;
+ * `null` explicitly clears a cell inside an owned rectangle. */
+export interface ValueOverlayCell { value: XlsxCell['value']; valueIsError?: boolean; numFmtId?: number }
+export interface ValueOverlay {
+  /** Cells the overlay replaces, including explicit null blanks (vacated cells). */
+  readonly rects: readonly SourceRect[]
+  /** The pivots' protected bounds (at least the current output): guarded from sheet sort/filter and
+   * joined to the extent. Every non-null `cell()` lies inside them (the extent bounds Find and copy);
+   * `setValueOverlay` refuses an overlay that breaks this with a TypeError naming the cell. Vacated cells
+   * are in `rects` and read empty; the stores keep every saved pivot area (with its page-field cells)
+   * guarded on their own, so vacated cells inside one stay protected whatever is named here (S3-G, S3-L).
+   * Required: a fallback to `rects` would grow the extent over vacated cells. The stores derive the used
+   * extent from these bounds; no separate row/column count is part of the overlay. */
+  readonly protectedRects: readonly SourceRect[]
+  cell(row: number, col: number): ValueOverlayCell | null | undefined
+  readonly merges: readonly SourceRect[]
+}
+/** The used extent (exclusive row/column counts) an overlay adds: its protected bounds, as the stores' `extent`. */
+export function overlayUsedCounts(rects: readonly SourceRect[]): { usedRows: number; usedCols: number } {
+  let usedRows = 0, usedCols = 0
+  for (const rect of rects) { usedRows = Math.max(usedRows, rect.r1 + 1); usedCols = Math.max(usedCols, rect.c1 + 1) }
+  return { usedRows, usedCols }
+}
+/** Bounding worksheet rectangle occupied by saved/current pivot areas. `null` means no overlay extent. */
+export function overlayUsedExtent(rects: readonly SourceRect[]): SourceRect | null {
+  if (!rects.length) return null
+  return rects.reduce((bounds, rect) => ({
+    r0: Math.min(bounds.r0, rect.r0), r1: Math.max(bounds.r1, rect.r1),
+    c0: Math.min(bounds.c0, rect.c0), c1: Math.max(bounds.c1, rect.c1),
+  }), { ...rects[0]! })
+}
 export interface ReadOptions { signal: AbortSignal; stamp: SourceStamp }
 /** Cursors belong to the original query/stamp; owner changes invalidate them (§4.1).
  * readRows/queryColumn/scanPopulated/queryOverview publish expected operational
@@ -213,8 +251,17 @@ export interface RangeCompletion {
  * bounded by its limit. External custom providers must meet the same contract. */
 export interface SourceStore {
   readonly stamp: SourceStamp
+  /** Structural generation for geometry-affecting metadata, including overlay merges. */
+  readonly structureGen?: number
   readonly valuePolicy: ValuePolicy
   readonly extent: { rows: 1048576; cols: 16384; used?: SourceRect }
+  /** Publish a committed pivot overlay; stores advance valueGen atomically. */
+  setValueOverlay?(overlay: ValueOverlay | undefined): void
+  /** Resident: the sheet's cell values changed in place (a dependent recompute after a pivot change wrote formula
+   * results, or put the saved ones back); advances valueGen so value-keyed consumers (tiles, find, filter value
+   * lists) re-read. `rows`: its row set changed too (a dependent spill grew into new rows or left rows empty), so the
+   * store takes its row inventory and used extent again. */
+  noteValuesChanged?(options?: { rows?: boolean }): void
   readCell(at: SourceCell, options: ReadOptions): Promise<CellRead>
   readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
   /** Ordering contract (§4.1; enforced by the worker session since S4.2): the
@@ -347,11 +394,14 @@ export interface StructuralResult {
   tables: readonly TableExtent[]
   spills: readonly SpillExtent[]
   drawings: readonly DrawingAnchor[]
+  /** Pivot output rectangles are protected from sheet-level sort/filter. */
+  pivots?: readonly SourceRect[]
   missing: readonly SourceRect[]
   error?: SourceFailure
 }
 /** Refusals never publish a changed view owner, spec §§4.4, 6.1, 6.3. */
 export type OperationRefusal =
+  | { reason: 'pivot'; range: SourceRect; message: string }
   | { reason: 'formula-value-unavailable'; count: number; firstAddress: SourceCell }
   | { reason: 'merge' | 'fixed-array' | 'dynamic-spill' | 'outside-column-data'; range: SourceRect }
   | { reason: 'drawing-impact'; drawingId: string }
@@ -639,6 +689,11 @@ export type WorkerCommand =
   | { kind: 'valueQuery'; requestId: string; owner: CacheIdentity; query: ColumnQuery }
   | { kind: 'search'; requestId: string; owner: WorkbookOwner; query: SearchQuery; cursor?: string }
   | { kind: 'read'; requestId: string; owner: CacheIdentity; query: SourceReadQuery }
+  | { kind: 'pivotOpen'; requestId: string; docId: string; sheetId: string; pivot: number; grantBytes: number; /** Main's grant for the fit cells (Task 29 r2; absent: PIVOT_FIT_REPLY_BYTES, 0: none). */ fitGrantBytes?: number }
+  | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; /** Latest revision the receiver has committed. */ baseRevision: number; /** Unique receiver request sequence, used only to cancel its stage. */ revision: number; delta: PivotDelta | 'reset'; grantBytes: number; /** As pivotOpen's. */ fitGrantBytes?: number }
+  | { kind: 'pivotCommit'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number }
+  | { kind: 'pivotFormulaStatus'; requestId: string; docId: string; sheetId: string }
+  | { kind: 'pivotRelease'; requestId: string; docId: string; sheetId: string; pivot: number }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }
   | { kind: 'close'; requestId: string; docId: string }
 
@@ -675,7 +730,7 @@ export type WorkerReplyBase<K extends WorkerCommandKind> =
     replyBytes?: number
   } : never
 export type WorkerResult =
-  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; formatting?: WorkbookFormatting }
+  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; hasFormulaCellsOutsidePivots?: boolean; formatting?: WorkbookFormatting }
   | { kind: 'activateSheet'; sheetId: string; layout?: SheetLayout }
   | { kind: 'prepareColumns'; cols: Uint16Array }
   | { kind: 'view'; delta: ViewCommitDelta }
@@ -683,6 +738,11 @@ export type WorkerResult =
   | { kind: 'valueQuery'; page: Page<ColumnEntry> }
   | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number; page?: FindPage }
   | { kind: 'read'; result: SourceReadResult }
+  | { kind: 'pivotOpen'; /** Last worker-committed wire revision. */ revision: number; def: PivotTableDefinition; /** The menus' model (Task 28), built where the cache lives. */ menu: import('../pivots/session/menu').PivotMenuModel; /** The session's value cells a fit reads (Task 29: the main thread's autofit fits them); absent past the payload cap. */ cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
+  | { kind: 'pivotApply'; /** Worker-assigned candidate revision; commit only this value. */ revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; /** The candidate is the pivot's saved view (Ruling S3-AK: a sheet switch may release it). */ atSaved?: true; def: PivotTableDefinition; menu: import('../pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: ChartModel }[]; /** As pivotOpen's. */ cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
+  | { kind: 'pivotCommit'; revision: number; valueGen: number; hasFormulaCellsOutsidePivots?: boolean } | { kind: 'pivotCommit'; refused: 'stale' }
+  | { kind: 'pivotFormulaStatus'; hasFormulaCellsOutsidePivots?: boolean }
+  | { kind: 'pivotRelease'; released: boolean; valueGen?: number }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).
  * Sort/filter publish one view delta; other completions match their command. */

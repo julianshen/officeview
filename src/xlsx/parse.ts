@@ -31,7 +31,7 @@ import { PackageError } from '../core/package-error'
 import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
 import { resolveWorkbookSparklines } from './sparklines/resolve'
-import { controlIds, parsePivotRegion, PIVOT_PART_MAX_BYTES, type ControlPartRef } from './pivots/stub'
+import { controlIds, isNoteRelationship, NOTE_PART_MAX_BYTES, noteCells, parsePivotRegion, PIVOT_PART_MAX_BYTES, recordNoteCells, type ControlPartRef } from './pivots/stub'
 import { attachPivotTables, loadSheetControls } from './pivotLoader'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
@@ -425,6 +425,13 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         } catch {
           (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}` })
         }
+      }
+      // Ruling S3-AC: a pivot sheet's noted cells count as occupied when the pivot grows (unreadable: all of them).
+      if (sheet.pivotRegions?.length) for (const rel of wsRelTargets.values()) {
+        if (!isNoteRelationship(rel.type)) continue
+        let cells: number[] | undefined
+        try { cells = noteCells(await pkg.prefixText(resolvePartTarget(sheetPath, rel.target), NOTE_PART_MAX_BYTES)) } catch { cells = undefined }
+        recordNoteCells(sheet, cells)
       }
       if (tablePartDecls.length === 0) {
         if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)

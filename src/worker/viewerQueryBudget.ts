@@ -79,7 +79,7 @@ export function boundedQueryStore(store: SourceStore, budget: number, emitted?: 
     }, pool, hostYield)
     return accounted instanceof Promise ? accounted.then(done) : done(accounted)
   }
-  return {
+  const bounded: SourceStore = {
     get stamp() { return store.stamp },
     get extent() { if (!fullDomain) return store.extent; const { used: _used, ...extent } = store.extent; return extent },
     get valuePolicy() { return store.valuePolicy },
@@ -114,4 +114,13 @@ export function boundedQueryStore(store: SourceStore, budget: number, emitted?: 
     ...(store.settle ? { settle: (payload: object) => store.settle!(payload) } : {}),
     release: () => store.release(),
   }
+  // Preserve optional adapter capabilities through this read facade. Keep each
+  // absent capability absent so callers can continue to feature-detect it.
+  if (store.structureGen !== undefined) Object.defineProperty(bounded, 'structureGen', { enumerable: true, get: () => store.structureGen })
+  if (store.setValueOverlay) bounded.setValueOverlay = overlay => store.setValueOverlay!(overlay)
+  if (store.readDrawings) bounded.readDrawings = (...args) => store.readDrawings!(...args)
+  if (store.readSparklines) bounded.readSparklines = (...args) => store.readSparklines!(...args)
+  if (store.readRegionStyles) bounded.readRegionStyles = (...args) => store.readRegionStyles!(...args)
+  if (store.readPivotDisplay) bounded.readPivotDisplay = (...args) => store.readPivotDisplay!(...args)
+  return bounded
 }

@@ -435,6 +435,9 @@ export interface PivotTableDefinition {
   customListSort: boolean
 
   location: PivotLocation
+  /** Viewer only (Ruling S3-AO): the pivot spilled — its change would cover this blocking cell, so it shows one
+   * #SPILL! cell at its location's top-left, as Excel 16.114 saves it. Never parsed from a file. */
+  spill?: { row: number; col: number }
   fields: PivotField[]
   /** Field indices; `PIVOT_VALUES_FIELD` (-2) is the Values pseudo-field. */
   rowFields: number[]

@@ -70,6 +70,14 @@ describe('S9 atomic sort modal', () => {
     expect(f.fixture.publications).toBe(0)
     expect(f.applied).not.toHaveBeenCalled()
   })
+  it('preserves the current PivotTable refusal punctuation', async () => {
+    const f = setup(), client = createControlsClient({ ...f.fixture.options, stageSort: async () => ({ kind: 'refused', refusal: { reason: 'pivot', range: f.fixture.range, message: "This change can't be made to a PivotTable." } }) })
+    const ui = render(<SortDialog {...f.props} client={client} />)
+    await waitFor(() => expect(ui.getByRole('textbox', { name: 'Column level 1' })).toBeTruthy())
+    fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+    await waitFor(() => expect(f.notice).toHaveBeenCalledWith("Operation refused: This change can't be made to a PivotTable."))
+    expect(f.fixture.publications).toBe(0)
+  })
 })
 
 it('sort Cancel/reopen resets private levels and never leaves an empty initial draft', async () => {

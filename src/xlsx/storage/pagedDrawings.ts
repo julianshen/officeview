@@ -268,15 +268,19 @@ class RangePackage extends OfficePackage {
 /** Resolve one sheet's pivot definitions through the same bounded package reader as drawings. */
 export async function readPagedPivotDisplayParts(source: { src: RangeSource; inventory: ZipInventory }, input: {
   sheetId: string; sheetName: string; pivotRegions: ReadonlyMap<string, readonly PivotRegionRef[]>
-}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory, pivotPartBytes?: number): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'diagnostics'>> {
+}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory, pivotPartBytes?: number): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'diagnostics'> & { allPivotTables: readonly PivotTableDefinition[]; pivotCaches: ReadonlyMap<number, import('../pivots/model').PivotCacheDefinition> }> {
   const limits = pagedDrawingLimits(profile, undefined, pivotPartBytes)
   const pkg = new RangePackage(source.src, source.inventory, limits, signal, memory, profile)
   const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
   let pivotTables: PivotTableDefinition[] = []
+  let allPivotTables: readonly PivotTableDefinition[] = []
+  let pivotCaches: ReadonlyMap<number, import('../pivots/model').PivotCacheDefinition> = new Map()
   try {
     if (input.pivotRegions.size) {
       const parsed = await (await import('../pivots/load')).loadPivotWorkbook(pkg, input.pivotRegions)
+      allPivotTables = parsed.tables
       pivotTables = parsed.tables.filter(table => table.sheet === input.sheetName)
+      pivotCaches = parsed.caches
       const sheetParts = new Set(input.pivotRegions.get(input.sheetName)?.map(region => region.partPath) ?? [])
       const cacheParts = new Set(pivotTables.map(table => table.cachePartPath).filter((partPath): partPath is string => Boolean(partPath)))
       diagnostics.push(...parsed.diagnostics.filter(diagnostic =>
@@ -290,7 +294,7 @@ export async function readPagedPivotDisplayParts(source: { src: RangeSource; inv
     diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Pivot display metadata could not be read', ...(partPath ? { partPath } : {}) })
   }
   diagnostics.push(...pkg.finish().map(item => ({ kind: 'unsupported' as const, feature: item.code, message: item.message, partPath: item.partId })))
-  return { pivotTables, diagnostics }
+  return { pivotTables, diagnostics, allPivotTables, pivotCaches }
 }
 
 /**

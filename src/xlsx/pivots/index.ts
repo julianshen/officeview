@@ -2,11 +2,15 @@
 import { registerPivotEngine } from '../pivotLoader'
 import { pivotStyleRegions } from './regions'
 import { paintPivotButtons } from './buttons'
+export { dropdownBox, drillBox, pivotButtons, PX_PER_PT } from './buttons'
+export type { ButtonPlacement } from './buttons'
+export { savedPivotLayout } from './savedLayout'
 import { loadSheetControls } from './slicers/load'
 import { paintControl } from './slicers/paint'
+import { pivotRuntimeFor } from './session/runtime'
 
-export { loadPivotWorkbook } from './load'
-// The Stage 2 engine (library only: no runtime caller yet). Exported here so it lives in this lazy chunk.
+export { loadPivotWorkbook, retainPivotRuntime } from './load'
+// The Stage 2 engine. Exported here so it lives in this lazy chunk.
 export { decodeRecords, isoToSerial, recordEvents, RECORD_LIMITS, VALUE_TAG } from './engine/records'
 export type { RecordColumn, RecordLimits, RecordResult, RecordStore } from './engine/records'
 export { initialViewState } from './engine/view'
@@ -14,11 +18,24 @@ export type { DataFieldState, FieldState, PageState, PivotViewState } from './en
 /** `computeAxes` has no date-system input; 1904 workbooks with date filters must use `computePivot`, which refuses them. */
 export { computeAxes, lineCarriesValues, NO_LINE, subtotalTypes } from './engine/axes'
 export type { EngineResult, PivotAxes } from './engine/axes'
-export { liveDefinition, placeCells } from './engine/place'
+export { liveDefinition, pivotItemLabel, placeCells } from './engine/place'
 export type { PivotCellValue, PivotLayout, PivotLayoutCell, PivotValueGrid, PlaceOptions } from './engine/place'
 export { computePivot } from './engine/compute'
 export { computeValues } from './engine/values'
 export { checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader } from './engine/faithful'
 export type { CellDiff, CellReader, FaithfulOptions, FaithfulResult, SavedCell } from './engine/faithful'
+export type { CaptionArg, CaptionArgs, CaptionKind, CaptionRef, CaptionSlot } from './engine/place'
+// The Stage 3 pivot session (Task 25): deltas, captions rule, open/apply/commit/reset, and the resident runtime.
+export { applyDelta, PIVOT_DELTA_KINDS } from './session/delta'
+export type { PivotDelta, PivotDeltaKind } from './session/delta'
+export { captionKey, captionRule, MEASURED_CAPTION_TABLES, resolveCaptions, savedCaptions, ZH_TW_CAPTIONS } from './session/captions'
+export type { CaptionRule, CaptionTable } from './session/captions'
+export { openPivotSession, ORACLE_VERIFIED_KINDS, pivotOverlapMessage, PIVOT_REFRESH_NOTICE } from './session/session'
+export { fitChars, macDigitWidth, PIVOT_FIT_INDENT_PT, pivotAutofit, pivotColumnFits, viewerFitTolerance } from './session/autofit'
+export type { PivotFitInput, PivotFitMeasure } from './session/autofit'
+export { recordsFromSource, refreshDefinition, savedCaptionLayout, worksheetSourceRange } from './session/refresh'
+export type { ChartGate, PivotApplyResult, PivotSession, PivotSessionInput } from './session/session'
+export { pivotRuntimeFor } from './session/runtime'
+export type { PivotRuntime, RecordLease, RecordLeaseResult, RecordsSource } from './session/runtime'
 
-registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl })
+registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl, runtimeFor: pivotRuntimeFor })
