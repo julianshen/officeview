@@ -1775,9 +1775,125 @@ export interface PivotGroupDialogProps {
 - [ ] **Step 4: Run all gates and lazy-chunk budget report.** Run `npx tsc --noEmit -p .`, `bun scripts/check-eager.ts`, `bun scripts/eager-budget.ts` (confirm `dist/index.js` remains < 38,720 B gzip and report lazy `pivots` / `PivotButtonLayer` chunk delta), Stage 2 pivot benchmark, and the full `npx vitest run` suite (rerunning known flake `tests/fc-t2-drawing-reply-grant.test.ts` alone if needed).
 - [ ] **Step 5: Documentation, whole-branch review, and PR 4.** Update `docs/validation/xlsx-pivots.md` and `CHANGELOG.md`, run the whole-branch review (`codex`), open PR 4 (`feature/pivots-s4` → `main`), trigger the Codex bot, wait for CI green, and request owner approval to merge.
 
-## Stage 5: slicer and timeline interaction (PR 5) — refined at stage start
+## Stage 5: slicer and timeline interaction (PR 5) — refined 2026-11-02
 
-- **Task 39. Slicer controls (Claude opus).** Click, Ctrl/⌘-click, the Multi-Select toggle (AGY-7), clear, and cross-filter states (§7.2).
-- **Task 40. Timeline controls (codex).** Period select by click or drag, and level changes.
-- **Task 41. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`; `Reset to saved view` on a pivot (from the field menu or field list, §6.7 AGY-11) also restores any live slicers and timelines driving that pivot to the file's saved state.
-- **Task 42. Stage 5 oracle, verification and the final whole-feature review (orchestrator).**
+**Revision note.** This replaces the four-line Stage 5 stub. The Excel interaction oracle comes first; Stage 1 established saved control models, item states, styles and geometry, but masked the slicer header icons and timeline selection bar. Stage 5 measures click, modifier, clear, date-boundary, cross-filter and linkage rules before exposing them. Work is split into slicer UI, timeline UI, linked pivot/table filtering, and final verification on resident and worker/paged paths.
+
+**Codebase facts (recon at feature/pivots-s4; line numbers are at this refinement):**
+- **Saved controls already resolve and paint lazily.** src/xlsx/pivots/slicers/model.ts:31-49,76-88 defines SlicerModel and TimelineModel. Slicer items have selected/noData state; timelines carry UTC range, optional selection, level and scroll position. src/xlsx/pivots/slicers/load.ts:90-143 resolves workbook caches and worksheet parts; src/xlsx/pivots/slicers/paint.ts:272-362 paints the saved model. src/xlsx/pivots/index.ts:1-41 registers the loader and painter inside the lazy pivots chunk. Keep the Stage 1 display path unless measured interactions require a shared model extension.
+- **Stage 1 is display-only.** tests/xlsx-slicers-display.test.ts and docs/validation/xlsx-pivots.md:167-198,267-278,460-529 pin saved pixels and selected/no-data paint states. References slicer-light1, slicer-two-column, slicer-no-data, slicer-scrolled, measure-timeline-selection and the four timeline levels do not establish mouse or keyboard state changes. The two slicer header icons and timeline clear icon were masked (xlsx-pivots.md:267-268).
+- **Pivot and table filter primitives differ.** src/xlsx/pivots/session/delta.ts:396-414 has items and page deltas for one pivot session. page is one field's page selection and cannot be assumed to represent a slicer on any axis or a control driving several sessions. src/xlsx/pivots/session/session.ts:390-424 stages and commits one session and owns its data/layout holds. Stage 5 needs a workbook-scoped transaction rather than sequentially publishing partial pivot commits.
+- **Worker protocol is per pivot today.** src/xlsx/view/contracts.ts:682-698 has pivotOpen/pivotApply/pivotCommit/pivotRelease; src/worker/viewerSession.ts:1326,1521,1612 performs per-pivot open/apply/commit. A linked control needs a bounded stage/commit protocol that prepares all targets before publishing any, or an equivalent proven atomic coordinator.
+- **Table filters already have a bounded path.** src/xlsx/view/contracts.ts:468-490 defines FilterSpec, ValuesFilter and membership references. src/components/xlsx/viewerControlsClient.ts:291-304,332-377 stages resident/remote filters, uses FilterEngine for typed rules and the prepared value-membership compiler for kind values. src/xlsx/view/filter.ts:98-112,183-220 provides classification and row matching and delegates values membership to the prepared lane. Table slicers must reuse this path, including its work budgets, row-set semantics, cancellation and admission.
+- **Table slicer parsing is intentionally incomplete.** src/xlsx/pivots/slicers/parseSlicers.ts:53-85,104-118 parses tabular pivot caches and recognizes tableSlicerCache, but buildSlicerModel refuses table caches at lines 107-110. Stage 5 supports only the table-cache subset verified by the oracle; OLAP/data-model caches and unsupported table metadata keep saved display/fallback.
+- **The lazy boundary is reusable.** src/components/xlsx/InteractiveSheetDoc.tsx:1454-1463,1667-1687 loads PivotButtonLayer dynamically for interactive pivot sheets and chooses resident or remote clients. Add controls to this lazy path (or a sibling lazy chunk imported only for sheets with supported controls); do not add slicer/timeline runtime to the eager graph. dist/index.js stays under 38,720 B gzip.
+- **Control inputs are capped.** src/xlsx/pivots/slicers/parseSlicers.ts:22-25,34-48,63-85 bounds slicers per part and cache items; src/xlsx/pivots/slicers/parseTimelines.ts:20,35-49 bounds timelines per part. Preserve caps; admit selection vectors, target lists, staged layouts and replies before allocation.
+
+### Global Constraints and scope rulings
+
+- **Oracle before interaction (binding, §7.2, §9, §11).** Task 39 owns expected Excel states. A UI action is exposed only after its oracle case passes on Excel 16.114 and both resident and worker/paged paths. Anything unmeasured stays disabled with a typed diagnostic and announcement; stored selected flags do not establish click semantics.
+- **One committed state across targets.** Stage all linked pivot layouts, overlays, charts, dependent-value notices, table filter/view changes and visible control state before publishing any. A stale revision, quota refusal, cancellation, overlap refusal or failed target leaves every previous state intact. Reserve worker grants and main-thread ledger bytes before candidate arrays, layouts, reply objects or DOM; release each hold exactly once on refusal, replacement, cancellation and close.
+- **Linkage follows the saved target list.** A pivot slicer/timeline updates only pivot tables named by its cache. A pivot sharing that cache but omitted from the target list remains independent. Linked pivots receive the same control selection while retaining their own layout, sort and unrelated filters. Multiple active controls compose and recompute no-data status as measured by Task 39.
+- **Table slicers are not pivot caches.** Resolve a supported table cache to its named table and source column, then express selection through existing FilterSpec values membership. Intersect with ordinary table filters without replacing unrelated rules. Missing/ambiguous table or column, unsupported cache extensions, unresolved values, unmeasured blank/error mapping or unsupported mixed linkage fail closed.
+- **Do not encode slicer state as a page field by assumption.** A slicer may target a field on any pivot axis. Keep its selected item identity separate from the pivot's page/item state until Task 39 measures the saved XML, filter-button state and intersection with existing manual filters.
+- **Bound work and memory.** Reuse profile record caps, worker checkpoints and FilterEngine limits. Compute no-data membership with a shared-cache index or one bounded pass, not a full records scan per item or per linked pivot. Bound timeline period generation by the viewport. Refuse before allocation when target fan-out or staged bytes exceed admission; cancellation interrupts scans and refunds all candidates.
+- **Accessibility and input parity (§8, S3-J).** Keep the worksheet grid as one Tab stop. Every item, Multi-Select, Clear Filter, period and level picker has a keyboard route, accessible name/state, visible focus and screen-reader announcement. Drag is optional; controls do not change grid ARIA ownership. Use the host's accessible UI locale for control chrome; match saved Excel control captions and timeline labels where the resolved model supplies them.
+- **Dynamic timeline label locale [owner/call].** Stage 1 captured timeline labels in Excel's zh-TW UI language (docs/validation/xlsx-pivots.md:190,278), while TimelineModel carries level and dates but no Excel UI locale (src/xlsx/pivots/slicers/model.ts:76-88). Task 39 records Excel's strings; the owner decides the locale source for generated selection labels, period names and level-picker labels when the workbook has no stored text. Do not infer it from workbook data.
+- **Lazy bundle and file fidelity.** Interactions are view-only and do not rewrite XLSX parts. New runtime remains in lazy pivots/control chunks; eager gzip stays below 38,720 B. Unsupported controls keep their saved display.
+
+### Task 39: Stage 5 Excel interaction oracle (agy; review: codex)
+
+**Files:**
+- Create scripts/xlsx-refs/control-interaction-cases.ts and scripts/xlsx-refs/build-control-interactions.ts. Extend the pivot interaction generator only if control operations remain separate from PivotDelta.
+- Create tests/fixtures/xlsx-pivots/controls/manifest.json, control .xlsx inputs/results and sidecars; keep display-only slicer fixtures intact.
+- Create tests/xlsx-pivots-control-oracle.test.ts; extend tests/xlsx-refs-interaction-cases.test.ts only for manifest/schema validation.
+- Update docs/validation/xlsx-pivots.md with Stage 5 measurements. Create docs/validation/xlsx-pivots-recipes-stage5.md if §11 recipes are needed.
+
+**Interfaces:** Define a control-specific oracle operation union, separate from PivotDelta: slicerSelect(name, itemIds or all), slicerMultiSelect(name, enabled), slicerClear(name), timelineSelect(name, startDate, endDate), timelineLevel(name, level), timelineClear(name), and tableSlicerSelect(name, itemIds or all). Each entry names the base file, control/cache/table identity, initial state, one action, Excel route and saved expected pivot cells/control cache/table rows. Oracle test derives both resident and worker/paged cases from the same workbook and compares exact cells, selection, no-data flags/order and affected targets.
+
+**Cases (one compact Excel recipe source where possible; these values are exact):** Build controls-seed.xlsx with columns Date, Region, Product, Sales and rows: (2023-12-31, East, Apples, 10), (2024-01-01, East, Bananas, 20), (2024-02-15, West, Apples, 30), (2024-03-31, West, Cherries, 40), (2024-04-01, South, Apples, 50). Add a pivot with Region rows, Product columns and Sum of Sales, Product slicer and Date timeline.
+- s5-slicer-click-one: from All, click Apples; record selected IDs and exact rows/cells (records 1, 3, 5; Excel determines whether empty Region rows remain).
+- s5-slicer-click-selected: click the selected Apples item again; record whether it remains selected, clears, or selects all.
+- s5-slicer-modifier-add-remove: with Apples selected, Ctrl-click (Windows) or Command-click (Mac) Bananas, then modifier-click Bananas again; record IDs and pivot cells after each step.
+- s5-slicer-multiselect-toggle: enable Multi-Select, ordinary-click Apples then Bananas, disable it, click Cherries; record each intermediate set and whether toggle state persists across sheet changes.
+- s5-slicer-clear: clear Apples+Bananas; record all-selected state and restored pivot values.
+- s5-slicer-crossfilter-order: add Region slicer, select East, and pin Product noData flags/order for crossFilter=none/showItemsWithDataAtTop/showItemsWithNoData and showMissing on/off; record selected-but-no-data behavior.
+- s5-slicer-hidden-or-blank: test blank and an item hidden by the pivot's existing page/item filter; record visibility, selection and intersection. If Excel cannot save a stable answer, keep the action unverified.
+- s5-timeline-click-month: at Months, click March 2024; record exact saved start/end and output (March 31 Sales 40 included; April 1 Sales 50 excluded).
+- s5-timeline-drag-forward-reverse: drag Jan→Mar and Mar→Jan; pin endpoints. Jan–Mar includes Sales 20+30+40 and excludes Dec 31 and Apr 1.
+- s5-timeline-level-preserves-range: select Jan 1–Mar 31 2024 at Months, switch to Quarters and back; record range, boundaries, labels and pivot cells at each step.
+- s5-timeline-clear-and-scroll: clear to All Periods, then scroll a 2023–2024 range; record first visible period and whether selection stays fixed.
+- s5-linked-two-pivots: put pivots with different layouts on separate sheets sharing a cache; link the slicer to both and deliberately omit a third pivot from its cache target list. Select Apples; record both linked pivots and prove the third is unchanged.
+- s5-linked-slicer-and-timeline: on the linked seed, apply Product=Apples and Date=March; record intersection output.
+- s5-table-slicer: make an Excel Table over the five rows with a Region table slicer; select East, add South, clear; record exact table row visibility while retaining ordinary AutoFilter criteria.
+- Prefer AppleScript when available. The Excel dictionary lacks slicer/timeline actions; drive UI-only cases with System Events. Otherwise hand-write, open/save in Excel 16.114 and verify no repair/rejection/no-op per §11. Batch all owner recipes once. Any unstable/unmeasured case stays disabled.
+
+**Steps:**
+1. Add cases and generator; collect UI recipes in one Stage 5 batch.
+2. Drive cases in Excel 16.114, save/reopen without repair, and record selected cache items, timeline dates/level, pivot cell deltas and table visibility.
+3. Write oracle tests first; fail if the action is omitted, reaches an unlisted pivot, or differs from saved Excel state.
+4. Run npx vitest run tests/xlsx-refs-interaction-cases.test.ts tests/xlsx-pivots-control-oracle.test.ts. Commit oracle artifacts and measurements before implementation starts.
+
+### Task 40: Slicer controls and selection UI (codex; review: agy + Claude sonnet)
+
+**Files:** Modify src/components/xlsx/pivot/PivotButtonLayer.tsx and its controller export; create SlicerLayer.tsx and src/xlsx/pivots/slicers/controller.ts if a separate controller is needed. Modify slicers/model.ts only for committed selection/revision data, keep paint.ts pure. Touch InteractiveSheetDoc.tsx only at the lazy pivotUi boundary and host announce/install callbacks. Create tests/xlsx-pivots-slicer-controls.test.tsx and tests/xlsx-pivots-slicer-state.test.ts; extend the control oracle test.
+
+**Interfaces:** Controller methods applySlicer(name, selection, signal), toggleMultiSelect(name, enabled), clearSlicer(name, signal), subscribe and dispose. selection uses stable cache item IDs, not labels. SlicerLayer receives a committed model, box and callbacks; render accessible item hit regions, Multi-Select and Clear Filter buttons with selected/no-data state. Implement click behavior only as Task 39 measured it. A refusal retains prior state and announces through the existing host.
+
+**Steps and tests:**
+1. RED resident and worker/paged tests named: slicer click matches s5-slicer-click-one; modifier toggles s5-slicer-modifier-add-remove; multi-select follows s5-slicer-multiselect-toggle; clear matches s5-slicer-clear; no-data state/order matches s5-slicer-crossfilter-order; stale/refused revision changes no state.
+2. Pin on controls-seed: Apples selects records 1,3,5 (values 10,30,50); Apples+Bananas selects 1,2,3,5 (10,20,30,50). Use Excel-saved totals, labels and empty-row behavior as assertions.
+3. Implement selection state and hit targets; compute no-data once per shared cache in a bounded cooperative pass, never a full scan per item or pivot.
+4. Keyboard tests: grid remains the sole grid Tab stop; arrows move among items; Space/Enter matches measured action; Escape restores invoker focus; accessible names announce selection/no-data and result.
+5. Check a control-free sheet adds no per-frame work and a control crossing tile boundaries repaints consistently. Run focused gates and commit.
+
+### Task 41: Timeline controls (agy; review: codex)
+
+**Files:** Create src/components/xlsx/pivot/TimelineLayer.tsx and tests/xlsx-pivots-timeline-controls.test.tsx. Extend the Task 40 controller with timeline operations; modify model.ts only for required committed revision state. Extend tests/xlsx-pivots-control-oracle.test.ts; keep tests/xlsx-slicers-display.test.ts as the saved-paint baseline.
+
+**Interfaces:** Add selectTimeline(name, startMs, endMs, signal), setTimelineLevel(name, level, signal) and clearTimeline(name, signal). Convert visible period hits to UTC calendar boundaries using TimelineModel.level; submit one final selection on pointer-up. Drag preview does not recompute pivots on every pointer move. Keyboard gives an equivalent start/end-period route; level picker is labelled.
+
+**Steps and tests:**
+1. RED tests named: click matches s5-timeline-click-month; forward and reverse drag match s5-timeline-drag-forward-reverse; Months→Quarters matches s5-timeline-level-preserves-range; clear/scroll match s5-timeline-clear-and-scroll; pointer cancellation/refusal retains prior state.
+2. Pin the source dates exactly: March internal interval [2024-03-01, 2024-04-01), serialized March 1–31 inclusive; Jan–Mar includes Sales 20+30+40 and excludes Dec 31 and Apr 1. Assert exact Excel oracle cells.
+3. Implement drag preview, commit, level picker and clear; handle pointer capture/cancel and clamp to visible periods without allocating the full date range.
+4. Assert keyboard names, selected range, level, announcements and focus restoration. Run focused tests and control oracles, then commit.
+
+### Task 42: Linked controls, table slicers and atomic worker apply (codex; review: Claude opus + agy)
+
+**Files:** Create src/xlsx/pivots/slicers/transaction.ts or equivalent. Modify slicers/load.ts, parseSlicers.ts, src/xlsx/view/contracts.ts, src/xlsx/view/pagedSource.ts, src/xlsx/view/viewerRemoteSource.ts, src/worker/viewerSession.ts, InteractiveSheetDoc.tsx and resident/remote pivot adapters as needed. Extend viewerControlsClient.ts through FilterSpec/prepared membership; add tests/xlsx-pivots-linked-controls.test.ts, tests/xlsx-pivots-table-slicer.test.ts, tests/xlsx-pivots-control-protocol.test.ts, and control oracle assertions.
+
+**Interfaces:** A workbook-scoped LinkedControlTransaction exposes stage(operation, {revision, grantBytes, signal}), commit(revision), cancel(revision) and release(). One staged revision covers all linked target candidates. Add a bounded worker controlApply/controlCommit pair (or an equally atomic protocol); a reply lists stable targets plus pivot cells/overlays/extents/chart updates, table view delta and control state. Do not call pivotCommit N times before every target stages.
+- Pivot slicers resolve cache pivotTables and source field; timelines resolve the cache target list/date field. Recompute each target through its existing session engine, retaining per-pivot layout/sort/unrelated filters; Task 39 decides how selection intersects manual page/item filters.
+- Table slicers support only measured tableSlicerCache. Express item selection as existing FilterSpec values membership for the named table source column and compose with ordinary filters; clearing removes only the slicer criterion. Missing/ambiguous table, unsupported cache, unresolved values, unmeasured blank/error mapping or unsupported linkage returns typed refusal.
+- Reset to saved view from field menu/list restores file-saved pivot view and live slicer/timeline selections driving that pivot (§6.7 / AGY-11), without resetting unrelated controls/pivots.
+
+**Steps and tests:**
+1. RED tests named: linked target behavior matches s5-linked-two-pivots; combined controls match s5-linked-slicer-and-timeline; table membership/clear matches s5-table-slicer; reset restores saved linked control state without changing unrelated filters.
+2. Protocol RED: candidate layouts admitted before construction; one refused target leaves all targets unchanged; stale commit drops; cancel/sheet switch/close refund all holds once; two controls sharing a cache share one source index; reply/fan-out caps refuse before serialization.
+3. Implement two-phase resident/worker staging. Reserve candidate pivots, composite overlays, table row-set/view, replies and selection vectors before construction. Check base revision, cancellation and owner generation before commit. Increment each affected sheet generation once.
+4. Counter tests at 10,000 and 100,000 records with 2 and 8 linked pivots assert O(records + items + targets) work or an admitted shared index, cancellation checkpoints, and no nested full scan.
+5. Assert resident/worker parity for cells, pixels, charts and dependent-value behavior after select and clear. Run all oracle tests, then commit.
+
+### Task 43: Stage 5 verification and final whole-feature review (orchestrator; review: codex)
+
+**Files:** Update docs/validation/xlsx-pivots.md and CHANGELOG.md. Create tests/xlsx-pivots-controls-e2e.spec.ts or extend the existing pivots browser spec. Update a Stage 5 perf report if needed.
+
+**Steps and tests:**
+1. Run all Task 39 cases through resident and worker/paged UI. Each passes or is disabled with typed reason; compare exact pivot cells, control state, table visible rows and cross-filter states.
+2. Chromium and WebKit E2E: desktop click/modifier/multi-select/clear; keyboard-only route; timeline click/forward+reverse drag/level/clear; one slicer across sheets; table slicer composed with ordinary table filter; pivot Reset; narrow/coarse-pointer layout and focus restoration. Assert overlays do not cover grid controls and no unexpected layout shift.
+3. Read-only perf/memory audit at 100,000 rows, 10,000 slicer items, 4 linked pivots, overlapping slicer/timeline, repeated cancellation/sheet-switch/close, and a 100-year timeline. Record work counters, peak admitted bytes, release/refusal points. Verify no per-item/per-pivot repeated records scan or uncharged candidates.
+4. Run npx tsc --noEmit -p ., npx vitest run, OV_MODULE_MAP=1 bun run build, bun scripts/check-eager.ts, bun scripts/eager-budget.ts, Stage 2 pivot benchmark and npm run test:browser -- xlsx-pivots. Confirm eager gzip <38,720 B, report lazy chunk growth and browser/sandbox limits.
+5. Update validation/changelog from evidence; run adversarial whole-feature review across Stages 1–5 by a different model family, address Critical/Important findings, open PR 5 from feature/pivots-s5 to main, trigger Codex bot, wait for CI and request owner approval before merge.
+
+### Review Focus
+
+1. Single click on selected item: keep, toggle, or clear? Does Ctrl/Command-click and the Multi-Select toggle alter ordinary click? Verify each transition against saved Excel state, not inferred flags.
+2. Cross-filter noData must reflect other active slicers, obey crossFilter/showMissing ordering and handle a selected item that becomes no-data. Detect stale availability after another selection changes.
+3. A control can link pivots on separate sheets; update only names in its cache list, and never leave a partial multi-target commit when one target refuses.
+4. Timeline leap days, month/quarter/year boundaries, reverse drags, inclusive end dates, UTC/timezone and level changes. Round-trip internal day intervals to saved dates exactly.
+5. Table slicer semantics differ from pivot slicers: identity, headers/totals, blanks/errors, within-control selection and across-control conjunction must follow Excel through FilterEngine.
+6. Clearing/resetting one control preserves unrelated controls and filters; pivot Reset restores only controls driving that pivot to saved state.
+7. Worker fan-out/reply limits, stale revisions, cancellation, sheet switch, owner close, release-on-refusal and cache sharing; trace bytes until the last lease, not merely candidate commit.
+8. Keyboard/screen-reader access to all items/icons/periods and the grid's single Tab stop; focus restoration on dismiss, clear, refusal and resize.
+9. Control-free sheets gain no eager bytes or per-frame/per-tile work. Check tile-straddle paints and redraw on remote sheet updates.
