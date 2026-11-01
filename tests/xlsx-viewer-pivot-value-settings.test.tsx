@@ -329,6 +329,28 @@ describe('Pivot value field settings UI', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('bounds Base Item options for a high-cardinality field and keeps the selected item reachable by search', () => {
+    const fields = makeModel().fields.map(field => field.index === 0 ? {
+      ...field,
+      items: Array.from({ length: 20_000 }, (_, index) => ({ index, label: index === 19_999 ? 'Target item' : `Item ${index}`, hidden: false, collapsed: false })),
+    } : field)
+    const model = makeModel({ fields, data: [{ ...makeModel().data[0]!, showAs: 'difference', baseField: 0, baseItem: 19_999 }] })
+    render(<PivotValueSettingsDialog model={model} dataIndex={0} onApply={vi.fn()} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Show Values As' }))
+    const showAs = screen.getByLabelText('Show values as')
+    fireEvent.change(showAs, { target: { value: 'difference' } })
+    const search = screen.getByLabelText('Search base items') as HTMLInputElement
+    const select = screen.getByLabelText('Base item') as HTMLSelectElement
+    expect(select.querySelectorAll('option').length).toBeLessThanOrEqual(102)
+    expect(select.value).toBe('19999')
+    fireEvent.change(search, { target: { value: 'Target item' } })
+    expect([...select.querySelectorAll('option')].some(option => option.value === '19999')).toBe(true)
+    select.focus()
+    expect(document.activeElement).toBe(select)
+    fireEvent.keyDown(select, { key: 'ArrowDown' })
+    expect(select.value).toBe('1048828')
+  })
+
   it('calculated data field restricts summary function and showAs options', () => {
     const onApply = vi.fn().mockResolvedValue(true)
     const onClose = vi.fn()

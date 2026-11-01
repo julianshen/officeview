@@ -29,6 +29,27 @@ describe('PivotFieldList', () => {
     expect(onApply).toHaveBeenCalledWith('reset')
   })
 
+  it('uses a linear number of field lookup checks while rendering a large field list', () => {
+    const count = 512
+    let predicates = 0
+    const fields = new Proxy(Array.from({ length: count }, (_, index) => ({
+      ...model.fields[0]!, index, sourceOrder: index, name: `Field ${index}`, axis: 'none' as const,
+    })), {
+      get(target, property, receiver) {
+        if (property === 'find') return (predicate: (value: (typeof target)[number], index: number, array: typeof target) => unknown) =>
+          Array.prototype.find.call(target, (value: (typeof target)[number], index: number, array: typeof target) => {
+            predicates++
+            return predicate(value, index, array)
+          })
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    render(<PivotFieldList model={{ ...model, fields }} pivot={0} onApply={vi.fn()} onClose={vi.fn()} />)
+    expect(predicates).toBeLessThanOrEqual(count * 4)
+    expect(screen.getAllByRole('checkbox')).toHaveLength(200)
+    expect(screen.getByRole('status').textContent).toContain('512 fields')
+  })
+
   it('sorts the field list and reorders Values chips with their existing data-field identity', () => {
     const onApply = vi.fn()
     const sortedModel: PivotMenuModel = {

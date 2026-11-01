@@ -460,6 +460,33 @@ describe('runtime retention (Ruling S3-E)', () => {
 })
 
 describe('session', () => {
+  it('reuses the already-retained saved layout when a view returns to it, even if new layout admission is refused', async () => {
+    const p = await baseline()
+    const session = open(inputOf(p))
+    const savedLayout = session.layout
+    const collapsed = session.apply(COLLAPSE_EAST)
+    expect(collapsed.ok).toBe(true)
+    if (!collapsed.ok) return
+    expect(session.commit(collapsed.value)).toBe(true)
+
+    let admissionCalls = 0
+    const restored = session.apply(EXPAND_EAST, { admitLayoutBytes: () => { admissionCalls++; return undefined } })
+    expect(restored.ok).toBe(true)
+    if (!restored.ok) return
+    expect(admissionCalls).toBe(0)
+    expect(restored.value.layout).toBe(savedLayout)
+  })
+
+  it('refuses a candidate before computing values when its layout admission is denied', async () => {
+    const p = await baseline()
+    const session = open(inputOf(p))
+    let requested = 0
+    const result = session.apply(COLLAPSE_EAST, { admitLayoutBytes: (bytes: number) => { requested = bytes; return undefined } })
+    expect(requested).toBeGreaterThan(0)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.diagnostic.feature).toBe('pivot-records-limit')
+  })
+
   it('open refuses each §7.6 case with its feature', async () => {
     const p = await baseline()
     expect(openRefusal(inputOf(p))).toBe('ok')

@@ -363,6 +363,30 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       return true
     }
   }
+  const admitCandidate = (sheetId: number, pivot: number) => (bytes: number) => {
+    const owner = `pivot-candidate:${sheetId}:${pivot}:${++refreshBuilds}`
+    if (ledger.bytes + bytes > budget) return undefined
+    ledger.set('document', owner, bytes)
+    let held = true
+    return { bytes, release: () => { if (!held) return; held = false; ledger.set('document', owner, 0) } }
+  }
+  const admitLayout = (sheetId: number, pivot: number) => {
+    const owner = `pivot-layout:${sheetId}:${pivot}:${++refreshBuilds}`
+    let bytes = 0, held = true
+    return (next: number) => {
+      if (ledger.bytes - bytes + next > budget) return undefined
+      ledger.set('document', owner, bytes = next)
+      return {
+        get bytes() { return bytes },
+        resize(value: number) {
+          if (!Number.isSafeInteger(value) || value < 0 || ledger.bytes - bytes + value > budget) return false
+          ledger.set('document', owner, bytes = value)
+          return true
+        },
+        release() { if (!held) return; held = false; bytes = 0; ledger.set('document', owner, 0) },
+      }
+    }
+  }
   /** A decode's or a build's refusal as the main thread says it (the engine words it for the worker). */
   const mainQuota = (diagnostic: PivotDiagnostic): PivotDiagnostic => diagnostic.feature === 'pivot-worker-quota' ? { ...diagnostic, feature: 'pivot-records-limit', message: MAIN_QUOTA_MESSAGE } : diagnostic
 
@@ -492,13 +516,8 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
               ledger.chargeWhileHeld('document', [store], store.bytes + metadataBytes); return ledger.hold(store) ?? undefined
             },
           } : {}),
-          admitCandidateBytes: extraBytes => {
-            const owner = `pivot-candidate:${sheetId}:${pivot}:${++refreshBuilds}`
-            if (ledger.bytes + extraBytes > budget) return undefined
-            ledger.set('document', owner, extraBytes)
-            let held = true
-            return { bytes: extraBytes, release: () => { if (!held) return; held = false; ledger.set('document', owner, 0) } }
-          },
+          admitCandidateBytes: admitCandidate(sheetId, pivot),
+          admitLayoutBytes: admitLayout(sheetId, pivot),
         })
         ledger.set('document', building, 0)
         if (!session.ok) { leased?.release(); return { ok: false, diagnostic: mainQuota(session.diagnostic) } }
@@ -518,13 +537,9 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       const entry = open.get(key(sheetId, pivot))
       if (!entry) return refusal('pivot-session-released', `${nameOf(savedDefs[sheetId]?.[pivot])} has no open session`)
       const { session } = entry
-      const applied = delta === 'reset' ? session.reset() : session.apply(delta, { admitCandidateBytes: extraBytes => {
-        const owner = `pivot-candidate:${sheetId}:${pivot}:${++refreshBuilds}`
-        if (ledger.bytes + extraBytes > budget) return undefined
-        ledger.set('document', owner, extraBytes)
-        let held = true
-        return { bytes: extraBytes, release: () => { if (!held) return; held = false; ledger.set('document', owner, 0) } }
-      } })
+      const applied = delta === 'reset' ? session.reset() : session.apply(delta, {
+        admitCandidateBytes: admitCandidate(sheetId, pivot), admitLayoutBytes: admitLayout(sheetId, pivot),
+      })
       if (!applied.ok) return applied
       const result = applied.value
       if (!session.commit(result)) {

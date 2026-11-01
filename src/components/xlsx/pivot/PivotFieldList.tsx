@@ -6,6 +6,7 @@ import type { PivotDelta, PivotMenuModel } from './pivotClient'
 import type { PivotDeltaKind } from './pivotClient'
 import { PivotGroupDialog } from './PivotGroupDialog'
 import { PivotValueSettingsDialog } from './PivotValueSettingsDialog'
+import { buildPivotFieldListIndex } from './fieldListIndex'
 
 export interface PivotFieldListProps {
   model: PivotMenuModel
@@ -23,6 +24,7 @@ type DragSource = { kind: 'field'; field: number } | { kind: 'chip'; field: numb
 const areas: Array<{ id: Area; label: string }> = [
   { id: 'page', label: 'Filters' }, { id: 'col', label: 'Columns' }, { id: 'row', label: 'Rows' }, { id: 'data', label: 'Values' },
 ]
+const FIELD_LIST_RENDER_LIMIT = 200
 
 export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply, onClose, invoker, verified }: PivotFieldListProps): ReactElement {
   const mobile = useControlMedia('(pointer: coarse), (max-width: 640px)')
@@ -31,22 +33,23 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
   const [dragging, setDragging] = useState<DragSource | null>(null)
   const [groupField, setGroupField] = useState<number | null>(null)
   const [valueSettingsDataIndex, setValueSettingsDataIndex] = useState<number | null>(null)
+  const fieldIndex = useMemo(() => buildPivotFieldListIndex(model), [model.fields, model.data])
+  const orderedFields = useMemo(() => {
+    return [...model.fields].sort(model.fieldListSortAscending ? (a, b) => a.name.localeCompare(b.name) || a.sourceOrder - b.sourceOrder : (a, b) => a.sourceOrder - b.sourceOrder)
+  }, [model.fields, model.fieldListSortAscending])
   const fields = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
-    return [...model.fields].filter(field => !query || field.name.toLocaleLowerCase().includes(query))
-      .sort(model.fieldListSortAscending ? (a, b) => a.name.localeCompare(b.name) || a.sourceOrder - b.sourceOrder : (a, b) => a.sourceOrder - b.sourceOrder)
-  }, [model.fields, model.fieldListSortAscending, search])
-  const dataFor = (field: number) => model.data.map((entry, index) => entry.field === field ? index : -1).filter(index => index >= 0)
-  const isPlaced = (field: number) => {
-    const item = model.fields.find(entry => entry.index === field)
-    return Boolean(item && (item.axis !== 'none' || dataFor(field).length))
-  }
+    return orderedFields.filter(field => !query || field.name.toLocaleLowerCase().includes(query))
+  }, [orderedFields, search])
+  const shownFields = fields.slice(0, FIELD_LIST_RENDER_LIMIT)
+  const dataFor = (field: number) => fieldIndex.dataIndicesByField.get(field) ?? []
+  const isPlaced = (field: number) => fieldIndex.placedFields.has(field)
   const move = (field: number, area: Area, index?: number) => {
     if (field === -2) {
       if (area === 'row' || area === 'col') onApply({ kind: 'moveField', field, axis: area, ...(index === undefined ? {} : { index }) })
       return
     }
-    const entry = model.fields.find(item => item.index === field)
+    const entry = fieldIndex.fieldsByIndex.get(field)
     if (!entry) return
     if (area === 'data') {
       if (entry.permissions.dragToData) onApply({ kind: 'addDataField', field, ...(index === undefined ? {} : { index }) })
@@ -57,7 +60,7 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
     if (allowed) onApply({ kind: 'moveField', field, axis, ...(index === undefined ? {} : { index }) })
   }
   const removeEverywhere = (field: number) => {
-    const entry = model.fields.find(item => item.index === field)
+    const entry = fieldIndex.fieldsByIndex.get(field)
     if (!entry?.permissions.dragOff) return
     for (const index of [...dataFor(field)].reverse()) onApply({ kind: 'removeDataField', dataIndex: index })
     if (entry.axis !== 'none') onApply({ kind: 'moveField', field, axis: 'none' })
@@ -99,7 +102,7 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
     </header>
     <label style={{ display: 'block', marginBlock: 10 }}>Search fields <input aria-label="Search fields" className={CONTROL_CLS} style={{ ...controlTarget, width: '100%' }} value={search} onChange={event => setSearch(event.target.value)} /></label>
     <fieldset><legend>Choose fields to add to report</legend>
-      {fields.map(field => <div key={field.index} draggable={field.permissions.dragOff || field.permissions.dragToData || field.permissions.dragToRow || field.permissions.dragToCol || field.permissions.dragToPage}
+      {shownFields.map(field => <div key={field.index} draggable={field.permissions.dragOff || field.permissions.dragToData || field.permissions.dragToRow || field.permissions.dragToCol || field.permissions.dragToPage}
         onDragStart={event => { setDragging({ kind: 'field', field: field.index }); event.dataTransfer.setData('text/plain', String(field.index)) }} onDragEnd={() => setDragging(null)}
         style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 44 }}>
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}><input type="checkbox" aria-label={field.name} checked={isPlaced(field.index)} disabled={isPlaced(field.index) ? !field.permissions.dragOff : !field.permissions.dragToData && !field.permissions.dragToRow}
@@ -109,12 +112,13 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
           {field.permissions.dragToPage && !field.calculated && <option value="page">Move to Filters</option>}{field.permissions.dragToCol && !field.calculated && <option value="col">Move to Columns</option>}{field.permissions.dragToRow && !field.calculated && <option value="row">Move to Rows</option>}{field.permissions.dragToData && <option value="data">Move to Values</option>}
         </select>
       </div>)}
+      {fields.length > shownFields.length && <p role="status">Showing {shownFields.length} of {fields.length} fields. Search to narrow the list.</p>}
     </fieldset>
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBlock: 12 }}>
       {areas.map(area => <fieldset key={area.id} aria-label={area.label} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, area.id, chips(area.id).length)} style={{ minWidth: 0, minHeight: 84 }}>
         <legend>{area.label}</legend>
         {chips(area.id).map((chip, index) => {
-          const field = fieldOf(area.id, chip), meta = field === undefined ? undefined : model.fields.find(item => item.index === field), label = area.id === 'data' ? model.data[chip]?.name : meta?.name
+          const field = fieldOf(area.id, chip), meta = field === undefined ? undefined : fieldIndex.fieldsByIndex.get(field), label = area.id === 'data' ? model.data[chip]?.name : meta?.name
           if (field === undefined) return null
           if (field === -2) {
             const axis = area.id === 'row' ? 'row' : 'col'
@@ -143,7 +147,7 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
     </div>
     <footer style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><button type="button" style={controlTarget} onClick={() => onApply('reset')}>Reset to saved view</button><button type="button" style={controlTarget} onClick={close}>Close</button></footer>
     </section>
-    {groupField !== null && model.fields.find(field => field.index === groupField)?.group?.kind && <PivotGroupDialog field={model.fields.find(field => field.index === groupField)!} date1904={model.date1904 ?? false}
+    {groupField !== null && fieldIndex.fieldsByIndex.get(groupField)?.group?.kind && <PivotGroupDialog field={fieldIndex.fieldsByIndex.get(groupField)!} date1904={model.date1904 ?? false}
       onApply={delta => Promise.resolve(onApply(delta)).then(result => result !== false)} onClose={() => setGroupField(null)} />}
     {valueSettingsDataIndex !== null && model.data[valueSettingsDataIndex] && <PivotValueSettingsDialog model={model} dataIndex={valueSettingsDataIndex}
       onApply={delta => Promise.resolve(onApply(delta)).then(result => result !== false)} onClose={() => setValueSettingsDataIndex(null)} />}

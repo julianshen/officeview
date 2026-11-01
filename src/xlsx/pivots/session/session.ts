@@ -36,7 +36,7 @@ import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition } from
 import type { EngineResult } from '../engine/axes'
 import { computePivot } from '../engine/compute'
 import { checkSavedLayout, engineEligibility, type CellReader, type FaithfulResult } from '../engine/faithful'
-import { liveDefinition, type PivotLayout } from '../engine/place'
+import { liveDefinition, type PivotCandidateHold, type PivotLayout } from '../engine/place'
 import { RECORD_LIMITS, type RecordLimits, type RecordStore } from '../engine/records'
 import { initialViewState, type PivotViewState } from '../engine/view'
 import { captionRule, MEASURED_CAPTION_TABLES, resolveCaptions, savedCaptions, type CaptionTable } from './captions'
@@ -66,6 +66,8 @@ export interface PivotSessionInput {
   limits?: RecordLimits
   /** Reserves candidate cache/index bytes before a Stage 4 field move allocates them. */
   admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined
+  /** Reserves the dense values/layout upper bound after axes are known but before they are built. */
+  admitLayoutBytes?: (extraBytes: number) => PivotCandidateHold | undefined
   /** Admits a rebuilt store, and the rebuilt cache's `metadataBytes` (`refreshedCacheBytes`), before the session
    * holds them (the caller's ledger or pool), for the session's life; undefined refuses
    * `pivot-records-limit`. The returned hold is released with the session. */
@@ -81,13 +83,43 @@ export interface PivotSession {
   readonly revision: number; readonly view: PivotViewState; readonly def: PivotTableDefinition; readonly layout: PivotLayout
   /** The cache the session computes from: the saved one, or the one a refresh rebuilt (its definitions index it). */
   readonly cache: PivotCacheDefinition
-  apply(delta: PivotDelta, options?: { admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined }): EngineResult<PivotApplyResult>   // pure: does not change the session
+  apply(delta: PivotDelta, options?: { admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined; admitLayoutBytes?: (extraBytes: number) => PivotCandidateHold | undefined }): EngineResult<PivotApplyResult>   // pure: does not change the session
   commit(result: PivotApplyResult): boolean                   // false when result.revision !== revision + 1
   /** Back to the saved state, as the next revision; refused `pivot-overlap` when that layout would now cover another
    * pivot's or the sheet's cells (a refreshed pivot's saved view is its refreshed layout, which may be larger). */
   reset(): EngineResult<PivotApplyResult>
   /** Ends the session and releases its store lease (once). Later applies refuse `pivot-session-released`. */
   release(): void
+}
+
+function combineHolds(candidate: PivotMemoryHold | undefined, layout: PivotCandidateHold | undefined): PivotMemoryHold {
+  let released = false
+  return {
+    get bytes() { return (candidate?.bytes ?? 0) + (layout?.bytes ?? 0) },
+    release() { if (released) return; released = true; candidate?.release(); layout?.release() },
+  }
+}
+function retainedLayoutBytes(store: RecordStore, layout: PivotLayout): number {
+  let textBytes = 0
+  for (const cell of layout.cells) if (cell.value.kind === 'text' || cell.value.kind === 'error') textBytes += cell.value.value.length * 2 + 24
+  const bytes = store.count * 8 + layout.axes.rows.length * 96 + layout.axes.cols.length * 96
+    + layout.cells.length * 160 + layout.merges.length * 48 + (layout.captionSlots?.length ?? 0) * 32 + textBytes + 1024
+  return Number.isSafeInteger(bytes) ? bytes : Number.POSITIVE_INFINITY
+}
+function sameFlags(a: readonly boolean[], b: readonly boolean[]): boolean {
+  return a === b || (a.length === b.length && a.every((value, index) => value === b[index]))
+}
+/** Collapse/expand can return to the exact saved view; in that case the session already owns its original layout. */
+function sameView(a: PivotViewState, b: PivotViewState): boolean {
+  if (a.rows !== b.rows || a.cols !== b.cols || a.pages !== b.pages || a.data !== b.data || a.filters !== b.filters || a.fields.length !== b.fields.length) return false
+  return a.fields.every((field, index) => {
+    const saved = b.fields[index]!
+    return field.hidden === saved.hidden && sameFlags(field.collapsed, saved.collapsed) && field.sortType === saved.sortType
+      && field.autoSortScope === saved.autoSortScope && field.defaultSubtotal === saved.defaultSubtotal
+      && field.subtotals === saved.subtotals && field.subtotalTop === saved.subtotalTop && field.compact === saved.compact
+      && field.outline === saved.outline && field.insertBlankRow === saved.insertBlankRow && field.fillDownLabels === saved.fillDownLabels
+      && field.showAll === saved.showAll
+  })
 }
 
 /**
@@ -299,7 +331,8 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
         captionRule: { locale: rule.locale, caption: (kind, args) => rule.caption(kind, args) }, admitCandidateBytes: options?.admitCandidateBytes ?? input.admitCandidateBytes }, delta)
       if (!transitioned.ok) return transitioned
       const candidate = transitioned.value
-      const discard = <T extends EngineResult<unknown>>(result: T): T => { candidate.hold?.release(); return result }
+      let layoutHold: PivotCandidateHold | undefined
+      const discard = <T extends EngineResult<unknown>>(result: T): T => { candidate.hold?.release(); layoutHold?.release(); layoutHold = undefined; return result }
       // Excel keeps the opened pivot's original location when every field and value is removed (Task 34 oracle).
       // The intermediate live definitions shrink as fields move; use the saved location for this final empty shape.
       const emptyPivot = !candidate.view.data.length && !candidate.view.rows.length && !candidate.view.cols.length && !candidate.view.pages.length && !candidate.view.filters.length
@@ -309,10 +342,21 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       if (emptyPivot && !task35EmptyBase) return discard(refuse('pivot-engine-unmeasured', 'An empty PivotTable layout has not been measured for this saved pivot.'))
       const emptyRef = task35EmptyBase ? 'A3:C20' : def0.location.ref
       const layoutDef = emptyPivot ? { ...candidate.def, location: { ...candidate.def.location, ref: emptyRef } } : candidate.def
-      const next = computePivot(candidate.store, candidate.cache, layoutDef, candidate.view, { date1904 })
+      // Re-expanding/collapsing back to the saved state needs no new layout allocation: the session already retains
+      // this exact layout. Besides avoiding duplicate work, this keeps an unrelated, denied autofit from blocking a
+      // view change that only restores the existing saved result.
+      const restoresSavedLayout = candidate.store === store && candidate.cache === cache && sameView(candidate.view, view0)
+      const next = restoresSavedLayout ? { ok: true as const, value: layout0 } : computePivot(candidate.store, candidate.cache, layoutDef, candidate.view, { date1904,
+        admitLayoutBytes: options?.admitLayoutBytes ?? input.admitLayoutBytes,
+      })
       if (!next.ok) return discard(next)
-      const layout = resolveCaptions(next.value, rule)
+      layoutHold = next.value.candidateHold
+      const layout = restoresSavedLayout ? { ok: true as const, value: layout0 } : resolveCaptions(next.value, rule)
       if (!layout.ok) return discard(layout)
+      try {
+        if (layoutHold?.resize && !layoutHold.resize(retainedLayoutBytes(candidate.store, layout.value)))
+          return discard(refuse('pivot-records-limit', 'The retained candidate layout exceeds the memory budget.'))
+      } catch (error) { candidate.hold?.release(); layoutHold?.release(); throw error }
       const area = areaFor(layout.value), current = shown
       const overlap = overlapOf(area)
       if (overlap && 'ok' in overlap) return discard(overlap)
@@ -323,13 +367,14 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
         if (linkedCharts.length || candidate.view.pages.length) return discard(refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet)))
         const spilled = spillLayout(layout.value)
         const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: spillDefinition(live, layout.value, overlap.spill), cache: candidate.cache, store: candidate.store, layout: spilled,
-          vacated: subtract(current, areaFor(spilled)), charts: [], ...(candidate.hold ? { hold: candidate.hold } : {}), spill: overlap.spill, notice: [notice, pivotSpillNotice(String(def.name ?? ''), row, col, def.sheet)].filter(Boolean).join(' ') }
+          vacated: subtract(current, areaFor(spilled)), charts: [], ...((candidate.hold || layoutHold) ? { hold: combineHolds(candidate.hold, layoutHold) } : {}), spill: overlap.spill, notice: [notice, pivotSpillNotice(String(def.name ?? ''), row, col, def.sheet)].filter(Boolean).join(' ') }
         issued.add(result)
         return { ok: true, value: result }
       }
       const charts = gate(layout.value, live)
       if (!charts.ok) return discard(charts)
-      const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: live, cache: candidate.cache, store: candidate.store, layout: layout.value, vacated: subtract(current, area), charts: charts.value, ...(candidate.hold ? { hold: candidate.hold } : {}), ...(notice ? { notice } : {}) }
+      const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: live, cache: candidate.cache, store: candidate.store, layout: layout.value, vacated: subtract(current, area), charts: charts.value,
+        ...((candidate.hold || layoutHold) ? { hold: combineHolds(candidate.hold, layoutHold) } : {}), ...(notice ? { notice } : {}) }
       issued.add(result)
       return { ok: true, value: result }
     },

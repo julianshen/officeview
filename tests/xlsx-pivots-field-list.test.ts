@@ -8,6 +8,7 @@ import { openPivotSession } from '../src/xlsx/pivots/session/session'
 import { PIVOT_DELTA_KINDS } from '../src/xlsx/pivots/session/delta'
 import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
+import { pivotMenuModel } from '../src/xlsx/pivots/session/menu'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const BASELINE = resolve(FIXTURES, 'engine/baseline.xlsx')
@@ -35,6 +36,23 @@ async function openInteraction(name: string) {
 }
 
 describe('Task 35 field list deltas', () => {
+  it('builds date-group menu periods with a bounded single pass over cache fields', async () => {
+    const loaded = (await loadAll(BASELINE))[0]!
+    const count = 512
+    let reads = 0
+    const fields = Array.from({ length: count }, (_, index) => {
+      const base = loaded.cache.fields[index % loaded.cache.fields.length]!
+      return Object.defineProperty({ ...base, name: `Field ${index}` }, 'fieldGroup', {
+        configurable: true, get() { reads++; return base.fieldGroup },
+      })
+    })
+    const cache = { ...loaded.cache, fields }
+    const def = { ...loaded.def, fields: Array.from({ length: count }, (_, index) => ({ ...loaded.def.fields[index % loaded.def.fields.length]!, name: `Field ${index}` })) }
+    const view = initialViewState(def, cache)
+    pivotMenuModel(def, cache, view, loaded.date1904)
+    expect(reads).toBeLessThanOrEqual(count * 10)
+  })
+
   it('materializes an inline field into first-appearance shared items without mutating the opened store or cache', async () => {
     const { loaded, session } = await openBaseline()
     const field = loaded.cache.fields.findIndex(cacheField => cacheField.sharedItems?.inline)

@@ -145,6 +145,24 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
 
   const chosenBaseFieldMeta = model.fields.find(f => f.index === baseField)
   const [baseItem, setBaseItem] = useState<number>(currentData?.baseItem ?? 1048828)
+  const [baseItemSearch, setBaseItemSearch] = useState('')
+  const baseItemChoices = useMemo(() => {
+    const items = chosenBaseFieldMeta?.items ?? []
+    const query = baseItemSearch.trim().toLocaleLowerCase()
+    const choices: typeof items = []
+    if (!query) choices.push(...items.slice(0, 100))
+    else {
+      for (const item of items) {
+        if (item.label.toLocaleLowerCase().includes(query)) choices.push(item)
+        if (choices.length === 100) break
+      }
+    }
+    if (baseItem >= 0 && !choices.some(item => item.index === baseItem)) {
+      const selected = items.find(item => item.index === baseItem)
+      if (selected) choices.length < 100 ? choices.push(selected) : choices.splice(99, 1, selected)
+    }
+    return choices
+  }, [chosenBaseFieldMeta?.items, baseItemSearch, baseItem])
 
   const [numFmtId, setNumFmtId] = useState<string>(
     currentData?.numFmtId !== undefined ? String(currentData.numFmtId) : ''
@@ -394,22 +412,40 @@ export function PivotValueSettingsDialog({ model, dataIndex, onApply, onClose }:
             )}
 
             {requiresBaseItem(showAs) && (
-              <label style={{ display: 'block', marginBottom: 8 }}>
-                Base item
+              <div style={{ display: 'block', marginBottom: 8 }}>
+                <label htmlFor="ov-pivot-base-item-search" style={{ display: 'block' }}>Search base items</label>
+                <input
+                  id="ov-pivot-base-item-search"
+                  aria-label="Search base items"
+                  type="search"
+                  value={baseItemSearch}
+                  onChange={event => setBaseItemSearch(event.target.value)}
+                  className={CONTROL_CLS}
+                  style={{ ...controlTarget, width: '100%', marginTop: 2, marginBottom: 4 }}
+                />
                 <select
                   aria-label="Base item"
                   value={baseItem}
                   onChange={event => setBaseItem(Number(event.target.value))}
+                  onKeyDown={event => {
+                    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+                    const choices = [1048828, 1048829, ...baseItemChoices.map(item => item.index)]
+                    const current = choices.indexOf(baseItem)
+                    const direction = event.key === 'ArrowDown' ? 1 : -1
+                    const next = (current + direction + choices.length) % choices.length
+                    event.preventDefault()
+                    setBaseItem(choices[next]!)
+                  }}
                   className={SELECT_CLS}
                   style={{ ...controlTarget, width: '100%', marginTop: 2 }}
                 >
                   <option value={1048828}>(previous)</option>
                   <option value={1048829}>(next)</option>
-                  {chosenBaseFieldMeta?.items.map(item => (
+                  {baseItemChoices.map(item => (
                     <option key={item.index} value={item.index}>{item.label || '(blank)'}</option>
                   ))}
                 </select>
-              </label>
+              </div>
             )}
           </div>
         )}

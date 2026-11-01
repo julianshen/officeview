@@ -385,7 +385,8 @@ describe('worker pivot protocol', () => {
     expect(extraBytes + overlayBytes).toBeGreaterThan(grantBytes)
 
     const refused = session.pivotApply(sheetId, 0, 0, 2, delta, grantBytes)
-    expect(refused).toMatchObject({ kind: 'quota', requiredBytes: extraBytes + overlayBytes, limitBytes: grantBytes })
+    expect(refused).toMatchObject({ kind: 'quota', limitBytes: grantBytes })
+    if (refused.kind === 'quota') expect(refused.requiredBytes).toBeGreaterThan(grantBytes)
     expect(session.memoryStats().sourceBytes).toBe(before)
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
@@ -398,9 +399,9 @@ describe('worker pivot protocol', () => {
       private triggered = false
       override set(pool: Parameters<MainMemoryLedger['set']>[0], owner: string, bytes: number) {
         super.set(pool, owner, bytes)
+        if (bytes > 0 && (owner.startsWith('pivot-candidate:') || owner.startsWith('pivot-layout:'))) this.candidateOwners.push(owner)
         if (!this.triggered && bytes > 0 && owner.startsWith('pivot-candidate:')) {
           this.triggered = true
-          this.candidateOwners.push(owner)
           this.client?.dispose?.()
         }
       }
@@ -416,8 +417,11 @@ describe('worker pivot protocol', () => {
     const field = opened.model.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
     const result = await client.apply(sheet, 0, { kind: 'moveField', field: field.index, axis: 'row' })
     expect(result).toMatchObject({ ok: false })
-    expect(ledger.candidateOwners).toHaveLength(1)
-    expect(ledger.candidateOwners.map(owner => ledger.ownerBytes('document', owner))).toEqual([0])
+    expect(ledger.candidateOwners.some(owner => owner.startsWith('pivot-candidate:'))).toBe(true)
+    expect(ledger.candidateOwners.some(owner => owner.startsWith('pivot-layout:'))).toBe(true)
+    const releasedBytes = ledger.candidateOwners.map(owner => ledger.ownerBytes('document', owner))
+    expect(releasedBytes.length).toBeGreaterThan(0)
+    expect(releasedBytes.every(bytes => bytes === 0)).toBe(true)
   })
 
   it('R2-1 (S3-L): the first commit protects the saved area, end to end, and main publishes no stale saved merge', async () => {

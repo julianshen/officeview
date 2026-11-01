@@ -195,6 +195,23 @@ describe('Task 37 grouping', () => {
     expect(result?.ok).toBe(false)
   })
 
+  it('reserves the field-remap candidate before grouping a large cache', async () => {
+    const seed = (await loadAll(interaction('interaction-filter-date-base')))[0]!
+    const count = 1024
+    const cacheFields = Array.from({ length: count }, (_, index) => ({ ...seed.cache.fields[index % seed.cache.fields.length]!, name: `Field ${index}`, fieldGroup: undefined }))
+    const defFields = Array.from({ length: count }, (_, index) => ({ ...seed.def.fields[index % seed.def.fields.length]!, name: `Field ${index}` }))
+    const cache = { ...seed.cache, fields: cacheFields }
+    const def = { ...seed.def, fields: defFields }
+    const view = initialViewState(def, cache)
+    let reserved = 0
+    const result = applyGrouping({ ...groupingContext(def, cache, seed.store, view, seed.date1904), admitCandidateBytes: bytes => {
+      reserved = bytes
+      return { bytes, release() {} }
+    } }, { kind: 'groupDate', field: 5, periods: ['months'] })
+    expect(result.ok).toBe(true)
+    expect(reserved).toBeGreaterThanOrEqual(count * 200)
+  })
+
   it('uses discrete inclusive labels for a non-negative integer number field', async () => {
     const seed = (await loadAll(interaction('s4-group-number-units-auto')))[0]!
     const cache = { ...seed.cache, fields: seed.cache.fields.map((field, index) => index === 4 ? { ...field, sharedItems: { ...field.sharedItems!, containsInteger: true, minValue: 0, maxValue: 50 } } : field) }

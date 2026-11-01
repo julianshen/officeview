@@ -9,7 +9,7 @@ import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDataFunction, 
 import { pivotItemLabel } from '../engine/place'
 import type { PivotViewState } from '../engine/view'
 import { PIVOT_FUNCTION_NAMES } from './functionNames'
-import { pivotMenuGroupInfo } from './grouping'
+import { pivotMenuGroupInfo, pivotMenuGroupPeriods } from './grouping'
 import type { PivotDateGroupPeriod } from './delta'
 
 /** One item of a field, by its pivot-item index (the index a delta names). */
@@ -87,27 +87,43 @@ function valuesOf(cache: PivotCacheDefinition, field: number): PivotMenuField['v
   return 'text'
 }
 export function pivotMenuModel(def: PivotTableDefinition, cache: PivotCacheDefinition, view: PivotViewState, date1904: boolean): PivotMenuModel {
-  const axisOf = (field: number): PivotMenuField['axis'] => view.rows.includes(field) ? 'row' : view.cols.includes(field) ? 'col' : view.pages.some(page => page.field === field) ? 'page' : 'none'
-  const below = (fields: readonly number[], field: number) => { const at = fields.indexOf(field); return at >= 0 && fields.slice(at + 1).length > 0 }
+  const groupPeriods = pivotMenuGroupPeriods(cache)
+  const rowPositions = new Map<number, number>(), colPositions = new Map<number, number>()
+  view.rows.forEach((field, index) => { if (!rowPositions.has(field)) rowPositions.set(field, index) })
+  view.cols.forEach((field, index) => { if (!colPositions.has(field)) colPositions.set(field, index) })
+  const pageByField = new Map<number, PivotViewState['pages'][number]>()
+  for (const page of view.pages) if (!pageByField.has(page.field)) pageByField.set(page.field, page)
+  const axisOf = (field: number): PivotMenuField['axis'] => rowPositions.has(field) ? 'row' : colPositions.has(field) ? 'col' : pageByField.has(field) ? 'page' : 'none'
+  const below = (positions: ReadonlyMap<number, number>, fields: readonly number[], field: number) => {
+    const at = positions.get(field)
+    return at !== undefined && at < fields.length - 1
+  }
   const used = [...new Set([...view.rows, ...view.cols, ...view.pages.map(page => page.field)])].filter(field => field !== PIVOT_VALUES_FIELD)
-  const order = [...used, ...def.fields.map((_, index) => index).filter(field => !used.includes(field))]
+  const usedSet = new Set(used)
+  const filtersByField = new Map<number, PivotViewState['filters'][number][]>()
+  for (const filter of view.filters) {
+    const list = filtersByField.get(filter.fld) ?? []
+    list.push(filter)
+    filtersByField.set(filter.fld, list)
+  }
+  const order = [...used, ...def.fields.map((_, index) => index).filter(field => !usedSet.has(field))]
   const fields = order.map((field): PivotMenuField => {
     const state = view.fields[field]
     const list = def.fields[field]?.items
     const indices = list ? list.flatMap((item, k) => item.type === 'data' ? [k] : []) : (state?.hidden ?? []).map((_, k) => k)
     const scope = state?.autoSortScope?.references.find(ref => ref.field === PIVOT_VALUES_FIELD)?.x[0]
-    const page = view.pages.find(entry => entry.field === field)
+    const page = pageByField.get(field)
     return {
       index: field, sourceOrder: field, name: pivotFieldName(def, cache, field), axis: axisOf(field),
       items: indices.map(k => ({ index: k, ...pivotMenuItemLabel(def, cache, field, k, date1904), hidden: state?.hidden[k] ?? false, collapsed: state?.collapsed[k] ?? false })),
       sort: state?.sortType ?? 'manual', ...(scope !== undefined ? { byData: scope } : {}),
-      filters: view.filters.filter(filter => filter.fld === field), values: valuesOf(cache, field),
-      expandable: below(view.rows, field) || below(view.cols, field),
+      filters: filtersByField.get(field) ?? [], values: valuesOf(cache, field),
+      expandable: below(rowPositions, view.rows, field) || below(colPositions, view.cols, field),
       ...(page ? { page: page.selected === 'all' && indices.some(k => state?.hidden[k]) ? indices.filter(k => !state?.hidden[k]) : page.selected } : {}),
       ...(page && def.fields[field]?.multipleItemSelectionAllowed ? { multiple: true } : {}),
       ...(cache.fields[field]?.formula !== undefined ? { calculated: true } : {}),
       ...(cache.fields[field]?.fieldGroup ? { virtualGroup: true } : {}),
-      group: pivotMenuGroupInfo(cache, field, date1904),
+      group: pivotMenuGroupInfo(cache, field, date1904, groupPeriods),
       defaultDataFn: cache.fields[field]?.formula !== undefined || (cache.fields[field]?.sharedItems?.containsNumber && !cache.fields[field]?.sharedItems?.containsString && !cache.fields[field]?.sharedItems?.containsDate) ? 'sum' : 'count',
       permissions: { dragToRow: Boolean(def.fields[field]?.dragToRow), dragToCol: Boolean(def.fields[field]?.dragToCol), dragToPage: Boolean(def.fields[field]?.dragToPage), dragToData: Boolean(def.fields[field]?.dragToData), dragOff: Boolean(def.fields[field]?.dragOff) },
     }

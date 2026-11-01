@@ -156,6 +156,14 @@ function allocation(ctx: PivotDeltaContext, bytes: number): { hold?: PivotMemory
   const hold = ctx.admitCandidateBytes?.(bytes)
   return ctx.admitCandidateBytes && !hold ? undefined : { ...(hold ? { hold } : {}) }
 }
+/** Conservative upper charge for the copied cache/definition/view vectors made by grouping transitions. */
+function fieldCandidateBytes(ctx: PivotDeltaContext): number {
+  const fields = Math.max(ctx.cache.fields.length, ctx.def.fields.length, ctx.view.fields.length)
+  const vectors = ctx.cache.fields.length + ctx.def.fields.length + ctx.view.fields.length
+  // Covers the cloned field/state objects and the three retained pointer vectors, including nested sort references.
+  const bytes = fields * 256 + vectors * 16 + 512
+  return Number.isSafeInteger(bytes) ? bytes : Number.POSITIVE_INFINITY
+}
 function groupedAxisSet(cache: PivotCacheDefinition, base: number): Set<number> {
   const out = new Set<number>([base])
   cache.fields.forEach((field, index) => { if (index !== base && field.fieldGroup?.base === base) out.add(index) })
@@ -186,7 +194,7 @@ function groupDate(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'g
   const sizes = periods.map(period => ({ period, count: dateCaptionCount(period, bounds.start, bounds.end, daysInterval) }))
   if (sizes.some(entry => !Number.isSafeInteger(entry.count) || entry.count < 1 || entry.count > 10000)) return refuse('pivot-records-limit', 'The date group has too many items.')
   // Reserve an upper bound before any group labels, cache fields, or pivot-item arrays are created.
-  const bytes = sizes.reduce((sum, g) => sum + g.count * 240 + 512, 0)
+  const bytes = sizes.reduce((sum, g) => sum + g.count * 240 + 512, 0) + fieldCandidateBytes(ctx)
   const admitted = allocation(ctx, bytes)
   if (!admitted) return refuse('pivot-records-limit', 'Date grouping exceeds the memory budget.')
   try {
@@ -230,7 +238,7 @@ function numberGroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 
   if (min === undefined || max === undefined || min > max) return invalid('The numeric grouping bounds are invalid.')
   const count = Math.ceil((max - min) / delta.by)
   if (!Number.isSafeInteger(count) || count < 1 || count > 10000) return refuse('pivot-records-limit', 'The number group has too many items.')
-  const bytes = (count + 2) * 240 + 512
+  const bytes = (count + 2) * 240 + 512 + fieldCandidateBytes(ctx)
   const admitted = allocation(ctx, bytes)
   if (!admitted) return refuse('pivot-records-limit', 'Number grouping exceeds the memory budget.')
   try {
@@ -256,6 +264,12 @@ function ungroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'ung
   const axis = axisOf(ctx.view, field) ?? axisOf(ctx.view, base) ?? (groupedField >= 0 ? axisOf(ctx.view, groupedField) : undefined)
   const sourceAxis = axis === 'row' ? ctx.view.rows : ctx.view.cols
   const insertAt = insertionPoint(sourceAxis, groupSet)
+  const source = ctx.store.columns[base]
+  const inlineBytes = ctx.cache.fields[base]?.sharedItems?.inline && source?.kind === 'inline' ? ctx.store.count * 108 + 256 : 0
+  const bytes = fieldCandidateBytes(ctx) + inlineBytes
+  const admitted = allocation(ctx, bytes)
+  if (!admitted) return refuse('pivot-records-limit', 'Ungrouping this field exceeds the memory budget.')
+  const discard = <T extends EngineResult<unknown>>(result: T): T => { admitted.hold?.release(); return result }
   const prior = removeGroupFields(ctx, base)
   let cache = prior.cache, store = ctx.store, def = prior.def, view = prior.view
   if (axis === 'row' || axis === 'col') {
@@ -265,13 +279,12 @@ function ungroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'ung
     view = { ...view, rows, cols }
     def = { ...def, rowFields: rows, colFields: cols, fields: def.fields.map((f, i) => i === base ? { ...f, axis: axis === 'row' ? 'axisRow' : 'axisCol' } : f) }
   }
-  const source = store.columns[base]
   if (group.rangePr && group.base === base && source?.kind === 'shared') {
     let items = group.savedPivotItems
     if (!items) {
       const raw = cache.fields[base]?.sharedItems?.items ?? []
       const order = sortItemOrder(raw.map((_, index) => index), raw, 'ascending', base, ctx.def.customListSort !== false)
-      if (!order.ok) return order
+      if (!order.ok) return discard(order)
       items = pivotItemsForOrder(order.value)
     }
     const state = group.savedFieldState as FieldState | undefined
@@ -279,8 +292,6 @@ function ungroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'ung
     view = { ...view, fields: view.fields.map((f, i) => i === base ? state ?? makeFieldState(f, items.length) : f) }
   }
   if (cache.fields[base]?.sharedItems?.inline && source?.kind === 'inline') {
-    const bytes = store.count * 108 + 256, admitted = allocation(ctx, bytes)
-    if (!admitted) return refuse('pivot-records-limit', 'Ungrouping this inline field exceeds the memory budget.')
     const items: PivotCacheItem[] = [], indices = new Uint32Array(store.count), byKey = new Map<string, number>()
     for (let row = 0; row < store.count; row++) {
       const tag = source.tag[row]!, text = source.text[source.textIndex[row]!] ?? ''
@@ -297,7 +308,7 @@ function ungroup(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'ung
     view = { ...view, fields: view.fields.map((f, i) => i === base ? makeFieldState(f, pItems.length) : f) }
     return { ok: true, value: { def, cache, store, view, extraBytes: bytes, ...(admitted.hold ? { hold: admitted.hold } : {}) } }
   }
-  return { ok: true, value: { def, cache, store, view, extraBytes: 0 } }
+  return { ok: true, value: { def, cache, store, view, extraBytes: bytes, ...(admitted.hold ? { hold: admitted.hold } : {}) } }
 }
 export function applyGrouping(ctx: PivotDeltaContext, delta: Extract<PivotDelta, { kind: 'groupDate' | 'groupNumber' | 'ungroup' }>): EngineResult<PivotDeltaStateResult> {
   if (ctx.def.disableFieldList) return refuse('pivot-field-list-disabled', `The field list is disabled for ${ctx.def.name}.`)
@@ -307,12 +318,26 @@ export function applyGrouping(ctx: PivotDeltaContext, delta: Extract<PivotDelta,
 }
 
 /** The menu capability for a field, computed without walking the record store. */
-export function pivotMenuGroupInfo(cache: PivotCacheDefinition, field: number, date1904: boolean): PivotMenuGroupInfo {
+export function pivotMenuGroupPeriods(cache: PivotCacheDefinition): ReadonlyMap<number, readonly PivotDateGroupPeriod[]> {
+  const periods = new Map<number, PivotDateGroupPeriod[]>()
+  for (const candidate of cache.fields) {
+    const group = candidate.fieldGroup
+    if (group?.base === undefined || !group.rangePr || group.rangePr.groupBy === 'range') continue
+    const list = periods.get(group.base) ?? []
+    list.push(group.rangePr.groupBy as PivotDateGroupPeriod)
+    periods.set(group.base, list)
+  }
+  return periods
+}
+
+export function pivotMenuGroupInfo(cache: PivotCacheDefinition, field: number, date1904: boolean, periodIndex?: ReadonlyMap<number, readonly PivotDateGroupPeriod[]>): PivotMenuGroupInfo {
   const cf = cache.fields[field], group = cf?.fieldGroup
   const baseField = group?.base ?? field
   const grouped = Boolean(group?.base !== undefined || group?.rangePr || group?.discretePr || group?.par)
   const shared = cache.fields[baseField]?.sharedItems
-  const periods = cache.fields.flatMap(candidate => candidate.fieldGroup?.base === baseField && candidate.fieldGroup.rangePr && candidate.fieldGroup.rangePr.groupBy !== 'range' ? [candidate.fieldGroup.rangePr.groupBy as PivotDateGroupPeriod] : [])
+  const periods = periodIndex
+    ? periodIndex.get(baseField) ?? []
+    : cache.fields.flatMap(candidate => candidate.fieldGroup?.base === baseField && candidate.fieldGroup.rangePr && candidate.fieldGroup.rangePr.groupBy !== 'range' ? [candidate.fieldGroup.rangePr.groupBy as PivotDateGroupPeriod] : [])
   if (shared?.containsDate && !shared.containsNonDate) {
     const bounds = shared.minDate && shared.maxDate ? { min: isoToSerial(shared.minDate, date1904), max: isoToSerial(shared.maxDate, date1904) } : undefined
     const range = group?.rangePr

@@ -61,7 +61,9 @@ export interface CaptionRef { kind: CaptionKind; args: CaptionArgs }
 /** An implicit caption cell of a layout: where it is and what it says. */
 export interface CaptionSlot extends CaptionRef { row: number; col: number }
 /** `captionSlots` lists every `caption: 'implicit'` cell, in cell order (absent on layouts built elsewhere). */
-export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean; captionSlots?: CaptionSlot[] }
+export interface PivotCandidateHold { readonly bytes: number; resize?(bytes: number): boolean; release(): void }
+export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean; captionSlots?: CaptionSlot[]
+  /** Internal admission retained by a staged session; omitted for ordinary engine calls. */ candidateHold?: PivotCandidateHold }
 /** Ruling S2-J: the workbook's date system is explicit (the cache does not know it). `savedCaption` is the saved text
  * of a caption slot, for the saved state only (Stage 2 caption ruling). */
 export interface PlaceOptions { date1904: boolean; savedCaption?: (row: number, col: number) => string | undefined }
