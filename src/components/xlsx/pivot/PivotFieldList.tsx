@@ -15,6 +15,7 @@ export interface PivotFieldListProps {
 }
 
 type Area = 'page' | 'col' | 'row' | 'data'
+type DragSource = { kind: 'field'; field: number } | { kind: 'chip'; field: number; area: Area; index: number }
 const areas: Array<{ id: Area; label: string }> = [
   { id: 'page', label: 'Filters' }, { id: 'col', label: 'Columns' }, { id: 'row', label: 'Rows' }, { id: 'data', label: 'Values' },
 ]
@@ -23,7 +24,7 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
   const mobile = useControlMedia('(pointer: coarse), (max-width: 640px)')
   const root = useRef<HTMLElement>(null)
   const [search, setSearch] = useState('')
-  const [dragging, setDragging] = useState<number | null>(null)
+  const [dragging, setDragging] = useState<DragSource | null>(null)
   const fields = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
     return [...model.fields].filter(field => !query || field.name.toLocaleLowerCase().includes(query))
@@ -59,12 +60,15 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
   const fieldOf = (area: Area, chip: number) => area === 'data' ? model.data[chip]?.field : chip
   const drop = (event: DragEvent, area: Area, index: number) => {
     event.preventDefault()
-    const field = dragging ?? Number(event.dataTransfer.getData('text/plain'))
-    if (Number.isInteger(field) && field >= 0) move(field, area, index)
+    event.stopPropagation()
+    const source = dragging ?? { kind: 'field' as const, field: Number(event.dataTransfer.getData('text/plain')) }
+    if (source.kind === 'chip' && source.area === 'data' && area === 'data') {
+      onApply({ kind: 'moveDataField', dataIndex: source.index, toIndex: index })
+    } else if (Number.isInteger(source.field) && (source.field >= 0 || source.field === -2)) move(source.field, area, index)
     setDragging(null)
   }
   const close = () => { onClose(); requestAnimationFrame(() => invoker?.focus()) }
-  useEffect(() => { root.current?.querySelector<HTMLElement>('input,button,select')?.focus() }, [])
+  useEffect(() => { root.current?.querySelector<HTMLElement>('input[aria-label="Search fields"]')?.focus() }, [])
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     event.stopPropagation()
     if (event.key === 'Escape') { event.preventDefault(); close(); return }
@@ -90,7 +94,7 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
     <label style={{ display: 'block', marginBlock: 10 }}>Search fields <input aria-label="Search fields" className={CONTROL_CLS} style={{ ...controlTarget, width: '100%' }} value={search} onChange={event => setSearch(event.target.value)} /></label>
     <fieldset><legend>Choose fields to add to report</legend>
       {fields.map(field => <div key={field.index} draggable={field.permissions.dragOff || field.permissions.dragToData || field.permissions.dragToRow || field.permissions.dragToCol || field.permissions.dragToPage}
-        onDragStart={event => { setDragging(field.index); event.dataTransfer.setData('text/plain', String(field.index)) }} onDragEnd={() => setDragging(null)}
+        onDragStart={event => { setDragging({ kind: 'field', field: field.index }); event.dataTransfer.setData('text/plain', String(field.index)) }} onDragEnd={() => setDragging(null)}
         style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 44 }}>
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}><input type="checkbox" aria-label={field.name} checked={isPlaced(field.index)} disabled={isPlaced(field.index) ? !field.permissions.dragOff : !field.permissions.dragToData && !field.permissions.dragToRow}
           onChange={event => { if (event.target.checked) field.defaultDataFn === 'sum' && field.permissions.dragToData ? move(field.index, 'data') : move(field.index, 'row'); else removeEverywhere(field.index) }} />{field.name}</label>
@@ -108,14 +112,14 @@ export function PivotFieldList({ model, pivot, pivotCount = 1, onPivot, onApply,
           if (field === undefined) return null
           if (field === -2) {
             const axis = area.id === 'row' ? 'row' : 'col'
-            return <div key={`${field}:${index}`}><span>{model.valuesCaption}</span><select aria-label={`Actions for ${model.valuesCaption}`} style={controlTarget} value="" onChange={event => { const action = event.target.value; if (action === 'up' || action === 'down' || action === 'begin' || action === 'end') {
+            return <div key={`${field}:${index}`} draggable onDragStart={event => { setDragging({ kind: 'chip', field, area: area.id, index }); event.dataTransfer.setData('text/plain', String(field)) }} onDragEnd={() => setDragging(null)} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, area.id, index)}><span>{model.valuesCaption}</span><select aria-label={`Actions for ${model.valuesCaption}`} style={controlTarget} value="" onChange={event => { const action = event.target.value; if (action === 'up' || action === 'down' || action === 'begin' || action === 'end') {
               const list = chips(area.id), target = action === 'up' ? Math.max(0, index - 1) : action === 'down' ? Math.min(list.length - 1, index + 1) : action === 'begin' ? 0 : list.length - 1; move(-2, area.id, target)
             } else if (action === 'other') move(-2, area.id === 'row' ? 'col' : 'row'); event.currentTarget.value = '' }}>
               <option value="">Actions</option><option value="up">Move Up</option><option value="down">Move Down</option><option value="begin">Move to Beginning</option><option value="end">Move to End</option><option value="other">Move to {axis === 'row' ? 'Columns' : 'Rows'}</option>
             </select></div>
           }
           if (!meta) return null
-          return <div key={`${field}:${index}`} draggable onDragStart={event => { setDragging(field); event.dataTransfer.setData('text/plain', String(field)) }} onDragEnd={() => setDragging(null)} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, area.id, index)} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          return <div key={`${field}:${index}`} draggable onDragStart={event => { setDragging({ kind: 'chip', field, area: area.id, index }); event.dataTransfer.setData('text/plain', String(field)) }} onDragEnd={() => setDragging(null)} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, area.id, index)} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <span>{label}</span>
             <select aria-label={`Actions for ${label}`} style={controlTarget} value="" onChange={event => { const action = event.target.value; if (action === 'up' || action === 'down' || action === 'begin' || action === 'end') {
               if (area.id === 'data') { const toIndex = action === 'up' ? Math.max(0, index - 1) : action === 'down' ? Math.min(model.data.length - 1, index + 1) : action === 'begin' ? 0 : model.data.length - 1; onApply({ kind: 'moveDataField', dataIndex: index, toIndex }) }

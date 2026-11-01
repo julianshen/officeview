@@ -527,7 +527,10 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       } })
       if (!applied.ok) return applied
       const result = applied.value
-      if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
+      if (!session.commit(result)) {
+        result.hold?.release()
+        return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
+      }
       entry.cache = result.cache
       // Ruling S3-AF: the dependents to recompute read the saved area, the area shown before this commit and the one
       // shown after (a shrink or reset vacates cells the previous layout filled).

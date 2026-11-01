@@ -1530,7 +1530,12 @@ export class DocumentSession {
     const overlay = pivotOverlay(applied.value, handle.savedRects, atSaved)
     // Plus its share of the sheet's composite overlay index, built when it commits (perf round 2).
     const bytes = pivotOverlayBytes(overlay, applied.value.layout) + OwnedRects.upperBytesFor(overlay.rects.length)
-    if (!Number.isSafeInteger(bytes) || bytes > grantBytes) { applied.value.hold?.release(); return { kind: 'quota', requiredBytes: bytes, limitBytes: grantBytes } }
+    const extraBytes = applied.value.hold?.bytes ?? 0
+    const requiredBytes = extraBytes + bytes
+    if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(requiredBytes) || requiredBytes > grantBytes) {
+      applied.value.hold?.release()
+      return { kind: 'quota', requiredBytes, limitBytes: grantBytes }
+    }
     const revision = Math.max(handle.highestWireRevision, handle.committedWireRevision, handle.session.revision) + 1
     const entry = this.memory.retain(`pivot-overlay:${this.docId}:${sheetId}:${pivot}:${revision}:${handle.serial++}`, {
       tier: 'source', owner: sheetId, bytes, evictable: false,

@@ -27,6 +27,7 @@ import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { MemoryPool } from '../src/xlsx/view/tileCache'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 
 const FIXTURE = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/engine/', import.meta.url)), 'baseline.xlsx')
 const FIXTURE_ROOT = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url)))
@@ -356,6 +357,67 @@ describe('worker pivot protocol', () => {
     const committed = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision }))
     expect(committed.kind).toBe('pivotCommit')
     await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('Task 35: candidate and overlay bytes share the per-apply grant', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const field = opened.menu.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
+    const session = kernel.session(docId)!
+    const before = session.memoryStats().sourceBytes
+    const delta: PivotDelta = { kind: 'moveField', field: field.index, axis: 'row' }
+    const staged = session.pivotApply(sheetId, 0, 0, 1, delta, 16 * 1024 * 1024)
+    expect(staged.kind).toBe('apply')
+    const internals = session as unknown as { pivotHandles: Map<string, { staged?: { result: { hold?: { bytes: number } }; entry: { bytes: number } } }> }
+    const entry = internals.pivotHandles.get(JSON.stringify([sheetId, 0]))?.staged
+    const extraBytes = entry?.result.hold?.bytes ?? 0, overlayBytes = entry?.entry.bytes ?? 0
+    expect(extraBytes).toBeGreaterThan(0)
+    expect(overlayBytes).toBeGreaterThan(0)
+    const grantBytes = Math.max(extraBytes, overlayBytes)
+    expect(extraBytes).toBeLessThanOrEqual(grantBytes)
+    expect(overlayBytes).toBeLessThanOrEqual(grantBytes)
+    expect(extraBytes + overlayBytes).toBeGreaterThan(grantBytes)
+
+    const refused = session.pivotApply(sheetId, 0, 0, 2, delta, grantBytes)
+    expect(refused).toMatchObject({ kind: 'quota', requiredBytes: extraBytes + overlayBytes, limitBytes: grantBytes })
+    expect(session.memoryStats().sourceBytes).toBe(before)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('Task 35: refunds a resident candidate when its session is released before commit', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    class ReleasingLedger extends MainMemoryLedger {
+      client: { dispose?(): void } | undefined
+      candidateOwners: string[] = []
+      private triggered = false
+      override set(pool: Parameters<MainMemoryLedger['set']>[0], owner: string, bytes: number) {
+        super.set(pool, owner, bytes)
+        if (!this.triggered && bytes > 0 && owner.startsWith('pivot-candidate:')) {
+          this.triggered = true
+          this.candidateOwners.push(owner)
+          this.client?.dispose?.()
+        }
+      }
+    }
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEEDS['engine-seed']!))))
+    const sheet = doc.sheets.findIndex(candidate => candidate.pivotTables?.length)
+    const ledger = new ReleasingLedger()
+    const client = createResidentPivotClient({ doc, ledger, install: () => {} })
+    ledger.client = client
+    const opened = await client.open(sheet, 0, new AbortController().signal)
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    const field = opened.model.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)!
+    const result = await client.apply(sheet, 0, { kind: 'moveField', field: field.index, axis: 'row' })
+    expect(result).toMatchObject({ ok: false })
+    expect(ledger.candidateOwners).toHaveLength(1)
+    expect(ledger.candidateOwners.map(owner => ledger.ownerBytes('document', owner))).toEqual([0])
   })
 
   it('R2-1 (S3-L): the first commit protects the saved area, end to end, and main publishes no stale saved merge', async () => {

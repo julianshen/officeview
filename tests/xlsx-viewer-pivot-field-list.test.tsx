@@ -19,6 +19,7 @@ describe('PivotFieldList', () => {
   it('searches fields, exposes keyboard/menu moves, drag targets and reset', () => {
     const onApply = vi.fn(), onClose = vi.fn()
     render(<PivotFieldList model={model} pivot={0} pivotCount={1} onApply={onApply} onClose={onClose} />)
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search fields' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Search fields' }), { target: { value: 'sales' } })
     expect(screen.queryByRole('checkbox', { name: 'Region' })).toBeNull()
     const actions = screen.getByRole('combobox', { name: 'Move Sales' })
@@ -28,6 +29,52 @@ describe('PivotFieldList', () => {
     expect(onApply).toHaveBeenCalledWith('reset')
   })
 
+  it('sorts the field list and reorders Values chips with their existing data-field identity', () => {
+    const onApply = vi.fn()
+    const sortedModel: PivotMenuModel = {
+      ...model, fieldListSortAscending: true, rows: [0], cols: [-2],
+      fields: [
+        { ...model.fields[0]!, index: 0, sourceOrder: 0, name: 'Zulu', axis: 'none' },
+        { ...model.fields[1]!, index: 1, sourceOrder: 1, name: 'Alpha', axis: 'none' },
+      ],
+      data: [
+        { index: 0, field: 0, name: 'Sum of Zulu', fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832 },
+        { index: 1, field: 1, name: 'Sum of Alpha', fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832 },
+      ],
+    }
+    render(<PivotFieldList model={sortedModel} pivot={0} onApply={onApply} onClose={vi.fn()} />)
+    expect(screen.getAllByRole('checkbox').map(node => node.getAttribute('aria-label'))).toEqual(['Alpha', 'Zulu'])
+    const values = screen.getByRole('group', { name: 'Values' })
+    const chips = values.querySelectorAll<HTMLElement>('[draggable="true"]')
+    expect(chips).toHaveLength(2)
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn().mockReturnValue('0'), effectAllowed: 'move' }
+    fireEvent.change(screen.getByRole('combobox', { name: 'Actions for Sum of Zulu' }), { target: { value: 'down' } })
+    expect(onApply).toHaveBeenCalledWith({ kind: 'moveDataField', dataIndex: 0, toIndex: 1 })
+    onApply.mockClear()
+    fireEvent.dragStart(chips[0]!, { dataTransfer })
+    fireEvent.drop(chips[1]!, { dataTransfer })
+    expect(onApply).toHaveBeenCalledWith({ kind: 'moveDataField', dataIndex: 0, toIndex: 1 })
+
+    onApply.mockClear()
+    const columns = screen.getByRole('group', { name: 'Columns' })
+    const marker = columns.querySelector<HTMLElement>('[draggable="true"]')!
+    fireEvent.dragStart(marker, { dataTransfer })
+    fireEvent.drop(screen.getByRole('group', { name: 'Rows' }), { dataTransfer })
+    expect(onApply).toHaveBeenCalledWith({ kind: 'moveField', field: -2, axis: 'row', index: 1 })
+
+    onApply.mockClear()
+    const alpha = screen.getByRole('checkbox', { name: 'Alpha' }).parentElement!.parentElement!
+    fireEvent.dragStart(alpha, { dataTransfer })
+    fireEvent.drop(screen.getByRole('group', { name: 'Rows' }), { dataTransfer })
+    expect(onApply).toHaveBeenCalledWith({ kind: 'moveField', field: 1, axis: 'row', index: 1 })
+
+    onApply.mockClear()
+    const rowChip = screen.getByRole('group', { name: 'Rows' }).querySelector<HTMLElement>('[draggable="true"]')!
+    fireEvent.dragStart(rowChip, { dataTransfer })
+    fireEvent.drop(screen.getByRole('group', { name: 'Columns' }), { dataTransfer })
+    expect(onApply).toHaveBeenCalledWith({ kind: 'moveField', field: 0, axis: 'col', index: 1 })
+  })
+
   it('offers the responsive bottom-sheet dialog and Escape close', () => {
     const original = window.matchMedia
     window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as typeof window.matchMedia
@@ -35,6 +82,10 @@ describe('PivotFieldList', () => {
     render(<PivotFieldList model={model} pivot={0} onApply={vi.fn()} onClose={onClose} />)
     const dialog = screen.getByRole('dialog', { name: 'PivotTable Fields' })
     expect(dialog.getAttribute('data-pivot-field-list')).toBe('bottom-sheet')
+    for (const node of dialog.querySelectorAll<HTMLElement>('button,input:not([type="checkbox"]),select')) {
+      expect(Number.parseFloat(node.style.minHeight || '0')).toBeGreaterThanOrEqual(44)
+      expect(Number.parseFloat(node.style.minWidth || '0')).toBeGreaterThanOrEqual(44)
+    }
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledOnce()
     window.matchMedia = original
