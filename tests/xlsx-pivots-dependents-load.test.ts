@@ -1,10 +1,11 @@
-// F1: on a normal file load the dependency graph is empty, so cell references into a pivot never recompute.
+// Dependents on a plain file load: the reader index is built from the parsed formulas, so cell references into a
+// pivot recompute without a forced full evaluation first.
 import { expect, it } from 'vitest'
 import { recomputeDependents } from '../src/xlsx/formula/workbook'
 import { registerGetPivotData, getPivotData } from '../src/xlsx/pivots/session/getpivotdata'
 import { load, cellAt, liveContext, viewerReadCellValue, changedOf } from './helpers/xlsx-pivots-dependent-fixtures'
 
-it('F1: after a plain parseXlsx (as the viewer gets it), =Pivot!B6 and =SUM(Pivot!B6:B8) follow a hide-West commit', async () => {
+it('after a plain parseXlsx (as the viewer gets it), =Pivot!B6 and =SUM(Pivot!B6:B8) follow a hide-West commit', async () => {
   registerGetPivotData()
   const doc = await load() // parse.ts:539 file-load evaluation only; no forceRecalc
   const { ctx } = await liveContext('West')
@@ -23,7 +24,7 @@ it('F1: after a plain parseXlsx (as the viewer gets it), =Pivot!B6 and =SUM(Pivo
   void b6; void result
 })
 
-it('F1 control (passes): the same recompute works only when a forced full evaluation ran first', async () => {
+it('the same recompute after a forced full evaluation', async () => {
   const { evaluateWorkbookFormulas } = await import('../src/xlsx/formula/workbook')
   registerGetPivotData()
   const doc = await load()

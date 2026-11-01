@@ -1,5 +1,5 @@
-// F9: aggregates over a pivot range enumerate the saved cellMap, so cells the live layout adds are skipped.
-// F10: the viewer's readCellValue disagrees with the composite overlay when two pivots share a vacated area.
+// Range readers of a committed pivot: aggregates count the cells the live layout adds, and a cell two pivots share
+// (one vacated it, the other grew into it) reads as the composite overlay shows it.
 import { expect, it } from 'vitest'
 import { evaluateWorkbookFormulas, recomputeDependents } from '../src/xlsx/formula/workbook'
 import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
@@ -15,7 +15,7 @@ function sheet(name: string, cells: Array<{ ref: string; col: number; row: numbe
   return { name, sheetId: name, workbookIndex: 0, cols: [], merges: [], mergeRanges: [], rows: [...rows.values()] }
 }
 
-it('F9 (Important): SUM over a pivot range counts cells the committed layout grew into', async () => {
+it('SUM over a pivot range counts cells the committed layout grew into', async () => {
   const doc: XlsxDocument = { definedNames: [], tables: [], sheets: [
     sheet('Pivot', [{ ref: 'A1', col: 0, row: 0, value: 1 }]),
     sheet('Calc', [{ ref: 'A1', col: 0, row: 0, value: 1, formula: 'SUM(Pivot!A1:A3)' }, { ref: 'B1', col: 1, row: 0, value: 1, formula: 'COUNTA(Pivot!A1:A3)' }]),
@@ -30,7 +30,7 @@ it('F9 (Important): SUM over a pivot range counts cells the committed layout gre
   expect(doc.sheets[1]!.rows[0]!.cells[1]!.value).toBe(3)
 })
 
-it('F10 (Important): two committed pivots: a cell B grew into (A vacated) reads B\'s value, as the overlay shows it', async () => {
+it('two committed pivots: a cell B grew into (A vacated) reads B\'s value, as the overlay shows it', async () => {
   const layout = (minRow: number, maxRow: number, minCol: number, maxCol: number, cells: Array<[number, number, number]>) =>
     ({ rect: { minRow, maxRow, minCol, maxCol }, merges: [], cells: cells.map(([row, col, value]) => ({ row, col, value: { kind: 'number', value } })) }) as never
   // compositeOverlay's own test case (tests/xlsx-viewer-pivot-ui.test.tsx:157): overlay.cell(5, 0) is { value: 50 }.

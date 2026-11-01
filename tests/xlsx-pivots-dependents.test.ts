@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateWorkbookFormulas, recomputeDependents } from '../src/xlsx/formula/workbook'
 import { registerFormulaFunction } from '../src/xlsx/formula/functions'
-import { markPagedDependentsStale } from '../src/xlsx/formula/workbook'
+import { markPagedDependentsStale, noteWorkbookCellsChanged } from '../src/xlsx/formula/workbook'
+import { mergeOwedRects, type OwedRect } from '../src/xlsx/pivots/session/dependentRects'
 import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
@@ -161,5 +162,61 @@ describe('pivot dependent formulas (Task 31)', () => {
     const pivotModules = [...eagerModules(map)].map(id => id.replace(/\\/g, '/')).filter(id =>
       /src\/xlsx\/pivots\/(?!stub\.ts(?:$|\?))/.test(id))
     expect(pivotModules).toEqual([])
+  })
+})
+
+describe('stale readers and edited cells', () => {
+  const staleCell = (ref: string, col: number, value: number, formula?: string) => ({ ref, col, row: 0, value, ...(formula ? { formula } : {}), styleIndex: 0, hasCachedValue: true })
+  function staleDocument(formula: string): XlsxDocument {
+    return { sheets: [
+      { name: 'Pivot', sheetId: 'P', workbookIndex: 0, cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [staleCell('A1', 0, 1)] }] },
+      { name: 'Calc', sheetId: 'C', workbookIndex: 1, cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [staleCell('A1', 0, 77, formula), staleCell('B1', 1, 154, 'A1*2')] }] },
+    ], definedNames: [], tables: [] }
+  }
+
+  it('S3-T: a formula reading a retained stale formula is also stale and keeps its own cached value', () => {
+    const doc = staleDocument('INDIRECT("Pivot!A1")')
+    evaluateWorkbookFormulas(doc)
+    const result = recomputeDependents(doc, [{ sheetId: 0, rect: { minRow: 0, minCol: 0, maxRow: 0, maxCol: 0 } }], { readCellValue: () => 5 })
+    expect(result.stale).toEqual(expect.arrayContaining(['calc!0:0', 'calc!1:0']))
+    expect(doc.sheets[1]!.rows[0]!.cells.map(item => item.value)).toEqual([77, 154])
+  })
+
+  it('S3-AJ: an announced in-place formula edit rebuilds the syntactic and runtime cell indexes', () => {
+    const doc = staleDocument('Pivot!A1*2')
+    evaluateWorkbookFormulas(doc, { forceRecalc: true })
+    const formula = doc.sheets[1]!.rows[0]!.cells[0]!
+    formula.formula = 'Pivot!B1*2'
+    doc.sheets[0]!.rows[0]!.cells.push(staleCell('B1', 1, 9))
+    // T31 r4 M-1: a direct edit of the cell model is announced; the commit path no longer walks every cell to find it.
+    noteWorkbookCellsChanged(doc)
+    const result = recomputeDependents(doc, [{ sheetId: 0, rect: { minRow: 0, minCol: 1, maxRow: 0, maxCol: 1 } }])
+    expect(result.recomputed).toBe(2)
+    expect(formula.value).toBe(18)
+  })
+})
+
+describe('the rectangles a pivot owes its dependents', () => {
+  const owedKey = (rect: OwedRect) => `${rect.r0}:${rect.r1}:${rect.c0}:${rect.c1}`
+
+  it('S3-AE: 20 consecutive over-budget commits leave the owed rectangles merged, with no duplicates', () => {
+    const saved = { r0: 2, r1: 23, c0: 0, c1: 8 }, collapsed = { r0: 2, r1: 18, c0: 0, c1: 8 }, grown = { r0: 2, r1: 30, c0: 0, c1: 8 }
+    let owed: OwedRect[] = []
+    // Each commit owes saved ∪ before ∪ current; nothing ran, so the owed set carries into the next commit.
+    for (let commit = 0; commit < 20; commit++) {
+      const before = commit % 2 ? collapsed : grown, current = commit % 2 ? grown : collapsed
+      owed = mergeOwedRects(owed, [saved, before, current])
+      expect(new Set(owed.map(owedKey)).size).toBe(owed.length)
+      expect(owed.length).toBeLessThanOrEqual(3)
+    }
+    // The grown area contains the other two.
+    expect(owed).toEqual([grown])
+  })
+
+  it('S3-AE: disjoint owed areas are all kept, once each', () => {
+    const a = { r0: 0, r1: 4, c0: 0, c1: 4 }, b = { r0: 10, r1: 12, c0: 10, c1: 12 }
+    let owed: OwedRect[] = []
+    for (let commit = 0; commit < 20; commit++) owed = mergeOwedRects(owed, [a, b, { ...a }])
+    expect(owed.map(owedKey).sort()).toEqual([owedKey(a), owedKey(b)].sort())
   })
 })
