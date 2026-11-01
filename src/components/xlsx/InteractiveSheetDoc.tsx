@@ -526,7 +526,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     setResidentDependentNotices({ unsupported, outdated, cells })
   }
-  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
+  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length) || Boolean(remote && sheetIds.some(id => remote.layout(id).hasPivotDisplay)), [doc, remote, sheetIds])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
@@ -2389,7 +2389,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
             <span className={toolbarLabel}>Reset sizes</span>
           </button>
-          {activePivots?.length && activePivots.some(def => !def.disableFieldList) ? <button type="button" className={toolbarBtn} aria-expanded={fieldListPivot !== null} onClick={event => {
+          {(activePivots ? activePivots.length > 0 && activePivots.some(def => !def.disableFieldList) : Boolean(remote && remote.layout(activeSheetId).hasPivotDisplay)) ? <button type="button" className={toolbarBtn} aria-expanded={fieldListPivot !== null} onClick={event => {
             if (fieldListPivot !== null) { setFieldListPivot(null); requestAnimationFrame(() => fieldListInvoker?.focus()) }
             else if (pivotController) void pivotController.showFieldList(activeIndex, selectedFieldListPivot, event.currentTarget)
           }}>Pivot fields</button> : null}
