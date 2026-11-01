@@ -7,7 +7,7 @@ import { SpillEngine, SpillSuspension, spillCellKey, type SpillBlockReason, type
 import { resolveUnicodeSettings, unicodeVersionOf } from './unicode'
 import { decideCellCalculation, isWhatIfDataTable, type CalcMode, type CalcPolicy } from './calc-policy'
 import { canonicalOrder, findCyclicCells, ITERATIVE_PASS_HARD_CAP, runBoundedPasses, transitiveDependents } from './iterative'
-import type { XlsxCell, XlsxDocument, XlsxSheet } from '../types'
+import type { XlsxCell, XlsxDocument, XlsxRow, XlsxSheet } from '../types'
 import { savedSpillFollowers } from './saved-spills'
 import { workbookValuePolicy } from './value-policy'
 
@@ -174,6 +174,19 @@ interface DocSpillState {
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
 const liveFormulaSnapshots = new WeakMap<XlsxDocument, Map<string, { cell: XlsxCell; content: CellContent }>>()
+/** The saved state of one worksheet position a dependent recompute's spill work wrote or cleared (Ruling S3-AL): the
+ * row and cell objects there before it first touched the position (absent: there was none), the cell's content, and
+ * the position's runtime-index entries. */
+interface SpillImage {
+  sheet: XlsxSheet; row: number; col: number; rowObj?: XlsxRow; cell?: XlsxCell; content?: CellContent
+  indexed?: XlsxCell; indexedSheet?: string; input: boolean
+}
+/** Per document, from its first dependent recompute until the restore: every position spill work touched, with its
+ * saved state, and the saved generation's spill records (the cells it owned and the rows it created). */
+interface SpillImages { positions: Map<string, SpillImage>; generated: GeneratedCellRecord[]; createdRows: CreatedRowRecord[] }
+const liveSpillImages = new WeakMap<XlsxDocument, SpillImages>()
+/** Set while a dependent recompute evaluates: told about a position before spill work writes or clears it. */
+let spillImageRecorder: ((sheet: XlsxSheet, col: number, row: number) => void) | undefined
 
 function reverseFormulaEdges(edges: Map<string, Set<string>>): Map<string, Set<string>> {
   const reverse = new Map<string, Set<string>>()
@@ -676,7 +689,22 @@ export function recomputeDependents(
     const cell = prior?.runtimeIndex?.cellMap.get(key)
     if (cell) snapshots.set(key, { cell, content: snapshotCell(cell) })
   }
-  evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, recomputeKeys)
+  // Ruling S3-AL: the saved state of every position the spill work writes or clears (a spill that grows or shrinks), so
+  // print and the restore put back exactly the saved cells, and the restored cells are the saved generation's again.
+  let images = liveSpillImages.get(doc)
+  if (!images) liveSpillImages.set(doc, images = { positions: new Map(), generated: [...(prior?.generated ?? [])], createdRows: [...(prior?.createdRows ?? [])] })
+  const positions = images.positions, runtime = prior?.runtimeIndex
+  spillImageRecorder = (sheet, col, row) => {
+    const key = makeCellKey(sheet.name, col, row)
+    if (positions.has(key)) return
+    const rowObj = sheet.rows.find(candidate => candidate.index === row)
+    const cell = rowObj?.cells.find(candidate => candidate.col === col)
+    const indexed = runtime?.cellMap.get(key), indexedSheet = runtime?.cellSheets.get(key)
+    positions.set(key, { sheet, row, col, ...(rowObj ? { rowObj } : {}), ...(cell ? { cell, content: snapshotCell(cell) } : {}),
+      ...(indexed ? { indexed } : {}), ...(indexedSheet !== undefined ? { indexedSheet } : {}), input: runtime?.inputKeys.has(key) ?? false })
+  }
+  try { evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, recomputeKeys) }
+  finally { spillImageRecorder = undefined }
   const affectedSheets = [...new Set([...formulaKeys].map(key => {
     const bang = key.lastIndexOf('!')
     return doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, bang))
@@ -707,26 +735,75 @@ export function recomputeDependents(
   return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
-/** The saved content of every formula cell a dependent recompute rewrote in place, as a detached copy of each cell
- * (keyed by the live cell object); undefined when none was rewritten. Ruling S3-AL: print, which never runs a pivot
- * session, shows these saved values beside the saved pivot. */
-export function savedDependentFormulaCells(doc: XlsxDocument): ReadonlyMap<XlsxCell, XlsxCell> | undefined {
-  const snapshots = liveFormulaSnapshots.get(doc)
-  if (!snapshots?.size) return undefined
-  const out = new Map<XlsxCell, XlsxCell>()
-  // A copy of the snapshot, never the live cell spread over it: the live cell may carry keys the saved one lacks.
-  for (const { cell, content } of snapshots.values()) out.set(cell, { ...content, ref: cell.ref, col: cell.col, row: cell.row })
+/** By sheet, row and column: the saved cell at every position a dependent recompute changed (a copy), or null where
+ * the saved workbook had no cell; undefined when nothing changed. That covers the formula cells it recomputed and the
+ * cells their spills wrote or cleared. Ruling S3-AL: print, which never runs a pivot session, shows these beside the
+ * saved pivot. */
+export type SavedDependentCells = ReadonlyMap<XlsxSheet, ReadonlyMap<number, ReadonlyMap<number, XlsxCell | null>>>
+export function savedDependentCells(doc: XlsxDocument): SavedDependentCells | undefined {
+  const snapshots = liveFormulaSnapshots.get(doc), images = liveSpillImages.get(doc)
+  if (!snapshots?.size && !images?.positions.size) return undefined
+  const out = new Map<XlsxSheet, Map<number, Map<number, XlsxCell | null>>>()
+  const put = (sheet: XlsxSheet, row: number, col: number, cell: XlsxCell | null) => {
+    let rows = out.get(sheet)
+    if (!rows) out.set(sheet, rows = new Map())
+    let cols = rows.get(row)
+    if (!cols) rows.set(row, cols = new Map())
+    if (!cols.has(col)) cols.set(col, cell)
+  }
+  // Copies of the saved content, never the live cell spread over it: the live cell may carry keys the saved one lacks.
+  for (const image of images?.positions.values() ?? []) put(image.sheet, image.row, image.col, image.cell ? { ...image.content!, ref: image.cell.ref, col: image.col, row: image.row } : null)
+  for (const [key, { cell, content }] of snapshots ?? []) {
+    const name = key.slice(0, key.lastIndexOf('!')), sheet = doc.sheets.find(candidate => candidate.name.toLowerCase() === name)
+    if (sheet) put(sheet, cell.row, cell.col, { ...content, ref: cell.ref, col: cell.col, row: cell.row })
+  }
   return out
 }
 
-/** Restore the saved formula values after a resident viewer releases its live pivot contexts; returns the indexes of
- * the sheets whose cells it restored. */
+/** Restore the saved formula values after a resident viewer releases its live pivot contexts, and every position their
+ * spills wrote or cleared: cells, rows, the runtime index and the saved generation's spill records, so a later
+ * recompute owns the saved spills again. Returns the indexes of the sheets whose cells it restored. */
 export function restoreDependentFormulaValues(doc: XlsxDocument): number[] {
-  const snapshots = liveFormulaSnapshots.get(doc)
-  if (!snapshots) return []
+  const snapshots = liveFormulaSnapshots.get(doc), images = liveSpillImages.get(doc)
+  if (!snapshots && !images) return []
   const names = new Set<string>()
-  for (const [key, { cell, content }] of snapshots) { restoreCell(cell, content); names.add(key.slice(0, key.lastIndexOf('!'))) }
-  snapshots.clear()
+  if (images) {
+    const state = docSpillStates.get(doc), runtime = state?.runtimeIndex
+    const emptied: Array<{ sheet: XlsxSheet; row: number }> = []
+    for (const [key, image] of images.positions) {
+      const { sheet } = image
+      names.add(sheet.name.toLowerCase())
+      let rowObj = sheet.rows.find(candidate => candidate.index === image.row)
+      const now = rowObj?.cells.find(candidate => candidate.col === image.col)
+      if (!image.cell) {
+        if (rowObj && now) rowObj.cells.splice(rowObj.cells.indexOf(now), 1)
+        if (!image.rowObj) emptied.push({ sheet, row: image.row })
+      } else {
+        if (!rowObj) {
+          rowObj = image.rowObj ?? { index: image.row, cells: [] }
+          const at = sheet.rows.findIndex(candidate => candidate.index > image.row)
+          if (at < 0) sheet.rows.push(rowObj); else sheet.rows.splice(at, 0, rowObj)
+        }
+        if (now !== image.cell) {
+          if (now) rowObj.cells.splice(rowObj.cells.indexOf(now), 1)
+          const at = rowObj.cells.findIndex(candidate => candidate.col > image.col)
+          if (at < 0) rowObj.cells.push(image.cell); else rowObj.cells.splice(at, 0, image.cell)
+        }
+        restoreCell(image.cell, image.content!)
+      }
+      if (runtime) {
+        if (image.indexed) runtime.cellMap.set(key, image.indexed); else runtime.cellMap.delete(key)
+        if (image.indexedSheet !== undefined) runtime.cellSheets.set(key, image.indexedSheet); else runtime.cellSheets.delete(key)
+        if (image.input) runtime.inputKeys.add(key); else runtime.inputKeys.delete(key)
+      }
+    }
+    // Rows the saved workbook did not have go again once empty.
+    for (const { sheet, row } of emptied) removeCreatedRow(sheet, row)
+    if (state) { state.generated = images.generated; state.createdRows = images.createdRows }
+    liveSpillImages.delete(doc)
+  }
+  for (const [key, { cell, content }] of snapshots ?? []) { restoreCell(cell, content); names.add(key.slice(0, key.lastIndexOf('!'))) }
+  snapshots?.clear()
   liveFormulaSnapshots.delete(doc)
   // The restored cells carry the same formula text: the syntactic index stays valid (M-1).
   return doc.sheets.flatMap((sheet, index) => names.has(sheet.name.toLowerCase()) ? [index] : [])
@@ -831,6 +908,22 @@ export function evaluateWorkbookFormulas(
 
 /** A bounded subset run used only by recomputeDependents. `onlyKeys` also
  * scopes old spill cleanup and preserves unaffected dependency edges. */
+/** `keys` (cell keys, `makeCellKey`) as spill owner keys (`spillCellKey`: the sheet identity the spill engine uses,
+ * as the identity sheets below name it), with the cell keys themselves kept too. */
+function spillOwnerKeys(doc: XlsxDocument, keys: ReadonlySet<string>): Set<string> {
+  const identities = new Map<string, string>()
+  for (const sheet of doc.workbookSheets ?? doc.sheets.map(candidate => ({ sheetId: candidate.sheetId ?? candidate.name, name: candidate.name }))) {
+    const name = sheet.name.toLowerCase()
+    if (!identities.has(name)) identities.set(name, String(sheet.sheetId))
+  }
+  const out = new Set<string>(keys)
+  for (const key of keys) {
+    const bang = key.lastIndexOf('!'), id = identities.get(key.slice(0, bang))
+    if (bang >= 0 && id !== undefined) out.add(`${id}${key.slice(bang)}`)
+  }
+  return out
+}
+
 function evaluateWorkbookFormulasInternal(
   doc: XlsxDocument,
   options?: WorkbookEvaluationOptions,
@@ -894,13 +987,18 @@ function evaluateWorkbookFormulasInternal(
   const manualFileLoadNoOp = options?.forceRecalc !== true &&
     (options?.intent ?? 'file-load') === 'file-load' &&
     doc.calc?.calcMode === 'manual'
+  // The spill owners among `onlyKeys`, keyed as the spill records key them (`spillCellKey`: the sheet's identity, not
+  // its lower-cased name), so a subset recalculation reverts, and does not retain, the followers of the owners it
+  // recalculates: a dependent spill that shrinks leaves none of its earlier cells behind (Ruling S3-AL).
+  const onlyOwners = onlyKeys ? spillOwnerKeys(doc, onlyKeys) : undefined
   const removedKeys = new Set<string>()
   if (prior && !manualFileLoadNoOp) {
     for (const g of prior.generated) {
-      if (onlyKeys && !onlyKeys.has(g.ownerKey)) continue
+      if (onlyOwners && !onlyOwners.has(g.ownerKey)) continue
       const rowObj = g.sheet.rows.find((r) => r.index === g.cell.row)
       if (!rowObj || !rowObj.cells.includes(g.cell)) continue // replaced object → user input
       if (!cellContentMatches(g.cell, g.written)) continue // user content edit → user input
+      spillImageRecorder?.(g.sheet, g.cell.col, g.cell.row)
       if (g.original) restoreCell(g.cell, g.original)
       else {
         removeCell(g.sheet, g.cell)
@@ -910,7 +1008,7 @@ function evaluateWorkbookFormulasInternal(
       removedKeys.add(g.key)
     }
     for (const row of prior.createdRows) {
-      if (onlyKeys && !onlyKeys.has(row.ownerKey)) continue
+      if (onlyOwners && !onlyOwners.has(row.ownerKey)) continue
       removeCreatedRow(row.sheet, row.index)
     }
   }
@@ -1007,7 +1105,7 @@ function evaluateWorkbookFormulasInternal(
   const activeSet = new Set<string>()
   const cycleMembers = new Set<string>()
   const generatedList: GeneratedCellRecord[] = []
-  const retainedGenerated = onlyKeys && prior ? prior.generated.filter(g => !onlyKeys.has(g.ownerKey)) : []
+  const retainedGenerated = onlyOwners && prior ? prior.generated.filter(g => !onlyOwners.has(g.ownerKey)) : []
   /** Rows this recalculation CREATED (safe to drop when empty); original rows
    * carrying heightPt/customHeight are never removed. */
   const createdRows: CreatedRowRecord[] = []
@@ -1139,6 +1237,7 @@ function evaluateWorkbookFormulasInternal(
     if (name === undefined) return
     const sheet = sheetsByName.get(name.toLowerCase())
     if (!sheet) return
+    spillImageRecorder?.(sheet, address.col, address.row)
     const existingRow = sheet.rows.find((r) => r.index === address.row)
     const existingCell = existingRow?.cells.find((c) => c.col === address.col)
     // Snapshot the ORIGINAL content of a pre-existing (blank/styled) cell so a
@@ -1162,6 +1261,7 @@ function evaluateWorkbookFormulasInternal(
   /** Revert one generated cell: restore an original cell's snapshot, or remove
    * a cell we created. Never destroys original formatting/metadata. */
   function revertGenerated(g: GeneratedCellRecord): void {
+    spillImageRecorder?.(g.sheet, g.cell.col, g.cell.row)
     if (g.original) {
       restoreCell(g.cell, g.original)
     } else {
@@ -1669,6 +1769,7 @@ function evaluateWorkbookFormulasInternal(
       // newly published follower. Edited cells remain ordinary blockers/input.
       for(const saved of savedByAnchor.get(cell)??[]){
         if(engine.ownerKeyForGenerated(addressOfName(saved.sheet.name,saved.cell.col,saved.cell.row))!==undefined)continue
+        spillImageRecorder?.(saved.sheet,saved.cell.col,saved.cell.row)
         Object.assign(saved.cell,blankSavedContent(saved.cell))
         const key=makeCellKey(saved.sheet.name,saved.cell.col,saved.cell.row)
         inputKeys.delete(key);memo.delete(key)
@@ -2121,7 +2222,7 @@ function evaluateWorkbookFormulasInternal(
 
   docSpillStates.set(doc, manualFileLoadNoOp && prior
     ? prior
-    : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyKeys && prior ? [...prior.createdRows.filter(row => !onlyKeys.has(row.ownerKey)), ...createdRows] : createdRows,
+    : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyOwners && prior ? [...prior.createdRows.filter(row => !onlyOwners.has(row.ownerKey)), ...createdRows] : createdRows,
       valueDeps, formulaDeps, reverseFormulaDeps: reverseDeps, retainedUnsupportedKeys, runtimeIndex: { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys, identitySheets, revision: cellModelRevision(doc) } })
   // A full pass reads every cell afresh: it is the resynchronisation point for direct edits nobody announced, so the
   // syntactic reader index is rebuilt from the cells at the next dependent recompute.

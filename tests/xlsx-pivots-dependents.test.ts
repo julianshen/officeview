@@ -2,9 +2,9 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateWorkbookFormulas, recomputeDependents } from '../src/xlsx/formula/workbook'
 import { registerFormulaFunction } from '../src/xlsx/formula/functions'
-import { markPagedDependentsStale, noteWorkbookCellsChanged } from '../src/xlsx/formula/workbook'
+import { markPagedDependentsStale, noteWorkbookCellsChanged, restoreDependentFormulaValues, savedDependentCells } from '../src/xlsx/formula/workbook'
 import { mergeOwedRects, type OwedRect } from '../src/xlsx/pivots/session/dependentRects'
-import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
+import type { XlsxCell, XlsxDocument, XlsxSheet } from '../src/xlsx/types'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -218,5 +218,68 @@ describe('the rectangles a pivot owes its dependents', () => {
     let owed: OwedRect[] = []
     for (let commit = 0; commit < 20; commit++) owed = mergeOwedRects(owed, [a, b, { ...a }])
     expect(owed.map(owedKey).sort()).toEqual([owedKey(a), owedKey(b)].sort())
+  })
+})
+
+describe('a dependent spill that grows or shrinks (Ruling S3-AL)', () => {
+  const spillCell = (ref: string, col: number, row: number, extra: Partial<XlsxCell> = {}): XlsxCell => ({ ref, col, row, value: null, styleIndex: 0, hasCachedValue: false, ...extra })
+  /** Pivot!A1 = `rows`; Calc!A1 = SEQUENCE(Pivot!A1,1), spilling down column A; Calc!C1 reads the spill's third cell. */
+  function spillDoc(rows: number): XlsxDocument {
+    const pivot: XlsxSheet = { name: 'Pivot', sheetId: 'Pivot', workbookIndex: 0, cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [spillCell('A1', 0, 0, { value: rows, hasCachedValue: true })] }] }
+    const calc: XlsxSheet = { name: 'Calc', sheetId: 'Calc', workbookIndex: 1, cols: [], merges: [], mergeRanges: [], rows: [{ index: 0, cells: [
+      spillCell('A1', 0, 0, { formula: 'SEQUENCE(Pivot!A1,1)', dynamicArray: true }), spillCell('B1', 1, 0, { value: 'beside', hasCachedValue: true }),
+    ] }] }
+    const doc: XlsxDocument = { sheets: [pivot, calc], definedNames: [], tables: [] }
+    evaluateWorkbookFormulas(doc, { forceRecalc: true, arrayMode: 'dynamic' })
+    return doc
+  }
+  const column = (doc: XlsxDocument) => doc.sheets[1]!.rows.flatMap(row => row.cells.filter(cell => cell.col === 0).map(cell => [cell.ref, cell.value]))
+  const commit = (doc: XlsxDocument, rows: number) => recomputeDependents(doc, [{ sheetId: 0, rect: { minRow: 0, maxRow: 0, minCol: 0, maxCol: 0 } }],
+    { arrayMode: 'dynamic', readCellValue: (name, col, row) => name === 'Pivot' && row === 0 && col === 0 ? rows : undefined })
+  /** What the print copy shows of Calc's column A (the viewer's withSavedCells, by position). */
+  const printed = (doc: XlsxDocument) => {
+    const calc = doc.sheets[1]!, saved = savedDependentCells(doc)?.get(calc)
+    const at = new Map<string, unknown>()
+    for (const row of calc.rows) for (const cell of row.cells) if (cell.col === 0) at.set(cell.ref, cell.value)
+    for (const [row, cols] of saved ?? []) for (const [col, cell] of cols) if (col === 0) { const ref = `A${row + 1}`; if (cell) at.set(ref, cell.value); else at.delete(ref) }
+    return [...at].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+  }
+
+  it('grown: print and the restore show the saved two cells, not the live third; a later commit spills again', () => {
+    const doc = spillDoc(2)
+    const saved = column(doc)
+    expect(saved).toEqual([['A1', 1], ['A2', 2]])
+    commit(doc, 3)
+    expect(column(doc)).toEqual([['A1', 1], ['A2', 2], ['A3', 3]])
+    expect(printed(doc)).toEqual(saved)
+    expect(savedDependentCells(doc)!.get(doc.sheets[1]!)!.get(2)!.get(0)).toBeNull()
+    restoreDependentFormulaValues(doc)
+    expect(column(doc)).toEqual(saved)
+    expect(doc.sheets[1]!.rows.map(row => row.index)).toEqual([0, 1])   // the row the spill created goes with it
+    expect(savedDependentCells(doc)).toBeUndefined()
+    // The restored cells are the saved spill's own again: the next commit grows it, unblocked.
+    commit(doc, 4)
+    expect(column(doc)).toEqual([['A1', 1], ['A2', 2], ['A3', 3], ['A4', 4]])
+    restoreDependentFormulaValues(doc)
+    expect(column(doc)).toEqual(saved)
+  })
+
+  it('shrunk: print and the restore put back the cleared saved cells; a later commit shrinks it again', () => {
+    const doc = spillDoc(3)
+    const saved = column(doc)
+    expect(saved).toEqual([['A1', 1], ['A2', 2], ['A3', 3]])
+    commit(doc, 1)
+    expect(column(doc)).toEqual([['A1', 1]])
+    expect(printed(doc)).toEqual(saved)
+    expect(savedDependentCells(doc)!.get(doc.sheets[1]!)!.get(2)!.get(0)).toMatchObject({ ref: 'A3', value: 3 })
+    restoreDependentFormulaValues(doc)
+    expect(column(doc)).toEqual(saved)
+    expect(doc.sheets[1]!.rows[0]!.cells.find(cell => cell.col === 1)!.value).toBe('beside')
+    commit(doc, 2)
+    expect(column(doc)).toEqual([['A1', 1], ['A2', 2]])
+    commit(doc, 3)   // a later commit of the same change: the saved state is still the first one
+    expect(printed(doc)).toEqual(saved)
+    restoreDependentFormulaValues(doc)
+    expect(column(doc)).toEqual(saved)
   })
 })

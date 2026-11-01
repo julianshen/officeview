@@ -149,6 +149,32 @@ it('a printout after a pivot change shows the saved pivot and the saved values o
   expect(node.content?.kind === 'xlsxChart' && node.content.chart).not.toBe(savedChart)
 }, 30_000)
 
+it('a printout and the unmount show a dependent spill as saved, whether the change grew it or shrank it', async () => {
+  const doc = await load()
+  const formulas = doc.sheets.find(s => s.name === 'Formulas')!
+  // D1 spills 2 rows while the saved grand total (B1) is over 200,000, else 3; E1 spills 3 rows, else 1.
+  formulas.rows.find(r => r.index === 0)!.cells.push(
+    { ref: 'D1', col: 3, row: 0, value: null, formula: 'SEQUENCE(IF(B1>200000,2,3),1)', dynamicArray: true, styleIndex: 0 } as never,
+    { ref: 'E1', col: 4, row: 0, value: null, formula: 'SEQUENCE(IF(B1>200000,3,1),1)', dynamicArray: true, styleIndex: 0 } as never)
+  formulas.rows.forEach(row => row.cells.sort((a, b) => a.col - b.col))
+  evaluateWorkbookFormulas(doc, { forceRecalc: true })
+  const columnOf = (sheet: XlsxDocument['sheets'][number], col: number) => sheet.rows.flatMap(row => row.cells.filter(cell => cell.col === col && cell.value !== null).map(cell => [cell.ref, cell.value]))
+  const savedD = columnOf(formulas, 3), savedE = columnOf(formulas, 4)
+  expect(savedD).toEqual([['D1', 1], ['D2', 2]])
+  expect(savedE).toEqual([['E1', 1], ['E2', 2], ['E3', 3]])
+  const { ui, print } = printing(doc)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  await filterRegion(ui, 'West')
+  await waitFor(() => expect(columnOf(formulas, 3)).toEqual([['D1', 1], ['D2', 2], ['D3', 3]]), { timeout: 10_000 })
+  expect(columnOf(formulas, 4)).toEqual([['E1', 1]])
+  const printed = (await print()).sheets.find(s => s.name === 'Formulas')!
+  expect(columnOf(printed, 3)).toEqual(savedD)
+  expect(columnOf(printed, 4)).toEqual(savedE)
+  ui.unmount()
+  expect(columnOf(formulas, 3)).toEqual(savedD)
+  expect(columnOf(formulas, 4)).toEqual(savedE)
+}, 30_000)
+
 it('a printout after every pivot is back to its saved view prints the document as it is, with no note', async () => {
   const doc = await load()
   const { ui, print, note } = printing(doc)

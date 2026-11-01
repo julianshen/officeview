@@ -27,7 +27,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
-import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues, savedDependentFormulaCells } from '../../xlsx/formula/workbook'
+import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues, savedDependentCells, type SavedDependentCells } from '../../xlsx/formula/workbook'
 import { workbookValuePolicy } from '../../xlsx/formula/value-policy'
 import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
@@ -2042,7 +2042,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
     // Ruling S3-AL: so do its dependents. The formula cells Task 31 recomputed print their saved values, and the charts
     // it refilled their saved models, so the paper never shows a saved pivot beside live numbers that read it.
-    const savedCells = savedDependentFormulaCells(doc)
+    const savedCells = savedDependentCells(doc)
     // Its linked charts print as saved too: each live chart model maps back to the saved one it replaced.
     const savedChart = new Map<ChartModel, ChartModel>()
     let dependentsSaved = Boolean(savedCells)
@@ -2052,7 +2052,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setPrintPivotNote(dependentsSaved ? 'Printing shows the pivot, and the values that depend on it, as saved.' : changed ? 'Printing shows the pivot as saved.' : '')
     const printed = changed || savedChart.size || savedCells ? { ...doc, sheets: doc.sheets.map((sheet, index) => {
       const drawings = savedChart.size ? withSavedCharts(sheet.drawings, savedChart) : sheet.drawings
-      const rows = savedCells ? withSavedCells(sheet.rows, savedCells) : sheet.rows
+      const savedOfSheet = savedCells?.get(sheet)
+      const rows = savedOfSheet ? withSavedCells(sheet.rows, savedOfSheet) : sheet.rows
       if (sheet.pivotTables === savedPivotDefs[index] && drawings === sheet.drawings && rows === sheet.rows) return sheet
       return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(rows !== sheet.rows ? { rows } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
     }) } : doc
@@ -2576,15 +2577,29 @@ function linkedPivotCharts(doc: XlsxDocument, sheetName: string, name: string): 
   return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chartLinksPivot(chart, sheetName, name))
 }
 
-/** Rows with the given cells swapped for their saved copies (copies only the rows that hold one; print, Ruling S3-AL). */
-function withSavedCells(rows: XlsxSheet['rows'], saved: ReadonlyMap<XlsxCell, XlsxCell>): XlsxSheet['rows'] {
-  let changed = false
-  const out = rows.map(row => {
-    if (!row.cells.some(cell => saved.has(cell))) return row
-    changed = true
-    return { ...row, cells: row.cells.map(cell => saved.get(cell) ?? cell) }
-  })
-  return changed ? out : rows
+/** Rows with the saved cells put back at every position a dependent recompute changed (Ruling S3-AL): a recomputed
+ * formula's saved value, a spill follower it cleared, and no cell where a grown spill wrote one. Copies only the rows
+ * that change (a row emptied this way stays, empty: a row the recompute created carries nothing to print). */
+function withSavedCells(rows: XlsxSheet['rows'], saved: NonNullable<ReturnType<SavedDependentCells['get']>>): XlsxSheet['rows'] {
+  const out: XlsxSheet['rows'] = []
+  const seen = new Set<number>()
+  const rebuilt = (cells: readonly XlsxCell[], positions: ReadonlyMap<number, XlsxCell | null>) => {
+    const kept = cells.filter(cell => !positions.has(cell.col))
+    for (const cell of positions.values()) if (cell) kept.push(cell)
+    return kept.sort((a, b) => a.col - b.col)
+  }
+  for (const row of rows) {
+    const positions = saved.get(row.index)
+    if (!positions) { out.push(row); continue }
+    seen.add(row.index)
+    out.push({ ...row, cells: rebuilt(row.cells, positions) })
+  }
+  for (const [index, positions] of saved) {
+    if (seen.has(index)) continue
+    const cells = rebuilt([], positions)
+    if (cells.length) out.push({ index, cells })
+  }
+  return out.sort((a, b) => a.index - b.index)
 }
 
 /** Drawing nodes with the given chart models swapped back (copies only along the changed paths; print of a changed pivot). */
