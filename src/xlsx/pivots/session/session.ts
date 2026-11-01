@@ -105,7 +105,7 @@ export interface PivotSession {
  * A shape the engine or the delta refuses stays refused inside a listed kind (a second filter family on a field, a
  * dynamic date filter, a nested ascending value-sort tie, …).
  */
-export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort', 'moveField', 'addDataField', 'removeDataField', 'moveDataField'])
+export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort', 'moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings'])
 
 const a1 = (row: number, col: number) => {
   let letters = ''
@@ -296,7 +296,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       // restore the pivot at its original location.
       const applyDef = state.spill ? (() => { const restored = { ...state.def, location: def0.location }; delete restored.spill; return restored })() : state.def
       const transitioned = applyDeltaState({ def: applyDef, cache: state.cache, store: state.store, view: state.view, date1904,
-        captionRule: { caption: (kind, args) => rule.caption(kind, args) }, admitCandidateBytes: options?.admitCandidateBytes ?? input.admitCandidateBytes }, delta)
+        captionRule: { locale: rule.locale, caption: (kind, args) => rule.caption(kind, args) }, admitCandidateBytes: options?.admitCandidateBytes ?? input.admitCandidateBytes }, delta)
       if (!transitioned.ok) return transitioned
       const candidate = transitioned.value
       const discard = <T extends EngineResult<unknown>>(result: T): T => { candidate.hold?.release(); return result }

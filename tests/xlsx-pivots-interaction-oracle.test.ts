@@ -35,7 +35,7 @@ const FROM_STAGE2 = resolve(INTERACTION, 'delta-from-stage2.json')
 const SEED_FILES: Record<string, string> = {
   'engine-seed': resolve(FIXTURES, 'recipes/engine-seed.xlsx'),
   'chart-seed': resolve(FIXTURES, 'recipes/pivot-chart-seed.xlsx'),
-  'getpivotdata-seed': resolve(INTERACTION, 'getpivotdata-seed.xlsx'),
+  'getpivotdata-seed': resolve(FIXTURES, 'recipes/getpivotdata-seed.xlsx'),
   'refresh-seed': resolve(INTERACTION, 'refresh-seed.xlsx'),
 }
 const BASELINE = resolve(FIXTURES, 'engine/baseline.xlsx')

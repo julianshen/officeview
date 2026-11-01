@@ -18,6 +18,7 @@ import { ConditionEditor, conditionInput, typedCondition, type ConditionInput } 
 import { useControlMedia } from '../controlMedia'
 import { controlTarget, CONTROL_BTN_CLS, CONTROL_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, SELECT_CLS } from '../controlUi'
 import { dateFilter, labelFilter, top10Filter, valueFilter, type DateOp, type LabelOp, type PivotDelta, type PivotDeltaKind, type PivotMenuField, type PivotMenuModel, type ValueOp } from './pivotClient'
+import { PivotValueSettingsDialog } from './PivotValueSettingsDialog'
 
 export interface PivotMenuProps {
   /** The sheet's owner: a change while the menu is open closes it (FilterDropdown's lifetime rule). */
@@ -116,8 +117,22 @@ export function PivotFieldMenu(props: PivotMenuProps): ReactElement {
   const [valueData, setValueData] = useState(0), [sortData, setSortData] = useState(field?.byData ?? 0)
   const [top, setTop] = useState({ count: '10', kind: 'count' as 'count' | 'percent' | 'sum', data: 0 })
   const [error, setError] = useState('')
-  if (!field) return <PivotMenuShell title="Pivot table" onClose={props.onClose}><p>This field is no longer in the pivot table.</p><MenuButton onClick={props.onClose}>Close</MenuButton></PivotMenuShell>
+  const [valueSettingsIndex, setValueSettingsIndex] = useState<number | null>(null)
   const has = (kind: PivotDeltaKind) => verified.has(kind)
+  if (props.field === -2) {
+    return <PivotMenuShell title={model.valuesCaption || 'Values'} onClose={props.onClose}>
+      {has('valueSettings') && model.data.map(entry => (
+        <MenuButton key={entry.index} onClick={() => setValueSettingsIndex(entry.index)}>
+          {model.data.length > 1 ? `Value field settings: ${entry.name}…` : 'Value field settings…'}
+        </MenuButton>
+      ))}
+      <div><MenuButton onClick={() => onApply('reset')}>Reset to saved view</MenuButton><MenuButton onClick={props.onClose}>Cancel</MenuButton></div>
+      {!model.disableFieldList && <MenuButton onClick={() => { props.onClose(); props.onShowFieldList?.() }}>Show field list</MenuButton>}
+      {valueSettingsIndex !== null && model.data[valueSettingsIndex] && <PivotValueSettingsDialog model={model} dataIndex={valueSettingsIndex}
+        onApply={delta => Promise.resolve(props.onApply(delta)).then(result => result !== false)} onClose={() => setValueSettingsIndex(null)} />}
+    </PivotMenuShell>
+  }
+  if (!field) return <PivotMenuShell title="Pivot table" onClose={props.onClose}><p>This field is no longer in the pivot table.</p><MenuButton onClick={props.onClose}>Close</MenuButton></PivotMenuShell>
   const id = model.nextFilterId
   const attempt = (build: () => PivotDelta) => { try { setError(''); onApply(build()) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Check the condition.') } }
   const dataSelect = (value: number, onChange: (next: number) => void, name: string) => <label>{name} <select aria-label={name} className={SELECT_CLS} style={controlTarget} value={value} onChange={event => onChange(Number(event.target.value))}>
@@ -141,6 +156,14 @@ export function PivotFieldMenu(props: PivotMenuProps): ReactElement {
       <MenuButton onClick={() => onApply({ kind: 'collapseAll', collapsed: false })}>Expand all</MenuButton>
       <MenuButton onClick={() => onApply({ kind: 'collapseAll', collapsed: true })}>Collapse all</MenuButton>
     </div>}
+    {has('valueSettings') && model.data.some(d => d.field === field.index) && (
+      <MenuButton onClick={() => {
+        const idx = model.data.findIndex(d => d.field === field.index)
+        setValueSettingsIndex(idx >= 0 ? idx : 0)
+      }}>
+        Value field settings…
+      </MenuButton>
+    )}
     {has('filter') && <>
       {field.values === 'date' ? <div>
         <ConditionEditor value={date} onChange={setDate} classification={DATE} kinds={['date']} index={1} invalid={false} label="Date filter" />
@@ -175,5 +198,7 @@ export function PivotFieldMenu(props: PivotMenuProps): ReactElement {
     {error && <p role="alert">{error}</p>}
     <div><MenuButton onClick={() => onApply('reset')}>Reset to saved view</MenuButton><MenuButton onClick={props.onClose}>Cancel</MenuButton></div>
     {!model.disableFieldList && <MenuButton onClick={() => { props.onClose(); props.onShowFieldList?.() }}>Show field list</MenuButton>}
+    {valueSettingsIndex !== null && model.data[valueSettingsIndex] && <PivotValueSettingsDialog model={model} dataIndex={valueSettingsIndex}
+      onApply={delta => Promise.resolve(props.onApply(delta)).then(result => result !== false)} onClose={() => setValueSettingsIndex(null)} />}
   </PivotMenuShell>
 }

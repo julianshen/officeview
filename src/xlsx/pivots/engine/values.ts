@@ -1303,10 +1303,9 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       }
       if (!hasLeafRecord && !basePresent) { outputPresent[at] = 0; continue }
       if (mode === 'difference') { output[at] = numerator - baseValue; outputPresent[at] = 1; continue }
-      if (mode === 'percent' && !hasLeafRecord) { outputErrors[at] = '#NULL!'; outputPresent[at] = 1; continue }
+      if ((mode === 'percent' || mode === 'percentDiff') && !hasLeafRecord) { outputErrors[at] = '#NULL!'; outputPresent[at] = 1; continue }
       if (mode === 'percentDiff' && !basePresent) { outputPresent[at] = 0; continue }
       if (!basePresent) return unmeasured('% of a base item with a blank base cell is not measured')
-      if (!hasLeafRecord) return unmeasured('% difference of a blank cell from its base item is not measured')
       if (baseValue === 0) { outputErrors[at] = '#DIV/0!'; outputPresent[at] = 1; continue }
       output[at] = mode === 'percent' ? numerator / baseValue : (numerator - baseValue) / baseValue
       outputPresent[at] = 1

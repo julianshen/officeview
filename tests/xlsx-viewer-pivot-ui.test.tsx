@@ -91,7 +91,7 @@ describe('resident pivot client (headless)', () => {
     expect(opened.ok, JSON.stringify(opened)).toBe(true)
     if (!opened.ok) return
     expect(opened.revision).toBe(0)
-    expect([...opened.verifiedKinds].sort()).toEqual(['addDataField', 'clearFilters', 'collapse', 'collapseAll', 'collapseField', 'filter', 'items', 'moveDataField', 'moveField', 'page', 'removeDataField', 'sort'])
+    expect([...opened.verifiedKinds].sort()).toEqual(['addDataField', 'clearFilters', 'collapse', 'collapseAll', 'collapseField', 'filter', 'items', 'moveDataField', 'moveField', 'page', 'removeDataField', 'sort', 'valueSettings'])
     const region = opened.model.fields.find(field => field.name === 'Region')!
     expect(region.items.map(item => item.label)).toEqual(['East', 'North', 'South', 'West', 'Central'].slice(0, region.items.length))
     // A3:I24 saved; R24 is the grand total row. Collapsing East (rows 6–8 under it) vacates three rows at the bottom.

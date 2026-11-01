@@ -27,6 +27,7 @@
  * - `sort` sets `sortType`; `byData` (a data-field index) sets the `autoSortScope` Excel saves for "sort by a value
  *   column" (Task 15 sort-value-top-level), and a sort without `byData` drops it.
  */
+export type { PivotDataFunction } from '../model'
 import {
   PIVOT_VALUES_FIELD,
   type PivotArea, type PivotCacheDefinition, type PivotDataFunction, type PivotDiagnostic, type PivotFilter,
@@ -46,7 +47,7 @@ import { decodeSerial } from '../../formula/serial'
 export interface PivotMemoryHold { readonly bytes: number; release(): void }
 export interface PivotDeltaContext {
   def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; view: PivotViewState; date1904: boolean
-  captionRule?: { caption(kind: 'dataField', args: { fn: string; field?: string }): string | undefined }
+  captionRule?: { locale?: 'zh-TW' | 'file'; caption(kind: 'dataField', args: { fn: string; field?: string }): string | undefined }
   admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined
 }
 export interface PivotDeltaStateResult { def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; view: PivotViewState; extraBytes: number; hold?: PivotMemoryHold }
@@ -101,7 +102,7 @@ function remapDataReferences(view: PivotViewState, map: readonly (number | undef
 
 /** Task 35 candidate transition. Materialization is reserved before allocating the candidate index or item arrays. */
 export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): EngineResult<PivotDeltaStateResult> {
-  if (!['moveField', 'addDataField', 'removeDataField', 'moveDataField'].includes(delta.kind)) {
+  if (!['moveField', 'addDataField', 'removeDataField', 'moveDataField', 'valueSettings'].includes(delta.kind)) {
     const view = applyDelta(ctx.view, delta, ctx.def, ctx.cache)
     return view.ok ? { ok: true, value: { def: ctx.def, cache: ctx.cache, store: ctx.store, view: view.value, extraBytes: 0 } } : view
   }
@@ -110,7 +111,7 @@ export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): Engi
   let hold: PivotMemoryHold | undefined
   const failWith = (result: EngineResult<never>): EngineResult<PivotDeltaStateResult> => { hold?.release(); return result }
   const reject = (feature: string, message: string) => failWith(refuse(feature, message))
-  if (def.disableFieldList) return reject('pivot-field-list-disabled', `The field list is disabled for ${def.name}.`)
+  if (delta.kind !== 'valueSettings' && def.disableFieldList) return reject('pivot-field-list-disabled', `The field list is disabled for ${def.name}.`)
   if (delta.kind === 'moveField') {
     const field = delta.field
     if (field === PIVOT_VALUES_FIELD) {
@@ -240,6 +241,152 @@ export function applyDeltaState(ctx: PivotDeltaContext, delta: PivotDelta): Engi
     const data = [...view.data], [item] = data.splice(delta.dataIndex, 1); data.splice(delta.toIndex, 0, item!)
     const map = Array.from({ length: view.data.length }, (_, old) => data.findIndex(entry => entry === view.data[old]))
     nextView = remapDataReferences({ ...view, data }, map)
+  } else if (delta.kind === 'valueSettings') {
+    const { dataIndex } = delta
+    if (!Number.isInteger(dataIndex) || dataIndex < 0 || dataIndex >= view.data.length) {
+      return reject('pivot-delta-invalid', `Data field ${dataIndex} does not exist.`)
+    }
+    const current = view.data[dataIndex]!
+    const sourceField = current.field
+    const isCalculated = cache.fields[sourceField]?.formula !== undefined
+
+    const VALID_FNS = new Set<PivotDataFunction>(['sum', 'count', 'average', 'max', 'min', 'product', 'countNums', 'stdDev', 'stdDevp', 'var', 'varp'])
+    if (delta.fn !== undefined && !VALID_FNS.has(delta.fn)) return reject('pivot-delta-invalid', `Summary function ${delta.fn} is not supported.`)
+    const nextFn = delta.fn ?? current.fn
+    if (isCalculated && nextFn !== 'sum') return reject('pivot-delta-invalid', 'Calculated fields only support Sum.')
+
+    const VALID_SHOW_AS = new Set<PivotValueShowAs>([
+      'normal', 'difference', 'percent', 'percentDiff', 'runTotal',
+      'percentOfRow', 'percentOfCol', 'percentOfTotal', 'index',
+      'percentOfParent', 'percentOfParentRow', 'percentOfParentCol',
+      'percentOfRunningTotal', 'rankAscending', 'rankDescending',
+    ])
+    if (delta.showAs !== undefined && !VALID_SHOW_AS.has(delta.showAs)) return reject('pivot-delta-invalid', `Show values as mode ${delta.showAs} is not supported.`)
+    const nextShowAs = delta.showAs ?? current.showAs
+    if (isCalculated && nextShowAs !== 'normal' && nextShowAs !== 'percentOfTotal') return reject('pivot-delta-invalid', 'Calculated fields only support No Calculation or % of Grand Total.')
+
+    const needsBaseField = ['percentOfParent', 'difference', 'percent', 'percentDiff', 'runTotal', 'percentOfRunningTotal', 'rankAscending', 'rankDescending'].includes(nextShowAs)
+    const needsBaseItem = ['difference', 'percent', 'percentDiff'].includes(nextShowAs)
+
+    let baseField = delta.baseField !== undefined ? delta.baseField : current.baseField
+    let baseItem = delta.baseItem !== undefined ? delta.baseItem : current.baseItem
+
+    if (needsBaseField) {
+      if (baseField === undefined || !Number.isInteger(baseField) || baseField < 0 || baseField >= def.fields.length) {
+        return reject('pivot-delta-invalid', `Base field is required for ${nextShowAs}.`)
+      }
+      const onRows = view.rows.includes(baseField)
+      const onCols = view.cols.includes(baseField)
+      if (nextShowAs === 'percentOfParent') {
+        if (!onRows) return reject('pivot-delta-invalid', '% of Parent Total requires a row base field.')
+      } else {
+        if (!onRows && !onCols) return reject('pivot-delta-invalid', `Base field ${baseField} must be on rows or columns.`)
+      }
+    } else {
+      if (delta.showAs !== undefined && delta.baseField === undefined) {
+        baseField = -1
+      }
+    }
+
+    if (needsBaseItem) {
+      if (baseItem === undefined || !Number.isInteger(baseItem)) {
+        return reject('pivot-delta-invalid', `Base item is required for ${nextShowAs}.`)
+      }
+      const isPrevNext = baseItem === 1048828 || baseItem === 1048829
+      const bf = def.fields[baseField]
+      const itemCount = bf?.items?.length ?? cache.fields[baseField]?.sharedItems?.items.length ?? 0
+      const isItemIndex = baseItem >= 0 && baseItem < itemCount
+      if (!isPrevNext && !isItemIndex) {
+        return reject('pivot-delta-invalid', `Base item ${baseItem} is invalid for base field ${baseField}.`)
+      }
+    } else {
+      if (delta.showAs !== undefined && delta.baseItem === undefined) {
+        baseItem = 1048832
+      }
+    }
+
+    const PRESET_NUMFMT_IDS = new Set([0, 1, 2, 3, 4, 9, 10, 11, 14, 37, 38, 39, 40, 44, 49])
+    let nextNumFmtId: number | undefined
+    if (delta.numFmtId === null) {
+      nextNumFmtId = undefined
+    } else if (delta.numFmtId !== undefined) {
+      if (!Number.isInteger(delta.numFmtId) || delta.numFmtId < 0) {
+        return reject('pivot-delta-invalid', `Number format ID ${delta.numFmtId} is invalid.`)
+      }
+      if (PRESET_NUMFMT_IDS.has(delta.numFmtId)) {
+        nextNumFmtId = delta.numFmtId
+      } else if (delta.numFmtId >= 164 && delta.numFmtId === current.numFmtId) {
+        nextNumFmtId = delta.numFmtId
+      } else {
+        return reject('pivot-delta-invalid', `Number format ID ${delta.numFmtId} is not supported.`)
+      }
+    } else {
+      nextNumFmtId = current.numFmtId
+    }
+
+    let nextName: string
+    if (delta.name !== undefined) {
+      const trimmed = delta.name.trim()
+      if (!trimmed) return reject('pivot-delta-invalid', 'The custom name cannot be blank.')
+      const otherNames = view.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean)
+      if (otherNames.some(n => n.toLowerCase() === trimmed.toLowerCase())) {
+        return reject('pivot-delta-invalid', `A data field named "${trimmed}" already exists.`)
+      }
+      nextName = trimmed
+    } else if (delta.fn !== undefined) {
+      if (ctx.captionRule?.locale === 'file' || !ctx.captionRule) {
+        return reject('pivot-caption-locale', `A default caption for ${nextFn} is not measured; provide a custom name.`)
+      }
+      const fieldName = def.fields[sourceField]?.name ?? cache.fields[sourceField]?.name ?? `Field ${sourceField + 1}`
+      const table = ZH_TW_CAPTIONS[`dataField:${nextFn}`]
+      const fromMeasuredTable = table?.replace('{field}', fieldName)
+      const baseName = ctx.captionRule.caption('dataField', { fn: nextFn, field: fieldName }) ?? fromMeasuredTable
+      if (!baseName) return reject('pivot-caption-locale', `A default caption for ${nextFn} is not measured; provide a custom name.`)
+      let disambiguated = baseName, suffix = 2
+      const otherNames = new Set(view.data.filter((_, i) => i !== dataIndex).map(d => d.name).filter(Boolean))
+      while (otherNames.has(disambiguated)) disambiguated = `${baseName}${suffix++}`
+      nextName = disambiguated
+    } else {
+      nextName = current.name
+    }
+
+    const nextData = view.data.map((entry, i) => {
+      if (i !== dataIndex) return entry
+      const updated = {
+        ...entry,
+        fn: nextFn,
+        showAs: nextShowAs,
+        baseField,
+        baseItem,
+        name: nextName,
+        ...(nextNumFmtId !== undefined ? { numFmtId: nextNumFmtId } : {}),
+      }
+      if (nextNumFmtId === undefined) delete (updated as any).numFmtId
+      return updated
+    })
+    nextView = { ...view, data: nextData }
+
+    const X14_SHOW_AS = new Set<string>(['percentOfParent', 'percentOfParentRow', 'percentOfParentCol', 'percentOfRunningTotal', 'rankAscending', 'rankDescending'])
+    if (def.dataFields && def.dataFields[dataIndex]) {
+      nextDef = {
+        ...def,
+        dataFields: def.dataFields.map((df, i) => {
+          if (i !== dataIndex) return df
+          const updatedDf = {
+            ...df,
+            subtotal: nextFn,
+            showDataAs: (X14_SHOW_AS.has(nextShowAs) ? 'normal' : nextShowAs) as any,
+            baseField,
+            baseItem,
+            name: nextName,
+            ...(nextNumFmtId !== undefined ? { numFmtId: nextNumFmtId } : {}),
+            ...(X14_SHOW_AS.has(nextShowAs) ? { x14: { ...df.x14, pivotShowAs: nextShowAs as any } } : {}),
+          }
+          if (nextNumFmtId === undefined) delete (updatedDf as any).numFmtId
+          return updatedDf
+        }),
+      }
+    }
   }
   return { ok: true, value: { def: nextDef, cache: nextCache, store: nextStore, view: nextView, extraBytes, ...(hold ? { hold } : {}) } }
 }

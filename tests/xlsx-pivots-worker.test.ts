@@ -33,11 +33,11 @@ const FIXTURE = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/engine/', 
 const FIXTURE_ROOT = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url)))
 const INTERACTION_CASES = (JSON.parse(readFileSync(resolve(FIXTURE_ROOT, 'interaction/manifest.json'), 'utf8')) as Array<{
   case: string; file: string; task: number; status?: string; setup?: string; seed: string; base?: string; pivot: string; delta: PivotDelta[]
-}>).filter(entry => (entry.task === 25 || entry.task === 35) && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
+}>).filter(entry => (entry.task === 25 || entry.task === 35 || entry.task === 36) && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
 const SEEDS: Record<string, string> = {
   'engine-seed': resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx'),
   'chart-seed': resolve(FIXTURE_ROOT, 'recipes/pivot-chart-seed.xlsx'),
-  'getpivotdata-seed': resolve(FIXTURE_ROOT, 'interaction/getpivotdata-seed.xlsx'),
+  'getpivotdata-seed': resolve(FIXTURE_ROOT, 'recipes/getpivotdata-seed.xlsx'),
   'refresh-seed': resolve(FIXTURE_ROOT, 'interaction/refresh-seed.xlsx'),
 }
 const quiet = { yield: async () => {} }

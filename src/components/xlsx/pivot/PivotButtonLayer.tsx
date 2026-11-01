@@ -25,7 +25,10 @@ import { drillBox, dropdownBox, pivotButtons, PX_PER_PT, savedPivotLayout, type 
 import type { PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './pivotClient'
 import { PivotFieldMenu } from './PivotFieldMenu'
 import { PivotPageMenu } from './PivotPageMenu'
+import { PivotValueSettingsDialog } from './PivotValueSettingsDialog'
 export { PivotFieldList } from './PivotFieldList'
+export { PivotValueSettingsDialog, PIVOT_VALUE_NUMFMT_PRESETS } from './PivotValueSettingsDialog'
+export type { PivotValueSettingsDialogProps } from './PivotValueSettingsDialog'
 
 export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind, PivotShownLayout, PendingPivotFits, PivotFitMemory } from './pivotClient'
@@ -36,7 +39,7 @@ export type PivotUiState =
   | { status: 'open'; revision: number; verified: ReadonlySet<PivotDeltaKind>; model: PivotMenuModel }
   | { status: 'refused'; diagnostic: PivotDiagnostic }
 /** `invoker` gets focus back (the grid, for a keyboard route); `anchor` places the menu (the pointer button). */
-export interface PivotMenuRequest { sheet: number; pivot: number; field: number; kind: 'field' | 'page'; invoker: HTMLElement; anchor?: HTMLElement }
+export interface PivotMenuRequest { sheet: number; pivot: number; field: number; kind: 'field' | 'page' | 'valueSettings'; invoker: HTMLElement; anchor?: HTMLElement; dataIndex?: number }
 export interface PivotControllerHost {
   client: PivotClient
   announce(message: string): void
@@ -103,6 +106,14 @@ export class PivotController {
     }
     if (state.model.disableFieldList) return
     this.host.openFieldList?.(sheet, pivot, invoker)
+  }
+  async showValueSettings(sheet: number, pivot: number, dataIndex: number, invoker: HTMLElement): Promise<void> {
+    const state = await this.open(sheet, pivot)
+    if (state.status !== 'open') {
+      if (state.status === 'refused') this.host.announce(`Not available: ${state.diagnostic.message}`)
+      return
+    }
+    this.host.openMenu({ sheet, pivot, field: -2, kind: 'valueSettings', invoker, dataIndex })
   }
   /** A button's use: opens the pivot if needed, then applies a ± change or opens the button's menu. */
   async activate(sheet: number, pivot: number, button: ButtonPlacement, invoker: HTMLElement, anchor?: HTMLElement): Promise<void> {
@@ -291,6 +302,18 @@ export function PivotMenu({ controller, request, owner, onClose, onNotice }: { c
   useEffect(() => controller.subscribe(() => setTick(tick => tick + 1)), [controller])
   const state = controller.state(request.sheet, request.pivot)
   if (state.status !== 'open') return null
+  if (request.kind === 'valueSettings') {
+    const dataIndex = request.dataIndex ?? (request.field >= 0 ? state.model.data.findIndex(d => d.field === request.field) : 0)
+    const validIndex = dataIndex >= 0 ? dataIndex : 0
+    return (
+      <PivotValueSettingsDialog
+        model={state.model}
+        dataIndex={validIndex}
+        onApply={delta => controller.apply(request.sheet, request.pivot, delta)}
+        onClose={onClose}
+      />
+    )
+  }
   const onApply = (delta: PivotDelta | 'reset') => { onClose(); void controller.apply(request.sheet, request.pivot, delta) }
   const common = { owner, model: state.model, verified: state.verified, field: request.field, onApply, onClose, onNotice, onShowFieldList: () => void controller.showFieldList(request.sheet, request.pivot, request.invoker) }
   return request.kind === 'page' ? <PivotPageMenu {...common} /> : <PivotFieldMenu {...common} />
