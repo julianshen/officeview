@@ -1653,8 +1653,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     dropTiles(sheetId, null)
     rerender()
   }
-  const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup })
-  pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
+  const [fieldListPivot, setFieldListPivot] = useState<number | null>(null)
+  const [fieldListInvoker, setFieldListInvoker] = useState<HTMLElement | null>(null)
+  const openFieldList = (sheet: number, pivot: number, invoker?: HTMLElement) => {
+    if (sheet !== sheetIds.indexOf(activeSheetId)) return
+    setFieldListPivot(pivot); setFieldListInvoker(invoker ?? null)
+  }
+  const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup, openFieldList })
+  pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup, openFieldList }
   // Declared before the pivot controller's effect, so on unmount this cleanup runs first (restorePivots reads it).
   const unmounting = useRef(false)
   useEffect(() => { unmounting.current = false; return () => { unmounting.current = true } }, [])
@@ -1671,7 +1677,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       sheet: index => doc.sheets[index],
     }, pivotFitMemory), commit => pivotHost.current.installPivot(commit))
       : pivotUi.createResidentPivotClient({ doc, saved: savedPivotDefs, ledger: mainLedger, profile: budgetProfile, install: commit => pivotHost.current.installPivot(commit), ...(pivotKinds ? { verifiedKinds: pivotKinds } : {}) })
-    const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu() })
+    const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu(), openFieldList: (sheet, pivot, invoker) => pivotHost.current.openFieldList(sheet, pivot, invoker) })
     setPivotController(controller)
     return () => {
       controller.dispose()
@@ -1686,7 +1692,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [sortPending, setSortPending] = useState<{ col: number; job: AbortController } | null>(null)
   const domHold = useRef<{ job: AbortController; bytes: number } | null>(null)
   const heldDomBytes = (measured: number) => Math.max(measured, domHold.current?.bytes ?? 0)
-  useEffect(() => { closePopup(); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
+  useEffect(() => { closePopup(); setFieldListPivot(null); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
   // A job's hold ends in the commit that no longer shows its pending glyph
   // (completion, refusal, cancellation or a sheet switch), never when the job
   // merely settles: until React commits, the DOM still holds the smaller
@@ -1824,6 +1830,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Pivots on the active sheet (Task 28): load-time pivot-* diagnostics, and one notice per pivot not interactive.
   const activeIndex = sheetIds.indexOf(activeSheetId)
   const activePivots = entry?.sheet.pivotTables
+  const firstFieldListPivot = Math.max(0, activePivots?.findIndex(def => !def.disableFieldList) ?? 0)
+  const selectedFieldListPivot = fieldListPivot ?? firstFieldListPivot
+  const fieldListState = fieldListPivot !== null && pivotController ? pivotController.state(activeIndex, fieldListPivot) : null
   const activeStaleCells = remote ? undefined : residentDependentNotices.cells.get(activeIndex)
   const pivotCellText = (row: number, col: number): string => { if (!entry) return ''; const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }
   const pivotNotices = entry ? [...new Set([
@@ -2376,6 +2385,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
             <span className={toolbarLabel}>Reset sizes</span>
           </button>
+          {activePivots?.length && activePivots.some(def => !def.disableFieldList) ? <button type="button" className={toolbarBtn} aria-expanded={fieldListPivot !== null} onClick={event => {
+            if (fieldListPivot !== null) { setFieldListPivot(null); requestAnimationFrame(() => fieldListInvoker?.focus()) }
+            else if (pivotController) void pivotController.showFieldList(activeIndex, selectedFieldListPivot, event.currentTarget)
+          }}>Pivot fields</button> : null}
         </div>
         {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}
         {showSearch && (
@@ -2387,7 +2400,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           </div>
         )}
         </div>
-        <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
+        <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0, minWidth: 0 }}>
+        <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, minWidth: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
@@ -2434,6 +2448,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
             </GridSemantics>
           )}
           <SheetChartDescriptions charts={activeCharts} />
+        </div>
+        {pivotUi && pivotController && fieldListState?.status === 'open' && fieldListState.model && !fieldListState.model.disableFieldList ? <pivotUi.PivotFieldList model={fieldListState.model} pivot={selectedFieldListPivot} pivotCount={activePivots?.length ?? 1} invoker={fieldListInvoker}
+          onPivot={pivot => { setFieldListPivot(pivot); void pivotController.open(activeIndex, pivot) }} onApply={delta => void pivotController.apply(activeIndex, selectedFieldListPivot, delta)} onClose={() => setFieldListPivot(null)} /> : null}
         </div>
         </div>
         {allowPrint && (

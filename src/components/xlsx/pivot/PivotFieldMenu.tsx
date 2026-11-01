@@ -28,6 +28,7 @@ export interface PivotMenuProps {
   onApply(delta: PivotDelta | 'reset'): void
   onClose(): void
   onNotice(message: string): void
+  onShowFieldList?(): void
 }
 
 /** The owner lifetime: an owner change while open closes the menu with FilterDropdown's notice. */
@@ -173,5 +174,6 @@ export function PivotFieldMenu(props: PivotMenuProps): ReactElement {
     {has('items') && <ItemChecklist key={field.index} field={field} onApply={hidden => onApply({ kind: 'items', field: field.index, hidden })} />}
     {error && <p role="alert">{error}</p>}
     <div><MenuButton onClick={() => onApply('reset')}>Reset to saved view</MenuButton><MenuButton onClick={props.onClose}>Cancel</MenuButton></div>
+    {!model.disableFieldList && <MenuButton onClick={() => { props.onClose(); props.onShowFieldList?.() }}>Show field list</MenuButton>}
   </PivotMenuShell>
 }

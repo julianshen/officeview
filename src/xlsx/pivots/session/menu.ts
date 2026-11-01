@@ -5,7 +5,7 @@
  * date item carries its value and number format (`number`); the main thread formats its label (`label` is then the
  * value as plain text until it does). Lazy chunk `pivots`.
  */
-import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotFieldSortType, type PivotFilter, type PivotTableDefinition } from '../model'
+import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDataFunction, type PivotFieldSortType, type PivotFilter, type PivotShowAsX14, type PivotShowDataAs, type PivotTableDefinition } from '../model'
 import { pivotItemLabel } from '../engine/place'
 import type { PivotViewState } from '../engine/view'
 import { PIVOT_FUNCTION_NAMES } from './functionNames'
@@ -14,6 +14,7 @@ import { PIVOT_FUNCTION_NAMES } from './functionNames'
 export interface PivotMenuItem { index: number; label: string; hidden: boolean; collapsed: boolean; number?: { value: number; numFmtId: number } }
 export interface PivotMenuField {
   index: number
+  sourceOrder: number
   name: string
   axis: 'row' | 'col' | 'page' | 'none'
   /** The field's data items (subtotal items are not listed). */
@@ -31,11 +32,22 @@ export interface PivotMenuField {
   page?: readonly number[] | 'all'
   /** A page field saved with "Select multiple items" on (`multipleItemSelectionAllowed`). */
   multiple?: boolean
+  calculated?: boolean
+  virtualGroup?: boolean
+  defaultDataFn: 'sum' | 'count'
+  permissions: { dragToRow: boolean; dragToCol: boolean; dragToPage: boolean; dragToData: boolean; dragOff: boolean }
 }
 export interface PivotMenuModel {
   name: string
   fields: PivotMenuField[]
-  data: Array<{ index: number; name: string }>
+  rows: readonly number[]
+  cols: readonly number[]
+  pages: readonly number[]
+  valuesCaption: string
+  disableFieldList?: boolean
+  fieldListSortAscending?: boolean
+  canAutoCaptionDataField?: boolean
+  data: Array<{ index: number; field: number; name: string; fn: PivotDataFunction; showAs: PivotShowDataAs | PivotShowAsX14; baseField: number; baseItem: number; numFmtId?: number }>
   /** The id a new filter takes (Excel's filter ids are unique in the pivot). */
   nextFilterId: number
 }
@@ -66,23 +78,28 @@ export function pivotMenuModel(def: PivotTableDefinition, cache: PivotCacheDefin
   const axisOf = (field: number): PivotMenuField['axis'] => view.rows.includes(field) ? 'row' : view.cols.includes(field) ? 'col' : view.pages.some(page => page.field === field) ? 'page' : 'none'
   const below = (fields: readonly number[], field: number) => { const at = fields.indexOf(field); return at >= 0 && fields.slice(at + 1).length > 0 }
   const used = [...new Set([...view.rows, ...view.cols, ...view.pages.map(page => page.field)])].filter(field => field !== PIVOT_VALUES_FIELD)
-  const fields = used.map((field): PivotMenuField => {
+  const order = [...used, ...def.fields.map((_, index) => index).filter(field => !used.includes(field))]
+  const fields = order.map((field): PivotMenuField => {
     const state = view.fields[field]
     const list = def.fields[field]?.items
     const indices = list ? list.flatMap((item, k) => item.type === 'data' ? [k] : []) : (state?.hidden ?? []).map((_, k) => k)
     const scope = state?.autoSortScope?.references.find(ref => ref.field === PIVOT_VALUES_FIELD)?.x[0]
     const page = view.pages.find(entry => entry.field === field)
     return {
-      index: field, name: pivotFieldName(def, cache, field), axis: axisOf(field),
+      index: field, sourceOrder: field, name: pivotFieldName(def, cache, field), axis: axisOf(field),
       items: indices.map(k => ({ index: k, ...pivotMenuItemLabel(def, cache, field, k, date1904), hidden: state?.hidden[k] ?? false, collapsed: state?.collapsed[k] ?? false })),
       sort: state?.sortType ?? 'manual', ...(scope !== undefined ? { byData: scope } : {}),
       filters: view.filters.filter(filter => filter.fld === field), values: valuesOf(cache, field),
       expandable: below(view.rows, field) || below(view.cols, field),
       ...(page ? { page: page.selected === 'all' && indices.some(k => state?.hidden[k]) ? indices.filter(k => !state?.hidden[k]) : page.selected } : {}),
       ...(page && def.fields[field]?.multipleItemSelectionAllowed ? { multiple: true } : {}),
+      ...(cache.fields[field]?.formula !== undefined ? { calculated: true } : {}),
+      ...(cache.fields[field]?.fieldGroup ? { virtualGroup: true } : {}),
+      defaultDataFn: cache.fields[field]?.formula !== undefined || (cache.fields[field]?.sharedItems?.containsNumber && !cache.fields[field]?.sharedItems?.containsString && !cache.fields[field]?.sharedItems?.containsDate) ? 'sum' : 'count',
+      permissions: { dragToRow: Boolean(def.fields[field]?.dragToRow), dragToCol: Boolean(def.fields[field]?.dragToCol), dragToPage: Boolean(def.fields[field]?.dragToPage), dragToData: Boolean(def.fields[field]?.dragToData), dragOff: Boolean(def.fields[field]?.dragOff) },
     }
   })
-  const data = view.data.map((entry, index) => ({ index, name: entry.name || `${PIVOT_FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${pivotFieldName(def, cache, entry.field)}` }))
+  const data = view.data.map((entry, index) => ({ index, field: entry.field, name: entry.name || `${PIVOT_FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${pivotFieldName(def, cache, entry.field)}`, fn: entry.fn, showAs: entry.showAs, baseField: entry.baseField, baseItem: entry.baseItem, ...(entry.numFmtId !== undefined ? { numFmtId: entry.numFmtId } : {}) }))
   const nextFilterId = view.filters.reduce((max, filter) => Math.max(max, filter.id), 0) + 1
-  return { name: String(def.name ?? ''), fields, data, nextFilterId }
+  return { name: String(def.name ?? ''), fields, rows: view.rows, cols: view.cols, pages: view.pages.map(page => page.field), valuesCaption: def.dataCaption || 'Values', ...(def.disableFieldList ? { disableFieldList: true } : {}), ...(def.fieldListSortAscending !== undefined ? { fieldListSortAscending: def.fieldListSortAscending } : {}), canAutoCaptionDataField: true, data, nextFilterId }
 }

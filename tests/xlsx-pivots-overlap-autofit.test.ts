@@ -332,7 +332,7 @@ describe('§7.8 the fit cells a paged reply carries are bounded (Task 29 fix rou
 })
 
 describe('§7.8 fit cells kept on the main thread are charged while kept (Task 29 fix round 1)', () => {
-  const menu = { name: 'P', fields: [], data: [], nextFilterId: 1 }
+  const menu = { name: 'P', fields: [], rows: [], cols: [], pages: [], valuesCaption: 'Values', data: [], nextFilterId: 1 }
   const cells = (n: number, tag: string) => Array.from({ length: n }, (_, row) => ({ row, col: 0, value: { value: `${tag}-${row}` } }))
   function memoryOf(ledger: MainMemoryLedger, room = Number.POSITIVE_INFINITY) {
     return {

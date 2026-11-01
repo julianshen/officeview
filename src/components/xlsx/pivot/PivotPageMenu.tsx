@@ -40,6 +40,7 @@ export function PivotPageMenu(props: PivotMenuProps): ReactElement {
     </fieldset>}
     {verified.has('clearFilters') && <MenuButton onClick={() => onApply({ kind: 'clearFilters', field: field.index })}>{`Clear filter from ${field.name}`}</MenuButton>}
     <div><MenuButton onClick={() => onApply('reset')}>Reset to saved view</MenuButton><MenuButton onClick={props.onClose}>Cancel</MenuButton></div>
+    {!model.disableFieldList && <MenuButton onClick={() => { props.onClose(); props.onShowFieldList?.() }}>Show field list</MenuButton>}
   </PivotMenuShell>
 }
 /** An untouched OK is no change (PR #57 review): the same selection, whatever its order. */

@@ -25,6 +25,7 @@ import { drillBox, dropdownBox, pivotButtons, PX_PER_PT, savedPivotLayout, type 
 import type { PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './pivotClient'
 import { PivotFieldMenu } from './PivotFieldMenu'
 import { PivotPageMenu } from './PivotPageMenu'
+export { PivotFieldList } from './PivotFieldList'
 
 export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind, PivotShownLayout, PendingPivotFits, PivotFitMemory } from './pivotClient'
@@ -41,6 +42,7 @@ export interface PivotControllerHost {
   announce(message: string): void
   openMenu(request: PivotMenuRequest): void
   closeMenu(): void
+  openFieldList?(sheet: number, pivot: number, invoker?: HTMLElement): void
 }
 
 const IDLE: PivotUiState = { status: 'idle' }
@@ -92,6 +94,15 @@ export class PivotController {
     }
     this.set(sheet, pivot, next)
     return next
+  }
+  async showFieldList(sheet: number, pivot: number, invoker?: HTMLElement): Promise<void> {
+    const state = await this.open(sheet, pivot)
+    if (state.status !== 'open') {
+      if (state.status === 'refused') this.host.announce(`Not available: ${state.diagnostic.message}`)
+      return
+    }
+    if (state.model.disableFieldList) return
+    this.host.openFieldList?.(sheet, pivot, invoker)
   }
   /** A button's use: opens the pivot if needed, then applies a ± change or opens the button's menu. */
   async activate(sheet: number, pivot: number, button: ButtonPlacement, invoker: HTMLElement, anchor?: HTMLElement): Promise<void> {
@@ -281,6 +292,6 @@ export function PivotMenu({ controller, request, owner, onClose, onNotice }: { c
   const state = controller.state(request.sheet, request.pivot)
   if (state.status !== 'open') return null
   const onApply = (delta: PivotDelta | 'reset') => { onClose(); void controller.apply(request.sheet, request.pivot, delta) }
-  const common = { owner, model: state.model, verified: state.verified, field: request.field, onApply, onClose, onNotice }
+  const common = { owner, model: state.model, verified: state.verified, field: request.field, onApply, onClose, onNotice, onShowFieldList: () => void controller.showFieldList(request.sheet, request.pivot, request.invoker) }
   return request.kind === 'page' ? <PivotPageMenu {...common} /> : <PivotFieldMenu {...common} />
 }

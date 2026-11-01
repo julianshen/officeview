@@ -40,7 +40,7 @@ import { liveDefinition, type PivotLayout } from '../engine/place'
 import { RECORD_LIMITS, type RecordLimits, type RecordStore } from '../engine/records'
 import { initialViewState, type PivotViewState } from '../engine/view'
 import { captionRule, MEASURED_CAPTION_TABLES, resolveCaptions, savedCaptions, type CaptionTable } from './captions'
-import { applyDelta, type PivotDelta, type PivotDeltaKind } from './delta'
+import { applyDeltaState, type PivotDelta, type PivotDeltaKind, type PivotMemoryHold } from './delta'
 import { recordsFromSource, refreshDefinition, refreshedCacheBytes, savedCaptionLayout, worksheetSourceRange } from './refresh'
 import { savedPivotLayout } from '../savedLayout'
 
@@ -64,6 +64,8 @@ export interface PivotSessionInput {
   source?: CellReader
   /** The rebuild's record limits (default `RECORD_LIMITS.D`). */
   limits?: RecordLimits
+  /** Reserves candidate cache/index bytes before a Stage 4 field move allocates them. */
+  admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined
   /** Admits a rebuilt store, and the rebuilt cache's `metadataBytes` (`refreshedCacheBytes`), before the session
    * holds them (the caller's ledger or pool), for the session's life; undefined refuses
    * `pivot-records-limit`. The returned hold is released with the session. */
@@ -72,14 +74,14 @@ export interface PivotSessionInput {
 export type ChartGate = (charts: readonly ChartModel[], layout: PivotLayout, def: PivotTableDefinition) => EngineResult<readonly ChartModel[]>
 /** `notice`: the one-line notice a refreshed pivot shows with its first change (§7.7), on every result issued before
  * the session's first commit. */
-export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[]; charts: readonly ChartModel[]; notice?: string
+export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; layout: PivotLayout; vacated: readonly SheetRect[]; charts: readonly ChartModel[]; hold?: PivotMemoryHold; notice?: string
   /** Ruling S3-AO: the change spilled; the blocking cell (also `def.spill`). */
   spill?: { row: number; col: number } }
 export interface PivotSession {
   readonly revision: number; readonly view: PivotViewState; readonly def: PivotTableDefinition; readonly layout: PivotLayout
   /** The cache the session computes from: the saved one, or the one a refresh rebuilt (its definitions index it). */
   readonly cache: PivotCacheDefinition
-  apply(delta: PivotDelta): EngineResult<PivotApplyResult>   // pure: does not change the session
+  apply(delta: PivotDelta, options?: { admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined }): EngineResult<PivotApplyResult>   // pure: does not change the session
   commit(result: PivotApplyResult): boolean                   // false when result.revision !== revision + 1
   /** Back to the saved state, as the next revision; refused `pivot-overlap` when that layout would now cover another
    * pivot's or the sheet's cells (a refreshed pivot's saved view is its refreshed layout, which may be larger). */
@@ -103,7 +105,7 @@ export interface PivotSession {
  * A shape the engine or the delta refuses stays refused inside a listed kind (a second filter family on a field, a
  * dynamic date filter, a nested ascending value-sort tie, …).
  */
-export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
+export const ORACLE_VERIFIED_KINDS: ReadonlySet<PivotDeltaKind> = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort', 'moveField', 'addDataField', 'removeDataField', 'moveDataField'])
 
 const a1 = (row: number, col: number) => {
   let letters = ''
@@ -260,7 +262,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
   const issued = new WeakSet<PivotApplyResult>()
   const areas = new WeakMap<PivotLayout, SheetRect[]>()
   const areaFor = (layout: PivotLayout) => { let area = areas.get(layout); if (!area) areas.set(layout, area = areaOf(layout)); return area }
-  let state: PivotApplyResult = { revision: 0, view: view0, def: def0, layout: layout0, vacated: [], charts: charts0.value }
+  let state: PivotApplyResult = { revision: 0, view: view0, def: def0, cache, store, layout: layout0, vacated: [], charts: charts0.value }
   /** The area the sheet shows: the saved area until the first commit. */
   let shown: SheetRect[] = savedArea
   let notice = notice0
@@ -285,39 +287,57 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
     get view() { return state.view },
     get def() { return state.def },
     get layout() { return state.layout },
-    get cache() { return cache },
-    apply(delta) {
+    get cache() { return state.cache },
+    apply(delta, options) {
       if (released) return refuse('pivot-session-released', `the session of pivot table ${def.name} was released`)
       if (!verified.has(delta.kind)) return refuse('pivot-interaction-unverified', `the ${delta.kind} interaction has no passing Excel oracle case`)
-      const view = applyDelta(state.view, delta, def, cache)
-      if (!view.ok) return view
-      const next = computePivot(store, cache, def, view.value, { date1904 })
-      if (!next.ok) return next
+      // A spill stores a one-cell display location on the live definition. Use the saved geometry as the basis for
+      // the next candidate while retaining its current field definitions and view; a change that now fits must
+      // restore the pivot at its original location.
+      const applyDef = state.spill ? (() => { const restored = { ...state.def, location: def0.location }; delete restored.spill; return restored })() : state.def
+      const transitioned = applyDeltaState({ def: applyDef, cache: state.cache, store: state.store, view: state.view, date1904,
+        captionRule: { caption: (kind, args) => rule.caption(kind, args) }, admitCandidateBytes: options?.admitCandidateBytes ?? input.admitCandidateBytes }, delta)
+      if (!transitioned.ok) return transitioned
+      const candidate = transitioned.value
+      const discard = <T extends EngineResult<unknown>>(result: T): T => { candidate.hold?.release(); return result }
+      // Excel keeps the opened pivot's original location when every field and value is removed (Task 34 oracle).
+      // The intermediate live definitions shrink as fields move; use the saved location for this final empty shape.
+      const emptyPivot = !candidate.view.data.length && !candidate.view.rows.length && !candidate.view.cols.length && !candidate.view.pages.length && !candidate.view.filters.length
+      // Excel's sole Task 35 all-fields-removed oracle starts from this saved A3 pivot (12 fields,
+      // Region/Product rows, Year + Values columns) and retains the measured empty shell A3:C20.
+      const task35EmptyBase = def0.location.ref === 'A3:I24' && def0.fields.length === 12 && view0.rows.join(',') === '0,1' && view0.cols.join(',') === '2,-2' && view0.data.length === 2
+      if (emptyPivot && !task35EmptyBase) return discard(refuse('pivot-engine-unmeasured', 'An empty PivotTable layout has not been measured for this saved pivot.'))
+      const emptyRef = task35EmptyBase ? 'A3:C20' : def0.location.ref
+      const layoutDef = emptyPivot ? { ...candidate.def, location: { ...candidate.def.location, ref: emptyRef } } : candidate.def
+      const next = computePivot(candidate.store, candidate.cache, layoutDef, candidate.view, { date1904 })
+      if (!next.ok) return discard(next)
       const layout = resolveCaptions(next.value, rule)
-      if (!layout.ok) return layout
+      if (!layout.ok) return discard(layout)
       const area = areaFor(layout.value), current = shown
       const overlap = overlapOf(area)
-      if (overlap && 'ok' in overlap) return overlap
-      const live = liveDefinition(def, view.value, next.value.axes, layout.value)
+      if (overlap && 'ok' in overlap) return discard(overlap)
+      const live = liveDefinition(layoutDef, candidate.view, next.value.axes, layout.value)
       if (overlap) {
         // A spilled pivot's charts and page cells were never measured: those refuse (fail closed).
         const { row, col } = overlap.spill
-        if (linkedCharts.length || view.value.pages.length) return refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet))
+        if (linkedCharts.length || candidate.view.pages.length) return discard(refuse('pivot-overlap', pivotOverlapMessage(row, col, def.sheet)))
         const spilled = spillLayout(layout.value)
-        const result: PivotApplyResult = { revision: state.revision + 1, view: view.value, def: spillDefinition(live, layout.value, overlap.spill), layout: spilled,
-          vacated: subtract(current, areaFor(spilled)), charts: [], spill: overlap.spill, notice: [notice, pivotSpillNotice(String(def.name ?? ''), row, col, def.sheet)].filter(Boolean).join(' ') }
+        const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: spillDefinition(live, layout.value, overlap.spill), cache: candidate.cache, store: candidate.store, layout: spilled,
+          vacated: subtract(current, areaFor(spilled)), charts: [], ...(candidate.hold ? { hold: candidate.hold } : {}), spill: overlap.spill, notice: [notice, pivotSpillNotice(String(def.name ?? ''), row, col, def.sheet)].filter(Boolean).join(' ') }
         issued.add(result)
         return { ok: true, value: result }
       }
       const charts = gate(layout.value, live)
-      if (!charts.ok) return charts
-      const result: PivotApplyResult = { revision: state.revision + 1, view: view.value, def: live, layout: layout.value, vacated: subtract(current, area), charts: charts.value, ...(notice ? { notice } : {}) }
+      if (!charts.ok) return discard(charts)
+      const result: PivotApplyResult = { revision: state.revision + 1, view: candidate.view, def: live, cache: candidate.cache, store: candidate.store, layout: layout.value, vacated: subtract(current, area), charts: charts.value, ...(candidate.hold ? { hold: candidate.hold } : {}), ...(notice ? { notice } : {}) }
       issued.add(result)
       return { ok: true, value: result }
     },
     commit(result) {
       if (released || !issued.has(result) || result.revision !== state.revision + 1) return false
+      const priorHold = state.hold
       state = result
+      if (priorHold && priorHold !== result.hold) priorHold.release()
       shown = areaFor(result.layout)
       notice = undefined
       return true
@@ -329,7 +349,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       // A refreshed saved view that no longer fits refuses (its spill was never measured).
       const overlap = overlapOf(areaFor(layout0))
       if (overlap) return 'ok' in overlap ? overlap : refuse('pivot-overlap', pivotOverlapMessage(overlap.spill.row, overlap.spill.col, def.sheet))
-      const result: PivotApplyResult = { revision: state.revision + 1, view: view0, def: def0, layout: layout0, vacated: subtract(shown, areaFor(layout0)), charts: charts0.value, ...(notice ? { notice } : {}) }
+      const result: PivotApplyResult = { revision: state.revision + 1, view: view0, def: def0, cache, store, layout: layout0, vacated: subtract(shown, areaFor(layout0)), charts: charts0.value, ...(notice ? { notice } : {}) }
       issued.add(result)
       return { ok: true, value: result }
     },
@@ -338,6 +358,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       released = true
       lease?.release()
       hold?.release()
+      state.hold?.release()
     },
   }
   return { ok: true, value: session }

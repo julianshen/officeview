@@ -30,7 +30,7 @@ import { installPivotCharts } from '../src/components/xlsx/sheetAssets'
 import { chartDescription } from '../src/charts/describe'
 import { refillChartModel } from '../src/charts/fill'
 import { adoptChartModel, chartModelOwner, modelOwner, releaseChartModel } from '../src/charts/own'
-import { createChartWorkspace } from '../src/charts/workspace'
+import { createChartWorkspace, scopeChartWorkspace } from '../src/charts/workspace'
 import { once } from './helpers/xlsx-pivots-load'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
@@ -115,6 +115,24 @@ describe('pivot charts follow (Task 30)', () => {
         expect(charts[0]!.preparedAxes).toBeDefined()
       })
     }
+    it('follows the measured Task 35 single-data layout and Values-to-Rows move', async () => {
+      const manifest = JSON.parse(readFileSync(resolve(INTERACTION, 'manifest.json'), 'utf8')) as ChartCase[]
+      for (const name of ['s4-chart-remove-second-data', 's4-chart-values-to-rows']) {
+        const entry = manifest.find(item => item.case === name)!
+        const target = await book(caseFile(entry))
+        const { session: opened } = await session(SEED)
+        const reset = opened.reset()
+        if (!reset.ok) throw new Error(`${name}: reset: ${reset.diagnostic.message}`)
+        let charts = reset.value.charts
+        for (const delta of entry.delta) {
+          const applied = opened.apply(delta)
+          if (!applied.ok) throw new Error(`${name}: ${applied.diagnostic.feature}: ${applied.diagnostic.message}`)
+          expect(opened.commit(applied.value)).toBe(true)
+          charts = applied.value.charts
+        }
+        expect(chartData(charts[0]!)).toEqual(chartData(target.charts[0]!))
+      }
+    })
     it('the seed\'s chart rebuilt over each field-move case\'s saved layout equals that case\'s saved chart', async () => {
       const seed = await book(SEED)
       for (const entry of CASES.filter(c => c.setup)) {
@@ -285,6 +303,24 @@ describe('pivot charts follow (Task 30)', () => {
       releaseChartModel(next)
       expect(workspace.used).toBeLessThan(charged)
       releaseChartModel(source)
+    })
+    it('refills a handed-off paged chart into its document facet', async () => {
+      const seed = await book(SEED)
+      const document = createChartWorkspace('desktop')
+      const scoped = scopeChartWorkspace(document, { reserve: () => true, release: () => {} })
+      const source: ChartModel = { ...seed.charts[0]! }
+      const owner = modelOwner(scoped)
+      expect(scoped.reserve(1000, owner.tag)).toBe(true)
+      adoptChartModel(source, owner)
+      scoped.handOff()
+      const { session: s } = await session(SEED)
+      const rebuilt = pivotChartSeries(source, s.layout, s.def)
+      if (!rebuilt.ok) throw new Error(rebuilt.diagnostic.message)
+      expect(chartModelOwner(rebuilt.value)?.workspace).toBe(document)
+      expect(document.used).toBeGreaterThan(1000)
+      releaseChartModel(rebuilt.value)
+      releaseChartModel(source)
+      expect(document.used).toBe(0)
     })
     it('a refused admission refunds the refill and the gate refuses the change', async () => {
       const seed = await book(SEED)

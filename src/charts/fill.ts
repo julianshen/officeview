@@ -256,7 +256,10 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
  * (`refused: true`), unowned, which the caller turns into its own refusal.
  */
 export function refillChartModel(model: ChartModel, build: (charge: (bytes: number) => void) => ChartModel, options: { workspace?: ChartWorkspace } = {}): ChartModel {
-  const source = chartModelOwner(model)?.workspace ?? options.workspace
+  const owned = chartModelOwner(model)?.workspace
+  // A paged drawing's model is read through a temporary scoped workspace. Once the reply is handed off that scope is
+  // closed; later pivot-chart refills must charge the persistent document facet, as layout preparation does.
+  const source = owned ? ((owned as { facet?: ChartWorkspace }).facet ?? owned) : options.workspace
   const owner = source ? modelOwner(source) : undefined
   const charge = (bytes: number) => { if (owner && !owner.workspace.reserve(bytes, owner.tag)) throw new ChartRefusal() }
   try {

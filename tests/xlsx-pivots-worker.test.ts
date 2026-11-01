@@ -30,9 +30,9 @@ import { MemoryPool } from '../src/xlsx/view/tileCache'
 
 const FIXTURE = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/engine/', import.meta.url)), 'baseline.xlsx')
 const FIXTURE_ROOT = resolve(fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url)))
-const TASK25_CASES = (JSON.parse(readFileSync(resolve(FIXTURE_ROOT, 'interaction/manifest.json'), 'utf8')) as Array<{
+const INTERACTION_CASES = (JSON.parse(readFileSync(resolve(FIXTURE_ROOT, 'interaction/manifest.json'), 'utf8')) as Array<{
   case: string; file: string; task: number; status?: string; setup?: string; seed: string; base?: string; pivot: string; delta: PivotDelta[]
-}>).filter(entry => entry.task === 25 && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
+}>).filter(entry => (entry.task === 25 || entry.task === 35) && entry.status === 'built' && entry.setup === undefined && entry.delta.length > 0)
 const SEEDS: Record<string, string> = {
   'engine-seed': resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx'),
   'chart-seed': resolve(FIXTURE_ROOT, 'recipes/pivot-chart-seed.xlsx'),
@@ -330,6 +330,31 @@ describe('worker pivot protocol', () => {
     const read = completed(await run(kernel, { kind: 'read', requestId: id(), owner: { docId, sheetId, valueGen: commit.valueGen, fontGen: 0, viewGen: 0 }, query: { op: 'pivotDisplay', grantBytes: 4 * 1024 * 1024 } }))
     if (read.kind !== 'read' || read.result.op !== 'pivotDisplay') throw new Error(JSON.stringify(read))
     expect(read.result.result.pivotTables.find(def => def.name === '樞紐分析表2')!.location.ref).toBe('A3:I21')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('Task 35: a worker field-list candidate is admitted before materialization and becomes the committed menu', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/engine-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))
+    if (opened.kind !== 'pivotOpen') throw new Error(JSON.stringify(opened))
+    const field = opened.menu.fields.find(entry => entry.axis === 'none' && entry.permissions.dragToRow)
+    expect(field).toBeDefined()
+    const before = kernel.session(docId)!.memoryStats().sourceBytes
+    const refused = await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'moveField', field: field!.index, axis: 'row' }, grantBytes: 1 })
+    expect(refused.kind).toBe('quota')
+    expect(kernel.session(docId)!.memoryStats().sourceBytes).toBe(before)
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 2,
+      delta: { kind: 'moveField', field: field!.index, axis: 'row' }, grantBytes: 16 * 1024 * 1024 }))
+    if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
+    expect(staged.menu.fields.find(entry => entry.index === field!.index)?.axis).toBe('row')
+    const committed = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision }))
+    expect(committed.kind).toBe('pivotCommit')
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
@@ -636,7 +661,7 @@ describe('worker pivot protocol', () => {
     expect(session.memoryStats().sourceBytes).toBe(baseline)
   })
 
-  it.each(TASK25_CASES.map(entry => [entry.case, entry] as const))('paged layout equals resident layout for interaction case %s', async (_name, entry) => {
+  it.each(INTERACTION_CASES.map(entry => [entry.case, entry] as const))('paged layout equals resident layout for interaction case %s', async (_name, entry) => {
     const start = entry.base ? resolve(FIXTURE_ROOT, `${entry.base}.xlsx`) : SEEDS[entry.seed]
     if (!start) throw new Error(`Unknown interaction seed ${entry.seed}`)
     const parts = await loadPivotParts(start)
@@ -682,7 +707,7 @@ describe('worker pivot protocol', () => {
           ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }),
         }
       })
-      expect(expected?.length).toBeGreaterThan(0)
+      if (entry.case !== 's4-empty-pivot-all-removed') expect(expected?.length).toBeGreaterThan(0)
       expect(pagedReply.cells).toEqual(expected)
       const committed = await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId: sheet.sheetId, pivot, revision })
       expect(completed(committed)).toMatchObject({ kind: 'pivotCommit', revision })

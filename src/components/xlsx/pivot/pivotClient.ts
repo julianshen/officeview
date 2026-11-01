@@ -422,7 +422,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     doc.sheets.flatMap(sheet => (sheet.pivotTables ?? []).map(table => ({ sheet: table.sheet, name: String(table.name ?? '') }))))
   /** The cache each live definition this client installed indexes (its session's), for labels read off the sheet. */
   const liveCaches = new WeakMap<PivotTableDefinition, PivotCacheDefinition>()
-  const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.cache, entry.session.view, entry.date1904)
+  const modelOf = (sheetId: number, entry: OpenPivot) => menuModel(sheetOf(sheetId)!, entry.session.def, entry.session.cache, entry.session.view, entry.date1904)
 
   const client: PivotClient = {
     preflight,
@@ -492,6 +492,13 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
               ledger.chargeWhileHeld('document', [store], store.bytes + metadataBytes); return ledger.hold(store) ?? undefined
             },
           } : {}),
+          admitCandidateBytes: extraBytes => {
+            const owner = `pivot-candidate:${sheetId}:${pivot}:${++refreshBuilds}`
+            if (ledger.bytes + extraBytes > budget) return undefined
+            ledger.set('document', owner, extraBytes)
+            let held = true
+            return { bytes: extraBytes, release: () => { if (!held) return; held = false; ledger.set('document', owner, 0) } }
+          },
         })
         ledger.set('document', building, 0)
         if (!session.ok) { leased?.release(); return { ok: false, diagnostic: mainQuota(session.diagnostic) } }
@@ -511,10 +518,17 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       const entry = open.get(key(sheetId, pivot))
       if (!entry) return refusal('pivot-session-released', `${nameOf(savedDefs[sheetId]?.[pivot])} has no open session`)
       const { session } = entry
-      const applied = delta === 'reset' ? session.reset() : session.apply(delta)
+      const applied = delta === 'reset' ? session.reset() : session.apply(delta, { admitCandidateBytes: extraBytes => {
+        const owner = `pivot-candidate:${sheetId}:${pivot}:${++refreshBuilds}`
+        if (ledger.bytes + extraBytes > budget) return undefined
+        ledger.set('document', owner, extraBytes)
+        let held = true
+        return { bytes: extraBytes, release: () => { if (!held) return; held = false; ledger.set('document', owner, 0) } }
+      } })
       if (!applied.ok) return applied
       const result = applied.value
       if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
+      entry.cache = result.cache
       // Ruling S3-AF: the dependents to recompute read the saved area, the area shown before this commit and the one
       // shown after (a shrink or reset vacates cells the previous layout filled).
       const before = entry.current
@@ -525,10 +539,10 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       // Its cell indexes are charged while the viewer keeps the overlay (perf round 2).
       if (overlay) ledger.chargeWhileReachable('structure', [overlay], overlay.indexBytes)
       const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay, ...(delta === 'reset' ? { reset: true } : {}),
-        layout: result.layout, cache: entry.cache, date1904: entry.date1904,
+        layout: result.layout, cache: result.cache, date1904: entry.date1904,
         changedRects: [...entry.saved, ...before, ...entry.current], allSaved: ![...open.values()].some(shows),
         ...(result.charts.length ? { charts: result.charts } : {}) }
-      liveCaches.set(session.def, entry.cache)
+      liveCaches.set(session.def, result.cache)
       options.install(commit)
       return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit, ...(result.notice ? { notice: result.notice } : {}) }
     },
