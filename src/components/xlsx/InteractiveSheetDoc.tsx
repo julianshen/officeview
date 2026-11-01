@@ -28,13 +28,14 @@ import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
 import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues, savedDependentFormulaCells } from '../../xlsx/formula/workbook'
+import { workbookValuePolicy } from '../../xlsx/formula/value-policy'
 import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
-import { columnToLetters, MAX_COLS, parseA1, validateCoordinate } from '../../xlsx/view/coordinates'
+import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
@@ -1585,6 +1586,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       rerender()
     }).catch(() => setAnnouncement('Some formulas that depend on this pivot may still show saved values.'))
   }
+  /** The rectangles pivot definitions cover (their locations), for the sheet-level formula notice. */
+  const pivotRectsOf = (defs: readonly import('../../xlsx/pivots/model').PivotTableDefinition[]) => defs.flatMap(def => {
+    const rect = parseA1Range(def.location.ref)
+    return rect ? [{ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 }] : []
+  })
+  /** Whether any sheet of a resident saved-values-only workbook has a formula outside its pivots (computed once). */
+  const cachedFormulaFlagRef = useRef<boolean | undefined>(undefined)
+  const cachedFormulaFlag = () => cachedFormulaFlagRef.current ??= doc.sheets.some((candidate, index) => markPagedDependentsStale(new Set(), index, candidate, pivotRectsOf(candidate.pivotTables ?? [])).size > 0)
   /** Installs a committed pivot change (spec §7.9): 1. the sheet's live definition; 2. its region styles rebuilt;
    * 3. the overlay on the source store (resident), which 4. bumps the store's valueGen (tiles, find, copy and the
    * geometry re-key); 5. the sheet's tiles dropped. The paged path's overlay is the worker's (Task 27). */
@@ -1595,16 +1604,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (remote) {
       const defs = [...(sheet?.pivotTables ?? [])]
       defs[commit.pivot] = commit.def
-      const pivotRects = defs.flatMap(def => {
-        const parts = def.location.ref.split(':')
-        if (parts.length < 1 || parts.length > 2) return []
-        try {
-          const a = parseA1(parts[0]!.replace(/\$/g, ''))
-          const b = parseA1((parts[1] ?? parts[0]!).replace(/\$/g, ''))
-          return [{ minRow: Math.min(a.row, b.row), maxRow: Math.max(a.row, b.row), minCol: Math.min(a.col, b.col), maxCol: Math.max(a.col, b.col) }]
-        } catch { return [] }
-      })
-      if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRects, remote.hasFormulaCellsOutsidePivots ?? false))
+      if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRectsOf(defs), remote.hasFormulaCellsOutsidePivots ?? false))
       // §7.8 (Task 29): autofit once the worker's new pivot display (its styles) has arrived; the old styles now.
       const shownEntry = entries.get(sheetId)
       if (pivotUi && commit.fit && shownEntry) (pendingPagedFits.current ??= pivotUi.pendingPivotFits(pivotFitMemory)).add(sheetId, { pivot: commit.pivot, fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
@@ -1633,7 +1633,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
     }
     if (pivotUi && beforeFit) autofitNotice.current = autofitPivot(sheetId, sheet, beforeFit, { def: commit.def, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) })
-    if (commit.layout && commit.cache && commit.changedRects?.length) installDependents(commit, sheet, commit.layout, commit.cache, commit.changedRects)
+    // A saved-values-only workbook never evaluates its formulas (final review minor 4): no recompute, which would refuse,
+    // but the sheet notice, as on the paged path, when the workbook has formulas outside its pivots.
+    if (commit.layout && commit.cache && commit.changedRects?.length) {
+      if (workbookValuePolicy(doc) === 'cached') setPagedDependentNoticeSheets(current => current.has(commit.sheetId) ? current
+        : markPagedDependentsStale(current, commit.sheetId, sheet, pivotRectsOf(sheet.pivotTables ?? []), cachedFormulaFlag()))
+      else installDependents(commit, sheet, commit.layout, commit.cache, commit.changedRects)
+    }
     cancelCopy()
     dropTiles(sheetId, null)
     rerender()
@@ -1814,7 +1820,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pivotNotices = entry ? [...new Set([
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
     ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
-    ...(pagedDependentNoticeSheets.has(activeIndex) || Boolean(activeSheetId && remote?.pivotFormulaNoticeSheets.has(activeSheetId)) ? ['Formulas outside this pivot may still show saved values (paged workbook).'] : []),
+    ...(pagedDependentNoticeSheets.has(activeIndex) || Boolean(activeSheetId && remote?.pivotFormulaNoticeSheets.has(activeSheetId)) ? [remote ? 'Formulas outside this pivot may still show saved values (paged workbook).' : 'Formulas outside this pivot still show saved values (this workbook shows saved formula values only).'] : []),
     ...(residentDependentNotices.unsupported.has(activeIndex) ? ['Some formulas still show saved values because their pivot reference is unsupported.'] : []),
     // M-4: over the work budget a reader keeps what it showed, which may be an earlier change's live value.
     ...(residentDependentNotices.outdated.has(activeIndex) ? ['Some formulas that depend on a pivot may be out of date: recalculating them would take too long.'] : []),

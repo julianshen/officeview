@@ -64,6 +64,17 @@ export function parseA1(address: string): SourceCell {
   return { row, col }
 }
 
+/** An A1 cell or range reference (`A1`, `$A$1:$C$4`, either corner order) as a rectangle; undefined when either
+ * corner is not a cell address. The shared parser behind every pivot location and region ref. */
+export function parseA1Range(ref: string): SourceRect | undefined {
+  const parts = ref.split(':')
+  if (parts.length > 2) return undefined
+  try {
+    const a = parseA1(parts[0]!), b = parts.length === 2 ? parseA1(parts[1]!) : a
+    return { r0: Math.min(a.row, b.row), r1: Math.max(a.row, b.row), c0: Math.min(a.col, b.col), c1: Math.max(a.col, b.col) }
+  } catch { return undefined }
+}
+
 export function formatA1(at: SourceCell): string {
   validateCoordinate(at.row, at.col)
   return `${columnToLetters(at.col)}${at.row + 1}`

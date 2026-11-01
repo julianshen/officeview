@@ -8,12 +8,14 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
+import { markSavedValuesOnly } from '../src/xlsx/formula/value-policy'
 import { chartWorkbook } from './helpers/xlsx-chart-fixture'
 import { patchedSeed } from './helpers/xlsx-pivots-dependent-patched'
 
 const SEED = resolve(__dirname, 'fixtures/xlsx-pivots/recipes/getpivotdata-seed.xlsx')
 const load = async () => parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(SEED))))
 const value = (doc: XlsxDocument, ref: string) => doc.sheets.find(s => s.name === 'Formulas')!.rows.flatMap(r => r.cells).find(c => c.ref === ref)!.value
+const statusText = (container: HTMLElement) => [...container.querySelectorAll('[role=status]')].map(node => node.textContent ?? '').join(' ')
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 async function hideWest(doc: XlsxDocument) {
@@ -220,4 +222,18 @@ it('a formula a pivot change leaves stale carries a corner mark with a tooltip a
   pickSheet(ui, 'Formulas')
   await waitFor(() => expect(marks()).toHaveLength(0), { timeout: 10_000 })
   expect(gridcell(0, 3)?.getAttribute('aria-description') ?? '').not.toMatch(/changed pivot table/)
+}, 60_000)
+
+it('a saved-values-only workbook keeps its formulas as saved after a pivot change, with the sheet notice and no false error', async () => {
+  const doc = await load()
+  markSavedValuesOnly(doc)
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  await filterRegion(ui, 'West')
+  await waitFor(() => expect(statusText(ui.container)).toMatch(/Pivot table changed \(view only; the file is unchanged\)\./), { timeout: 10_000 })
+  await new Promise(resolve => setTimeout(resolve, 200))
+  expect(statusText(ui.container)).not.toMatch(/Some formulas that depend on this pivot/)
+  expect(value(doc, 'B1')).toBeCloseTo(222603.36, 6)
+  // The pivot's sheet says so once, as the paged path does (S3-S): the workbook has formulas outside its pivots.
+  expect(statusText(ui.container)).toMatch(/Formulas outside this pivot still show saved values \(this workbook shows saved formula values only\)\./)
 }, 60_000)
