@@ -273,6 +273,7 @@ interface WorkerPivotHandle {
   pivot: number
   assets: WorkerPivotAssets
   def: PivotTableDefinition
+  /** The session's cache: for a refreshOnLoad pivot the rebuilt one, which its live definitions index. */
   cache: PivotCacheDefinition
   linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string }[]
   releaseAssets?: () => void
@@ -1479,7 +1480,9 @@ export class DocumentSession {
       } : {}) })
     building?.release()
     if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
-    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, savedDef: def, cache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, fitPayload: pivotFitPayload, share, runtimeHeld,
+    // The session's cache (a refreshOnLoad pivot's rebuilt one): its definitions index it (PR #57 review).
+    const sessionCache = opened.value.cache
+    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, savedDef: def, cache: sessionCache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, fitPayload: pivotFitPayload, share, runtimeHeld,
       linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),
       releaseAssets,
       highestWireRevision: 0, committedWireRevision: 0, requestRevision: 0, serial: 0 }
@@ -1487,7 +1490,7 @@ export class DocumentSession {
     shareHeld = false
     runtimeTransferred = true
     assetsTransferred = true
-    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), ...withCells(layoutCells(pivotFitPayload, opened.value.def, opened.value.layout, fitBytes)), created: true, handle }
+    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, sessionCache, opened.value.view, assets.date1904), ...withCells(layoutCells(pivotFitPayload, opened.value.def, opened.value.layout, fitBytes)), created: true, handle }
     } finally {
       releaseShare()
       releaseRuntime()

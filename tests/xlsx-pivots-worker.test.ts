@@ -1232,3 +1232,39 @@ describe('worker refreshed cache metadata stays charged (Task 32 fix round 2)', 
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 })
+
+describe('worker refreshed menus (PR #57 review: use the refreshed cache)', () => {
+  it('a refreshed worker pivot labels its menu items from the rebuilt cache, and hiding North hides North', async () => {
+    const file = resolve(FIXTURE_ROOT, 'recipes/refresh-seed.xlsx')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const kernel = new ViewerKernel({ parse: async input => parseXlsx(await OfficePackage.load(input)) }, quiet)
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    type Menu = { fields: Array<{ index: number; name: string; items: Array<{ index: number; label: string }> }> }
+    const opened = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 })) as unknown as { menu: Menu }
+    const region = opened.menu.fields.find(field => field.name === 'Region')!
+    // The rebuilt cache moved North ahead of East; the pivot items keep their order (East, North, …).
+    expect(region.items.map(item => item.label)).toEqual(['East', 'North', 'South', 'West', 'Central'])
+    const north = region.items.find(item => item.label === 'North')!.index
+    const staged = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1,
+      delta: { kind: 'items', field: region.index, hidden: [north] }, grantBytes: 16 * 1024 * 1024 })) as unknown as { menu: Menu; cells: Array<{ row: number; col: number; value: { value: unknown } | null }> }
+    const labels = staged.cells.filter(cell => cell.col === 0).map(cell => cell.value?.value)
+    expect(labels).toContain('East')
+    expect(labels).not.toContain('North')
+    expect(staged.menu.fields.find(field => field.name === 'Region')!.items.map(item => item.label)).toEqual(['East', 'North', 'South', 'West', 'Central'])
+    // The same change on the resident path gives the same cells.
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const { MainMemoryLedger } = await import('../src/xlsx/view/mainLedger')
+    const residentDoc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))
+    const installs: Array<{ overlay?: { cell(row: number, col: number): { value: unknown } | null | undefined } | null }> = []
+    const client = createResidentPivotClient({ doc: residentDoc, ledger: new MainMemoryLedger(), install: commit => { installs.push(commit as never) } })
+    const index = residentDoc.sheets.findIndex(candidate => candidate.pivotTables?.length)
+    const residentOpen = await client.open(index, 0, new AbortController().signal)
+    if (!residentOpen.ok) throw new Error(residentOpen.diagnostic.message)
+    expect((await client.apply(index, 0, { kind: 'items', field: region.index, hidden: [north] })).ok).toBe(true)
+    for (const cell of staged.cells) expect(cell.value?.value ?? null, `R${cell.row + 1}C${cell.col + 1}`).toEqual(installs[0]!.overlay!.cell(cell.row, cell.col)?.value ?? null)
+    client.dispose?.()
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+})
