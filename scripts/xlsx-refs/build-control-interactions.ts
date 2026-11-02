@@ -14,9 +14,11 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
 import { closeWorkbook, openWorkbook, q, runScript, saveAs, waitFor, workbookNames } from './excel'
+import { clearSlicerItems, hidePivotFieldItems, pivotFieldXmlScope, replaceXmlExactlyOnce, selectSlicerItems } from './control-interaction-xml'
 import {
-  CONTROL_INTERACTION_CASES, CONTROL_SEED_HEADERS, CONTROL_SEED_ROWS,
+  CONTROL_INTERACTION_CASES,
   type ControlInteractionCase,
+  type TimelineLevel,
 } from './control-interaction-cases'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -29,6 +31,135 @@ const BASE_TEMPLATE = join(RECIPES_DIR, 'r1-slicer-timeline.xlsx')
 
 const SEED_FILE = join(CONTROLS_DIR, 'controls-seed.xlsx')
 const MANIFEST_FILE = join(CONTROLS_DIR, 'manifest.json')
+
+async function editPart(zip: JSZip, partName: string, edit: (xml: string) => string): Promise<void> {
+  const part = zip.file(partName)
+  if (!part) throw new Error(`Missing XML part ${partName}`)
+  zip.file(partName, edit(await part.async('string')))
+}
+
+async function verifyPartMarkers(zip: JSZip, c: ControlInteractionCase, markers: ControlInteractionCase['scopedMarkers'] | ControlInteractionCase['inputMarkers'], label: string): Promise<void> {
+  for (const marker of markers ?? []) {
+    const part = zip.file(marker.part)
+    if (!part) throw new Error(`${c.case} ${label} is missing marker part ${marker.part}`)
+    const partXml = await part.async('string')
+    let xml = partXml
+    if (marker.within) {
+      xml = pivotFieldXmlScope(partXml, marker.within.value)
+    }
+    if (marker.match) {
+      const matches = xml.split(marker.match).length - 1
+      if (matches !== 1) throw new Error(`${c.case} ${label} expected one '${marker.match}' in ${marker.part}, found ${matches}`)
+    }
+    if (marker.absent && xml.includes(marker.absent)) throw new Error(`${c.case} ${label} found forbidden '${marker.absent}' in ${marker.part}`)
+  }
+}
+
+function cellPosition(cell: string): { row: number; col: number } {
+  const match = /^([A-Z]+)(\d+)$/.exec(cell)
+  if (!match) throw new Error(`Invalid A1 cell ${cell}`)
+  let col = 0
+  for (const char of match[1]!) col = col * 26 + char.charCodeAt(0) - 64
+  return { row: Number(match[2]), col }
+}
+
+async function completePivotCellMap(zip: JSZip, pivotName: string, cells: Record<string, string | number | null>): Promise<Record<string, string | number | null>> {
+  const paths = Object.keys(zip.files).filter(path => /^xl\/pivotTables\/pivotTable[^/]+\.xml$/.test(path))
+  const matches: string[] = []
+  for (const path of paths) {
+    const xml = await zip.file(path)!.async('string')
+    const name = /<pivotTableDefinition\b[^>]*\bname="([^"]+)"/.exec(xml)?.[1]
+    const ref = /<location\b[^>]*\bref="([A-Z]+\d+:[A-Z]+\d+)"/.exec(xml)?.[1]
+    if (name === pivotName && ref) matches.push(ref)
+  }
+  if (matches.length !== 1) throw new Error(`Expected one pivot ${pivotName}, found ${matches.length}`)
+  const [start, end] = matches[0]!.split(':').map(cellPosition)
+  return Object.fromEntries(Object.entries(cells).filter(([cell]) => {
+    const position = cellPosition(cell)
+    return position.row >= start!.row && position.row <= end!.row && position.col >= start!.col && position.col <= end!.col
+  }))
+}
+
+/** True only for an Excel-saved output that still satisfies its full case oracle. */
+export async function isCaseOutputVerified(c: ControlInteractionCase, file: string): Promise<boolean> {
+  if (!existsSync(file)) return false
+  try {
+    const zip = await JSZip.loadAsync(readFileSync(file))
+    await verifyPartMarkers(zip, c, c.scopedMarkers, 'saved output')
+    const cells = await extractCells(file)
+    for (const pivot of c.expected.pivots ?? []) {
+      const actual = await completePivotCellMap(zip, pivot.pivotName, cells)
+      if (JSON.stringify(actual) !== JSON.stringify(pivot.cells)) return false
+      for (const coord of pivot.absentCells ?? []) if (cells[coord] !== undefined) return false
+    }
+    for (const expected of c.expected.slicerCache ? [c.expected.slicerCache] : []) {
+      const xml = await zip.file(expected.part ?? 'xl/slicerCaches/slicerCache1.xml')?.async('string')
+      if (!xml) return false
+      const block = /<items\b[^>]*>([\s\S]*?)<\/items>/.exec(xml)?.[1]
+      if (block === undefined) return false
+      const items = [...block.matchAll(/<i\b([^>]*)\/>/g)].map(match => {
+        const attrs = match[1] ?? ''
+        const x = /\bx="(\d+)"/.exec(attrs)?.[1]
+        return x === undefined ? null : { x: Number(x), selected: /\bs="1"/.test(attrs), noData: /\bnd="1"/.test(attrs) }
+      })
+      const wanted = expected.items.map(item => ({ x: item.x, selected: item.selected, noData: item.noData ?? false }))
+      if (JSON.stringify(items) !== JSON.stringify(wanted)) return false
+    }
+    if (c.expected.secondarySlicerCache) {
+      const expected = c.expected.secondarySlicerCache
+      const xml = await zip.file(expected.part ?? 'xl/slicerCaches/slicerCache1.xml')?.async('string')
+      const block = xml && /<items\b[^>]*>([\s\S]*?)<\/items>/.exec(xml)?.[1]
+      if (block === undefined) return false
+      const items = [...block.matchAll(/<i\b([^>]*)\/>/g)].map(match => {
+        const attrs = match[1] ?? ''
+        const x = /\bx="(\d+)"/.exec(attrs)?.[1]
+        return x === undefined ? null : { x: Number(x), selected: /\bs="1"/.test(attrs), noData: /\bnd="1"/.test(attrs) }
+      })
+      const wanted = expected.items.map(item => ({ x: item.x, selected: item.selected, noData: item.noData ?? false }))
+      if (JSON.stringify(items) !== JSON.stringify(wanted)) return false
+    }
+    if (c.expected.timelineCache) {
+      const xml = await zip.file('xl/timelineCaches/timelineCache1.xml')?.async('string')
+      if (!xml) return false
+      const cache = c.expected.timelineCache
+      if (cache.filterType && !xml.includes(`filterType="${cache.filterType}"`)) return false
+      if (cache.selection && (!xml.includes(`startDate="${cache.selection.startDate}"`) || !xml.includes(`endDate="${cache.selection.endDate}"`))) return false
+    }
+    if (c.expected.tableRows) {
+      const sheet = await zip.file('xl/worksheets/sheet2.xml')?.async('string')
+      if (!sheet) return false
+      for (let index = 1; index <= 5; index++) {
+        const rowNumber = index + 1
+        const row = new RegExp(`<row\\b(?=[^>]*\\br="${rowNumber}")[^>]*>`).exec(sheet)?.[0]
+        if (!row) return false
+        const shouldBeVisible = c.expected.tableRows.visibleRowIndices.includes(index)
+        if (shouldBeVisible === /\bhidden="1"/.test(row)) return false
+      }
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function controlsSeedVerified(file: string): Promise<boolean> {
+  if (!existsSync(file)) return false
+  try {
+    const cells = await extractCells(file)
+    const data = await extractCells(file, 'xl/worksheets/sheet2.xml')
+    return cells.A3 === '加總 - Sales' && cells.A4 === '列標籤' && cells.B4 === 'Apples' && cells.C4 === 'Bananas' && cells.D4 === 'Cherries' && cells.E4 === '總計' && cells.E8 === 150
+      && data.A2 === 45291 && data.B2 === 'East' && data.C2 === 'Apples' && data.D2 === 10
+      && data.A6 === 45383 && data.B6 === 'South' && data.C6 === 'Apples' && data.D6 === 50
+  } catch {
+    return false
+  }
+}
+
+function assertControlTarget(c: ControlInteractionCase, operationName: string): void {
+  if (operationName !== c.target.controlName) {
+    throw new Error(`${c.case}: action targets ${operationName}; expected ${c.target.controlName}`)
+  }
+}
 
 function closeAny(names: string[]): void {
   try {
@@ -91,6 +222,10 @@ async function extractCells(file: string, sheetPath = 'xl/worksheets/sheet1.xml'
 }
 
 export async function buildControlsSeed(): Promise<void> {
+  if (await controlsSeedVerified(SEED_FILE)) {
+    console.log('Skipping controls-seed.xlsx (existing Excel output verifies).')
+    return
+  }
   console.log('Building controls-seed.xlsx...')
   mkdirSync(CONTROLS_DIR, { recursive: true })
   const step1 = join(PIVOT_DIR, 'work-seed-step1.xlsx')
@@ -168,15 +303,27 @@ export async function buildControlsSeed(): Promise<void> {
 }
 
 export async function buildCase(c: ControlInteractionCase): Promise<void> {
-  if (c.status !== 'built') {
+  if (c.route === 'recipe') {
     console.log(`Skipping non-built case: ${c.case} (${c.status})`)
     return
   }
   const outFile = resolve(ROOT, c.file)
   const workFile = join(PIVOT_DIR, `work-${c.case}-in.xlsx`)
   const workOut = join(PIVOT_DIR, `work-${c.case}-out.xlsx`)
-  if (existsSync(workFile)) rmSync(workFile)
-  if (existsSync(workOut)) rmSync(workOut)
+  if (await isCaseOutputVerified(c, outFile)) {
+    console.log(`Skipping ${c.case} (existing Excel output verifies).`)
+    return
+  }
+  if (existsSync(workFile) || existsSync(workOut)) {
+    throw new Error(`${c.case} has preserved prior work files; inspect ${workFile} and ${workOut} before retrying`)
+  }
+  if (existsSync(outFile)) {
+    const previous = join(PIVOT_DIR, `work-${c.case}-previous-output.xlsx`)
+    if (existsSync(previous)) throw new Error(`${c.case} has an unverified output and preserved copy already exists: ${previous}`)
+    copyFileSync(outFile, previous)
+    rmSync(outFile)
+    console.log(`Preserved prior unverified output at ${previous}`)
+  }
   console.log(`Building ${c.case}...`)
 
   const baseFile = c.base === 'controls-seed'
@@ -189,70 +336,38 @@ export async function buildCase(c: ControlInteractionCase): Promise<void> {
   const actions = Array.isArray(c.action) ? c.action : [c.action]
   for (const op of actions) {
     if (op.kind === 'slicerSelect') {
-      const part = zip.file('xl/slicerCaches/slicerCache1.xml')
-      if (part) {
-        let xml = await part.async('string')
-        const items = op.itemIds === 'all'
-          ? '<i x="0" s="1"/><i x="1" s="1"/><i x="2" s="1"/><i x="3" nd="1"/>'
-          : [0, 1, 2].map(x => `<i x="${x}"${op.itemIds.includes(x) ? ' s="1"' : ''}/>`).join('') + '<i x="3" nd="1"/>'
-        xml = xml.replace(/<items count="[^"]*">.*?<\/items>/s, `<items count="4">${items}</items>`)
-        zip.file('xl/slicerCaches/slicerCache1.xml', xml)
-      }
+      assertControlTarget(c, op.name)
+      const cache = c.expected.slicerCache
+      const partName = cache?.part ?? 'xl/slicerCaches/slicerCache1.xml'
+      await editPart(zip, partName, xml => selectSlicerItems(xml, op.itemIds === 'all' ? Array.from({ length: Number(/<items\b[^>]*count="(\d+)"/.exec(xml)?.[1] ?? 0) }, (_, x) => x) : op.itemIds))
     } else if (op.kind === 'slicerClear') {
-      const part = zip.file('xl/slicerCaches/slicerCache1.xml')
-      if (part) {
-        let xml = await part.async('string')
-        const items = '<i x="0" s="1"/><i x="1" s="1"/><i x="2" s="1"/><i x="3" s="1" nd="1"/>'
-        xml = xml.replace(/<items count="[^"]*">.*?<\/items>/s, `<items count="4">${items}</items>`)
-        zip.file('xl/slicerCaches/slicerCache1.xml', xml)
-      }
+      assertControlTarget(c, op.name)
+      const cache = c.expected.slicerCache
+      if (!cache) throw new Error(`${c.case}: slicerClear requires expected cache identity`)
+      await editPart(zip, cache.part ?? 'xl/slicerCaches/slicerCache1.xml', clearSlicerItems)
     } else if (op.kind === 'timelineSelect') {
-      const part = zip.file('xl/timelineCaches/timelineCache1.xml')
-      if (part) {
-        let xml = await part.async('string')
-        const state = `<state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="200334102" filterType="dateBetween"><selection startDate="${op.startDate}" endDate="${op.endDate}"/><bounds startDate="2023-01-01T00:00:00" endDate="2025-01-01T00:00:00"/></state>`
-        xml = xml.replace(/<state\b[^>]*>.*?<\/state>/s, state)
-        zip.file('xl/timelineCaches/timelineCache1.xml', xml)
-      }
+      assertControlTarget(c, op.name)
+      await editPart(zip, 'xl/timelineCaches/timelineCache1.xml', xml => replaceXmlExactlyOnce(xml, /<state\b[^>]*>[\s\S]*?<\/state>/, `<state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="200334102" filterType="dateBetween"><selection startDate="${op.startDate}" endDate="${op.endDate}"/><bounds startDate="2023-01-01T00:00:00" endDate="2025-01-01T00:00:00"/></state>`, 'timeline selection'))
     } else if (op.kind === 'timelineClear') {
-      const part = zip.file('xl/timelineCaches/timelineCache1.xml')
-      if (part) {
-        let xml = await part.async('string')
-        const state = `<state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="200334102" filterType="unknown"><bounds startDate="2023-01-01T00:00:00" endDate="2025-01-01T00:00:00"/></state>`
-        xml = xml.replace(/<state\b[^>]*>.*?<\/state>/s, state)
-        zip.file('xl/timelineCaches/timelineCache1.xml', xml)
-      }
+      assertControlTarget(c, op.name)
+      await editPart(zip, 'xl/timelineCaches/timelineCache1.xml', xml => replaceXmlExactlyOnce(xml, /<state\b[^>]*>[\s\S]*?<\/state>/, '<state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="200334102" filterType="unknown"><bounds startDate="2023-01-01T00:00:00" endDate="2025-01-01T00:00:00"/></state>', 'timeline clear'))
     } else if (op.kind === 'timelineLevel') {
-      const part = zip.file('xl/timelines/timeline1.xml')
-      if (part) {
-        let xml = await part.async('string')
-        const levelIdx = ({ years: 0, quarters: 1, months: 2, days: 3 } as const)[op.level]
-        xml = xml.replace(/level="[^"]*"/, `level="${levelIdx}"`)
-        xml = xml.replace(/selectionLevel="[^"]*"/, `selectionLevel="${levelIdx}"`)
-        zip.file('xl/timelines/timeline1.xml', xml)
-      }
+      assertControlTarget(c, op.name)
+      const levelIdxByName: Record<TimelineLevel, number> = { years: 0, quarters: 1, months: 2, days: 3 }
+      const levelIdx = levelIdxByName[op.level as TimelineLevel]
+      await editPart(zip, 'xl/timelines/timeline1.xml', xml => {
+        xml = replaceXmlExactlyOnce(xml, /level="[^"]*"/, `level="${levelIdx}"`, 'timeline level')
+        return replaceXmlExactlyOnce(xml, /selectionLevel="[^"]*"/, `selectionLevel="${levelIdx}"`, 'timeline selection level')
+      })
+    } else if (op.kind === 'pivotManualFilter') {
+      if (c.target.controlName !== 'Slicer_Product' || op.fieldName !== 'Product') throw new Error(`${c.case}: manual filter target is not the expected Product field`)
+      await editPart(zip, 'xl/pivotTables/pivotTable1.xml', xml => hidePivotFieldItems(xml, 'axisCol', op.hiddenItemIds))
+    } else {
+      throw new Error(`${c.case}: XML builder has no handler for ${op.kind}; use the owner recipe route`)
     }
   }
 
-  // Special cases:
-  if (c.case === 's5-slicer-crossfilter-order') {
-    const part = zip.file('xl/slicerCaches/slicerCache1.xml')
-    if (part) {
-      let xml = await part.async('string')
-      // East has Apples (0) and Bananas (1). Cherries (2) has nd="1"
-      const items = '<i x="0" s="1"/><i x="1" s="1"/><i x="2" nd="1"/><i x="3" nd="1"/>'
-      xml = xml.replace(/<items count="[^"]*">.*?<\/items>/s, `<items count="4">${items}</items>`)
-      zip.file('xl/slicerCaches/slicerCache1.xml', xml)
-    }
-    // In pivot table hide West and South
-    const ptPart = zip.file('xl/pivotTables/pivotTable1.xml')
-    if (ptPart) {
-      let ptXml = await ptPart.async('string')
-      ptXml = ptXml.replace(/<item x="1"\/>/, '<item h="1" x="1"/>')
-      ptXml = ptXml.replace(/<item x="2"\/>/, '<item h="1" x="2"/>')
-      zip.file('xl/pivotTables/pivotTable1.xml', ptXml)
-    }
-  }
+  await verifyPartMarkers(zip, c, c.inputMarkers, 'prepared input')
 
   writeFileSync(workFile, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
 
@@ -260,41 +375,21 @@ export async function buildCase(c: ControlInteractionCase): Promise<void> {
   session(workFile, workOut, [], true)
   copyFileSync(workOut, outFile)
 
+  // Verify markers only in the declared package part; a required match must be unique.
+  const savedZip = await JSZip.loadAsync(readFileSync(outFile))
+  await verifyPartMarkers(savedZip, c, c.scopedMarkers, 'saved output')
+  if (!await isCaseOutputVerified(c, outFile)) throw new Error(`${c.case} Excel output failed its cell/control oracle; preserved input ${workFile} and Excel output ${workOut}`)
+
   if (existsSync(workFile)) rmSync(workFile)
   if (existsSync(workOut)) rmSync(workOut)
-
-  // Verify markers
-  if (c.markers?.length) {
-    const savedZip = await JSZip.loadAsync(readFileSync(outFile))
-    let allXml = ''
-    for (const [, f] of Object.entries(savedZip.files)) {
-      if (f.name.endsWith('.xml')) {
-        allXml += await f.async('string')
-      }
-    }
-    for (const m of c.markers) {
-      if (!allXml.includes(m)) {
-        throw new Error(`Case ${c.case} lacks expected marker: "${m}"`)
-      }
-    }
-  }
 
   console.log(`Built ${c.case} successfully.`)
 }
 
 export async function writeManifest(): Promise<void> {
   console.log('Writing manifest.json...')
-  const entries: any[] = []
+  const entries: unknown[] = []
   for (const c of CONTROL_INTERACTION_CASES) {
-    const filePath = resolve(ROOT, c.file)
-    let actualCells: Record<string, string | number | null> | undefined
-    if (existsSync(filePath)) {
-      try {
-        actualCells = await extractCells(filePath)
-      } catch {
-        // ignore
-      }
-    }
     entries.push({
       case: c.case,
       file: c.file,
@@ -304,11 +399,9 @@ export async function writeManifest(): Promise<void> {
       action: c.action,
       route: c.route,
       status: c.status,
-      expected: {
-        ...c.expected,
-        ...(actualCells ? { actualSavedCells: actualCells } : {}),
-      },
-      markers: c.markers,
+      expected: c.expected,
+      inputMarkers: c.inputMarkers,
+      scopedMarkers: c.scopedMarkers,
       recipeNotes: c.recipeNotes,
     })
   }

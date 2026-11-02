@@ -1,98 +1,74 @@
 # XLSX pivots: Stage 5 owner recipes (slicers and timelines)
 
-Reference measurements recorded from Microsoft Excel for Mac 16.114 (zh-TW UI locale) for interactions that require hand-recorded UI actions or cannot be stably encoded through XML refresh alone (spec §9, §11, pivots plan Task 39).
+Owner-recorded Excel UI actions that cannot be established by changing saved XML state alone (spec §9, §11). Reference application: Microsoft Excel for Mac 16.114, zh-TW UI locale. These are procedures to record; they are not treated as measurements until the resulting workbook and observation record are saved.
 
-## Before you start
+## Start workbook
 
-- **Environment:** Excel for Mac 16.114, zh-TW UI locale.
-- **Start file:** `tests/fixtures/xlsx-pivots/controls/controls-seed.xlsx`.
-  - Sheet `Data` contains the 5-row seed:
-    - (2023-12-31, East, Apples, 10)
-    - (2024-01-01, East, Bananas, 20)
-    - (2024-02-15, West, Apples, 30)
-    - (2024-03-31, West, Cherries, 40)
-    - (2024-04-01, South, Apples, 50)
-  - Sheet `工作表1` contains the pivot table `樞紐分析表1`:
-    - Row field: `Region` (East, South, West)
-    - Column field: `Product` (Apples, Bananas, Cherries)
-    - Values: `加總 - Sales` (Sum of Sales = 150)
-    - Slicer: `Slicer_Product`
-    - Timeline: `NativeTimeline_Date`
+Use `tests/fixtures/xlsx-pivots/controls/controls-seed.xlsx`:
 
----
+- `Data`: Date, Region, Product, Sales with rows (2023-12-31, East, Apples, 10), (2024-01-01, East, Bananas, 20), (2024-02-15, West, Apples, 30), (2024-03-31, West, Cherries, 40), (2024-04-01, South, Apples, 50).
+- `工作表1`: `樞紐分析表1`, Region rows, Product columns, Sum of Sales, Product slicer `Slicer_Product`, Date timeline `NativeTimeline_Date`.
 
-## R1 — Slicer Multi-Select toggle (`s5-slicer-multiselect-toggle`)
+## R1 — Slicer click semantics and Multi-Select
 
-**Purpose:** Verify the multi-select toggle button lifetime and interaction semantics. The pressed toggle button is ephemeral viewer UI state, not an XLSX-persisted value; it is verified in viewer UI tests rather than Excel save/reopen oracles.
+Run the direct UI actions and record every intermediate selection, pivot total, and saved/reopened state. No keyboard shortcut is part of this recipe.
 
-1. Open `controls-seed.xlsx`.
-2. On `工作表1`, click the **Multi-Select** (多選) toggle button on the top-right of `Slicer_Product` (keyboard shortcut: Alt+S).
-3. With Multi-Select enabled:
-   - Click **Apples**: only Apples is selected (Bananas and Cherries unselected). Pivot sum = 90.
-   - Click **Bananas**: both Apples and Bananas become selected. Pivot sum = 110.
-4. Disable Multi-Select (click the Multi-Select toggle button again).
-5. Click **Cherries**:
-   - Single-click selection immediately selects only Cherries (Apples and Bananas deselected). Pivot sum = 40.
-6. **Key measurement:**
-   - Multi-Select button state is transient in Excel; saving and reopening does not persist the toggle button's pressed state.
-   - While Multi-Select is active, ordinary mouse clicks perform toggle/additive selection without needing the Command/Ctrl modifier key.
+1. In All-selected state, click the visible Multi-Select button.
+2. Click Apples, then Bananas. Record the selected items and pivot total after each click.
+3. Click the Multi-Select button again, then click Cherries. Record the final selection and pivot total.
+4. From a saved Apples-only state, click Apples again. Record whether it remains selected, clears, or selects all.
+5. In a separate pass from Apples-only, Command-click Bananas; record the intermediate result. Command-click Bananas again and record the final result.
+6. Save and reopen; record whether the toggle's pressed appearance persists. Do not infer click behavior from cache XML or an undocumented shortcut.
 
----
+Cases: `s5-slicer-click-selected`, `s5-slicer-modifier-add-remove`, and `s5-slicer-multiselect-toggle`. Their XML-cache equivalents are not accepted as click evidence.
 
-## R2 — Slicer on field with manual pivot filter (`s5-slicer-hidden-or-blank`)
+## R2 — Slicer on a manually filtered pivot field (measured XML/refresh case)
 
-**Purpose:** Measure slicer behavior when a pivot field is filtered through the pivot table dropdown (manual filter) versus the slicer.
+Run `bun scripts/xlsx-refs/build-control-interactions.ts` to rebuild `s5-slicer-manual-filter-vs-slicer.xlsx`. The prepared input hides Cherries (Product item x=2) in the pivot's column field while the slicer cache selects x=0,1,2. Excel for Mac 16.114 refresh/save removed the hidden flag from x=2, kept the slicer selection, and set `h="1"` on the no-data/missing x=3 item. Cherries remains in the saved pivot and the grand total is 150. The output and complete-cell oracle are checked in; the run log is `s5-build-run3.log`. This is a measured saved-XML reconciliation, not evidence of a manual UI gesture or a general filter-intersection rule.
 
-1. Open `controls-seed.xlsx`.
-2. On `工作表1`, open the `Product` column filter dropdown in the pivot table header (cell `B3` / `B4`).
-3. Uncheck **Cherries** in the manual filter dropdown → click OK.
-   - In the pivot table: Cherries column is removed.
-4. Inspect `Slicer_Product`:
-   - In Excel 16.114, Cherries appears dimmed / marked as no data, or unselected.
-   - Clicking Cherries in the slicer does NOT override the pivot manual filter; the pivot table remains filtered.
-5. **Key measurement:**
-   - Slicer selection and pivot manual item filters operate as a logical AND (intersection).
-   - If Excel cannot stably save this combined state without repairing, the case remains marked `unverified` per Task 39 specification.
+## R3 — Report Connections with distinct layouts
 
----
+1. Duplicate the pivot sheet twice. Keep three distinct layouts: Pivot 1 Region rows × Product columns; Pivot 2 Date rows × Product columns; Pivot 3 Product rows with Sales values and no column field.
+2. Record each pivot's complete occupied cell map before the selection.
+3. Open Report Connections for `Slicer_Product`. Connect Pivot 1 and Pivot 2; leave Pivot 3 unchecked.
+4. Select Apples. Record the complete cell maps of all three pivots, the cache target list, and actual pivot names. Verify both linked layouts respond and the unlinked pivot's complete cell map is unchanged.
 
-## R3 — Linked slicer controlling two pivot tables while omitting a third (`s5-linked-two-pivots`)
+Case: `s5-linked-two-pivots`. A same-layout duplicate is not sufficient evidence.
 
-**Purpose:** Verify Excel's Report Connections (報表連線) linking a single slicer cache to multiple pivot tables across worksheets, while proving an unlinked pivot remains unaffected.
+## R4 — Table Slicer while retaining AutoFilter
 
-1. Open a copy of `controls-seed.xlsx`.
-2. Duplicate `工作表1` twice to create `工作表1 (2)` and `工作表1 (3)`.
-3. In Excel UI, right-click `Slicer_Product` on `工作表1` → **報表連線...** (Report Connections...).
-4. In the Report Connections dialog:
-   - Check `樞紐分析表1` (on `工作表1`).
-   - Check `樞紐分析表2` (on `工作表1 (2)`).
-   - Uncheck `樞紐分析表3` (on `工作表1 (3)`).
-   - Click OK.
-5. In `Slicer_Product`, click **Apples**:
-   - `樞紐分析表1` (linked): filters to Apples, grand total = 90.
-   - `樞紐分析表2` (linked): filters to Apples, grand total = 90.
-   - `樞紐分析表3` (unlinked): remains unfiltered, grand total = 150.
-6. Save as `tests/fixtures/xlsx-pivots/controls/s5-linked-two-pivots.xlsx`.
+No Excel-authored table-slicer template is checked in. A hand-written `tableSlicerCache` package produced a repair prompt in Excel 16.114, so this case is an owner recipe and is excluded from the XML builder.
 
----
+1. Open `tests/fixtures/xlsx-pivots/controls/controls-seed.xlsx` in Excel.
+2. On `Data`, select `A1:D6`, choose **Insert > Table**, and confirm that the table has headers. Verify the resulting table name is `Table1`.
+3. With a Table1 cell selected, choose **Table Design > Insert Slicer**, select **Region**, and create the slicer.
+4. Use Table1's Product AutoFilter to keep only **Apples**.
+5. In the Region slicer, click **East**, then Command-click **South**. The intended intersection is East Apples and South Apples.
+6. Save as `tests/fixtures/xlsx-pivots/controls/s5-table-slicer.xlsx`, close the workbook, then reopen that exact file.
+7. Record the visible source rows and verify the saved AutoFilter still selects Apples. The expected rows are 2 and 6 visible (East/South Apples); rows 3, 4 and 5 are hidden. Also record the table-slicer cache's selected Region items and the Excel version.
 
-## R4 — Excel Table Slicer on ListObject (`s5-table-slicer`)
+If Excel cannot create or reopen the combined state, record the actual result and leave the case unmeasured; do not synthesize table-slicer parts or row-hidden flags in XML.
 
-**Purpose:** Verify Table Slicers (Excel extension `tableSlicerCache` on a ListObject Table) filtering table rows while retaining AutoFilter criteria.
+Case: `s5-table-slicer` (owner recipe; unmeasured until the saved workbook and observation are recorded).
 
-1. Open a copy of `controls-seed.xlsx`.
-2. On sheet `Data`, select the range `A1:D6`.
-3. Choose **插入 → 表格** (Insert → Table), confirm "表格有標題" (My table has headers) → click OK (creates `Table1`).
-4. With `Table1` selected, choose **表格設計 → 插入交叉分析篩選器** (Table Design → Insert Slicer).
-5. Tick **Region** → click OK (creates `Slicer_Region`).
-6. In `Slicer_Region`:
-   - Click **East**: rows 2 and 3 (data rows 1 and 2, East) remain visible; rows 4, 5, 6 (West, South) are hidden via AutoFilter row hiding.
-   - Command-click **South**: row 6 becomes visible alongside rows 2 and 3.
-   - Click **Clear Filter** (清除篩選): all table rows 2 through 6 become visible.
-7. Save as `tests/fixtures/xlsx-pivots/controls/s5-table-slicer.xlsx`.
+## R5 — Timeline scroll
 
----
+With All Periods selected, scroll to the 2023 range. Record the first visible period and whether the committed selection changes. Writing `scrollPosition` in XML does not prove UI scrolling.
 
-## Hand-back Summary
+Case: `s5-timeline-scroll`.
 
-All four owner recipes record the precise UI actions, expected pivot/table cell outcomes, and OpenXML storage constraints. Cases R1 and R2 document transient/manual UI behavior; cases R3 and R4 document multi-pivot connection and Table ListObject slicer extensions.
+## R6 — Timeline forward and reverse drag
+
+From All Periods, drag Jan→Mar, save and record normalized endpoints and the complete pivot cell map. Restore All Periods, drag Mar→Jan, and record the same fields. Compare both saved outcomes; a single XML date range does not establish drag normalization.
+
+Case: `s5-timeline-drag-forward-reverse`.
+
+## R7 — Cross-filter order
+
+Create a real Region slicer connected to the pivot, select East, and let Excel refresh. Record the actual Region and Product cache parts, Product item order, selected/no-data flags, and complete pivot cell map. This recipe is pending: the current seed has no Region slicer cache, so adding a cache part without the real control connection or editing the Product cache is not evidence.
+
+Case: `s5-slicer-crossfilter-order`.
+
+## Automation boundary
+
+The builder automates R2 by preparing package XML and asking Excel to recalculate and save. R4 is owner-recorded because the hand-written table-slicer package was rejected by Excel and there is no checked-in Excel-authored template. R1 and R3 require direct Excel UI actions because saved state alone cannot prove click semantics or Report Connections dialog actions. R5–R7 remain owner-recorded. Do not use coordinate-driven System Events as a substitute for a stable Excel object-model action.

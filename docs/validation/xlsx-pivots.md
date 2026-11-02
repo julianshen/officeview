@@ -974,44 +974,24 @@ Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hi
 - **Unmeasured or contradictory caption locales.** Default caption generation refuses with `pivot-caption-locale` when saved data fields contradict the pivot name's locale or when the locale is unmeasured, requiring an explicit custom name.
 - **Memory admission and quota refusal.** Staging candidate transitions that materialize inline fields into shared items, add virtual grouping fields, or allocate overlay buffers requires pre-allocation admission against available worker/session grants. If the required bytes exceed the grant, the change is refused typed (`pivot-memory-limit`) and candidate holds are refunded cleanly without leaking resident or worker memory.
 
-## Stage 5 interaction oracle and measurements (Task 39, 2026-11-02, Excel 16.114, zh-TW UI)
+## Stage 5 interaction oracle and measurements (Task 39, fix round 3)
 
-Measurements recorded from Microsoft Excel for Mac 16.114 (zh-TW UI locale) across all Stage 5 control interaction cases (`tests/fixtures/xlsx-pivots/controls/`, Task 39). Built on `controls-seed.xlsx` with exact 5-row dataset: `(2023-12-31, East, Apples, 10)`, `(2024-01-01, East, Bananas, 20)`, `(2024-02-15, West, Apples, 30)`, `(2024-03-31, West, Cherries, 40)`, `(2024-04-01, South, Apples, 50)`, with pivot `Region` on Rows, `Product` on Columns, and `Sum of Sales` (150 total), plus `Slicer_Product` and `NativeTimeline_Date`.
+The Stage 5 case definitions distinguish saved XML state from UI actions. Excel for Mac 16.114 opened, refreshed, and saved the R2 input. Its saved output is retained at `tests/fixtures/xlsx-pivots/controls/s5-slicer-manual-filter-vs-slicer.xlsx`; the run is recorded in `s5-build-run3.log`. R4 remains pending. The owner recipes in `xlsx-pivots-recipes-stage5.md` are procedures, not completed measurements.
 
-### 1. Slicer selection, toggle, and cross-filter semantics
-- **Single item selection (`s5-slicer-click-one`):**
-  - Selecting `Apples` (item 0) sets `<i x="0" s="1"/>` in `slicerCache1.xml` while items 1 (`Bananas`) and 2 (`Cherries`) lose `s="1"`.
-  - In `pivotTable1.xml`, unselected items gain `h="1"`: `<item x="0"/><item h="1" x="1"/><item h="1" x="2"/>`.
-  - Columns `Bananas` and `Cherries` collapse from the grid: cells `B4` becomes `Apples`, `C4` becomes `總計` (Grand Total), and total sales is `90` (East 10, South 50, West 30).
-- **Idempotency (`s5-slicer-click-selected`):**
-  - Clicking an already-selected single item (`Apples`) in standard click mode does not clear selection; it remains selected (`<i x="0" s="1"/>`) and the pivot output is unchanged.
-- **Modifier add/remove (`s5-slicer-modifier-add-remove`):**
-  - Command-clicking (Mac) or Ctrl-clicking (Windows) an unselected item (`Bananas`) adds it to the active selection: items 0 and 1 have `s="1"`, while item 2 has `h="1"`. Total sales becomes `110` (Apples 90 + Bananas 20).
-- **Clear filter (`s5-slicer-clear`):**
-  - Clearing the slicer sets all valid items to `s="1"` in `slicerCache1.xml`, removes all `h="1"` hiding flags from `pivotTable1.xml`, and restores the full pivot table to `150` total sales across all 3 products.
-- **Cross-filtering and no-data states (`s5-slicer-crossfilter-order`):**
-  - When another filter or axis restricts the data to `East`, `Cherries` has no records in the active subset.
-  - Slicer cache retains item order (`Apples`, `Bananas`, `Cherries`, `(blank)`). Empty cache items receive `nd="1"` (no data).
+### Saved-state cases using XML followed by Excel refresh/save
 
-### 2. Timeline date range, levels, and bounds
-- **Date selection (`s5-timeline-click-month`):**
-  - Clicking March 2024 sets `timelineCache1.xml` state to `filterType="dateBetween"` with `startDate="2024-03-01T00:00:00"` and `endDate="2024-03-31T00:00:00"`.
-  - Pivot table filters to the single matching record (`2024-03-31`, `West`, `Cherries`, 40): only Cherries column and West row appear, total sales = `40` (April 1 record of 50 excluded).
-- **Range dragging (`s5-timeline-drag-forward-reverse`):**
-  - Dragging from Jan 1 to March 31, 2024 (`2024-01-01T00:00:00` to `2024-03-31T00:00:00`) captures records 2, 3, 4 (Sales 20 + 30 + 40 = 90), excluding Dec 31 (2023) and Apr 1.
-- **Level switching preserves underlying date range (`s5-timeline-level-preserves-range`):**
-  - Switching the timeline display level from `months` (`level="2"`) to `quarters` (`level="1"`) updates `level="1"` and `selectionLevel="1"` in `timeline1.xml`.
-  - The underlying selection range in `timelineCache1.xml` is **strictly preserved**: `startDate="2024-01-01T00:00:00"` and `endDate="2024-03-31T00:00:00"` remain untouched, and pivot cells stay identical (`90` total).
-- **Timeline clear (`s5-timeline-clear-and-scroll`):**
-  - Clearing the timeline sets `filterType="unknown"` in `timelineCache1.xml` (removing `selection` element) and restores all date periods, returning the pivot table to `150` total sales.
+- **Slicer selection (`s5-slicer-click-one`):** The builder changes the Product slicer cache to Apples-only, opens and refreshes in Excel, then checks the saved cache and complete pivot cells. This establishes selected-state serialization and recomputation, not the mouse-click behavior.
+- **Slicer clear (`s5-slicer-clear`):** The builder writes the all-selected cache state; Excel refresh/save must restore the full pivot.
+- **Manual pivot filter with slicer (`s5-slicer-manual-filter-vs-slicer`, R2):** The prepared input hides Cherries (Product item x=2) in the `axisCol` field while the slicer selects x=0,1,2. Excel 16.114 refresh/save removes that manual hidden flag from x=2, retains the slicer selection, and writes `h="1"` on the no-data/missing x=3 item instead. The saved pivot still displays Cherries and has total 150. This measures Excel's reconciliation of this XML combination; it does not establish a UI gesture or a general AND/intersection rule. The source has no blank Product record.
+- **Timeline selection and level (`s5-timeline-click-month`, `s5-timeline-level-preserves-range`):** XML expresses the selected dates/level; Excel refresh/save must preserve the expected timeline and pivot state. This does not establish click or drag gestures.
+- **Timeline clear (`s5-timeline-clear`):** Excel 16.114 refresh/save saved `filterType="unknown"`, removed the selection element, and restored the full pivot map.
+- **Table Slicer (`s5-table-slicer`, R4):** This is an owner recipe, not an XML build. A hand-written table-slicer package prompted Excel 16.114 to offer repair, so the synthetic cache was removed from the automated builder. Follow R4 in `xlsx-pivots-recipes-stage5.md` to create the Table1 and Region slicer through Excel, add a Product=Apples AutoFilter, then save and reopen. The expected visible rows are 2 and 6; this remains unmeasured until that workbook and observation are recorded.
 
-### 3. Multi-control linkage and empty intersections
-- **Selected-but-no-data in joint filtering (`s5-linked-slicer-and-timeline`):**
-  - Applying both `Product=Apples` in the slicer and `Date=March 2024` in the timeline produces an **empty intersection** (no row in the data is Apples in March 2024; March 2024 only has Cherries).
-  - In `slicerCache1.xml`, Apples (item 0) receives **both** `s="1"` (selected) and `nd="1"` (no data): `<i x="0" s="1" nd="1"/>`.
-  - In `pivotTable1.xml`, all data rows are eliminated: only column grand total header (`B4: 總計`) and row grand total header (`A5: 總計`) appear, with 0 data cells.
-- **Report Connections (`s5-linked-two-pivots`, Owner Recipe R3):**
-  - Connecting a slicer cache to two pivot tables (`PivotTable1` and `PivotTable2`) while omitting a third (`PivotTable3`): selecting Apples updates both linked pivots to 90, while the unlinked pivot remains unchanged at 150.
-- **Table Slicers (`s5-table-slicer`, Owner Recipe R4):**
-  - Table Slicers filter ListObject table rows directly through Excel's AutoFilter row-hidden mechanism (`<tableSlicerCache>`), maintaining independent filter criteria on regular table columns.
+### Owner-recorded UI cases (not yet measured here)
 
+- **Slicer click semantics and Multi-Select:** `s5-slicer-click-selected`, `s5-slicer-modifier-add-remove`, and `s5-slicer-multiselect-toggle` are R1 recipes. Record direct clicks and each intermediate selection; no keyboard shortcut or XML equivalent is claimed.
+- **Cross-filter/no-data order:** `s5-slicer-crossfilter-order` is R7. The old fixture edited the Product cache while claiming a Region filter; it is not evidence and is excluded. Add/connect a real Region slicer, select East, and record both cache states and the full pivot output.
+- **Timeline drags and scroll:** `s5-timeline-drag-forward-reverse` (R6) and `s5-timeline-scroll` (R5) require UI actions and saved observations. A serialized date range or scroll-position attribute alone is insufficient.
+- **Report Connections:** `s5-linked-two-pivots` (R3) requires three distinct layouts and full before/after maps for both linked pivots and the unlinked pivot. The recipe is pending owner observation.
+
+Do not cite these pending cases as Excel measurements until the saved artifacts and owner records exist.

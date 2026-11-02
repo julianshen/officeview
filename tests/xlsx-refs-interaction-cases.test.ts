@@ -439,16 +439,22 @@ describe('verifyInteraction recomputation and strengthened markers', () => {
 })
 
 const CONTROL_KINDS = new Set([
-  'slicerSelect', 'slicerMultiSelect', 'slicerClear',
-  'timelineSelect', 'timelineLevel', 'timelineClear',
+  'slicerCreate', 'slicerSelect', 'slicerClick', 'slicerMultiSelect', 'slicerClear',
+  'pivotManualFilter', 'tableAutoFilter', 'timelineSelect', 'timelineDrag', 'timelineScroll', 'timelineLevel', 'timelineClear',
   'tableSlicerSelect',
 ])
 
 const CONTROL_KIND_CHECKS: Record<ControlOracleOp['kind'], (op: Record<string, unknown>) => boolean> = {
+  slicerCreate: op => typeof op.name === 'string' && typeof op.fieldName === 'string' && typeof op.target === 'string',
   slicerSelect: op => typeof op.name === 'string' && (op.itemIds === 'all' || (Array.isArray(op.itemIds) && (op.itemIds as unknown[]).every(Number.isInteger))),
+  slicerClick: op => typeof op.name === 'string' && Number.isInteger(op.itemId) && (op.modifier === undefined || typeof op.modifier === 'boolean'),
   slicerMultiSelect: op => typeof op.name === 'string' && typeof op.enabled === 'boolean',
   slicerClear: op => typeof op.name === 'string',
+  pivotManualFilter: op => typeof op.fieldName === 'string' && Array.isArray(op.hiddenItemIds) && op.hiddenItemIds.every(Number.isInteger),
+  tableAutoFilter: op => typeof op.tableName === 'string' && typeof op.fieldName === 'string' && Array.isArray(op.values) && op.values.every(value => typeof value === 'string'),
   timelineSelect: op => typeof op.name === 'string' && typeof op.startDate === 'string' && typeof op.endDate === 'string',
+  timelineDrag: op => typeof op.name === 'string' && typeof op.startDate === 'string' && typeof op.endDate === 'string',
+  timelineScroll: op => typeof op.name === 'string' && typeof op.firstVisiblePeriod === 'string',
   timelineLevel: op => typeof op.name === 'string' && ['years', 'quarters', 'months', 'days'].includes(String(op.level)),
   timelineClear: op => typeof op.name === 'string',
   tableSlicerSelect: op => typeof op.name === 'string' && (op.itemIds === 'all' || (Array.isArray(op.itemIds) && (op.itemIds as unknown[]).every(Number.isInteger))),
@@ -477,16 +483,17 @@ describe('Stage 5 control interaction cases (control-interaction-cases.ts)', () 
       's5-slicer-multiselect-toggle',
       's5-slicer-clear',
       's5-slicer-crossfilter-order',
-      's5-slicer-hidden-or-blank',
+      's5-slicer-manual-filter-vs-slicer',
       's5-timeline-click-month',
       's5-timeline-drag-forward-reverse',
       's5-timeline-level-preserves-range',
-      's5-timeline-clear-and-scroll',
+      's5-timeline-clear',
+      's5-timeline-scroll',
       's5-linked-two-pivots',
       's5-linked-slicer-and-timeline',
       's5-table-slicer',
     ]
-    expect(CONTROL_INTERACTION_CASES.length).toBe(14)
+    expect(CONTROL_INTERACTION_CASES.length).toBe(15)
     expect(CONTROL_INTERACTION_CASES.map(c => c.case)).toEqual(EXPECTED_CASES)
   })
 
@@ -516,7 +523,7 @@ describe('Stage 5 control interaction cases (control-interaction-cases.ts)', () 
     if (!existsSync(CONTROLS_MANIFEST)) return
     const raw = JSON.parse(readFileSync(CONTROLS_MANIFEST, 'utf8')) as ControlInteractionCase[]
     expect(Array.isArray(raw)).toBe(true)
-    expect(raw.length).toBe(14)
+    expect(raw.length).toBe(15)
     expect(raw.map(c => c.case)).toEqual(CONTROL_INTERACTION_CASES.map(c => c.case))
   })
 })
