@@ -1,0 +1,1090 @@
+[
+  {
+    "case": "s5-slicer-click-one",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-click-one.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "All items selected",
+    "action": {
+      "kind": "slicerSelect",
+      "name": "Slicer_Product",
+      "itemIds": [
+        0
+      ]
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": true
+          },
+          {
+            "x": 1,
+            "selected": false
+          },
+          {
+            "x": 2,
+            "selected": false
+          }
+        ]
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 10,
+            "A6": "South",
+            "B6": 50,
+            "C6": 50,
+            "A7": "West",
+            "B7": 30,
+            "C7": 30,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 90
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "總計",
+        "A5": "East",
+        "B5": 10,
+        "C5": 10,
+        "A6": "South",
+        "B6": 50,
+        "C6": 50,
+        "A7": "West",
+        "B7": 30,
+        "C7": 30,
+        "A8": "總計",
+        "B8": 90,
+        "C8": 90
+      }
+    },
+    "markers": [
+      "<i x=\"0\" s=\"1\"/>",
+      "<item h=\"1\" x=\"1\"/>",
+      "<item h=\"1\" x=\"2\"/>"
+    ]
+  },
+  {
+    "case": "s5-slicer-click-selected",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-click-selected.xlsx",
+    "base": "s5-slicer-click-one",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "Apples selected",
+    "action": {
+      "kind": "slicerSelect",
+      "name": "Slicer_Product",
+      "itemIds": [
+        0
+      ]
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": true
+          },
+          {
+            "x": 1,
+            "selected": false
+          },
+          {
+            "x": 2,
+            "selected": false
+          }
+        ]
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 10,
+            "A6": "South",
+            "B6": 50,
+            "C6": 50,
+            "A7": "West",
+            "B7": 30,
+            "C7": 30,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 90
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "總計",
+        "A5": "East",
+        "B5": 10,
+        "C5": 10,
+        "A6": "South",
+        "B6": 50,
+        "C6": 50,
+        "A7": "West",
+        "B7": 30,
+        "C7": 30,
+        "A8": "總計",
+        "B8": 90,
+        "C8": 90
+      }
+    },
+    "markers": [
+      "<i x=\"0\" s=\"1\"/>"
+    ]
+  },
+  {
+    "case": "s5-slicer-modifier-add-remove",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-modifier-add-remove.xlsx",
+    "base": "s5-slicer-click-one",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "Apples selected",
+    "action": {
+      "kind": "slicerSelect",
+      "name": "Slicer_Product",
+      "itemIds": [
+        0,
+        1
+      ]
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": true
+          },
+          {
+            "x": 1,
+            "selected": true
+          },
+          {
+            "x": 2,
+            "selected": false
+          }
+        ]
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 20,
+            "D5": 30,
+            "A6": "South",
+            "B6": 50,
+            "D6": 50,
+            "A7": "West",
+            "B7": 30,
+            "D7": 30,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 20,
+            "D8": 110
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "Bananas",
+        "D4": "總計",
+        "A5": "East",
+        "B5": 10,
+        "C5": 20,
+        "D5": 30,
+        "A6": "South",
+        "B6": 50,
+        "D6": 50,
+        "A7": "West",
+        "B7": 30,
+        "D7": 30,
+        "A8": "總計",
+        "B8": 90,
+        "C8": 20,
+        "D8": 110
+      }
+    },
+    "markers": [
+      "<i x=\"0\" s=\"1\"/>",
+      "<i x=\"1\" s=\"1\"/>",
+      "<item h=\"1\" x=\"2\"/>"
+    ]
+  },
+  {
+    "case": "s5-slicer-multiselect-toggle",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-multiselect-toggle.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "All items selected",
+    "action": [
+      {
+        "kind": "slicerMultiSelect",
+        "name": "Slicer_Product",
+        "enabled": true
+      },
+      {
+        "kind": "slicerSelect",
+        "name": "Slicer_Product",
+        "itemIds": [
+          0
+        ]
+      },
+      {
+        "kind": "slicerSelect",
+        "name": "Slicer_Product",
+        "itemIds": [
+          0,
+          1
+        ]
+      },
+      {
+        "kind": "slicerMultiSelect",
+        "name": "Slicer_Product",
+        "enabled": false
+      },
+      {
+        "kind": "slicerSelect",
+        "name": "Slicer_Product",
+        "itemIds": [
+          2
+        ]
+      }
+    ],
+    "route": "recipe",
+    "status": "recipe",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": false
+          },
+          {
+            "x": 1,
+            "selected": false
+          },
+          {
+            "x": 2,
+            "selected": true
+          }
+        ]
+      }
+    },
+    "recipeNotes": "Multi-select toggle state is ephemeral viewer UI state; tested in UI tests and documented in recipes."
+  },
+  {
+    "case": "s5-slicer-clear",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-clear.xlsx",
+    "base": "s5-slicer-modifier-add-remove",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "Apples and Bananas selected",
+    "action": {
+      "kind": "slicerClear",
+      "name": "Slicer_Product"
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": true
+          },
+          {
+            "x": 1,
+            "selected": true
+          },
+          {
+            "x": 2,
+            "selected": true
+          }
+        ]
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "Cherries",
+            "E4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 20,
+            "E5": 30,
+            "A6": "South",
+            "B6": 50,
+            "E6": 50,
+            "A7": "West",
+            "B7": 30,
+            "D7": 40,
+            "E7": 70,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 20,
+            "D8": 40,
+            "E8": 150
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "Bananas",
+        "D4": "Cherries",
+        "E4": "總計",
+        "A5": "East",
+        "B5": 10,
+        "C5": 20,
+        "E5": 30,
+        "A6": "South",
+        "B6": 50,
+        "E6": 50,
+        "A7": "West",
+        "B7": 30,
+        "D7": 40,
+        "E7": 70,
+        "A8": "總計",
+        "B8": 90,
+        "C8": 20,
+        "D8": 40,
+        "E8": 150
+      }
+    },
+    "markers": [
+      "<i x=\"0\" s=\"1\"/>",
+      "<i x=\"1\" s=\"1\"/>",
+      "<i x=\"2\" s=\"1\"/>"
+    ]
+  },
+  {
+    "case": "s5-slicer-crossfilter-order",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-crossfilter-order.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Region",
+      "cacheName": "Slicer_Region"
+    },
+    "initialState": "Region slicer added; select East",
+    "action": {
+      "kind": "slicerSelect",
+      "name": "Slicer_Region",
+      "itemIds": [
+        0
+      ]
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": true
+          },
+          {
+            "x": 1,
+            "selected": true
+          },
+          {
+            "x": 2,
+            "selected": false
+          },
+          {
+            "x": 3,
+            "selected": false,
+            "noData": true
+          }
+        ]
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 20,
+            "D5": 30,
+            "A6": "South",
+            "B6": 50,
+            "D6": 50,
+            "A7": "West",
+            "B7": 30,
+            "D7": 30,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 20,
+            "D8": 110
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "Bananas",
+        "D4": "總計",
+        "A5": "East",
+        "B5": 10,
+        "C5": 20,
+        "D5": 30,
+        "A6": "South",
+        "B6": 50,
+        "D6": 50,
+        "A7": "West",
+        "B7": 30,
+        "D7": 30,
+        "A8": "總計",
+        "B8": 90,
+        "C8": 20,
+        "D8": 110
+      }
+    },
+    "markers": [
+      "nd=\"1\""
+    ]
+  },
+  {
+    "case": "s5-slicer-hidden-or-blank",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-slicer-hidden-or-blank.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "Item hidden by pivot manual filter",
+    "action": {
+      "kind": "slicerSelect",
+      "name": "Slicer_Product",
+      "itemIds": [
+        0
+      ]
+    },
+    "route": "recipe",
+    "status": "unverified",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ]
+    },
+    "recipeNotes": "Hidden or blank item intersection recorded in Stage 5 recipes doc."
+  },
+  {
+    "case": "s5-timeline-click-month",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-timeline-click-month.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "NativeTimeline_Date",
+      "cacheName": "NativeTimeline_Date"
+    },
+    "initialState": "All Periods",
+    "action": {
+      "kind": "timelineSelect",
+      "name": "NativeTimeline_Date",
+      "startDate": "2024-03-01T00:00:00",
+      "endDate": "2024-03-31T00:00:00"
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "timelineCache": {
+        "name": "NativeTimeline_Date",
+        "filterType": "dateBetween",
+        "selection": {
+          "startDate": "2024-03-01T00:00:00",
+          "endDate": "2024-03-31T00:00:00"
+        }
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Cherries",
+            "C4": "總計",
+            "A5": "West",
+            "B5": 40,
+            "C5": 40,
+            "A6": "總計",
+            "B6": 40,
+            "C6": 40
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Cherries",
+        "C4": "總計",
+        "A5": "West",
+        "B5": 40,
+        "C5": 40,
+        "A6": "總計",
+        "B6": 40,
+        "C6": 40
+      }
+    },
+    "markers": [
+      "filterType=\"dateBetween\"",
+      "startDate=\"2024-03-01T00:00:00\"",
+      "endDate=\"2024-03-31T00:00:00\""
+    ]
+  },
+  {
+    "case": "s5-timeline-drag-forward-reverse",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-timeline-drag-forward-reverse.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "NativeTimeline_Date",
+      "cacheName": "NativeTimeline_Date"
+    },
+    "initialState": "All Periods",
+    "action": {
+      "kind": "timelineSelect",
+      "name": "NativeTimeline_Date",
+      "startDate": "2024-01-01T00:00:00",
+      "endDate": "2024-03-31T00:00:00"
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "timelineCache": {
+        "name": "NativeTimeline_Date",
+        "filterType": "dateBetween",
+        "selection": {
+          "startDate": "2024-01-01T00:00:00",
+          "endDate": "2024-03-31T00:00:00"
+        }
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "Cherries",
+            "E4": "總計",
+            "A5": "East",
+            "C5": 20,
+            "E5": 20,
+            "A6": "West",
+            "B6": 30,
+            "D6": 40,
+            "E6": 70,
+            "A7": "總計",
+            "B7": 30,
+            "C7": 20,
+            "D7": 40,
+            "E7": 90
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "Bananas",
+        "D4": "Cherries",
+        "E4": "總計",
+        "A5": "East",
+        "C5": 20,
+        "E5": 20,
+        "A6": "West",
+        "B6": 30,
+        "D6": 40,
+        "E6": 70,
+        "A7": "總計",
+        "B7": 30,
+        "C7": 20,
+        "D7": 40,
+        "E7": 90
+      }
+    },
+    "markers": [
+      "filterType=\"dateBetween\"",
+      "startDate=\"2024-01-01T00:00:00\"",
+      "endDate=\"2024-03-31T00:00:00\""
+    ]
+  },
+  {
+    "case": "s5-timeline-level-preserves-range",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-timeline-level-preserves-range.xlsx",
+    "base": "s5-timeline-drag-forward-reverse",
+    "target": {
+      "controlName": "NativeTimeline_Date",
+      "cacheName": "NativeTimeline_Date"
+    },
+    "initialState": "Jan-Mar 2024 selected at months",
+    "action": {
+      "kind": "timelineLevel",
+      "name": "NativeTimeline_Date",
+      "level": "quarters"
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "timelineCache": {
+        "name": "NativeTimeline_Date",
+        "filterType": "dateBetween",
+        "selection": {
+          "startDate": "2024-01-01T00:00:00",
+          "endDate": "2024-03-31T00:00:00"
+        }
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "Cherries",
+            "E4": "總計",
+            "A5": "East",
+            "C5": 20,
+            "E5": 20,
+            "A6": "West",
+            "B6": 30,
+            "D6": 40,
+            "E6": 70,
+            "A7": "總計",
+            "B7": 30,
+            "C7": 20,
+            "D7": 40,
+            "E7": 90
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "Bananas",
+        "D4": "Cherries",
+        "E4": "總計",
+        "A5": "East",
+        "C5": 20,
+        "E5": 20,
+        "A6": "West",
+        "B6": 30,
+        "D6": 40,
+        "E6": 70,
+        "A7": "總計",
+        "B7": 30,
+        "C7": 20,
+        "D7": 40,
+        "E7": 90
+      }
+    },
+    "markers": [
+      "level=\"1\"",
+      "selectionLevel=\"1\""
+    ]
+  },
+  {
+    "case": "s5-timeline-clear-and-scroll",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-timeline-clear-and-scroll.xlsx",
+    "base": "s5-timeline-drag-forward-reverse",
+    "target": {
+      "controlName": "NativeTimeline_Date",
+      "cacheName": "NativeTimeline_Date"
+    },
+    "initialState": "Jan-Mar 2024 selected",
+    "action": {
+      "kind": "timelineClear",
+      "name": "NativeTimeline_Date"
+    },
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "timelineCache": {
+        "name": "NativeTimeline_Date",
+        "filterType": "unknown"
+      },
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "Cherries",
+            "E4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 20,
+            "E5": 30,
+            "A6": "South",
+            "B6": 50,
+            "E6": 50,
+            "A7": "West",
+            "B7": 30,
+            "D7": 40,
+            "E7": 70,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 20,
+            "D8": 40,
+            "E8": 150
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "Apples",
+        "C4": "Bananas",
+        "D4": "Cherries",
+        "E4": "總計",
+        "A5": "East",
+        "B5": 10,
+        "C5": 20,
+        "E5": 30,
+        "A6": "South",
+        "B6": 50,
+        "E6": 50,
+        "A7": "West",
+        "B7": 30,
+        "D7": 40,
+        "E7": 70,
+        "A8": "總計",
+        "B8": 90,
+        "C8": 20,
+        "D8": 40,
+        "E8": 150
+      }
+    },
+    "markers": [
+      "filterType=\"unknown\""
+    ]
+  },
+  {
+    "case": "s5-linked-two-pivots",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-linked-two-pivots.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "Two pivots linked, third pivot unlinked",
+    "action": {
+      "kind": "slicerSelect",
+      "name": "Slicer_Product",
+      "itemIds": [
+        0
+      ]
+    },
+    "route": "recipe",
+    "status": "recipe",
+    "expected": {
+      "affectedTargets": [
+        "PivotTable1",
+        "PivotTable2"
+      ],
+      "slicerCache": {
+        "name": "Slicer_Product",
+        "items": [
+          {
+            "x": 0,
+            "selected": true
+          },
+          {
+            "x": 1,
+            "selected": false
+          },
+          {
+            "x": 2,
+            "selected": false
+          }
+        ]
+      },
+      "pivots": [
+        {
+          "pivotName": "PivotTable1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 10,
+            "A6": "South",
+            "B6": 50,
+            "C6": 50,
+            "A7": "West",
+            "B7": 30,
+            "C7": 30,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 90
+          }
+        },
+        {
+          "pivotName": "PivotTable2",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 10,
+            "A6": "South",
+            "B6": 50,
+            "C6": 50,
+            "A7": "West",
+            "B7": 30,
+            "C7": 30,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 90
+          }
+        },
+        {
+          "pivotName": "PivotTable3",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "Apples",
+            "C4": "Bananas",
+            "D4": "Cherries",
+            "E4": "總計",
+            "A5": "East",
+            "B5": 10,
+            "C5": 20,
+            "E5": 30,
+            "A6": "South",
+            "B6": 50,
+            "E6": 50,
+            "A7": "West",
+            "B7": 30,
+            "D7": 40,
+            "E7": 70,
+            "A8": "總計",
+            "B8": 90,
+            "C8": 20,
+            "D8": 40,
+            "E8": 150
+          }
+        }
+      ]
+    },
+    "markers": [
+      "<pivotTable tabId=\"1\" name=\"PivotTable1\"/>",
+      "<pivotTable tabId=\"2\" name=\"PivotTable2\"/>"
+    ],
+    "recipeNotes": "Owner recipe R3: In Excel 16.114, link Slicer_Product to PivotTable1 and PivotTable2 via Report Connections, leaving PivotTable3 unlinked; select Apples."
+  },
+  {
+    "case": "s5-linked-slicer-and-timeline",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-linked-slicer-and-timeline.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Product",
+      "cacheName": "Slicer_Product"
+    },
+    "initialState": "Product=Apples AND Date=March 2024 (empty intersection)",
+    "action": [
+      {
+        "kind": "slicerSelect",
+        "name": "Slicer_Product",
+        "itemIds": [
+          0
+        ]
+      },
+      {
+        "kind": "timelineSelect",
+        "name": "NativeTimeline_Date",
+        "startDate": "2024-03-01T00:00:00",
+        "endDate": "2024-03-31T00:00:00"
+      }
+    ],
+    "route": "xml",
+    "status": "built",
+    "expected": {
+      "affectedTargets": [
+        "樞紐分析表1"
+      ],
+      "pivots": [
+        {
+          "pivotName": "樞紐分析表1",
+          "cells": {
+            "A3": "加總 - Sales",
+            "B3": "欄標籤",
+            "A4": "列標籤",
+            "B4": "總計",
+            "A5": "總計"
+          }
+        }
+      ],
+      "actualSavedCells": {
+        "A3": "加總 - Sales",
+        "B3": "欄標籤",
+        "A4": "列標籤",
+        "B4": "總計",
+        "A5": "總計"
+      }
+    },
+    "markers": [
+      "<i x=\"0\" s=\"1\" nd=\"1\"/>",
+      "startDate=\"2024-03-01T00:00:00\""
+    ]
+  },
+  {
+    "case": "s5-table-slicer",
+    "file": "tests/fixtures/xlsx-pivots/controls/s5-table-slicer.xlsx",
+    "base": "controls-seed",
+    "target": {
+      "controlName": "Slicer_Region",
+      "tableName": "Table1"
+    },
+    "initialState": "Table over 5 rows with Region table slicer",
+    "action": {
+      "kind": "tableSlicerSelect",
+      "name": "Slicer_Region",
+      "itemIds": [
+        0
+      ]
+    },
+    "route": "recipe",
+    "status": "recipe",
+    "expected": {
+      "affectedTargets": [
+        "Table1"
+      ],
+      "tableRows": {
+        "tableName": "Table1",
+        "visibleRowIndices": [
+          0,
+          1
+        ]
+      }
+    },
+    "markers": [
+      "<tableSlicerCache",
+      "tableId=\"1\""
+    ],
+    "recipeNotes": "Owner recipe R4: In Excel 16.114, create Table1 over Data!A1:D6, insert Region Table Slicer, select East (rows 1,2 visible), add South (1,2,5 visible), clear (all visible)."
+  }
+]

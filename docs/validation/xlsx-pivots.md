@@ -973,3 +973,45 @@ Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hi
 - **Variance and standard deviation with totals.** Computing `var`, `varp`, `stdDev`, or `stdDevp` on pivots with subtotals or grand totals is refused as `pivot-values-unsupported` (S2-AA); only total-less pivots (`rowGrandTotals="0" colGrandTotals="0"`) are supported.
 - **Unmeasured or contradictory caption locales.** Default caption generation refuses with `pivot-caption-locale` when saved data fields contradict the pivot name's locale or when the locale is unmeasured, requiring an explicit custom name.
 - **Memory admission and quota refusal.** Staging candidate transitions that materialize inline fields into shared items, add virtual grouping fields, or allocate overlay buffers requires pre-allocation admission against available worker/session grants. If the required bytes exceed the grant, the change is refused typed (`pivot-memory-limit`) and candidate holds are refunded cleanly without leaking resident or worker memory.
+
+## Stage 5 interaction oracle and measurements (Task 39, 2026-11-02, Excel 16.114, zh-TW UI)
+
+Measurements recorded from Microsoft Excel for Mac 16.114 (zh-TW UI locale) across all Stage 5 control interaction cases (`tests/fixtures/xlsx-pivots/controls/`, Task 39). Built on `controls-seed.xlsx` with exact 5-row dataset: `(2023-12-31, East, Apples, 10)`, `(2024-01-01, East, Bananas, 20)`, `(2024-02-15, West, Apples, 30)`, `(2024-03-31, West, Cherries, 40)`, `(2024-04-01, South, Apples, 50)`, with pivot `Region` on Rows, `Product` on Columns, and `Sum of Sales` (150 total), plus `Slicer_Product` and `NativeTimeline_Date`.
+
+### 1. Slicer selection, toggle, and cross-filter semantics
+- **Single item selection (`s5-slicer-click-one`):**
+  - Selecting `Apples` (item 0) sets `<i x="0" s="1"/>` in `slicerCache1.xml` while items 1 (`Bananas`) and 2 (`Cherries`) lose `s="1"`.
+  - In `pivotTable1.xml`, unselected items gain `h="1"`: `<item x="0"/><item h="1" x="1"/><item h="1" x="2"/>`.
+  - Columns `Bananas` and `Cherries` collapse from the grid: cells `B4` becomes `Apples`, `C4` becomes `總計` (Grand Total), and total sales is `90` (East 10, South 50, West 30).
+- **Idempotency (`s5-slicer-click-selected`):**
+  - Clicking an already-selected single item (`Apples`) in standard click mode does not clear selection; it remains selected (`<i x="0" s="1"/>`) and the pivot output is unchanged.
+- **Modifier add/remove (`s5-slicer-modifier-add-remove`):**
+  - Command-clicking (Mac) or Ctrl-clicking (Windows) an unselected item (`Bananas`) adds it to the active selection: items 0 and 1 have `s="1"`, while item 2 has `h="1"`. Total sales becomes `110` (Apples 90 + Bananas 20).
+- **Clear filter (`s5-slicer-clear`):**
+  - Clearing the slicer sets all valid items to `s="1"` in `slicerCache1.xml`, removes all `h="1"` hiding flags from `pivotTable1.xml`, and restores the full pivot table to `150` total sales across all 3 products.
+- **Cross-filtering and no-data states (`s5-slicer-crossfilter-order`):**
+  - When another filter or axis restricts the data to `East`, `Cherries` has no records in the active subset.
+  - Slicer cache retains item order (`Apples`, `Bananas`, `Cherries`, `(blank)`). Empty cache items receive `nd="1"` (no data).
+
+### 2. Timeline date range, levels, and bounds
+- **Date selection (`s5-timeline-click-month`):**
+  - Clicking March 2024 sets `timelineCache1.xml` state to `filterType="dateBetween"` with `startDate="2024-03-01T00:00:00"` and `endDate="2024-03-31T00:00:00"`.
+  - Pivot table filters to the single matching record (`2024-03-31`, `West`, `Cherries`, 40): only Cherries column and West row appear, total sales = `40` (April 1 record of 50 excluded).
+- **Range dragging (`s5-timeline-drag-forward-reverse`):**
+  - Dragging from Jan 1 to March 31, 2024 (`2024-01-01T00:00:00` to `2024-03-31T00:00:00`) captures records 2, 3, 4 (Sales 20 + 30 + 40 = 90), excluding Dec 31 (2023) and Apr 1.
+- **Level switching preserves underlying date range (`s5-timeline-level-preserves-range`):**
+  - Switching the timeline display level from `months` (`level="2"`) to `quarters` (`level="1"`) updates `level="1"` and `selectionLevel="1"` in `timeline1.xml`.
+  - The underlying selection range in `timelineCache1.xml` is **strictly preserved**: `startDate="2024-01-01T00:00:00"` and `endDate="2024-03-31T00:00:00"` remain untouched, and pivot cells stay identical (`90` total).
+- **Timeline clear (`s5-timeline-clear-and-scroll`):**
+  - Clearing the timeline sets `filterType="unknown"` in `timelineCache1.xml` (removing `selection` element) and restores all date periods, returning the pivot table to `150` total sales.
+
+### 3. Multi-control linkage and empty intersections
+- **Selected-but-no-data in joint filtering (`s5-linked-slicer-and-timeline`):**
+  - Applying both `Product=Apples` in the slicer and `Date=March 2024` in the timeline produces an **empty intersection** (no row in the data is Apples in March 2024; March 2024 only has Cherries).
+  - In `slicerCache1.xml`, Apples (item 0) receives **both** `s="1"` (selected) and `nd="1"` (no data): `<i x="0" s="1" nd="1"/>`.
+  - In `pivotTable1.xml`, all data rows are eliminated: only column grand total header (`B4: 總計`) and row grand total header (`A5: 總計`) appear, with 0 data cells.
+- **Report Connections (`s5-linked-two-pivots`, Owner Recipe R3):**
+  - Connecting a slicer cache to two pivot tables (`PivotTable1` and `PivotTable2`) while omitting a third (`PivotTable3`): selecting Apples updates both linked pivots to 90, while the unlinked pivot remains unchanged at 150.
+- **Table Slicers (`s5-table-slicer`, Owner Recipe R4):**
+  - Table Slicers filter ListObject table rows directly through Excel's AutoFilter row-hidden mechanism (`<tableSlicerCache>`), maintaining independent filter criteria on regular table columns.
+
