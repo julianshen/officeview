@@ -11,11 +11,11 @@
  * in device space, so a control split across tiles paints exactly as on one
  * surface (Review Focus 4). A non-axis-aligned transform draws unsnapped.
  *
- * View-only: no hover state, no header buttons (multi-select, clear filter), and
- * the timeline's labels are English, where Excel draws its UI language.
+ * View-only: no hover state, no header buttons (multi-select, clear filter).
+ * Timeline labels use the workbook-language table resolved with the saved control.
  */
 import { parseThemeContext } from '../../../drawing/style'
-import type { Box, SlicerAppearance, SlicerItemState, SlicerModel, TimelineAppearance, TimelineLevel, TimelineModel, XlsxControlContent } from './model'
+import type { Box, SlicerAppearance, SlicerItemState, SlicerModel, TimelineAppearance, TimelineLabelLocale, TimelineLevel, TimelineModel, XlsxControlContent } from './model'
 import { slicerAppearance, timelineAppearance } from './style'
 
 /** Slicer geometry in pt (refs/slicer-light1.png, slicer-two-column, slicer-scrolled, slicer-no-data). */
@@ -100,7 +100,6 @@ export function slicerLayout(m: SlicerModel, box: Box, scale: number): SlicerLay
 
 const DAY = 86_400_000
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
-const LEVEL_LABEL: Record<TimelineLevel, string> = { years: 'YEARS', quarters: 'QUARTERS', months: 'MONTHS', days: 'DAYS' }
 const ymd = (t: number) => { const d = new Date(t); return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() } }
 /** The start of the period containing `t`. */
 function periodStart(level: TimelineLevel, t: number): number {
@@ -118,26 +117,26 @@ function periodAt(level: TimelineLevel, origin: number, index: number): number {
   const { y, m } = ymd(origin)
   return level === 'years' ? Date.UTC(y + index, 0, 1) : Date.UTC(y, m + index * (level === 'quarters' ? 3 : 1), 1)
 }
-function periodLabel(level: TimelineLevel, t: number): string {
+function periodLabel(level: TimelineLevel, t: number, locale: TimelineLabelLocale): string {
   const { y, m, d } = ymd(t)
-  return level === 'years' ? String(y) : level === 'quarters' ? `Q${Math.floor(m / 3) + 1}` : level === 'months' ? MONTHS[m]! : String(d)
+  return level === 'years' ? String(y) : level === 'quarters' ? `Q${Math.floor(m / 3) + 1}` : level === 'months' ? locale === 'zh-TW' ? `${m + 1}月` : MONTHS[m]! : String(d)
 }
 /** The label of the row above the periods where it changes: the year, or the month and year for days. */
-function groupLabel(level: TimelineLevel, t: number): string | undefined {
+function groupLabel(level: TimelineLevel, t: number, locale: TimelineLabelLocale): string | undefined {
   const { y, m } = ymd(t)
-  return level === 'years' ? undefined : level === 'days' ? `${MONTHS[m]} ${y}` : String(y)
+  return level === 'years' ? undefined : level === 'days' ? locale === 'zh-TW' ? `${m + 1}月` : `${MONTHS[m]} ${y}` : String(y)
 }
 /** A date in the selection label, without its year. */
-function formatPeriod(level: TimelineLevel, t: number): string {
+function formatPeriod(level: TimelineLevel, t: number, locale: TimelineLabelLocale): string {
   const { y, m, d } = ymd(t)
-  return level === 'years' ? String(y) : level === 'quarters' ? `Q${Math.floor(m / 3) + 1}` : level === 'months' ? MONTHS[m]! : `${MONTHS[m]} ${d}`
+  return level === 'years' ? String(y) : level === 'quarters' ? `Q${Math.floor(m / 3) + 1}` : level === 'months' ? locale === 'zh-TW' ? `${m + 1}月` : MONTHS[m]! : locale === 'zh-TW' ? `${m + 1}月${d}日` : `${MONTHS[m]} ${d}`
 }
 /** Excel's selection label, year first ("2024 3月 - 5月" in the zh-TW capture → "2024 MAR - MAY"). */
-function selectionText(level: TimelineLevel, start: number, end: number): string {
+function selectionText(level: TimelineLevel, start: number, end: number, locale: TimelineLabelLocale): string {
   const a = ymd(start).y, b = ymd(end).y, single = periodStart(level, start) === periodStart(level, end)
   if (level === 'years') return single ? String(a) : `${a} - ${b}`
-  if (single) return `${a} ${formatPeriod(level, start)}`
-  return a === b ? `${a} ${formatPeriod(level, start)} - ${formatPeriod(level, end)}` : `${a} ${formatPeriod(level, start)} - ${b} ${formatPeriod(level, end)}`
+  if (single) return `${a} ${formatPeriod(level, start, locale)}`
+  return a === b ? `${a} ${formatPeriod(level, start, locale)} - ${formatPeriod(level, end, locale)}` : `${a} ${formatPeriod(level, start, locale)} - ${b} ${formatPeriod(level, end, locale)}`
 }
 
 export interface TimelinePeriod { index: number; start: number; x: number; width: number; selected: boolean; label: string; group?: string }
@@ -162,6 +161,7 @@ export interface TimelineLayout {
 
 export function timelineLayout(m: TimelineModel, box: Box, scale: number): TimelineLayout {
   const s = scale, P = TIMELINE_PT, show = m.show ?? { header: true, selectionLabel: true, timeLevel: true, scrollbar: true }
+  const locale = m.labelLocale ?? 'en-US'
   const bar = { x: box.x + P.barLeft * s, y: box.y + P.barTop * s, width: Math.max(0, box.width - (P.barLeft + P.barRight) * s), height: P.barHeight * s }
   const pitch = TIMELINE_PERIOD_PT[m.level] * s
   const origin = periodStart(m.level, m.range.start)
@@ -176,19 +176,23 @@ export function timelineLayout(m: TimelineModel, box: Box, scale: number): Timel
     const index = first + k, start = periodAt(m.level, origin, index), end = periodAt(m.level, origin, index + 1)
     const selected = !sel || (start <= sel.end && end > sel.start)
     const previous = k === 0 ? undefined : periodAt(m.level, origin, index - 1)
-    const group = groupLabel(m.level, start)
-    periods.push({ index, start, x: bar.x + k * pitch, width: pitch, selected, label: periodLabel(m.level, start), ...(group !== undefined && (previous === undefined || groupLabel(m.level, previous) !== group) ? { group } : {}) })
+    const group = groupLabel(m.level, start, locale)
+    periods.push({ index, start, x: bar.x + k * pitch, width: pitch, selected, label: periodLabel(m.level, start, locale), ...(group !== undefined && (previous === undefined || groupLabel(m.level, previous, locale) !== group) ? { group } : {}) })
   }
   // No selection handles (Ruling AK): Excel draws none in a static capture, with or without a selection
   // (refs/timeline-*.png, refs/measure-timeline-selection.png).
   const track = show.scrollbar ? { x: bar.x, y: bar.y + bar.height + P.trackGap * s, width: bar.width, height: P.trackHeight * s } : undefined
   const fraction = inView / total
   const thumb = track && fraction < 1 ? { x: bar.x + bar.width * first / total, y: track.y - s, width: Math.max(2 * s, bar.width * fraction), height: P.thumbHeight * s } : undefined
-  const label = sel ? selectionText(m.level, sel.start, sel.end) : 'All Periods'
+  const label = sel ? selectionText(m.level, sel.start, sel.end, locale) : locale === 'zh-TW' ? '所有週期' : 'All Periods'
+  const levelLabels: Record<TimelineLevel, Record<TimelineLabelLocale, string>> = {
+    years: { 'en-US': 'YEARS', 'zh-TW': '年' }, quarters: { 'en-US': 'QUARTERS', 'zh-TW': '季' },
+    months: { 'en-US': 'MONTHS', 'zh-TW': '月' }, days: { 'en-US': 'DAYS', 'zh-TW': '天' },
+  }
   return {
     ...(show.header ? { separatorY: box.y + P.separator * s, caption: { x: box.x + P.captionX * s, baseline: box.y + P.captionBaseline * s } } : {}),
     ...(show.selectionLabel ? { selectionLabel: { x: box.x + P.labelX * s, baseline: box.y + P.selectionBaseline * s, text: label } } : {}),
-    ...(show.timeLevel ? { level: { right: box.x + box.width - P.levelRight * s, baseline: box.y + P.selectionBaseline * s, text: LEVEL_LABEL[m.level] } } : {}),
+    ...(show.timeLevel ? { level: { right: box.x + box.width - P.levelRight * s, baseline: box.y + P.selectionBaseline * s, text: levelLabels[m.level][locale] } } : {}),
     yearBaseline: box.y + P.yearBaseline * s,
     periodBaseline: box.y + P.periodBaseline * s,
     bar, pitch, total, first, periods,

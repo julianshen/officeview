@@ -15,7 +15,7 @@
  */
 import { attrs, getChild, getChildren, type XmlNode } from '../../../core/xml'
 import type { PivotCacheDefinition } from '../model'
-import type { ControlDiagnostic, TimelineAppearance, TimelineLevel, TimelineModel } from './model'
+import type { ControlDiagnostic, TimelineAppearance, TimelineLabelLocale, TimelineLevel, TimelineModel } from './model'
 
 export const MAX_TIMELINES_PER_PART = 256
 const LEVELS: readonly TimelineLevel[] = ['years', 'quarters', 'months', 'days']
@@ -59,6 +59,15 @@ export interface TimelineCacheDef {
   selection?: { start: number; end: number }
 }
 
+/** Use the same saved default-name locale evidence as pivot caption detection. Unknown or mixed targets refuse. */
+export function timelineLabelLocale(cache: Pick<TimelineCacheDef, 'pivotTables'> | undefined): TimelineLabelLocale | undefined {
+  const names = cache?.pivotTables
+  if (!names?.length) return undefined
+  if (names.every(name => /^樞紐分析表\d*$/.test(name))) return 'zh-TW'
+  if (names.every(name => /^PivotTable\d*$/i.test(name))) return 'en-US'
+  return undefined
+}
+
 export function parseTimelineCache(node: XmlNode | undefined): TimelineCacheDef | undefined {
   const def = root(node, 'timelineCacheDefinition')
   const a = attrs(def)
@@ -90,12 +99,15 @@ function boundsFromCache(cache: TimelineCacheDef, pivotCaches: ReadonlyMap<numbe
 export function buildTimelineModel(part: TimelinePart, cache: TimelineCacheDef | undefined, pivotCaches: ReadonlyMap<number, PivotCacheDefinition>, style: { style: string; appearance: TimelineAppearance }): { model?: TimelineModel; diagnostics: ControlDiagnostic[] } {
   const fail = (feature: string, message: string) => ({ diagnostics: [{ kind: 'unsupported' as const, feature, message: `Timeline ${part.name}: ${message}; its fallback shape is shown` }] })
   if (!cache) return fail('timeline-cache-missing', `timeline cache ${part.cache} is missing or unreadable`)
+  const labelLocale = timelineLabelLocale(cache)
+  if (!labelLocale) return fail('timeline-label-locale', 'its linked pivots do not identify a measured label language')
   const range = cache.bounds ?? boundsFromCache(cache, pivotCaches)
   if (!range || range.end <= range.start) return fail('timeline-range-invalid', `timeline cache ${cache.name} has no date range`)
   return {
     diagnostics: [],
     model: {
       name: part.name,
+      labelLocale,
       ...(cache.pivotCacheId === undefined || !pivotCaches.has(cache.pivotCacheId) ? {} : { cacheId: pivotCaches.get(cache.pivotCacheId)!.cacheId }),
       drives: cache.pivotTables.map(pivotTable => ({ pivotTable })),
       caption: part.caption ?? (cache.sourceName || part.name),

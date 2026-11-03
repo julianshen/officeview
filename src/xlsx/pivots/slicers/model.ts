@@ -59,6 +59,7 @@ export interface SlicerModel {
 }
 
 export type TimelineLevel = 'years' | 'quarters' | 'months' | 'days'
+export type TimelineLabelLocale = 'en-US' | 'zh-TW'
 
 export interface TimelineAppearance {
   border: string
@@ -85,6 +86,8 @@ export interface TimelineAppearance {
 
 export interface TimelineModel {
   name: string
+  /** Locale of generated labels, inferred only from a supported linked pivot name. */
+  labelLocale?: TimelineLabelLocale
   /** Resolved workbook pivot cache id and linked pivots for worker-side interaction validation. */
   cacheId?: number
   drives?: { pivotTable?: string }[]

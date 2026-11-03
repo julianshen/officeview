@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TimelineController } from '../src/xlsx/pivots/slicers/controller'
 import { TimelineLayer } from '../src/components/xlsx/pivot/TimelineLayer'
 import type { TimelineModel } from '../src/xlsx/pivots/slicers/model'
+import { timelineLayout } from '../src/xlsx/pivots/slicers/paint'
+import { buildTimelineModel, timelineLabelLocale, type TimelineCacheDef } from '../src/xlsx/pivots/slicers/parseTimelines'
 import type { ScrollWindow } from '../src/xlsx/view/contracts'
 import { readFileSync } from 'node:fs'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
@@ -70,6 +72,33 @@ function setup(hostOverrides: Record<string, unknown> = {}) {
 }
 
 describe('timeline control state', () => {
+  it('uses measured zh-TW labels for a workbook identified by its linked pivot name', async () => {
+    const doc = await controlsDocument()
+    const drawing = doc.sheets.flatMap(sheet => sheet.drawings ?? []).find(item => item.content?.kind === 'timeline')
+    expect(drawing?.content?.kind).toBe('timeline')
+    if (drawing?.content?.kind !== 'timeline') throw new Error('timeline was not resolved')
+    const timeline = drawing.content.timeline
+    const layout = timelineLayout(timeline, { x: 0, y: 0, width: 900, height: 120 }, 1)
+    expect(timeline.labelLocale).toBe('zh-TW')
+    expect(layout.selectionLabel?.text).toBe('所有週期')
+    expect(layout.level?.text).toBe('月')
+    expect(layout.periods[0]?.label).toBe('3月')
+    const selected = timelineLayout({ ...timeline, selection: { start: MARCH, end: Date.UTC(2024, 4, 31) } }, { x: 0, y: 0, width: 900, height: 120 }, 1)
+    expect(selected.selectionLabel?.text).toBe('2024 3月 - 5月')
+  })
+
+  it('keeps the source fallback when linked pivots do not identify a measured label language', async () => {
+    expect(timelineLabelLocale({ pivotTables: ['Pivot Sales Summary'] })).toBeUndefined()
+    expect(timelineLabelLocale({ pivotTables: ['樞紐分析表1', 'PivotTable1'] })).toBeUndefined()
+    const doc = await controlsDocument()
+    const known = doc.sheets.flatMap(sheet => sheet.drawings ?? []).find(item => item.content?.kind === 'timeline')
+    if (known?.content?.kind !== 'timeline' || !known.content.timeline.appearance) throw new Error('timeline appearance missing')
+    const cache: TimelineCacheDef = { name: 'cache', sourceName: 'Date', pivotTables: ['Pivot Sales Summary'], bounds: { start: JANUARY, end: APRIL } }
+    const result = buildTimelineModel({ name: 'unknown', cache: 'cache', level: 'months', show: { header: true, selectionLabel: true, timeLevel: true, scrollbar: true } }, cache, new Map(), { style: known.content.timeline.style, appearance: known.content.timeline.appearance })
+    expect(result.model).toBeUndefined()
+    expect(result.diagnostics[0]?.feature).toBe('timeline-label-locale')
+  })
+
   it('selects a visible month as its complete UTC calendar interval, with inclusive final day', async () => {
     const { apply, controller } = setup()
     expect(await controller.selectTimeline(model.name, Date.UTC(2024, 2, 18), Date.UTC(2024, 2, 18), new AbortController().signal)).toBe(true)
