@@ -14,6 +14,12 @@ import type { ChartModel } from '../../charts/model'
 /** The main-ledger grant a pivot open or apply reserves for its reply's fit cells (Task 29): the worker stops the
  * cells within it (none when the grant is 0). */
 export const PIVOT_FIT_REPLY_BYTES = 4 * 1024 * 1024
+/** Shared bounded fan-out limits for slicer/timeline protocol, worker and adapters. */
+export const MAX_LINKED_CONTROL_TARGETS = 8
+export const MAX_LINKED_CONTROL_ITEMS = 10_000
+/** Linked apply's reply gets a bounded main-ledger reservation; the worker grant is partitioned 1/3 for that reply. */
+export const LINKED_CONTROL_REPLY_BYTES = 4 * 1024 * 1024
+export const LINKED_CONTROL_WORKER_GRANT_BYTES = LINKED_CONTROL_REPLY_BYTES * 3
 export const MAX_REGION_STYLE_TABLES = 512
 /** Largest built-in table-style descriptor measured across all 144 table/pivot
  * names: 25,154 B excluding the shared workbook theme; 32 KiB leaves 1.3x headroom. */

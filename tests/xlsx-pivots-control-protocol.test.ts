@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { VIEWER_COMMAND_KINDS, isViewerCommand, isViewerReply } from '../src/worker/viewerProtocol'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
+import { MAX_LINKED_CONTROL_TARGETS } from '../src/xlsx/pivots/slicers/transaction'
 
 const controlApply = (overrides: Record<string, unknown> = {}) => ({
   kind: 'controlApply', requestId: 'control-1', docId: 'doc-1', revision: 1, grantBytes: 1024,
@@ -20,7 +21,7 @@ describe('linked-control worker protocol', () => {
   })
 
   it('rejects over-limit, duplicate or malformed fan-out before the worker sees it', () => {
-    expect(isViewerCommand(controlApply({ targets: Array.from({ length: 9 }, (_, pivot) => ({ sheetId: 's', pivot, name: `P${pivot}`, cacheId: 7, baseRevision: 0, requestRevision: 1, delta: 'reset' })) }))).toBe(false)
+    expect(isViewerCommand(controlApply({ targets: Array.from({ length: MAX_LINKED_CONTROL_TARGETS + 1 }, (_, pivot) => ({ sheetId: 's', pivot, name: `P${pivot}`, cacheId: 7, baseRevision: 0, requestRevision: 1, delta: 'reset' })) }))).toBe(false)
     expect(isViewerCommand(controlApply({ targets: [
       { sheetId: 's', pivot: 0, name: 'P', cacheId: 7, baseRevision: 0, requestRevision: 1, delta: 'reset' },
       { sheetId: 's', pivot: 0, name: 'P', cacheId: 7, baseRevision: 0, requestRevision: 1, delta: 'reset' },

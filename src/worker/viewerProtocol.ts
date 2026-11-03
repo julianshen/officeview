@@ -18,7 +18,7 @@ import type {
   WorkerReply,
   WorkerReplyBase,
 } from '../xlsx/view/contracts'
-import { OPERATION_REFUSED_CODE } from '../xlsx/view/contracts'
+import { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS, OPERATION_REFUSED_CODE } from '../xlsx/view/contracts'
 import { MAX_ROWS, validateCoordinate } from '../xlsx/view/coordinates'
 import { CompactRowVisibility } from '../xlsx/view/visibility'
 
@@ -46,7 +46,7 @@ export function isViewerCommand(data: unknown): data is WorkerCommand {
     const command = data as Record<string, unknown>, selection = command.selection
     if (typeof command.docId !== 'string' || !Number.isSafeInteger(command.revision) || Number(command.revision) < 1
       || !Number.isSafeInteger(command.grantBytes) || Number(command.grantBytes) < 1 || !Array.isArray(command.targets)
-      || command.targets.length < 1 || command.targets.length > 8 || typeof selection !== 'object' || selection === null) return false
+      || command.targets.length < 1 || command.targets.length > MAX_LINKED_CONTROL_TARGETS || typeof selection !== 'object' || selection === null) return false
     const value = selection as Record<string, unknown>
     if (typeof value.name !== 'string' || value.name.length < 1 || value.name.length > 256) return false
     const selectionKeys = Object.keys(value)
@@ -56,7 +56,7 @@ export function isViewerCommand(data: unknown): data is WorkerCommand {
       if (!Number.isSafeInteger(value.start) || !Number.isSafeInteger(value.end) || Number(value.start) > Number(value.end)) return false
     } else if (value.kind === 'slicerSelection' || value.kind === 'tableSlicerSelection') {
       if (selectionKeys.length !== 3 || !Object.prototype.hasOwnProperty.call(value, 'selectedItemIds')) return false
-      if (!Array.isArray(value.selectedItemIds) || value.selectedItemIds.length > 10_000) return false
+      if (!Array.isArray(value.selectedItemIds) || value.selectedItemIds.length > MAX_LINKED_CONTROL_ITEMS) return false
       const ids = new Set<number>()
       for (const id of value.selectedItemIds) { if (!Number.isSafeInteger(id) || Number(id) < 0 || ids.has(Number(id))) return false; ids.add(Number(id)) }
     } else if (value.kind !== 'slicerClear' && value.kind !== 'timelineClear') return false

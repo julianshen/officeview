@@ -96,6 +96,8 @@ export function buildTimelineModel(part: TimelinePart, cache: TimelineCacheDef |
     diagnostics: [],
     model: {
       name: part.name,
+      ...(cache.pivotCacheId === undefined || !pivotCaches.has(cache.pivotCacheId) ? {} : { cacheId: pivotCaches.get(cache.pivotCacheId)!.cacheId }),
+      drives: cache.pivotTables.map(pivotTable => ({ pivotTable })),
       caption: part.caption ?? (cache.sourceName || part.name),
       style: style.style,
       level: part.level,

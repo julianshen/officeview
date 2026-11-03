@@ -77,6 +77,7 @@ import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import type { FormatAllocation } from '../xlsx/formula/format'
 import type { FormatBudget } from '../xlsx/view/formatWorkspace'
 import type { PivotCacheDefinition, PivotTableDefinition } from '../xlsx/pivots/model'
+import { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS } from '../xlsx/view/contracts'
 import type { RecordLimits, RecordResult } from '../xlsx/pivots/engine/records'
 import type { CellReader } from '../xlsx/pivots/engine/faithful'
 import { estimatePayloadBytes } from '../xlsx/view/payloadBytes'
@@ -229,6 +230,12 @@ export interface WorkbookSource {
 }
 
 /** Source-specific inputs consumed by the worker pivot session manager. */
+export interface WorkerControlLink {
+  readonly name: string
+  readonly kind: 'slicer' | 'timeline'
+  readonly cacheId?: number
+  readonly pivotTables: readonly string[]
+}
 export interface WorkerPivotAssets {
   readonly tables: readonly PivotTableDefinition[]
   readonly date1904: boolean
@@ -236,6 +243,8 @@ export interface WorkerPivotAssets {
   readonly metadataBytes: number
   readonly runtimeKey: object
   readonly linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]
+  /** Bounded resolved control-to-pivot linkage copied from workbook drawing metadata. */
+  readonly controlLinks?: readonly WorkerControlLink[]
   /** Every pivot of the workbook by sheet and name (an unnamed one possibly any name): resolves a chart source without a sheet (S3-Q). */
   readonly pivots?: readonly { readonly sheet: string; readonly name?: string }[]
   /** Pins source-owned per-generation metadata while a worker pivot handle references it. */
@@ -1633,14 +1642,15 @@ export class DocumentSession {
   /** Stage the complete, bounded target fan-out before making any pivot or control selection visible. */
   async controlApply(revision: number, grantBytes: number, selection: import('../xlsx/view/contracts').LinkedControlSelection,
     targets: readonly import('../xlsx/view/contracts').LinkedControlPivotTarget[], signal: AbortSignal): Promise<WorkerLinkedControlOutcome> {
-    const { validateLinkedControlOperation, MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS } = await import('../xlsx/pivots/slicers/transaction')
+    const { validateLinkedControlOperation, resolveWorkerControlLink } = await import('../xlsx/pivots/slicers/transaction')
     if (this.closed || signal.aborted) return { kind: 'cancelled' }
-    if (!validateLinkedControlOperation(selection) || !Number.isSafeInteger(revision) || revision <= this.linkedControlRevision
+    if (!validateLinkedControlOperation(selection) || !Number.isSafeInteger(revision)
       || !Number.isSafeInteger(grantBytes) || grantBytes < 1 || !Array.isArray(targets)
       || targets.length < 1 || targets.length > MAX_LINKED_CONTROL_TARGETS
       || ('selectedItemIds' in selection && selection.selectedItemIds.length > MAX_LINKED_CONTROL_ITEMS)) {
       return { kind: 'refused', feature: 'pivot-control-protocol-invalid', message: 'The linked-control request is invalid or exceeds its target, item or memory bound.' }
     }
+    if (revision <= this.linkedControlRevision) return { kind: 'stale' }
     // Task 40 implements pivot-cache controls only. A table cache uses a distinct
     // source-row FilterSpec transaction and must never be mistaken for a pivot apply.
     if (selection.kind === 'tableSlicerSelection') return { kind: 'refused', feature: 'pivot-control-table-unverified', message: 'Table slicer filtering is not verified yet.' }
@@ -1655,6 +1665,14 @@ export class DocumentSession {
         return { kind: 'refused', feature: 'pivot-control-target-stale', message: 'A linked pivot target is missing, duplicated, staged elsewhere, or no longer matches its saved cache linkage.' }
       }
       seen.add(id); resolved.push({ target, handle, key })
+    }
+    const targetLinks = resolved.map(({ target }) => ({ name: target.name, cacheId: target.cacheId }))
+    const controlLinks = resolved.map(({ handle }) => resolveWorkerControlLink(selection, handle.assets.controlLinks ?? [], targetLinks))
+    const badLink = controlLinks.find(result => !result.ok)
+    if (badLink && !badLink.ok) return { kind: 'refused', feature: badLink.feature, message: badLink.message }
+    const canonicalLink = controlLinks[0]?.ok ? JSON.stringify(controlLinks[0].link) : undefined
+    if (!canonicalLink || controlLinks.some(result => !result.ok || JSON.stringify(result.link) !== canonicalLink)) {
+      return { kind: 'refused', feature: 'pivot-control-linkage-unknown', message: 'Linked pivot targets do not agree on the saved workbook control linkage.' }
     }
     if (resolved.length > 1) {
       // Ruling S5-C: the linked-pivots-with-different-layouts route is still an owner recipe.

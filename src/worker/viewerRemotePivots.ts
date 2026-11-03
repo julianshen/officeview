@@ -3,7 +3,7 @@ import type { PivotDelta } from '../xlsx/pivots/session/delta'
 import type { PivotTableDefinition } from '../xlsx/pivots/model'
 import type { PivotMenuModel } from '../xlsx/pivots/session/menu'
 import type { ChartModel } from '../charts/model'
-import { PIVOT_FIT_REPLY_BYTES, type LinkedControlPivotTarget, type LinkedControlSelection, type ValueOverlayCell, type WorkerReply } from '../xlsx/view/contracts'
+import { LINKED_CONTROL_REPLY_BYTES, LINKED_CONTROL_WORKER_GRANT_BYTES, MAX_LINKED_CONTROL_TARGETS, PIVOT_FIT_REPLY_BYTES, type LinkedControlPivotTarget, type LinkedControlSelection, type ValueOverlayCell, type WorkerCommand, type WorkerReply } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
 import { ViewerNotSentError, type ViewerClient } from './viewerClient'
 import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
@@ -87,6 +87,20 @@ export class RemotePivotSessions {
       error => { if (error instanceof ViewerNotSentError) grant.release(owner); throw error })
   }
 
+  /** Linked-control replies carry every candidate result, so they require a receiver grant (not only a worker grant). */
+  private sendLinkedGranted(command: Extract<WorkerCommand, { kind: 'controlApply' | 'controlCommit' }>): Promise<WorkerReply<'controlApply' | 'controlCommit'>> | undefined {
+    const grant = this.host.replyGrant
+    if (!grant) return undefined
+    const owner = `pivot-control-reply:${command.requestId}`
+    if (!grant.reserve(owner, LINKED_CONTROL_REPLY_BYTES)) return undefined
+    const sent = this.host.client.send(command as never) as Promise<WorkerReply<'controlApply' | 'controlCommit'>>
+    return sent.then(reply => { grant.settle(owner, reply); return reply }, error => {
+      // A disposed receiver can still have an in-flight reply; only refund a command known not to have left.
+      if (error instanceof ViewerNotSentError) grant.release(owner)
+      throw error
+    })
+  }
+
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<RemotePivotOpen | { kind: 'refused'; message: string }> {
     const key = keyOf(sheetId, pivot)
     let entry = this.entries.get(key)
@@ -144,7 +158,7 @@ export class RemotePivotSessions {
   /** A workbook-scoped linked control is staged by one worker command and committed by exactly one command. */
   async applyLinked(selection: LinkedControlSelection, targets: readonly { sheetId: number; pivot: number; delta: PivotDelta | 'reset' }[], signal?: AbortSignal): Promise<RemoteLinkedControlApply> {
     if (this.closed || this.host.isClosed() || signal?.aborted) return { kind: 'cancelled' }
-    if (!targets.length || targets.length > 8) return { kind: 'refused', message: 'Linked control target count exceeds the supported limit.' }
+    if (!targets.length || targets.length > MAX_LINKED_CONTROL_TARGETS) return { kind: 'refused', message: 'Linked control target count exceeds the supported limit.' }
     const localKeys = targets.map(target => keyOf(target.sheetId, target.pivot))
     const wireKeys = targets.map(target => JSON.stringify([String(target.sheetId), target.pivot]))
     if (new Set(localKeys).size !== localKeys.length) return { kind: 'refused', message: 'Linked control contains duplicate pivot targets.' }
@@ -167,9 +181,12 @@ export class RemotePivotSessions {
     let staged = false, committed = false
     signal?.addEventListener('abort', cancel, { once: true })
     try {
-      const reply = await this.host.client.send({ kind: 'controlApply', requestId, docId: this.host.docId, revision, selection, targets: wireTargets, grantBytes: WORKER_BUDGETS[this.host.profile] / 2 })
+      const applyReply = this.sendLinkedGranted({ kind: 'controlApply', requestId, docId: this.host.docId, revision, selection, targets: wireTargets, grantBytes: LINKED_CONTROL_WORKER_GRANT_BYTES })
+      if (!applyReply) return { kind: 'refused', message: 'Not enough main-thread memory to receive the linked-control result.' }
+      const reply = await applyReply
       if (this.linkedControlPending !== pending) return { kind: 'stale' }
       if (signal?.aborted || reply.kind === 'cancelled') return { kind: 'cancelled' }
+      if (reply.kind === 'error' && reply.code === 'stale-source') return { kind: 'stale' }
       if (reply.kind !== 'complete' || reply.result.kind !== 'controlApply') return { kind: 'refused', message: messageOf(reply) }
       staged = true
       if (reply.result.targets.length !== targets.length || reply.result.targets.some((target, index) => target.id !== wireKeys[index])) {
@@ -177,7 +194,10 @@ export class RemotePivotSessions {
       }
       if (signal?.aborted) { cancel(); return { kind: 'cancelled' } }
       // Once sent, commit is a fact; wait for its acknowledgement even if the caller aborts meanwhile.
-      const commitReply = await this.host.client.send({ kind: 'controlCommit', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision })
+      const commitResponse = this.sendLinkedGranted({ kind: 'controlCommit', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision })
+      if (!commitResponse) return { kind: 'refused', message: 'Not enough main-thread memory to receive the linked-control commit.' }
+      const commitReply = await commitResponse
+      if (commitReply.kind === 'error' && commitReply.code === 'stale-source') return { kind: 'stale' }
       if (commitReply.kind !== 'complete' || commitReply.result.kind !== 'controlCommit' || commitReply.result.revision !== revision) {
         return commitReply.kind === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', message: messageOf(commitReply) }
       }

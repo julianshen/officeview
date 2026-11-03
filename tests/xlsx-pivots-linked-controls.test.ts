@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { LinkedControlTransaction, measuredDeselectFromAll, resolveSlicerPivotTargets, SharedControlIndexCache, validateLinkedControlOperation, type LinkedControlOperation, type LinkedControlTarget } from '../src/xlsx/pivots/slicers/transaction'
+import { LinkedControlTransaction, measuredDeselectFromAll, resolveSlicerPivotTargets, resolveWorkerControlLink, SharedControlIndexCache, validateLinkedControlOperation, type LinkedControlOperation, type LinkedControlTarget } from '../src/xlsx/pivots/slicers/transaction'
 
 const operation: LinkedControlOperation = { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }
 
@@ -186,6 +186,16 @@ describe('linked-control bounds and resolution', () => {
       .toMatchObject({ ok: false, feature: 'pivot-control-target-duplicate' })
     expect(resolveSlicerPivotTargets({ name: 'Slicer_Product', kind: 'tabular', pivotTables: Array(9).fill('Sales'), pivotCacheId: 7 }, pivots))
       .toMatchObject({ ok: false, feature: 'pivot-control-target-limit' })
+  })
+
+  it('refuses unknown controls and any target from a mixed pivot cache at the worker boundary', () => {
+    const link = { name: 'Slicer_Product', kind: 'slicer' as const, cacheId: 7, pivotTables: ['Sales', 'Returns'] }
+    expect(resolveWorkerControlLink({ kind: 'slicerSelection', name: 'Other', selectedItemIds: [0] }, [link], [
+      { name: 'Sales', cacheId: 7 }, { name: 'Returns', cacheId: 7 },
+    ])).toMatchObject({ ok: false, feature: 'pivot-control-linkage-unknown' })
+    expect(resolveWorkerControlLink({ kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }, [link], [
+      { name: 'Sales', cacheId: 7 }, { name: 'Returns', cacheId: 8 },
+    ])).toMatchObject({ ok: false, feature: 'pivot-control-linkage-cache-mismatch' })
   })
 
   it('rejects oversized, duplicate and malformed item selections before target estimates', async () => {

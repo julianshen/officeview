@@ -1,8 +1,8 @@
 /** Workbook-scoped staging primitives for linked slicer/timeline changes.
  * This module is lazy with the rest of `xlsx/pivots`; it is not imported by the eager graph. */
 
-export const MAX_LINKED_CONTROL_TARGETS = 8
-export const MAX_LINKED_CONTROL_ITEMS = 10_000
+import { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS } from '../../view/contracts'
+export { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS } from '../../view/contracts'
 
 export type LinkedControlOperation =
   | { kind: 'slicerSelection'; name: string; selectedItemIds: readonly number[] }
@@ -273,6 +273,40 @@ export class SharedControlIndexCache<K, V> {
 export interface LinkedPivotDescriptor { sheetId: string; pivot: number; name: string; cacheId: number; layoutKey?: string }
 export interface SlicerPivotLink { name: string; kind: 'tabular'; pivotTables: readonly string[]; pivotCacheId: number }
 export type ControlTargetsResult = { ok: true; targets: readonly LinkedPivotDescriptor[] } | { ok: false; feature: string; message: string }
+
+export interface WorkerControlLink {
+  readonly name: string
+  readonly kind: 'slicer' | 'timeline'
+  /** Workbook pivot cache id, resolved from the control's x14 cache id. */
+  readonly cacheId?: number
+  readonly pivotTables: readonly string[]
+}
+export interface WorkerControlTarget { readonly name: string; readonly cacheId: number }
+export type WorkerControlLinkResult = { ok: true; link: WorkerControlLink } | { ok: false; feature: string; message: string }
+
+/** Validates the saved workbook linkage again at the worker boundary; caller-supplied targets are not authority. */
+export function resolveWorkerControlLink(selection: LinkedControlOperation, links: readonly WorkerControlLink[], targets: readonly WorkerControlTarget[]): WorkerControlLinkResult {
+  const kind = selection.kind.startsWith('timeline') ? 'timeline' : 'slicer'
+  const matches = links.filter(link => link.name === selection.name && link.kind === kind)
+  if (matches.length !== 1) return { ok: false,
+    feature: matches.length ? 'pivot-control-linkage-ambiguous' : 'pivot-control-linkage-unknown',
+    message: matches.length ? `Control ${selection.name} has ambiguous saved linkage.` : `Control ${selection.name} has no known saved workbook linkage.` }
+  const link = matches[0]!
+  if (!Number.isSafeInteger(link.cacheId) || link.cacheId! < 0 || !link.pivotTables.length || link.pivotTables.length > MAX_LINKED_CONTROL_TARGETS
+    || link.pivotTables.some(name => !name) || new Set(link.pivotTables).size !== link.pivotTables.length) {
+    return { ok: false, feature: 'pivot-control-linkage-unsupported', message: `Control ${selection.name} has incomplete or unsupported saved linkage.` }
+  }
+  if (targets.length !== link.pivotTables.length) return { ok: false, feature: 'pivot-control-target-unlinked', message: `The requested pivots do not match all pivots linked to ${selection.name}.` }
+  const wanted = new Set(link.pivotTables)
+  const seen = new Set<string>()
+  for (const target of targets) {
+    if (target.cacheId !== link.cacheId) return { ok: false, feature: 'pivot-control-linkage-cache-mismatch', message: `A target of ${selection.name} uses a different pivot cache.` }
+    if (!wanted.has(target.name)) return { ok: false, feature: 'pivot-control-target-unlinked', message: `Pivot ${target.name} is not linked to ${selection.name}.` }
+    if (seen.has(target.name)) return { ok: false, feature: 'pivot-control-linkage-ambiguous', message: `Pivot ${target.name} is duplicated in the linked-control request.` }
+    seen.add(target.name)
+  }
+  return { ok: true, link }
+}
 
 /** Resolves only the pivot tables listed by a saved slicer cache; omitted pivots on that cache stay independent. */
 export function resolveSlicerPivotTargets(link: SlicerPivotLink, pivots: readonly LinkedPivotDescriptor[]): ControlTargetsResult {
