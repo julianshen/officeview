@@ -132,3 +132,36 @@
 ### Commit
 
 - Report-only verification: pending.
+
+## Fix round 1 — OpenCode review findings, independent verification
+
+### Files
+
+- No source or test edits were needed in this verification round. The findings were already addressed in `9c76f43f` and `52184a46`; this section records the independent check at `0ac0210c`.
+- This report is the only file changed for this round.
+
+### Finding 1 — RESOLVED (committed slicer selection reaches canvas paint)
+
+- Verified the failure mode: canvas painting consumes the drawing's slicer model, so a controller-only committed selection would leave the painted control at its saved selection.
+- The test-first fix is in `9c76f43f`: `SlicerControllerHost.onChange` publishes only after successful apply; `InteractiveSheetDoc` retains the model by slicer name, bumps drawing generation, and substitutes the committed model for the next tile paint. The mounted regression test `repaints the canvas control from the committed slicer selection` asserts that selecting Apples changes the painter's actual model to selected ids `[0]` and item states `[true, false, false, false]`, while the filtered pivot result updates.
+- Independent GREEN: `npx vitest run tests/xlsx-viewer-pivot-ui.test.tsx -t 'repaints the canvas control from the committed slicer selection'` — 1 passed. The broader focused run also passed.
+
+### Finding 2 — RESOLVED (S5-B language rule)
+
+- The reported gap was valid: timeline labels had English-only generators and no fail-closed locale decision.
+- The test-first fix is in `52184a46`: generated labels are enabled only when all linked pivot captions identify a measured locale (`樞紐分析表N` → `zh-TW`, `PivotTableN` → `en-US`). Unknown, custom, or mixed captions produce `timeline-label-locale` and preserve the saved fallback rather than generating unmeasured labels. Tests cover the measured zh-TW labels and unknown/mixed refusal; the saved-paint baseline remains intact.
+- Independent GREEN: `npx vitest run tests/xlsx-pivots-timeline-controls.test.tsx tests/xlsx-pivots-control-oracle.test.ts tests/xlsx-slicers-display.test.ts` passed as part of the four-file focused run below.
+
+### Gates
+
+- `npx tsc --noEmit -p tsconfig.json` — passed.
+- Focused: `npx vitest run tests/xlsx-viewer-pivot-ui.test.tsx tests/xlsx-pivots-timeline-controls.test.tsx tests/xlsx-pivots-control-oracle.test.ts tests/xlsx-slicers-display.test.ts` — 4 files passed; 167 passed, 8 skipped.
+- Required broad gate: `npx vitest run tests/xlsx-pivots* tests/xlsx-viewer-* tests/xlsx-formula*` — 226 files passed, 3 failed; 6,300 passed, 10 failed, 59 skipped, 1 todo; 8 unhandled errors. `tests/xlsx-viewer-harness-identity.test.ts` and eight dependent cases in `tests/xlsx-viewer-bench-collector.test.ts` failed on sandbox `listen EPERM 127.0.0.1`. `tests/xlsx-viewer-construction-memory.test.ts`'s heap-bound calibration failed once in the broad run (`builder-numeric x98304`: 9,437,184 B vs 6,282,246 B limit), then passed when rerun alone (1 passed, 16 skipped); no code in that test's accounting path changed in this round.
+- `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts` — passed; eager graph and paged chunks validated; gzip 35,978 B / 38,720 B.
+- `git diff --check` — passed before this report-only edit.
+
+### Commit
+
+- Finding 1 source/test fix: `9c76f43f` (`fix(pivots): repaint committed slicer selection`).
+- Finding 2 source/test fix: `52184a46` (`fix(pivots): follow measured timeline label locale`).
+- This round's report commit: recorded in the completion marker.
