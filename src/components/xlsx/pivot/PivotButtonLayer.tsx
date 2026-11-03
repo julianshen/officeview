@@ -32,12 +32,16 @@ export { PivotValueSettingsDialog, PIVOT_VALUE_NUMFMT_PRESETS } from './PivotVal
 export type { PivotValueSettingsDialogProps } from './PivotValueSettingsDialog'
 
 export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort } from './pivotClient'
+export { dateFilter } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind, PivotShownLayout, PendingPivotFits, PivotFitMemory } from './pivotClient'
 export { SlicerLayer } from './SlicerLayer'
 export type { SlicerLayerProps } from './SlicerLayer'
-export { SlicerController } from '../../../xlsx/pivots/slicers/controller'
-export type { SlicerAction, SlicerApplyResult, SlicerControllerHost } from '../../../xlsx/pivots/slicers/controller'
+export { TimelineLayer } from './TimelineLayer'
+export type { TimelineLayerProps } from './TimelineLayer'
+export { SlicerController, TimelineController } from '../../../xlsx/pivots/slicers/controller'
+export type { SlicerAction, SlicerApplyResult, SlicerControllerHost, TimelineAction, TimelineApplyResult, TimelineControllerHost } from '../../../xlsx/pivots/slicers/controller'
 export type { Box as SlicerBox, SlicerModel } from '../../../xlsx/pivots/slicers/model'
+export type { TimelineModel } from '../../../xlsx/pivots/slicers/model'
 
 export type PivotUiState =
   | { status: 'idle' }

@@ -88,6 +88,10 @@ export interface TimelineModel {
   /** Resolved workbook pivot cache id and linked pivots for worker-side interaction validation. */
   cacheId?: number
   drives?: { pivotTable?: string }[]
+  /** Monotonic committed view-only control revision (0 is the saved model). */
+  revision?: number
+  /** The date filter installed by this live timeline selection, used to clear only its own filter. */
+  filterId?: number
   caption?: string
   style: string
   level: TimelineLevel

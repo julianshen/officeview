@@ -216,6 +216,28 @@ describe('Stage 5 Excel Control Oracle (Task 39)', () => {
   })
 
   describe('Semantics, symmetry and sensitivity', () => {
+    it.skipIf(!existsSync(resolve(CONTROLS_DIR, 's5-timeline-click-month.xlsx')))('s5-timeline-click-month is March 2024 inclusive of March 31 and excludes April 1', async () => {
+      const cells = await extractCells(resolve(CONTROLS_DIR, 's5-timeline-click-month.xlsx'))
+      expect(cells.B4).toBe('Cherries')
+      expect(cells.B5).toBe(40)
+      expect(cells.C5).toBe(40)
+      expect(cells.A5).toBe('West')
+      expect(cells.A6).toBe('總計')
+      expect(cells.D4).toBeUndefined()
+    })
+
+    it.skipIf(!existsSync(resolve(CONTROLS_DIR, 's5-timeline-level-preserves-range.xlsx')))('s5-timeline-level-preserves-range includes Jan through Mar, excludes Dec 31 and Apr 1, and totals 90', async () => {
+      const cells = await extractCells(resolve(CONTROLS_DIR, 's5-timeline-level-preserves-range.xlsx'))
+      expect(cells.C5).toBe(20)
+      expect(cells.E5).toBe(20)
+      expect(cells.E6).toBe(70)
+      expect(cells.B7).toBe(30)
+      expect(cells.C7).toBe(20)
+      expect(cells.D7).toBe(40)
+      expect(cells.E7).toBe(90)
+      expect(cells.E8).toBeUndefined()
+    })
+
     it.skipIf(!existsSync(resolve(CONTROLS_DIR, 's5-slicer-clear.xlsx')))('s5-slicer-clear restores the full pivot table values from controls-seed.xlsx', async () => {
       const seedCells = await extractCells(SEED_PATH)
       const clearCells = await extractCells(resolve(CONTROLS_DIR, 's5-slicer-clear.xlsx'))
