@@ -192,4 +192,4 @@
 
 ### Commit
 
-- Report-only verification commit: pending.
+- Report-only verification commit: `6dff036a6efd6eefee7fab8eabc965b7e039155e` (`docs(pivots): verify Task 42 review fixes`).
