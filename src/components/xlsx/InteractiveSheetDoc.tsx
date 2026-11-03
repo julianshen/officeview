@@ -112,6 +112,21 @@ import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
 import type * as PivotUi from './pivot/PivotButtonLayer'
 import type { PivotDeltaKind } from '../../xlsx/pivots/session/delta'
 
+interface ActiveSlicerDrawing { drawing: XlsxDrawing; model: PivotUi.SlicerModel }
+function slicerDrawingsOf(drawings: readonly XlsxDrawing[] | undefined): ActiveSlicerDrawing[] {
+  const out: ActiveSlicerDrawing[] = []
+  for (const drawing of drawings ?? []) {
+    if (drawing.group) continue
+    if (drawing.content?.kind === 'slicer') out.push({ drawing, model: drawing.content.slicer })
+  }
+  return out
+}
+function slicerDrawingBox(drawing: XlsxDrawing): PivotUi.SlicerBox | undefined {
+  if (drawing.group || drawing.transformValid === false || drawing.rotationDeg) return undefined
+  const box = { x: drawing.xEmu / 9525, y: drawing.yEmu / 9525, width: drawing.widthEmu / 9525, height: drawing.heightEmu / 9525 }
+  return Object.values(box).every(Number.isFinite) && box.width > 0 && box.height > 0 ? box : undefined
+}
+
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
 export interface SheetViewInput {
@@ -526,7 +541,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     setResidentDependentNotices({ unsupported, outdated, cells })
   }
-  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length) || Boolean(remote && sheetIds.some(id => remote.layout(id).hasPivotDisplay)), [doc, remote, sheetIds])
+  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length || sheet.drawings?.some(drawing => drawing.content?.kind === 'slicer' || drawing.content?.kind === 'timeline')) || Boolean(remote && sheetIds.some(id => remote.layout(id).hasPivotDisplay)), [doc, remote, sheetIds])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
@@ -846,6 +861,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const sparklineViewKeyRef = useRef(sparklineViewKey)
 
   const entry = activeSheetId ? entryFor(activeSheetId) : null
+  const activeSlicerDrawings = useMemo(() => slicerDrawingsOf(entry?.sheet.drawings), [entry?.sheet.drawings])
   const identity = identityOf(activeSheetId)
   const identityKey = JSON.stringify([identity.docId, identity.sheetId, identity.valueGen, identity.fontGen, identity.viewGen])
 
@@ -1454,7 +1470,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // ---- pivot controls (Task 28): a lazy chunk with the client, the button layer and the menus ----
   const [pivotUi, setPivotUi] = useState<typeof PivotUi | null>(null)
   // A paged shell's pivots arrive with the worker's display parts: the active sheet's entry says so.
-  const wantsPivotUi = hasPivots || Boolean(entry?.sheet.pivotTables?.length)
+  const wantsPivotUi = hasPivots || Boolean(entry?.sheet.pivotTables?.length || activeSlicerDrawings.length)
   useEffect(() => {
     if (!wantsPivotUi) return
     let live = true
@@ -1685,6 +1701,57 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       setPivotController(current => current === controller ? null : current)
     }
   }, [pivotUi, doc, remote, mainLedger, budgetProfile, pivotKinds])
+  const [slicerController, setSlicerController] = useState<PivotUi.SlicerController | null>(null)
+  useEffect(() => {
+    if (!pivotUi || !pivotController || !activeSlicerDrawings.length) { setSlicerController(null); return }
+    let holdSerial = 0
+    const controller = new pivotUi.SlicerController(activeSlicerDrawings.map(item => item.model), {
+      announce: message => pivotHost.current.announce(message),
+      admit: bytes => {
+        const owner = `slicer-selection:${identity}:${++holdSerial}`
+        if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return undefined
+        mainLedger.set('controls', owner, bytes)
+        let held = true
+        return { release: () => { if (!held) return; held = false; mainLedger.release('controls', owner) } }
+      },
+      apply: async (model, action, signal) => {
+        if (signal.aborted) return { kind: 'cancelled' }
+        const drives = model.drives ?? []
+        if (drives.length !== 1 || !drives[0]?.pivotTable || drives[0].table) return { kind: 'refused', message: 'This slicer has multiple or unsupported targets; its selection is not available.' }
+        const name = drives[0].pivotTable
+        const activeSheetIndex = sheetIds.indexOf(activeSheetId)
+        const matches = doc.sheets.flatMap((savedSheet, sheetId) => {
+          // The paged shell receives this sheet's definitions through its bounded display entry, not doc.sheets.
+          const sheet = sheetId === activeSheetIndex ? entry?.sheet ?? savedSheet : savedSheet
+          return (sheet.pivotTables ?? []).flatMap((def, pivot) => def.name === name && def.cacheId === model.cacheId ? [{ sheetId, pivot, def }] : [])
+        })
+        if (matches.length !== 1) return { kind: 'refused', message: 'This slicer target is missing or ambiguous; its selection is not available.' }
+        const target = matches[0]!, fieldIndex = model.sourceFieldIndex
+        if (!Number.isSafeInteger(fieldIndex) || fieldIndex! < 0 || target.def.cacheId !== model.cacheId) return { kind: 'refused', message: 'This slicer field does not match its pivot cache.' }
+        const opened = await pivotController.open(target.sheetId, target.pivot)
+        if (opened.status !== 'open') return { kind: 'refused', message: opened.status === 'refused' ? opened.diagnostic.message : 'This pivot cannot be opened for a slicer change.' }
+        const field = opened.model.fields.find(candidate => candidate.index === fieldIndex)
+        const pivotItems = target.def.fields[fieldIndex!]!.items
+        if (!field || !Array.isArray(pivotItems) || pivotItems.length > 10_000 || pivotItems.some(item => item.type === 'data' && item.x === undefined)) return { kind: 'refused', message: 'This slicer field has an unsupported item mapping.' }
+        const current = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
+        const expectedHidden = pivotItems.flatMap((item, index) => item.type === 'data' && !current.has(item.x!) ? [index] : [])
+        const actualHidden = field.items.filter(item => item.hidden).map(item => item.index)
+        if (expectedHidden.length !== actualHidden.length || expectedHidden.some(index => !actualHidden.includes(index))) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        const selected = action.kind === 'clear' ? new Set(model.allItemIds ?? []) : new Set(action.selectedItemIds)
+        const hidden = pivotItems.flatMap((item, index) => item.type === 'data' && !selected.has(item.x!) ? [index] : [])
+        const cacheName = model.cacheName ?? model.name
+        const selection: import('../../xlsx/view/contracts').LinkedControlSelection = action.kind === 'clear'
+          ? { kind: 'slicerClear', name: cacheName }
+          : { kind: 'slicerSelection', name: cacheName, selectedItemIds: action.selectedItemIds }
+        const outcome = await pivotController.applyLinked(selection, [{ sheetId: target.sheetId, pivot: target.pivot, delta: { kind: 'items', field: fieldIndex!, hidden } }])
+        if (outcome.kind === 'committed') return { kind: 'committed', revision: outcome.targets[0]?.revision ?? outcome.revision }
+        return outcome.kind === 'refused' ? outcome : { kind: outcome.kind }
+      },
+    })
+    setSlicerController(controller)
+    return () => { controller.dispose(); setSlicerController(current => current === controller ? null : current) }
+  }, [pivotUi, pivotController, activeSlicerDrawings, doc])
+  useEffect(() => slicerController?.subscribe(rerender), [slicerController, rerender])
   useEffect(() => pivotController?.subscribe(rerender), [pivotController, rerender])
   const controlJob = useRef<AbortController | null>(null)
   // The header sort in flight (spec §12.2 acknowledgment): shown with the click,
@@ -2424,9 +2491,29 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
               popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: popup.request.kind === 'valueSettings' ? 'Value field settings' : pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
                 : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
-              cellControls={pivotUi && pivotController && activePivots?.length && scroll ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
-                cellText={pivotCellText} /> : undefined}
-              onCellControl={pivotUi && pivotController && activePivots?.length ? (at, action, grid) => {
+              cellControls={scroll && ((pivotUi && pivotController && activePivots?.length) || (pivotUi && slicerController && activeSlicerDrawings.length)) ? <>
+                {pivotUi && pivotController && activePivots?.length ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
+                  cellText={pivotCellText} isFiltered={(cacheId, field) => slicerController?.isFieldFiltered(cacheId, field) ?? false} /> : null}
+                {pivotUi && slicerController && activeSlicerDrawings.map(({ drawing, model }) => {
+                  const box = slicerDrawingBox(drawing)
+                  return box ? <pivotUi.SlicerLayer key={model.name} model={model} box={box} window={scroll} viewport={viewport} controller={slicerController}
+                    invoker={rootRef.current?.querySelector<HTMLElement>('[role="grid"]') ?? undefined} /> : null
+                })}
+              </> : undefined}
+              onCellControl={pivotUi && ((pivotController && activePivots?.length) || (slicerController && activeSlicerDrawings.length)) ? (at, action, grid) => {
+                if (action === 'open' && slicerController && entry) {
+                  const cell = entry.metrics.sourceCellToLogical(at)
+                  const over = cell && activeSlicerDrawings.find(({ drawing }) => {
+                    const box = slicerDrawingBox(drawing)
+                    return box && cell.x < box.x + box.width && cell.x + cell.width > box.x && cell.y < box.y + box.height && cell.y + cell.height > box.y
+                  })
+                  if (over) {
+                    const layer = [...(rootRef.current?.querySelectorAll<HTMLElement>('[data-officeview-ui="slicer-layer"]') ?? [])].find(node => node.dataset.slicerName === over.model.name)
+                    const first = layer?.querySelector<HTMLButtonElement>('[data-slicer-item]:not(:disabled)')
+                    if (first) { first.focus(); return true }
+                  }
+                }
+                if (!pivotController || !activePivots?.length) return false
                 // Ruling S3-J: the keyboard route to a cell's pivot control (focus returns to the grid).
                 const found = pivotUi.controlsAt(activePivots, at.row, at.col)
                 const drill = found.find(entry => entry.button.kind === 'expand' || entry.button.kind === 'collapse')
@@ -2456,6 +2543,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 // Ruling S3-AM: a formula a pivot change left stale carries its mark and tooltip (resident only).
                 const why = activeStaleCells?.get(at.row * MAX_COLS + at.col)
                 const stale = why ? { ...shown, stale: why === 'unsupported' ? STALE_UNSUPPORTED : STALE_OUTDATED } : shown
+                if (activeSlicerDrawings.length) {
+                  const cellBox = entry.metrics.sourceCellToLogical(at)
+                  const over = cellBox && activeSlicerDrawings.find(({ drawing }) => {
+                    const box = slicerDrawingBox(drawing)
+                    return box && cellBox.x < box.x + box.width && cellBox.x + cellBox.width > box.x && cellBox.y < box.y + box.height && cellBox.y + cellBox.height > box.y
+                  })
+                  if (over) return { ...stale, control: `${over.model.caption ?? over.model.name} slicer, Alt+Down to open` }
+                }
                 if (!pivotUi || !pivotController || !activePivots?.length) return stale
                 const expanded = pivotUi.expandedAt(activePivots, at.row, at.col)
                 const control = pivotUi.cellControlDescription(pivotController, activeIndex, activePivots, at.row, at.col, pivotCellText)

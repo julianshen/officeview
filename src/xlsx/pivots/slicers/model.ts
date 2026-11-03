@@ -28,10 +28,20 @@ export interface SlicerAppearance {
   fontFamily: string
 }
 
-export interface SlicerItem { label: string; selected: boolean; noData: boolean }
+export interface SlicerItem { id: number; label: string; selected: boolean; noData: boolean }
 
 export interface SlicerModel {
   name: string
+  /** Workbook-wide slicer-cache operation name (distinct from the drawing's control name). */
+  cacheName?: string
+  /** Resolved workbook pivot cache id for worker-side interaction validation. */
+  cacheId?: number
+  /** Cache field index and every cache item identity, including saved items hidden by showMissing=0. */
+  sourceFieldIndex?: number
+  allItemIds?: number[]
+  selectedItemIds?: number[]
+  /** Monotonic committed selection revision (0 is the saved model). */
+  revision?: number
   caption?: string
   showCaption: boolean
   columnCount: number
@@ -75,6 +85,9 @@ export interface TimelineAppearance {
 
 export interface TimelineModel {
   name: string
+  /** Resolved workbook pivot cache id and linked pivots for worker-side interaction validation. */
+  cacheId?: number
+  drives?: { pivotTable?: string }[]
   caption?: string
   style: string
   level: TimelineLevel

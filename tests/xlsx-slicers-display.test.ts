@@ -107,10 +107,10 @@ describe('every slicer and timeline reference case parses into a control drawing
     expect(model.drives).toEqual([{ pivotTable: 'PivotTable1' }])
     // refs/slicer-light1.png: the slicer cache's order (x = 2, 1, 3, 0) is the display order; Apples and Cherries selected.
     expect(model.items.slice(0, 4)).toEqual([
-      { label: 'Apples', selected: true, noData: false }, { label: 'Dates', selected: false, noData: false },
-      { label: 'Cherries', selected: true, noData: false }, { label: 'Bananas', selected: false, noData: false },
+      { id: 2, label: 'Apples', selected: true, noData: false }, { id: 1, label: 'Dates', selected: false, noData: false },
+      { id: 3, label: 'Cherries', selected: true, noData: false }, { id: 0, label: 'Bananas', selected: false, noData: false },
     ])
-    if (spec.noData) expect(model.items[4]).toEqual({ label: 'Elderberries', selected: false, noData: true })
+    if (spec.noData) expect(model.items[4]).toEqual({ id: 4, label: 'Elderberries', selected: false, noData: true })
     expect(slicer!.source.representation).toBe('choice')
     // Every slicer case carries the default timeline (no style attribute: TimeSlicerStyleLight1, months).
     expect(timelineModel(timeline)).toMatchObject({ name: 'Date', caption: 'Date', style: 'TimeSlicerStyleLight1', level: 'months' })
@@ -134,8 +134,8 @@ describe('every slicer and timeline reference case parses into a control drawing
     const sheet = doc.sheets.find(s => controls(s).slicer)!
     const model = slicerModel(controls(sheet).slicer)
     expect(model.items).toEqual([
-      { label: 'Apples', selected: true, noData: false }, { label: 'Bananas', selected: false, noData: false },
-      { label: 'Cherries', selected: true, noData: false }, { label: 'Dates', selected: false, noData: false },
+      { id: 2, label: 'Apples', selected: true, noData: false }, { id: 1, label: 'Bananas', selected: false, noData: false },
+      { id: 3, label: 'Cherries', selected: true, noData: false }, { id: 0, label: 'Dates', selected: false, noData: false },
     ])
     expect(model.style).toBe('SlicerStyleLight1')
     const timeline = timelineModel(controls(sheet).timeline)

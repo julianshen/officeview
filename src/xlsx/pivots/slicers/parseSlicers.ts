@@ -113,21 +113,29 @@ export function buildSlicerModel(part: SlicerPart, cache: SlicerCacheDef | undef
   if (!pivot) return fail('slicer-pivot-cache-missing', `pivot cache ${tabular.pivotCacheId ?? '(none)'} of slicer cache ${cache.name} is missing`)
   if (pivot.olap) return fail('slicer-cache-unsupported', `slicer cache ${cache.name} reads an OLAP pivot cache`)
   const field = pivot.fields.find(candidate => candidate.name === cache.sourceName)
+  const sourceFieldIndex = pivot.fields.indexOf(field!)
   const shared = field?.sharedItems?.items.length ? field.sharedItems.items : field?.fieldGroup?.groupItems ?? []
   if (!field || !shared.length) return fail('slicer-item-invalid', `field ${cache.sourceName} has no items in pivot cache ${tabular.pivotCacheId}`)
   if (tabular.invalid || tabular.items.some(item => item.x < 0 || item.x >= shared.length)) return fail('slicer-item-invalid', `an item index lies outside field ${cache.sourceName}`)
   const diagnostics: ControlDiagnostic[] = []
+  if (new Set(tabular.items.map(item => item.x)).size !== tabular.items.length) return fail('slicer-item-invalid', `cache ${cache.name} repeats a stable item id`)
   if (tabular.truncated) diagnostics.push({ kind: 'unsupported', feature: 'slicer-items-truncated', message: `Slicer ${part.name}: only the first ${MAX_SLICER_ITEMS} items are shown` })
   // Cross-filtering (spec §7.2): no-data items are marked unless crossFilter="none", hidden by showMissing="0",
   // and listed after the items with data by the default showItemsWithDataAtTop.
   let items: SlicerItem[] = tabular.items
-    .map(item => ({ label: itemLabel(shared[item.x]!), selected: item.selected, noData: item.noData && tabular.crossFilter !== 'none' }))
+    .map(item => ({ id: item.x, label: itemLabel(shared[item.x]!), selected: item.selected, noData: item.noData && tabular.crossFilter !== 'none' }))
     .filter(item => tabular.showMissing || !item.noData)
   if (tabular.crossFilter === 'showItemsWithDataAtTop') items = [...items.filter(item => !item.noData), ...items.filter(item => item.noData)]
   return {
     diagnostics,
     model: {
       name: part.name,
+      cacheName: part.cache,
+      cacheId: pivot.cacheId,
+      sourceFieldIndex,
+      allItemIds: tabular.items.map(item => item.x),
+      selectedItemIds: tabular.items.filter(item => item.selected).map(item => item.x),
+      revision: 0,
       caption: part.caption ?? (cache.sourceName || part.name),
       showCaption: part.showCaption,
       columnCount: part.columnCount,

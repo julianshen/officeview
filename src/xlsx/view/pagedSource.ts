@@ -21,7 +21,7 @@ import { PackageError } from '../../core/package-error'
 import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1Range, type SourceCell, type SourceRect } from './coordinates'
 import { uniqueRectList } from './rectIndex'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
-import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets } from '../../worker/viewerSession'
+import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets, type WorkerControlLink } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
 import { LaneBuilder, assertOverlayCellsProtected, overlayIncompleteColumnPage, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
 import {
@@ -1401,6 +1401,16 @@ function collectPivotChartRefs(sheetId: string, drawings: readonly XlsxDrawing[]
     if (node.children) collectPivotChartRefs(sheetId, node.children, out)
   }
 }
+function collectControlLinks(drawings: readonly XlsxDrawing[], out: WorkerControlLink[]): void {
+  for (const node of drawings) {
+    const content = node.content
+    if (content?.kind === 'slicer') out.push({ name: content.slicer.cacheName ?? content.slicer.name, kind: 'slicer', cacheId: content.slicer.cacheId,
+      pivotTables: content.slicer.drives.map(drive => drive.pivotTable ?? '') })
+    else if (content?.kind === 'timeline') out.push({ name: content.timeline.name, kind: 'timeline', cacheId: content.timeline.cacheId,
+      pivotTables: (content.timeline.drives ?? []).map(drive => drive.pivotTable ?? '') })
+    if (node.children) collectControlLinks(node.children, out)
+  }
+}
 /** Whether a cell sits in an authored hidden row or column (chart `plotVisOnly` provenance, as buildGeometry reads them). */
 function hiddenCell(meta: SheetMetadata | undefined, row: number, col: number): boolean {
   if (!meta) return false
@@ -1477,6 +1487,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
         cursor = next
       } while (cursor !== undefined)
       const linkedCharts: Array<{ sheetId: string; partPath: string; treePath: string; chart: ChartModel }> = []
+      const controlLinks: WorkerControlLink[] = []
       for (const chartSheet of workbook.sheets) {
         if (chartSheet.state !== 'complete') return undefined
         if (!chartSheet.metadata.drawingIds.length && !chartSheet.metadata.legacyDrawingIds?.length) continue
@@ -1485,6 +1496,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
         const drawings = await chartStore.readDrawings({ signal, stamp: chartStore.stamp }, profile, memory)
         if (drawings.completeness !== 'complete' || signal.aborted) return undefined
         collectPivotChartRefs(chartSheet.sheetId, drawings.drawings, linkedCharts)
+        collectControlLinks(drawings.drawings, controlLinks)
         if (memory && !memory.set(0)) return undefined
       }
       if (store.stamp.valueGen !== generation || signal.aborted) return undefined
@@ -1493,7 +1505,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       // Merges, array and spill ranges and noted cells count too (S3-AC), charged with the metadata.
       const { pagedBlockers, structuralOccupancy } = await import('../pivots/session/occupancy')
       const structure = structuralOccupancy(pagedBlockers(sheet))
-      const metadataBytes = 512 + count * 32 + structure.bytes + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts })
+      const metadataBytes = 512 + count * 32 + structure.bytes + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts, controlLinks })
       const previousKey = currentPivotAssets.get(sheetId)
       if (previousKey && previousKey !== cacheKey) {
         const previous = pivotAssetCache.get(previousKey)
@@ -1521,7 +1533,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       }
       const assets: WorkerPivotAssets = {
         tables: parsed.pivotTables, date1904: runtime.date1904, retainedBytes: 0, metadataBytes: chargedMetadataBytes,
-        linkedCharts,
+        linkedCharts, controlLinks,
         pivots: workbook.sheets.flatMap(candidate => (candidate.metadata.pivotRegions ?? []).map(region => ({ sheet: candidate.name, ...(region.name !== undefined ? { name: region.name } : {}) }))),
         runtimeKey: runtime,
         retain: () => {
