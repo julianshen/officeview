@@ -165,3 +165,31 @@
 - Finding 1 source/test fix: `9c76f43f` (`fix(pivots): repaint committed slicer selection`).
 - Finding 2 source/test fix: `52184a46` (`fix(pivots): follow measured timeline label locale`).
 - This round's report commit: recorded in the completion marker.
+
+## Fix round 1 — OpenCode findings re-verified
+
+### Files
+
+- No source or test changes were needed: both findings are resolved by `9c76f43f` and `52184a46`.
+- This section is the only change in this round.
+
+### Finding 1 — RESOLVED
+
+- Rechecked the mounted paint path: after a successful slicer transaction, `SlicerControllerHost.onChange` publishes the committed model; the viewer stores it by slicer name, increments drawing generation, and substitutes it for the saved drawing model before repaint.
+- Re-ran `npx vitest run tests/xlsx-viewer-pivot-ui.test.tsx -t 'repaints the canvas control from the committed slicer selection'`: 1 passed, 39 skipped. The test asserts the painter receives selected ids `[0]` and item states `[true, false, false, false]` after Apples is selected, while the pivot result updates. This directly covers the stale saved-all-selected model failure.
+
+### Finding 2 — RESOLVED
+
+- Rechecked S5-B: only linked pivot names with measured default-caption forms produce a timeline locale (`樞紐分析表N` -> `zh-TW`, `PivotTableN` -> `en-US`). Unknown, custom, or mixed names refuse timeline model generation and retain the saved fallback. Locale-aware period, group, level, selection, and all-period strings are generated only for those measured locales.
+- Re-ran `npx vitest run tests/xlsx-pivots-timeline-controls.test.tsx tests/xlsx-pivots-control-oracle.test.ts tests/xlsx-slicers-display.test.ts`: 3 files passed, 127 passed, 8 skipped. Tests pin the measured zh-TW labels and unknown/mixed-language refusal; the saved-paint baseline remains green.
+
+### Gates
+
+- `npx tsc --noEmit -p tsconfig.json` — passed.
+- Required broad gate `npx vitest run tests/xlsx-pivots* tests/xlsx-viewer-* tests/xlsx-formula*` — 227 files passed, 2 failed; 6,301 passed, 9 failed, 59 skipped, 1 todo; 8 unhandled errors. The only failures were `tests/xlsx-viewer-harness-identity.test.ts` and 8 dependent cases in `tests/xlsx-viewer-bench-collector.test.ts`, all from sandbox `listen EPERM 127.0.0.1` (the HTTP hook timed out because its listener could not bind).
+- `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts` — passed; eager graph and paged worker chunks validated; gzip 35,978 B / 38,720 B.
+- `git diff --check` — passed before commit.
+
+### Commit
+
+- Report-only verification commit: pending.
