@@ -72,6 +72,130 @@ async function openObjectPivot(options: { afterDispatch?: (command: WorkerComman
 }
 
 describe('worker pivot protocol', () => {
+  it('stages every linked pivot before publishing control or value state, then commits both together', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot({ duplicate: true })
+    const second = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 1, grantBytes: 16 * 1024 * 1024 }))
+    expect(second.kind).toBe('pivotOpen')
+    const tables = sheet.pivotTables!
+    const selection = { kind: 'slicerSelection' as const, name: 'Slicer_Product', selectedItemIds: [0] }
+    const staged = completed(await run(kernel, {
+      kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024, selection,
+      targets: tables.slice(0, 2).map((table, pivot) => ({ sheetId, pivot, name: table!.name, cacheId: table!.cacheId, baseRevision: 0, requestRevision: 1,
+        delta: { kind: 'collapse' as const, field: 0, item: 0, collapsed: true } })),
+    }))
+    expect(staged.kind).toBe('controlApply')
+    if (staged.kind !== 'controlApply') throw new Error(JSON.stringify(staged))
+    expect(staged.targets.map(target => target.id)).toEqual([JSON.stringify([sheetId, 0]), JSON.stringify([sheetId, 1])])
+    // Re-opening a live handle is a committed-state read: candidates are not visible yet.
+    const before0 = await session.pivotOpen(sheetId, 0, 16 * 1024 * 1024, new AbortController().signal)
+    const before1 = await session.pivotOpen(sheetId, 1, 16 * 1024 * 1024, new AbortController().signal)
+    expect(before0.kind === 'open' ? before0.revision : -1).toBe(0)
+    expect(before1.kind === 'open' ? before1.revision : -1).toBe(0)
+    const committed = completed(await run(kernel, { kind: 'controlCommit', requestId: id(), docId, revision: 1 }))
+    expect(committed).toMatchObject({ kind: 'controlCommit', revision: 1, selection, valueGens: [{ sheetId }] })
+    const after0 = await session.pivotOpen(sheetId, 0, 16 * 1024 * 1024, new AbortController().signal)
+    const after1 = await session.pivotOpen(sheetId, 1, 16 * 1024 * 1024, new AbortController().signal)
+    expect(after0.kind === 'open' ? after0.revision : 0).toBeGreaterThan(0)
+    expect(after1.kind === 'open' ? after1.revision : 0).toBeGreaterThan(0)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('rejects a stale linked target before staging any sibling candidate', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot({ duplicate: true })
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 1, grantBytes: 16 * 1024 * 1024 })
+    const tables = sheet.pivotTables!
+    const reply = await run(kernel, {
+      kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024,
+      selection: { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] },
+      targets: tables.slice(0, 2).map((table, pivot) => ({ sheetId, pivot, name: table!.name, cacheId: table!.cacheId, baseRevision: pivot === 1 ? 5 : 0, requestRevision: 1, delta: 'reset' as const })),
+    })
+    expect(reply.kind).toBe('error')
+    expect(reply).toMatchObject({ diagnostics: [{ code: 'pivot-control-target-stale' }] })
+    const current = await session.pivotOpen(sheetId, 0, 16 * 1024 * 1024, new AbortController().signal)
+    expect(current.kind === 'open' ? current.revision : -1).toBe(0)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('fails closed before staging linked pivots whose committed layouts differ', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot({ duplicate: true })
+    const second = completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 1, grantBytes: 16 * 1024 * 1024 }))
+    if (second.kind !== 'pivotOpen') throw new Error(JSON.stringify(second))
+    const row = second.menu.fields.find(field => field.axis === 'row')!
+    const candidate = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 1, baseRevision: 0, revision: 1, grantBytes: 16 * 1024 * 1024,
+      delta: { kind: 'moveField', field: row.index, axis: 'col', index: 0 } }))
+    if (candidate.kind !== 'pivotApply') throw new Error(JSON.stringify(candidate))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 1, revision: candidate.revision })
+    const before = session.memoryStats().sourceBytes
+    const reply = await run(kernel, { kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024,
+      selection: { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] },
+      targets: sheet.pivotTables!.slice(0, 2).map((table, pivot) => ({ sheetId, pivot, name: table!.name, cacheId: table!.cacheId,
+        baseRevision: pivot === 0 ? 0 : candidate.revision, requestRevision: pivot === 0 ? 1 : 2, delta: 'reset' as const })) })
+    expect(reply.kind).toBe('error')
+    expect(reply).toMatchObject({ diagnostics: [{ code: 'pivot-control-linked-layout-unverified' }] })
+    expect(session.memoryStats().sourceBytes).toBe(before)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('control cancel discards every worker candidate and refunds the aggregate hold', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot({ duplicate: true })
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 1, grantBytes: 16 * 1024 * 1024 })
+    const before = session.memoryStats().sourceBytes
+    const staged = completed(await run(kernel, { kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024,
+      selection: { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }, targets: sheet.pivotTables!.slice(0, 2).map((table, pivot) => ({
+        sheetId, pivot, name: table!.name, cacheId: table!.cacheId, baseRevision: 0, requestRevision: 1, delta: { kind: 'collapse' as const, field: 0, item: 0, collapsed: true },
+      })) }))
+    expect(staged.kind).toBe('controlApply')
+    expect(session.memoryStats().sourceBytes).toBeGreaterThan(before)
+    expect(completed(await run(kernel, { kind: 'controlCancel', requestId: id(), docId, revision: 1 }))).toEqual({ kind: 'controlCancel', cancelled: true })
+    expect(session.memoryStats().sourceBytes).toBe(before)
+    const stale = await run(kernel, { kind: 'controlCommit', requestId: id(), docId, revision: 1 })
+    expect(stale.kind).toBe('error')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('fails closed for table slicers before reserving or staging a pivot candidate', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot()
+    const before = session.memoryStats().sourceBytes
+    const reply = await run(kernel, { kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024,
+      selection: { kind: 'tableSlicerSelection', name: 'Slicer_Region', selectedItemIds: [0] },
+      targets: [{ sheetId, pivot: 0, name: sheet.pivotTables![0]!.name, cacheId: sheet.pivotTables![0]!.cacheId, baseRevision: 0, requestRevision: 1, delta: 'reset' }] })
+    expect(reply.kind).toBe('error')
+    expect(reply).toMatchObject({ diagnostics: [{ code: 'pivot-control-table-unverified' }] })
+    expect(session.memoryStats().sourceBytes).toBe(before)
+    const current = await session.pivotOpen(sheetId, 0, 16 * 1024 * 1024, new AbortController().signal)
+    expect(current.kind === 'open' ? current.revision : -1).toBe(0)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
+  it('remote pivot adapter sends one linked apply and publishes callbacks only after its single commit', async () => {
+    const { kernel, docId, sheetId } = await openObjectPivot({ duplicate: true })
+    const port = connectInProcess(kernel), client = new ViewerClient(port), committed = vi.fn(), linkedCommitted = vi.fn((_targets: readonly { pivot: number }[]) => {})
+    const remote = new RemotePivotSessions({ docId, profile: 'D', client, isClosed: () => false, committed, linkedCommitted })
+    const numericSheet = Number(sheetId)
+    try {
+      expect((await remote.open(numericSheet, 0, new AbortController().signal)).kind).toBe('open')
+      expect((await remote.open(numericSheet, 1, new AbortController().signal)).kind).toBe('open')
+      // Ordinary per-pivot applies advance their own request sequence independently of the workbook control revision.
+      expect((await remote.apply(numericSheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })).kind).toBe('committed')
+      expect((await remote.apply(numericSheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: false })).kind).toBe('committed')
+      committed.mockClear()
+      const result = await remote.applyLinked({ kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }, [
+        { sheetId: numericSheet, pivot: 0, delta: { kind: 'collapse', field: 0, item: 0, collapsed: true } },
+        { sheetId: numericSheet, pivot: 1, delta: { kind: 'collapse', field: 0, item: 0, collapsed: true } },
+      ])
+      expect(result.kind).toBe('committed')
+      expect(committed).not.toHaveBeenCalled()
+      expect(linkedCommitted).toHaveBeenCalledTimes(1)
+      expect(linkedCommitted.mock.calls[0]?.[0].map(target => target.pivot)).toEqual([0, 1])
+      expect((await remote.apply(numericSheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })).kind).toBe('committed')
+      expect(client.rejectedReplies).toBe(0)
+    } finally {
+      remote.close()
+      await run(kernel, { kind: 'close', requestId: id(), docId })
+      await port.idle()
+    }
+  })
+
   it('preserves a selected report filter on reorder and initializes a field entering Filters as All', async () => {
     const file = resolve(FIXTURE_ROOT, 'engine/quirk-page-single.xlsx')
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file))))

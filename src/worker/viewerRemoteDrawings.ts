@@ -144,16 +144,31 @@ export class RemoteDrawingCache {
 
   /** Swaps committed worker chart models into their source drawing nodes and repaints each affected sheet. */
   setPivotCharts(ownerKey: string, charts: readonly { sheetId: string; partPath: string; treePath: string; chart: ChartModel }[]): void {
-    if (this.closed) return
-    if (charts.length) this.pivotChartOverrides.set(ownerKey, new Map(charts.map(item => [chartKey(item.sheetId, item.partPath, item.treePath), item.chart])))
-    else this.pivotChartOverrides.delete(ownerKey)
-    for (const [sheetId, entry] of this.entries) {
-      if (entry.state !== 'ready' || !this.applyPivotCharts(sheetId, entry)) continue
+    for (const sheetId of this.setPivotChartsBatch([{ ownerKey, charts }])) this.host.changed(sheetId)
+  }
+  /** Atomically replaces a linked pivot-chart fan-out, rebuilding and notifying each affected sheet once. */
+  setPivotChartsBatch(changes: readonly { ownerKey: string; charts: readonly { sheetId: string; partPath: string; treePath: string; chart: ChartModel }[] }[]): readonly string[] {
+    if (this.closed) return []
+    const affected = new Set<string>()
+    for (const { ownerKey, charts } of changes) {
+      const previous = this.pivotChartOverrides.get(ownerKey)
+      for (const key of previous?.keys() ?? []) affected.add((JSON.parse(key) as [string])[0]!)
+      if (charts.length) {
+        const next = new Map(charts.map(item => [chartKey(item.sheetId, item.partPath, item.treePath), item.chart]))
+        this.pivotChartOverrides.set(ownerKey, next)
+        for (const item of charts) affected.add(item.sheetId)
+      } else this.pivotChartOverrides.delete(ownerKey)
+    }
+    const changed: string[] = []
+    for (const sheetId of affected) {
+      const entry = this.entries.get(sheetId)
+      if (!entry || entry.state !== 'ready' || !this.applyPivotCharts(sheetId, entry)) continue
       entry.drawingsIn = drawingQuery(entry.drawings)
       entry.gen++
       entry.shells = undefined
-      this.host.changed(sheetId)
+      changed.push(sheetId)
     }
+    return changed
   }
 
   private reset(entry: Entry): void {

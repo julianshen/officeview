@@ -679,6 +679,23 @@ export interface SheetLayout {
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }
+/** Control selection is a separate workbook-scoped revision; it is not a page-field or item-filter delta. */
+export type LinkedControlSelection =
+  | { kind: 'slicerSelection'; name: string; selectedItemIds: readonly number[] }
+  | { kind: 'slicerClear'; name: string }
+  | { kind: 'timelineSelection'; name: string; start: number; end: number }
+  | { kind: 'timelineClear'; name: string }
+  | { kind: 'tableSlicerSelection'; name: string; selectedItemIds: readonly number[] }
+export interface LinkedControlPivotTarget {
+  sheetId: string
+  pivot: number
+  name: string
+  cacheId: number
+  baseRevision: number
+  /** Monotonic per-pivot request sequence; distinct from the workbook transaction revision. */
+  requestRevision: number
+  delta: PivotDelta | 'reset'
+}
 export type WorkerCommand =
   | { kind: 'open'; requestId: string; docId: string; source: SourceHandle; profile: ProfileId }
   | { kind: 'activateSheet'; requestId: string; owner: WorkbookOwner; sheetId: string }
@@ -694,6 +711,9 @@ export type WorkerCommand =
   | { kind: 'pivotCommit'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number }
   | { kind: 'pivotFormulaStatus'; requestId: string; docId: string; sheetId: string }
   | { kind: 'pivotRelease'; requestId: string; docId: string; sheetId: string; pivot: number }
+  | { kind: 'controlApply'; requestId: string; docId: string; revision: number; grantBytes: number; selection: LinkedControlSelection; targets: readonly LinkedControlPivotTarget[] }
+  | { kind: 'controlCommit'; requestId: string; docId: string; revision: number }
+  | { kind: 'controlCancel'; requestId: string; docId: string; revision: number }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }
   | { kind: 'close'; requestId: string; docId: string }
 
@@ -743,6 +763,9 @@ export type WorkerResult =
   | { kind: 'pivotCommit'; revision: number; valueGen: number; hasFormulaCellsOutsidePivots?: boolean } | { kind: 'pivotCommit'; refused: 'stale' }
   | { kind: 'pivotFormulaStatus'; hasFormulaCellsOutsidePivots?: boolean }
   | { kind: 'pivotRelease'; released: boolean; valueGen?: number }
+  | { kind: 'controlApply'; revision: number; selection: LinkedControlSelection; targets: readonly { id: string; sheetId: string; pivot: number; revision: number; result: Extract<WorkerResult, { kind: 'pivotApply' }> }[] }
+  | { kind: 'controlCommit'; revision: number; selection: LinkedControlSelection; valueGens: readonly { sheetId: string; valueGen: number }[] }
+  | { kind: 'controlCancel'; cancelled: boolean }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).
  * Sort/filter publish one view delta; other completions match their command. */

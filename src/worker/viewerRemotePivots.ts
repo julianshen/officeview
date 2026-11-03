@@ -3,7 +3,7 @@ import type { PivotDelta } from '../xlsx/pivots/session/delta'
 import type { PivotTableDefinition } from '../xlsx/pivots/model'
 import type { PivotMenuModel } from '../xlsx/pivots/session/menu'
 import type { ChartModel } from '../charts/model'
-import { PIVOT_FIT_REPLY_BYTES, type ValueOverlayCell, type WorkerReply } from '../xlsx/view/contracts'
+import { PIVOT_FIT_REPLY_BYTES, type LinkedControlPivotTarget, type LinkedControlSelection, type ValueOverlayCell, type WorkerReply } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
 import { ViewerNotSentError, type ViewerClient } from './viewerClient'
 import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
@@ -11,6 +11,10 @@ import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
 export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition; /** The menus' model (Task 28). */ readonly menu: PivotMenuModel; /** The session's value cells a fit reads (Task 29 autofit; absent past the payload cap). */ readonly cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
 export type RemotePivotApply =
   | { readonly kind: 'committed'; readonly revision: number; readonly notice?: string; readonly atSaved?: true; readonly def: PivotTableDefinition; readonly menu: PivotMenuModel; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
+  | { readonly kind: 'stale' | 'cancelled' }
+  | { readonly kind: 'refused'; readonly message: string }
+export type RemoteLinkedControlApply =
+  | { readonly kind: 'committed'; readonly revision: number; readonly selection: LinkedControlSelection; readonly targets: readonly { id: string; sheetId: number; pivot: number; result: RemotePivotApplyPayload; valueGen: number }[] }
   | { readonly kind: 'stale' | 'cancelled' }
   | { readonly kind: 'refused'; readonly message: string }
 
@@ -42,6 +46,8 @@ export interface RemotePivotHost {
    * arrived reply's stamped size from arrival, adopting the grant. Absent: no grant is sent (the worker's default). */
   readonly replyGrant?: { reserve(owner: string, bytes: number): boolean; settle(owner: string, reply: WorkerReply): void; release(owner: string): void }
   committed?(sheetId: number, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void
+  /** Publishes a linked control's complete fan-out in one main-thread state change. */
+  linkedCommitted?(targets: readonly { sheetId: number; pivot: number; result: RemotePivotApplyPayload; valueGen: number }[]): void
   formulaFlagChanged?(sheetId: number, hasFormulaCellsOutsidePivots: boolean): void
   /** The pivot's committed display is withdrawn on this thread, once, when its release is sent. */
   released?(sheetId: number, pivot: number): void
@@ -49,7 +55,7 @@ export interface RemotePivotHost {
    * generation only; the display was withdrawn when the release was sent). */
   releaseAcknowledged?(sheetId: number, valueGen: number): void
 }
-interface Entry { generation: number; revision: number; requestRevision: number; opened: boolean; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }>
+interface Entry { generation: number; revision: number; requestRevision: number; opened: boolean; def?: PivotTableDefinition; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }>
   /** Its last published commit shows a change (not the saved view): a sheet switch keeps it (Ruling S3-AK). */
   changed?: boolean }
 const keyOf = (sheetId: number, pivot: number) => JSON.stringify([sheetId, pivot])
@@ -63,6 +69,8 @@ const messageOf = (reply: WorkerReply): string => reply.kind === 'error'
 export class RemotePivotSessions {
   private readonly entries = new Map<string, Entry>()
   private closed = false
+  private linkedControlRevision = 0
+  private linkedControlPending?: { revision: number; requestId: string; targetIds: readonly string[] }
   constructor(private readonly host: RemotePivotHost) {}
 
   /** Sends a pivot open or apply under a main-ledger grant for its fit cells (see `RemotePivotHost.replyGrant`). */
@@ -95,6 +103,7 @@ export class RemotePivotSessions {
       if (reply.kind !== 'complete' || reply.result.kind !== 'pivotOpen') return { kind: 'refused' as const, message: messageOf(reply) }
       entry!.revision = reply.result.revision
       entry!.opened = true
+      entry!.def = reply.result.def
       return { kind: 'open' as const, revision: reply.result.revision, def: reply.result.def, menu: reply.result.menu, ...(reply.result.cells ? { cells: reply.result.cells } : {}) }
     }).finally(() => { if (this.entries.get(key) === entry) { entry!.open = undefined; entry!.openRequest = undefined } })
     return entry.open
@@ -132,6 +141,66 @@ export class RemotePivotSessions {
     } finally { if (entry.applyRequest === requestId) entry.applyRequest = undefined }
   }
 
+  /** A workbook-scoped linked control is staged by one worker command and committed by exactly one command. */
+  async applyLinked(selection: LinkedControlSelection, targets: readonly { sheetId: number; pivot: number; delta: PivotDelta | 'reset' }[], signal?: AbortSignal): Promise<RemoteLinkedControlApply> {
+    if (this.closed || this.host.isClosed() || signal?.aborted) return { kind: 'cancelled' }
+    if (!targets.length || targets.length > 8) return { kind: 'refused', message: 'Linked control target count exceeds the supported limit.' }
+    const localKeys = targets.map(target => keyOf(target.sheetId, target.pivot))
+    const wireKeys = targets.map(target => JSON.stringify([String(target.sheetId), target.pivot]))
+    if (new Set(localKeys).size !== localKeys.length) return { kind: 'refused', message: 'Linked control contains duplicate pivot targets.' }
+    const wireTargets: LinkedControlPivotTarget[] = []
+    for (let index = 0; index < targets.length; index++) {
+      const target = targets[index]!, entry = this.entries.get(localKeys[index]!)
+      if (!entry?.opened || !entry.def || !entry.def.name) return { kind: 'refused', message: 'Open every linked pivot before applying a control.' }
+      wireTargets.push({ sheetId: String(target.sheetId), pivot: target.pivot, name: entry.def.name, cacheId: entry.def.cacheId,
+        baseRevision: entry.revision, requestRevision: ++entry.requestRevision, delta: target.delta })
+    }
+    if (this.linkedControlPending) {
+      void this.host.client.send({ kind: 'controlCancel', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision: this.linkedControlPending.revision }).catch(() => {})
+    }
+    const revision = ++this.linkedControlRevision, requestId = this.host.client.nextRequestId()
+    const pending = this.linkedControlPending = { revision, requestId, targetIds: wireKeys }
+    const cancel = () => {
+      void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: requestId }).catch(() => {})
+      void this.host.client.send({ kind: 'controlCancel', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision }).catch(() => {})
+    }
+    let staged = false, committed = false
+    signal?.addEventListener('abort', cancel, { once: true })
+    try {
+      const reply = await this.host.client.send({ kind: 'controlApply', requestId, docId: this.host.docId, revision, selection, targets: wireTargets, grantBytes: WORKER_BUDGETS[this.host.profile] / 2 })
+      if (this.linkedControlPending !== pending) return { kind: 'stale' }
+      if (signal?.aborted || reply.kind === 'cancelled') return { kind: 'cancelled' }
+      if (reply.kind !== 'complete' || reply.result.kind !== 'controlApply') return { kind: 'refused', message: messageOf(reply) }
+      staged = true
+      if (reply.result.targets.length !== targets.length || reply.result.targets.some((target, index) => target.id !== wireKeys[index])) {
+        return { kind: 'refused', message: 'Worker linked-control reply did not match the staged targets.' }
+      }
+      if (signal?.aborted) { cancel(); return { kind: 'cancelled' } }
+      // Once sent, commit is a fact; wait for its acknowledgement even if the caller aborts meanwhile.
+      const commitReply = await this.host.client.send({ kind: 'controlCommit', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision })
+      if (commitReply.kind !== 'complete' || commitReply.result.kind !== 'controlCommit' || commitReply.result.revision !== revision) {
+        return commitReply.kind === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', message: messageOf(commitReply) }
+      }
+      committed = true
+      const valueGens = new Map(commitReply.result.valueGens.map(item => [item.sheetId, item.valueGen]))
+      const published = reply.result.targets.map((item, index) => {
+        const target = targets[index]!, sheetId = String(target.sheetId), valueGen = valueGens.get(sheetId)
+        if (valueGen === undefined || item.result.kind !== 'pivotApply') throw new Error('Linked-control commit omitted a target result or sheet generation')
+        const result: RemotePivotApplyPayload = item.result
+        const entry = this.entries.get(localKeys[index]!)
+        if (entry) { entry.revision = item.revision; entry.changed = !result.atSaved }
+        return { id: item.id, sheetId: target.sheetId, pivot: target.pivot, result, valueGen }
+      })
+      if (this.host.linkedCommitted) this.host.linkedCommitted(published.map(({ sheetId, pivot, result, valueGen }) => ({ sheetId, pivot, result, valueGen })))
+      else for (const target of published) this.host.committed?.(target.sheetId, target.pivot, target.result, target.valueGen)
+      return { kind: 'committed', revision, selection: commitReply.result.selection, targets: published }
+    } finally {
+      signal?.removeEventListener('abort', cancel)
+      if (staged && !committed) void this.host.client.send({ kind: 'controlCancel', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision }).catch(() => {})
+      if (this.linkedControlPending === pending) this.linkedControlPending = undefined
+    }
+  }
+
   /** The workbook formula flag (S3-S) once the worker has reported it: it is document-wide and does not depend on the
    * commit or the pivot entry that asked (S3-AG), so it is kept for the document's life. */
   private formulaFlag?: boolean
@@ -154,6 +223,7 @@ export class RemotePivotSessions {
   release(sheetId: number, pivot: number): void {
     const key = keyOf(sheetId, pivot), entry = this.entries.get(key)
     if (!entry) return
+    if (this.linkedControlPending?.targetIds.includes(JSON.stringify([String(sheetId), pivot]))) this.cancelLinkedControlPending()
     this.entries.delete(key); entry.generation++
     if (entry.openRequest) void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: entry.openRequest }).catch(() => {})
     if (entry.applyRequest) void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: entry.applyRequest }).catch(() => {})
@@ -167,6 +237,7 @@ export class RemotePivotSessions {
    * committed change keeps its session (the worker keeps its overlay, charged) until it is reset or the workbook
    * closes, as on the resident path, so the menus, the autofit's "before" and the fitted widths stay true. */
   releaseExcept(sheetId: number): void {
+    if (this.linkedControlPending?.targetIds.some(id => (JSON.parse(id) as [string, number])[0] !== String(sheetId))) this.cancelLinkedControlPending()
     for (const [key, entry] of [...this.entries]) {
       const [candidate, pivot] = JSON.parse(key) as [number, number]
       if (candidate !== sheetId && !entry.changed) this.release(candidate, pivot)
@@ -175,12 +246,21 @@ export class RemotePivotSessions {
 
   close(): void {
     if (this.closed) return
+    this.cancelLinkedControlPending()
     for (const [key] of this.entries) {
       const [sheet, pivot] = JSON.parse(key) as [number, number]
       this.release(sheet, pivot)
     }
     this.closed = true
     this.entries.clear()
+  }
+
+  private cancelLinkedControlPending(): void {
+    const pending = this.linkedControlPending
+    if (!pending) return
+    this.linkedControlPending = undefined
+    void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: pending.requestId }).catch(() => {})
+    void this.host.client.send({ kind: 'controlCancel', requestId: this.host.client.nextRequestId(), docId: this.host.docId, revision: pending.revision }).catch(() => {})
   }
 
   private async awaitRequest(request: Promise<WorkerReply<'pivotOpen'>>, requestId: string, signal: AbortSignal): Promise<WorkerReply<'pivotOpen'>> {
