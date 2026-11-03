@@ -359,6 +359,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const session = useRef(new SheetNavigationSession(docId)).current
   const windows = useRef(new Map<string, ScrollWindow>()).current
   const entries = useRef(new Map<string, SheetEntry>()).current
+  const slicerModels = useRef(new Map<string, PivotUi.SlicerModel>()).current
+  const slicerSheetIds = useRef(new Map<string, string>()).current
+  const slicerDrawingCache = useRef(new Map<string, { generation: number; base: readonly XlsxDrawing[]; drawings: XlsxDrawing[] }>()).current
   const timelineModels = useRef(new Map<string, PivotUi.TimelineModel>()).current
   const timelineSheetIds = useRef(new Map<string, string>()).current
   const localDrawingGens = useRef(new Map<string, number>()).current
@@ -795,6 +798,23 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       })
       if (changed) {
         timelineDrawingCache.set(sheetId, { generation: timelineGeneration, base: sheet.drawings, drawings })
+        sheet = { ...sheet, drawings }
+      }
+    }
+    const cachedSlicerDrawings = slicerDrawingCache.get(sheetId)
+    if (cachedSlicerDrawings && cachedSlicerDrawings.generation === timelineGeneration && cachedSlicerDrawings.base === sheet.drawings) {
+      if (cachedSlicerDrawings.drawings !== sheet.drawings) sheet = { ...sheet, drawings: cachedSlicerDrawings.drawings }
+    } else if (slicerModels.size && sheet.drawings?.some(drawing => drawing.content?.kind === 'slicer' && slicerModels.has(drawing.content.slicer.name))) {
+      let changed = false
+      const drawings = sheet.drawings.map(drawing => {
+        if (drawing.content?.kind !== 'slicer') return drawing
+        const model = slicerModels.get(drawing.content.slicer.name)
+        if (!model || model === drawing.content.slicer) return drawing
+        changed = true
+        return { ...drawing, content: { ...drawing.content, slicer: model } }
+      })
+      if (changed) {
+        slicerDrawingCache.set(sheetId, { generation: timelineGeneration, base: sheet.drawings, drawings })
         sheet = { ...sheet, drawings }
       }
     }
@@ -1734,11 +1754,32 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
   }, [pivotUi, doc, remote, mainLedger, budgetProfile, pivotKinds])
   const [slicerController, setSlicerController] = useState<PivotUi.SlicerController | null>(null)
+  const slicerControllerOwner = useRef<{ sheetId: string; doc: XlsxDocument; pivotController: unknown; pivotUi: unknown; controller: PivotUi.SlicerController } | null>(null)
   useEffect(() => {
-    if (!pivotUi || !pivotController || !activeSlicerDrawings.length) { setSlicerController(null); return }
+    const previous = slicerControllerOwner.current
+    if (!pivotUi || !pivotController || !activeSlicerDrawings.length) {
+      if (previous && (previous.sheetId !== activeSheetId || previous.doc !== doc || previous.pivotController !== pivotController || previous.pivotUi !== pivotUi || !activeSlicerDrawings.length)) {
+        previous.controller.dispose()
+        slicerControllerOwner.current = null
+        setSlicerController(current => current === previous.controller ? null : current)
+      }
+      return
+    }
+    if (previous && previous.sheetId === activeSheetId && previous.doc === doc && previous.pivotController === pivotController && previous.pivotUi === pivotUi) {
+      previous.controller.register(activeSlicerDrawings.map(item => item.model))
+      setSlicerController(previous.controller)
+      return
+    }
+    previous?.controller.dispose()
     let holdSerial = 0
+    for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
     const controller = new pivotUi.SlicerController(activeSlicerDrawings.map(item => item.model), {
       announce: message => pivotHost.current.announce(message),
+      onChange: model => {
+        slicerModels.set(model.name, model)
+        const sheetId = slicerSheetIds.get(model.name)
+        if (sheetId !== undefined) localDrawingGens.set(sheetId, (localDrawingGens.get(sheetId) ?? 0) + 1)
+      },
       admit: bytes => {
         const owner = `slicer-selection:${identity}:${++holdSerial}`
         if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return undefined
@@ -1780,9 +1821,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         return outcome.kind === 'refused' ? outcome : { kind: outcome.kind }
       },
     })
+    slicerControllerOwner.current = { sheetId: activeSheetId, doc, pivotController, pivotUi, controller }
     setSlicerController(controller)
-    return () => { controller.dispose(); setSlicerController(current => current === controller ? null : current) }
-  }, [pivotUi, pivotController, activeSlicerDrawings, doc])
+  }, [pivotUi, pivotController, activeSlicerDrawings, activeSheetId, doc])
+  useEffect(() => () => {
+    slicerControllerOwner.current?.controller.dispose()
+    slicerControllerOwner.current = null
+  }, [])
   const [timelineController, setTimelineController] = useState<PivotUi.TimelineController | null>(null)
   useEffect(() => {
     if (!pivotUi || !pivotController) { setTimelineController(null); return }

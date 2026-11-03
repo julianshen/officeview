@@ -17,7 +17,7 @@ import InteractiveSheetDoc, { pivotCellMatch } from '../src/components/xlsx/Inte
 import { PivotFieldList } from '../src/components/xlsx/pivot/PivotFieldList'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
+import { pivotEngine, pivotRuntimeFor } from '../src/xlsx/pivotLoader'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
 import type { XlsxDocument } from '../src/xlsx/types'
@@ -1046,6 +1046,25 @@ describe('interactive slicer controls (Task 41)', () => {
     await waitFor(() => expect(cellText(ui.container, 7, 4)).toContain('150'), FIRST_PAINT_WAIT)
     expect([...ui.container.querySelectorAll<HTMLButtonElement>('[data-officeview-ui="pivot-button"][aria-pressed="true"]')]).toHaveLength(0)
     ui.unmount()
+  }, 60_000)
+
+  it('repaints the canvas control from the committed slicer selection', async () => {
+    const doc = await load(CONTROLS_SEED), engine = pivotEngine()
+    if (!engine) throw new Error('Expected the parsed slicer to register its painter')
+    const painted: Array<Extract<import('../src/xlsx/pivots/slicers/model').XlsxControlContent, { kind: 'slicer' }>['slicer']> = []
+    const paintOriginal = engine.paintControl.bind(engine)
+    const paint = vi.spyOn(engine, 'paintControl').mockImplementation((ctx, content, width, height, familyCss) => {
+      if (content.kind === 'slicer') painted.push(content.slicer)
+      paintOriginal(ctx, content, width, height, familyCss)
+    })
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    try {
+      const group = await ui.findByRole('group', { name: /Product slicer/i }, FIRST_PAINT_WAIT)
+      fireEvent.click(within(group).getByRole('button', { name: 'Apples, selected' }))
+      await waitFor(() => expect(cellText(ui.container, 7, 1)).toContain('90'), FIRST_PAINT_WAIT)
+      await waitFor(() => expect(painted.at(-1)?.selectedItemIds).toEqual([0]), FIRST_PAINT_WAIT)
+      expect(painted.at(-1)?.items.map(item => item.selected)).toEqual([true, false, false, false])
+    } finally { ui.unmount(); paint.mockRestore() }
   }, 60_000)
 
   it('worker/paged: click-one and clear use the linked-control transaction and update the visible pivot', async () => {

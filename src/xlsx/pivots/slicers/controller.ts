@@ -5,6 +5,7 @@ export type SlicerApplyResult = { kind: 'committed'; revision: number } | { kind
 export interface SlicerControllerHost {
   apply(model: SlicerModel, action: SlicerAction, signal: AbortSignal): Promise<SlicerApplyResult>
   announce(message: string): void
+  onChange?(model: SlicerModel): void
   /** Reserve an upper bound before copying the committed item state. */
   admit?(bytes: number): { release(): void } | undefined
 }
@@ -23,6 +24,17 @@ export class SlicerController {
     for (const model of models) if (!this.models.has(model.name)) { this.models.set(model.name, model); this.reindexField(model) }
   }
 
+  register(models: readonly SlicerModel[]): void {
+    if (this.disposed) return
+    for (const model of models) {
+      const current = this.models.get(model.name)
+      if (!current || (model.revision ?? 0) > (current.revision ?? 0)) {
+        this.models.set(model.name, model)
+        this.reindexField(model)
+      }
+    }
+  }
+
   model(name: string): SlicerModel | undefined { return this.models.get(name) }
   multiSelect(_name: string): boolean { return false }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
@@ -30,6 +42,7 @@ export class SlicerController {
     if (this.disposed) return
     this.models.set(model.name, model)
     this.reindexField(model)
+    this.host.onChange?.(model)
     for (const listener of this.listeners) listener()
   }
 
