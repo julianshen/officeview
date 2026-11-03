@@ -69,3 +69,36 @@
 ### Commit
 
 - Finding 1 source/test fix: `9c76f43f` (`fix(pivots): repaint committed slicer selection`). Finding 2 is still open, so no completion marker is written yet.
+
+## Fix round 1
+
+### Files
+
+- `src/xlsx/pivots/slicers/model.ts`
+- `src/xlsx/pivots/slicers/parseTimelines.ts`
+- `src/xlsx/pivots/slicers/paint.ts`
+- `tests/xlsx-pivots-timeline-controls.test.tsx`
+
+### Finding 1 — RESOLVED before this round
+
+- Verified the existing fix from `9c76f43f` by rerunning `tests/xlsx-viewer-pivot-ui.test.tsx -t 'repaints the canvas control from the committed slicer selection'`: 1 passed. The regression test observes the committed selection in the canvas drawing model after the controller publishes it. No duplicate production change was needed.
+
+### Finding 2 — RESOLVED
+
+- Verified the finding against the current code: timeline generation had no language property and hardcoded English month, level, group, and selection labels.
+- RED: added a parsed-fixture test for the zh-TW-linked `controls-seed.xlsx` plus an unknown/mixed linked-pivot fallback test. Before the fix, both failed: the model had no `labelLocale`, and no locale resolver existed. The fixture's saved scroll position starts at March, so the final expected first period is `3月`.
+- GREEN: `timelineLabelLocale()` uses the saved linked pivot names, following the existing pivot-caption locale evidence: all default `樞紐分析表N` targets select the measured zh-TW strings; all default `PivotTableN` targets preserve the English table. Unknown or mixed names yield no model and a `timeline-label-locale` diagnostic, leaving the drawing's AlternateContent fallback in place rather than guessing generated labels.
+- Added locale-aware period, group, level, and selection labels. Tests pin `3月`, `月`, `所有週期`, and the measured selection string `2024 3月 - 5月`; the saved-paint baseline and control-oracle suites remain green.
+
+### Gates
+
+- `npx tsc --noEmit -p tsconfig.json` — passed.
+- Focused `timeline-controls`, `control-oracle`, and `slicers-display` suites — 3 files passed; 127 passed, 8 skipped.
+- Slicer repaint regression probe — 1 passed.
+- Required broad `npx vitest run tests/xlsx-pivots* tests/xlsx-viewer-* tests/xlsx-formula*` — 227 files passed, 2 failed; 6,301 passed, 9 failed, 59 skipped, 1 todo; 8 errors. Failures were confined to `tests/xlsx-viewer-harness-identity.test.ts` and `tests/xlsx-viewer-bench-collector.test.ts`: both hit sandbox `listen EPERM 127.0.0.1`; the collector's eight dependent HTTP cases timed out after the listener could not bind.
+- `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts` — passed; eager graph ok, paged worker chunks ok, gzip 35,978 B / 38,720 B.
+- `git diff --check` — passed.
+
+### Commit
+
+- Source and test fix: `52184a461957ae9d2073f92e256cded5a452bee3` (`fix(pivots): follow measured timeline label locale`).
