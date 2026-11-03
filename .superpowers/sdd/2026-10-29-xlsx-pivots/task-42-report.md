@@ -102,3 +102,33 @@
 ### Commit
 
 - Source and test fix: `52184a461957ae9d2073f92e256cded5a452bee3` (`fix(pivots): follow measured timeline label locale`).
+
+## Fix round 1 — OpenCode findings verified at HEAD
+
+### Files
+
+- No source or test edits were needed in this round; both findings are already fixed in `9c76f43f` and `52184a46`.
+- This report is the only file changed for this verification round.
+
+### Finding 1 — RESOLVED
+
+- Verified the original failure mode against current code: after a committed selection, the canvas drawing must use the controller's committed slicer model, not the package's saved all-selected model.
+- Test-first evidence is in `9c76f43f`: the mounted regression test `repaints the canvas control from the committed slicer selection` observes the actual `paintControl` input after selecting Apples and asserts selected ids `[0]` and item states `[true, false, false, false]`; it also waits for the filtered pivot result. The test would fail if the painter continued receiving the saved drawing.
+- Current implementation publishes only committed models, stores them by slicer name, increments the owning sheet's drawing generation, and replaces the drawing's slicer model in `prepareEntry`; the regression test passes at HEAD.
+
+### Finding 2 — RESOLVED
+
+- The S5-B behavior is implemented in `52184a46`: label generation receives a locale only when all linked pivot names identify one of the two measured default-caption locales (`樞紐分析表N` → `zh-TW`, `PivotTableN` → `en-US`). Unknown, custom, or mixed names return no locale, refuse to build the generated timeline model, emit `timeline-label-locale`, and preserve the saved AlternateContent fallback. This deliberately fails closed rather than substituting the host locale or guessing.
+- Tests exercise the measured zh-TW strings from the controls-seed workbook and the unknown/mixed-name refusal path. `timelineLayout` uses the model locale for period, group, level, all-period, and selection labels; no English generator is used for a model detected as zh-TW.
+
+### Gates
+
+- `npx tsc --noEmit -p tsconfig.json` — passed.
+- Focused suites (`tests/xlsx-pivots-timeline-controls.test.tsx`, `tests/xlsx-pivots-control-oracle.test.ts`, `tests/xlsx-viewer-pivot-ui.test.tsx`) — 3 files passed; 70 passed, 8 skipped.
+- Required broad gate — 227 files passed, 2 failed; 6,301 passed, 9 failed, 59 skipped, 1 todo; 8 errors. All failures/errors were the sandbox localhost bind restriction (`listen EPERM 127.0.0.1`) in `tests/xlsx-viewer-harness-identity.test.ts` and `tests/xlsx-viewer-bench-collector.test.ts` (the collector's eight HTTP tests/hooks depend on its blocked listener).
+- `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts` — passed; eager graph and paged chunks validated; gzip 35,978 B / 38,720 B.
+- `git diff --check` — passed.
+
+### Commit
+
+- Report-only verification: pending.
