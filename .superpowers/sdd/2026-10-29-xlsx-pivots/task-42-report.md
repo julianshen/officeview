@@ -37,3 +37,35 @@
 
 - Source and test commit: `7aba58cb` (`feat(pivots): add interactive timeline controls`).
 - Report commit: recorded in the completion marker after creation.
+
+## Fix round 1
+
+### Files
+
+- `src/components/xlsx/InteractiveSheetDoc.tsx`
+- `src/xlsx/pivots/slicers/controller.ts`
+- `tests/xlsx-viewer-pivot-ui.test.tsx`
+
+### Finding 1 — RESOLVED
+
+- RED: the mounted painter probe showed the controller committed `selectedItemIds: [0]` while the saved drawing passed to `paintControl` still contained `[0, 1, 2, 3]` (all four items selected).
+- GREEN: `SlicerControllerHost.onChange` publishes the committed model only after a successful apply. The viewer retains that model by slicer name, bumps the sheet's drawing generation, and substitutes it into the next prepared drawing before tile paint. The controller stays alive across that drawing refresh and accepts only strictly newer registered revisions, avoiding a stale saved drawing overwriting its committed state.
+- Regression evidence: the existing worker/paged click-one-and-clear test remains green; its linked-control transaction still updates the visible pivot.
+- Test: `tests/xlsx-viewer-pivot-ui.test.tsx` / “repaints the canvas control from the committed slicer selection”.
+
+### Finding 2 — VERIFIED, OPEN (owner decision required)
+
+- The report's previous English-label concern is accurate: `timelineLayout` generates English month, quarter, level and selection labels; `TimelineModel` has no language or saved period-label fields. The current XLSX parser assigns `semantics.locale: 'en-US'` as a fixed default, while the measured timeline reference includes zh-TW strings. `dc:language` and equivalent workbook-language metadata are not parsed into the timeline model, and the timeline XML stores no generated period labels to preserve.
+- This cannot be safely closed as a code-only correction: choosing a detected-language source and the zh-TW translations requires reconciling S5-B against the existing English painter baseline and deciding what to show when no saved labels exist. I have not silently selected a fallback or claimed the requirement is met. Finding 2 remains open pending the owner ruling; this fix round is not complete until that is resolved.
+
+### Gates
+
+- `npx tsc --noEmit -p tsconfig.json` — passed.
+- Focused slicer/control/UI suites — 3 files passed; 68 passed, 8 skipped.
+- Required broad gate `npx vitest run tests/xlsx-pivots* tests/xlsx-viewer-* tests/xlsx-formula*` — 227 files passed, 2 failed; 6,299 passed, 9 failed, 59 skipped, 1 todo. The failures were the sandbox network-bind restrictions: `listen EPERM 127.0.0.1` in `xlsx-viewer-harness-identity.test.ts` and `xlsx-viewer-bench-collector.test.ts`; the latter's eight dependent setup/hook errors timed out after its listener could not bind.
+- `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts` — passed; eager graph ok, paged worker chunks ok, gzip 35,977 B / 38,720 B.
+- `git diff --check` — passed.
+
+### Commit
+
+- Finding 1 source/test fix: `9c76f43f` (`fix(pivots): repaint committed slicer selection`). Finding 2 is still open, so no completion marker is written yet.
