@@ -68,7 +68,7 @@ import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sort
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
 import { filterValueDomain, scanValueDomain, type ValueDomainScan, type ValueStatus } from '../xlsx/view/values'
-import { awaitQueryDeadline, interruptibleStore } from './viewerAbort'
+import { awaitQueryDeadline, interruptibleStore, retainUntilDrained } from './viewerAbort'
 import { WorkbookFind, FindError, FIND_HIT_BUFFER_BUDGET, type FindPage, type FindSheetInput } from '../xlsx/view/find'
 import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
 import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
@@ -2530,6 +2530,11 @@ export class DocumentSession {
    * projection, then one validated commit. The draft order/inverse and mask are
    * charged to the transient ledger until the operation ends. */
   async sort(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, hooks: OperationHooks = {}): Promise<OperationOutcome> {
+    const drained = retainUntilDrained(signal)
+    try { return await this.sortOwned(owner, spec, signal, hooks) }
+    finally { drained() }
+  }
+  private async sortOwned(owner: CacheIdentity, spec: SortSpec | null, signal: AbortSignal, hooks: OperationHooks = {}): Promise<OperationOutcome> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const resident = this.residentNow(owner.sheetId) ?? await this.residentFor(owner, signal)
     if ('kind' in resident) return resident
@@ -2615,6 +2620,11 @@ export class DocumentSession {
   /** Filter draft: rule evaluation, cooperative mask projection, the drawing
    * geometry guard over before/after metrics, then one validated commit. */
   async filter(owner: CacheIdentity, spec: FilterSpec | null, nowMs: number, signal: AbortSignal, hooks: OperationHooks = {}): Promise<OperationOutcome> {
+    const drained = retainUntilDrained(signal)
+    try { return await this.filterOwned(owner, spec, nowMs, signal, hooks) }
+    finally { drained() }
+  }
+  private async filterOwned(owner: CacheIdentity, spec: FilterSpec | null, nowMs: number, signal: AbortSignal, hooks: OperationHooks = {}): Promise<OperationOutcome> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     let normalized: FilterSpec | null
     try { normalized = normalizeFilter(spec) } catch (cause) {

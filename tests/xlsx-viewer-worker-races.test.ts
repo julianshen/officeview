@@ -328,8 +328,8 @@ describe('S4.2 stale results never replace the current view', () => {
       's sort:progress 0/3',
       's sort:progress 1/3',
       '> close',
-      'c close:complete',
       's sort:cancelled document-closed',
+      'c close:complete',
       '> release key read',
     ])
     expect(r.sources[0].releases).toBe(1)
@@ -517,6 +517,8 @@ describe('S4.2 cancellation and reclaim', () => {
     await older
     expect(lastReply(r.log, 's1')).toBe('s1 sort:cancelled superseded')
     expect(lastReply(r.log, 's2')).toBe('s2 sort:complete rev1 g1')
+    // Reply cancellation precedes provider drain; the held draft remains charged until then.
+    await until(() => session.memoryStats().transientBytes === 0, 'cancelled draft drain')
     expect(session.memoryStats().transientBytes).toBe(0)
   })
 

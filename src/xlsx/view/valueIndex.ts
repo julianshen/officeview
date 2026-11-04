@@ -244,7 +244,8 @@ export class ValueReservation implements LaneAccount {
   get closed(): boolean { return this.released }
   get canAdopt(): boolean { return this.cache.canAdopt }
   adopt(targets: readonly object[], bytes = this.bytes): void {
-    if (this.released || bytes > this.bytes) throw new ValueIndexError('closed', 'Invalid reservation adoption')
+    if (this.released) throw new ValueIndexError('closed', 'Invalid reservation adoption')
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.bytes) throw new RangeError('Invalid value index reservation adoption')
     this.cache.adopt(targets, bytes, () => { this.bytes -= bytes })
   }
   charge(bytes: number): void {
@@ -254,9 +255,9 @@ export class ValueReservation implements LaneAccount {
   }
   release(bytes = this.bytes): void {
     if (this.released) return
-    const amount = Math.min(bytes, this.bytes)
-    this.bytes -= amount
-    this.cache.release(amount)
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.bytes) throw new RangeError('Invalid value index reservation release')
+    this.bytes -= bytes
+    this.cache.release(bytes)
   }
   close(): void {
     if (this.released) return
@@ -291,6 +292,7 @@ export class ValueIndexCache {
   /** @internal Move cache bytes onto a surviving rule/page owner atomically. */
   adopt(targets: readonly object[], bytes: number, transferred?: () => void): void {
     if (!this.adoption) throw new ValueIndexError('invalid-rule', 'Cache has no lifetime account')
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.used) throw new RangeError('Invalid value index memory adoption')
     this.adoption(targets, bytes)
     // Registration can fail before transfer. Once it returns, the reservation
     // must forget these bytes even if the subsequent usage observer throws.
@@ -487,6 +489,7 @@ export class ValueIndex implements LaneAccount {
   release(result: ValueSearchResult): void
   release(target: number | ValueSearchResult): void {
     if (typeof target === 'number') {
+      if (!Number.isSafeInteger(target) || target < 0 || target > this.ledger.chargedBytes) throw new RangeError('Invalid value index release')
       this.ledger.chargedBytes -= target
       this.cache.release(target)
       return
@@ -907,7 +910,7 @@ export class ValueIndex implements LaneAccount {
   ownsSearch(result: ValueSearchResult): void {
     this.assertLive()
     const record = this.results.get(result)
-    if (!record || record.reservation.closed || result.searchedEntries > this.count) {
+    if (!record || record.holders <= 0 || record.reservation.closed || result.searchedEntries > this.count) {
       throw new ValueIndexError('stale-source', 'Search result belongs to another or a released value index result')
     }
   }
