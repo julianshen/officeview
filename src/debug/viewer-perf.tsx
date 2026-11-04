@@ -17,6 +17,7 @@
  * Excluded from the library build (tsconfig.build.json excludes src/debug).
  */
 import { useEffect, useMemo, useState, type JSX } from 'react'
+import { ACK_ATTRIBUTES, qualifiesAck, type AckKind } from './harness/viewerAck'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile, type ViewerWorkerPort } from '../components/OfficeFile'
 import '../styles/officeview.css'
@@ -130,7 +131,7 @@ export interface ViewerPerf {
   measureMemory(): Promise<unknown>
 }
 export interface WireRecord { requestId: string; kind: string; op?: string; detail?: string; postedAt: number; progress: number; repliedAt: number | null; reply: string | null }
-export type AckKind = 'status' | 'dialog-open' | 'dialog-close' | 'apply' | 'find'
+export type { AckKind } from './harness/viewerAck'
 declare global { interface Window { __viewerPerf?: ViewerPerf } }
 
 const raf = () => new Promise<number>(resolve => requestAnimationFrame(resolve))
@@ -548,23 +549,6 @@ function describe(mutation: MutationRecord): string {
   const label = target ? `${target.tagName.toLowerCase()}${target.getAttribute('role') ? `[role=${target.getAttribute('role')}]` : ''}${target.getAttribute('data-officeview-ui') ? `[ui=${target.getAttribute('data-officeview-ui')}]` : ''}` : '?'
   return mutation.type === 'attributes' ? `${label} @${mutation.attributeName}` : `${label} ${mutation.type}`
 }
-function removesDialog(mutation: MutationRecord): boolean {
-  return mutation.type === 'childList' && [...mutation.removedNodes].some(node => node instanceof Element && (node.matches('[role=dialog]') || node.querySelector('[role=dialog]') !== null))
-}
-function qualifies(kind: AckKind, mutation: MutationRecord): boolean {
-  const el = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement
-  if (!el) return false
-  if (mutation.type === 'attributes' && (mutation.attributeName === 'aria-busy' || mutation.attributeName === 'aria-sort' || mutation.attributeName === 'aria-disabled')) return true
-  const inStatus = el.closest('[role=status],[role=progressbar],[role=alert]') !== null
-  switch (kind) {
-    case 'status': return inStatus || el.closest('[role=progressbar]') !== null
-    case 'dialog-open': return mutation.type === 'childList' && [...mutation.addedNodes].some(node => node instanceof Element && (node.matches('[role=dialog]') || node.querySelector('[role=dialog]') !== null))
-    case 'dialog-close': return removesDialog(mutation)
-    // Applying from a dialog: the dialog closing, or a status/aria change, acknowledges it.
-    case 'apply': return removesDialog(mutation) || inStatus
-    case 'find': return inStatus || (el.closest('[data-officeview-ui]') !== null && mutation.type !== 'attributes')
-  }
-}
 let pendingAck: Promise<AckRecord> | null = null
 function ackProbe(kind: AckKind, timeoutMs: number): Promise<AckRecord> {
   return new Promise(resolve => {
@@ -579,14 +563,14 @@ function ackProbe(kind: AckKind, timeoutMs: number): Promise<AckRecord> {
     document.addEventListener('input', echo, { capture: false })
     const observer = new MutationObserver(mutations => {
       if (record.inputAt < 0 || record.mutationAt !== null) return
-      const hit = mutations.find(mutation => qualifies(kind, mutation))
+      const hit = mutations.find(mutation => qualifiesAck(kind, mutation))
       if (!hit) return
       record.mutationAt = performance.now()
       record.what = describe(hit)
       record.statusAfter = statusText().slice(0, 300)
       finishSoon()
     })
-    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-busy', 'aria-sort', 'aria-disabled', 'hidden'] })
+    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ACK_ATTRIBUTES })
     let done = false
     const finish = () => {
       if (done) return
