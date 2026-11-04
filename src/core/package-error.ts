@@ -8,6 +8,8 @@ export type PackageErrorReason =
   | 'entry-limit' | 'central-directory-limit' | 'name-limit' | 'name-encoding' | 'name-invalid'
   | 'duplicate-name' | 'case-duplicate-name' | 'encrypted' | 'method' | 'multi-disk'
   | 'size-mismatch' | 'truncated-deflate'
+  /** The worker memory pool cannot hold an import's construction peak (S13.4, spec §12.4). */
+  | 'memory-budget'
 
 export class PackageError extends Error {
   readonly code: PackageErrorCode

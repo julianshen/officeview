@@ -638,7 +638,21 @@ export function newSheetMetadata(): SheetMetadata {
  * first xdr:from/xdr:to/xdr:ext/xdr:pos child of each anchor, nothing else is
  * retained. A top-level mc:AlternateContent, or a document element other than
  * wsDr, reports `onUnreadable` (fail-closed), matching the object parser. */
-export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) => void, onUnreadable: () => void): XmlEvents {
+/** Internal admission seam: absolute conservative ownership, before retention.
+ * Strings count as 2 bytes per UTF-16 unit plus a header, including borrowed
+ * names/attributes. This models logical ownership, not an engine's ropes/heap. */
+export interface AnchorConstructionOptions {
+  need?(bytes: number): void
+}
+const ANCHOR_CONSUMER_BYTES = 256
+const ANCHOR_HOLDER_BYTES = 64
+const ANCHOR_PROPERTY_BYTES = 48
+const anchorStringBytes = (chars: number) => 48 + 2 * chars
+
+export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) => void, onUnreadable: () => void, options: AnchorConstructionOptions = {}): XmlEvents & { dispose(): void } {
+  options.need?.(ANCHOR_CONSUMER_BYTES)
+  let held = ANCHOR_CONSUMER_BYTES
+  let disposed = false
   let depth = 0
   let anchor: { name: string; parts: AnchorParts } | undefined
   /** A non-wsDr document element: one unreadable report, nothing beneath it is collected. */
@@ -646,30 +660,76 @@ export function anchorRecordEvents(onAnchor: (name: string, parts: AnchorParts) 
   let section: Record<string, string> | undefined
   let field: string | undefined
   let text = ''
+  let textBytes = 0
+  const need = (bytes: number) => {
+    if (disposed) throw new PackageError('cancelled', 'drawing marker consumer already disposed')
+    options.need?.(bytes)
+  }
+  const grow = (bytes: number) => { need(held + bytes); held += bytes }
+  const clear = () => { anchor = undefined; section = undefined; field = undefined; text = ''; textBytes = 0 }
+  const finish = () => {
+    try { onAnchor(anchor!.name, anchor!.parts) }
+    finally {
+      // The callback performs Number conversion while every lexical field is
+      // still charged. Drop the last consumer references before returning bytes.
+      clear()
+      held = ANCHOR_CONSUMER_BYTES
+      need(held)
+    }
+  }
   return {
+    dispose() { clear(); disposed = true },
     open(qname, names, values, count, selfClosing) {
+      need(held)
       const local = localName(qname)
       if (depth === 0) { foreign = local !== DRAWING_ROOT; if (foreign) onUnreadable() }
       if (foreign) { if (!selfClosing) depth++; return }
       if (depth === 1) {
-        if (ANCHOR_ELEMENTS.has(local)) anchor = { name: local, parts: {} }
-        else if (local === 'AlternateContent') onUnreadable()
-        if (selfClosing && anchor) { onAnchor(anchor.name, anchor.parts); anchor = undefined }
+        if (ANCHOR_ELEMENTS.has(local)) {
+          grow(2 * ANCHOR_HOLDER_BYTES + anchorStringBytes(local.length))
+          anchor = { name: local, parts: {} }
+        } else if (local === 'AlternateContent') onUnreadable()
+        if (selfClosing && anchor) finish()
       } else if (anchor && depth === 2) {
-        if ((local === 'from' || local === 'to') && !anchor.parts[local]) section = anchor.parts[local] = {}
-        else if ((local === 'ext' || local === 'pos') && !anchor.parts[local]) anchor.parts[local] = attrMap(names, values, count)
+        if ((local === 'from' || local === 'to') && !anchor.parts[local]) {
+          grow(ANCHOR_HOLDER_BYTES + ANCHOR_PROPERTY_BYTES + anchorStringBytes(local.length))
+          section = anchor.parts[local] = {}
+        } else if ((local === 'ext' || local === 'pos') && !anchor.parts[local]) {
+          let bytes = ANCHOR_HOLDER_BYTES + ANCHOR_PROPERTY_BYTES + anchorStringBytes(local.length)
+          for (let i = 0; i < count; i++) bytes += ANCHOR_PROPERTY_BYTES + anchorStringBytes(localName(names[i]).length) + anchorStringBytes(values[i].length)
+          grow(bytes)
+          anchor.parts[local] = attrMap(names, values, count)
+        }
       } else if (section && depth === 3 && !selfClosing && !(local in section)) {
+        grow(anchorStringBytes(local.length) + anchorStringBytes(0))
         field = local
         text = ''
+        textBytes = anchorStringBytes(0)
       }
       if (!selfClosing) depth++
     },
     close() {
+      need(held)
       depth--
-      if (depth === 3 && field !== undefined && section) { section[field] = text; field = undefined }
-      else if (depth === 2) section = undefined
-      else if (depth === 1 && anchor) { onAnchor(anchor.name, anchor.parts); anchor = undefined }
+      if (depth === 3 && field !== undefined && section) {
+        grow(ANCHOR_PROPERTY_BYTES)
+        section[field] = text
+        field = undefined
+        text = ''
+        textBytes = 0
+      } else if (depth === 2) section = undefined
+      else if (depth === 1 && anchor) finish()
     },
-    text(chunk) { if (field !== undefined) text += chunk },
+    text(chunk) {
+      need(held)
+      if (field === undefined) return
+      const nextBytes = anchorStringBytes(text.length + chunk.length)
+      // Admit both the old continuation and its replacement before concat.
+      need(held + nextBytes)
+      text += chunk
+      held += nextBytes - textBytes
+      textBytes = nextBytes
+      need(held)
+    },
   }
 }
