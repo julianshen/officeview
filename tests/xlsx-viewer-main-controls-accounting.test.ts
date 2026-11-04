@@ -1,4 +1,4 @@
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
 const WeakRef = (globalThis as any).WeakRef as new <T extends object>(value: T) => {
   deref(): T | undefined
 }
@@ -133,11 +133,16 @@ for (const profile of ['D', 'M'] as const)
       assert.equal(JSON.stringify(view.selection), originalSelection)
       assert.equal(JSON.stringify(doc), originalDoc)
       assert.deepEqual(store.stamp, stamp)
-      for (const g of gates)
-        g.open()
+      // Public replies cancel while providers still hold their lanes and input view.
       const settled = await Promise.allSettled(pending), outcomes = settled.map(x => x.status === 'fulfilled' ? x.value : { kind: x.reason.code, rejected: true })
       assert.deepEqual(outcomes.map(x => x.kind), ['cancelled', 'cancelled', 'cancelled'])
-    for (const owner of kernelOwners) assert.equal(ledger.ownerBytes('controls', owner), 0)
+      for (const g of gates) g.open()
+      // Reply completion no longer signals provider cleanup; wait for actual drain,
+      // retaining the exact zero-byte assertions for every raw-lane owner.
+      await vi.waitFor(() => {
+        for (const owner of kernelOwners) assert.equal(ledger.ownerBytes('controls', owner), 0)
+        assert.ok(sessions.every(x => x.session.memoryStats().totalBytes === 0))
+      })
       assert.ok(afterClose.byPool.controls - ledger.snapshot().byPool.controls >= rawBytes + 22690)
       assert.ok(sessions.every(x => x.session.memoryStats().totalBytes === 0))
       assert.equal(view, originalView)

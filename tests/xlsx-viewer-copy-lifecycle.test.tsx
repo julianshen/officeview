@@ -6,6 +6,7 @@ import { ViewerClient } from '../src/worker/viewerClient'
 import { connectInProcess, ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { workbookOf } from './helpers/xlsx-find'
 
 const docOf = () => workbookOf([{ sheetId: 'A', cells: [
@@ -98,6 +99,60 @@ it('older clipboard settlement cannot release the newer pending copy charge', as
   expect(ledger.snapshot().byPool.copy).toBe(0)
   expect(ui.queryByRole('button', { name: 'Cancel copy' })).toBeNull()
   expect(ui.getByRole('status').textContent).toContain('Selection copied.')
+})
+
+it('repaints a refused overflow frame after clipboard and pressure owners settle', async () => {
+  const writes = clipboard(), doc = workbookOf([{ sheetId: 'A', cells: [
+    { row: 0, col: 0, value: 'Name' }, { row: 1, col: 0, value: 'beta' },
+    { row: 100, col: 0, value: 'a very long text value that crosses several columns' },
+    { row: 100, col: 2, value: 'block' },
+  ] }])
+  let ledger!: MainMemoryLedger
+  const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
+  await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
+  go(ui, 'A2')
+  await copy(ui, writes, 1)
+  expect(ledger.snapshot().byPool.copy).toBe(144)
+
+  ledger.set('controls', 'overflow-pressure', MAIN_THREAD_BUDGETS.D)
+  const scroller = ui.getByTestId('officeview-sheet-scroller')
+  Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: 1800 })
+  fireEvent.scroll(scroller)
+  await waitFor(() => expect(ui.container.textContent).toContain('Text overflow occupancy exceeds the document memory budget'))
+  expect(ui.getByRole('button', { name: 'Cancel copy' })).toBeTruthy()
+
+  await act(async () => {
+    ledger.release('controls', 'overflow-pressure')
+    writes.jobs[0].resolve()
+  })
+  await waitFor(() => expect(ui.container.textContent).not.toContain('Text overflow occupancy exceeds the document memory budget'))
+  expect(ledger.snapshot().byPool.copy).toBe(0)
+})
+
+it('repaints a refused overflow frame when a cancelled clipboard owner finally settles', async () => {
+  const writes = clipboard(), doc = workbookOf([{ sheetId: 'A', cells: [
+    { row: 0, col: 0, value: 'Name' }, { row: 1, col: 0, value: 'beta' },
+    { row: 100, col: 0, value: 'a very long text value that crosses several columns' },
+    { row: 100, col: 2, value: 'block' },
+  ] }])
+  let ledger!: MainMemoryLedger
+  const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
+  await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
+  go(ui, 'A2')
+  await copy(ui, writes, 1)
+  expect(ledger.snapshot().byPool.copy).toBe(144)
+
+  ledger.set('controls', 'overflow-pressure', MAIN_THREAD_BUDGETS.D)
+  const scroller = ui.getByTestId('officeview-sheet-scroller')
+  Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: 1800 })
+  fireEvent.scroll(scroller)
+  await waitFor(() => expect(ui.container.textContent).toContain('Text overflow occupancy exceeds the document memory budget'))
+  fireEvent.click(ui.getByRole('button', { name: 'Cancel copy' }))
+  ledger.release('controls', 'overflow-pressure')
+
+  await act(async () => writes.jobs[0]!.resolve())
+  await waitFor(() => expect(ui.container.textContent).not.toContain('Text overflow occupancy exceeds the document memory budget'))
+  expect(ledger.snapshot().byPool.copy).toBe(0)
 })
 
 it('cancelled native jobs keep distinct TSV charges through out-of-order completion', async () => {

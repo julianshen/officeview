@@ -271,7 +271,7 @@ export class ViewerKernel {
       }
       report = this.reporter(command, entry, emit)
       const work = this.dispatch(command, entry.controller.signal, report, retain)
-      const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, expired.signal)
+      const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, command.kind === 'sort' || command.kind === 'filter' ? entry.controller.signal : expired.signal)
       dispatched = out
       const after = this.env.afterDispatch?.(command)
       if (after) {

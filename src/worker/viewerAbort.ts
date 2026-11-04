@@ -1,9 +1,24 @@
 import type { Page, SourceFailure, SourceStore } from '../xlsx/view/contracts'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
 
+// Operations holding prepared lanes or local allocation accounts must drain their
+// providers before running finally. The kernel independently cancels the reply.
+const draining = new WeakMap<AbortSignal, number>()
+export function retainUntilDrained(signal: AbortSignal): () => void {
+  draining.set(signal, (draining.get(signal) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const count = draining.get(signal) ?? 0
+    if (count <= 1) draining.delete(signal)
+    else draining.set(signal, count - 1)
+  }
+}
 const deadlines = new WeakMap<AbortSignal, AbortSignal>()
 export function bindQueryDeadline(signal: AbortSignal, deadline: AbortSignal): void { deadlines.set(signal, deadline) }
 export function awaitQueryDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (draining.has(signal)) return work
   const deadline = deadlines.get(signal)
   return deadline ? awaitAbortable(awaitAbortable(work, signal), deadline) : awaitAbortable(work, signal)
 }

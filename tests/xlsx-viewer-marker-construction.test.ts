@@ -226,14 +226,19 @@ describe('marker pre-retention and lifecycle', () => {
   it.each(['callback', 'token', 'envelope'] as const)('%s failure releases explicit marker ownership after dropping fields', async (failure) => {
     const store = new SourcePageStore({ docId: failure, backend: memoryPageBackend() })
     const share = store.construction.share('marker', { untilReleased: true })
+    let heldBeforeFailure = 0
     const events = anchorRecordEvents(() => { if (failure === 'callback') throw new Error('callback failure') }, () => {}, { need: (bytes) => share.need(bytes) })
     async function* input() {
-      yield new TextEncoder().encode(startField + '0001')
-      if (failure === 'envelope') throw new PackageError('resource-limit', 'part envelope')
+      // The base consumer is rounded to 64 KiB. Keep a live marker payload that
+      // crosses that step so the assertion below cannot pass on the base hold.
+      yield new TextEncoder().encode(startField + '0'.repeat(40_000))
+      if (failure === 'envelope') { heldBeforeFailure = share.bytes; throw new PackageError('resource-limit', 'part envelope') }
+      heldBeforeFailure = share.bytes
       yield new TextEncoder().encode(failure === 'token' ? '&bad' : endField)
     }
     try { await expect(tokenizeBytes(input(), events)).rejects.toThrow() }
     finally { events.dispose(); share.release(); share.release() }
+    expect(heldBeforeFailure).toBeGreaterThan(64 * 1024)
     expect(store.construction.transientBytes).toBe(0)
   })
   it('close while input is withheld keeps fields charged until parser disposal and prohibits revival', async () => {

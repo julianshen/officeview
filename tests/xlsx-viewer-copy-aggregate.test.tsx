@@ -146,3 +146,23 @@ it('refuses hidden-column construction before cloning intervals or allocating vi
     expect(ledger.snapshot().byPool.copy).toBe(0)
   } finally { vi.unstubAllGlobals(); ledger.release('controls', 'pressure') }
 })
+
+it('reserves each hidden interval before retaining it in the copy input', async () => {
+  const writes = clipboard(), doc = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'beta' }] }])
+  doc.sheets[0].cols = [2, 4, 6].map(col => ({ min: col, max: col, hidden: true }))
+  let ledger!: MainMemoryLedger
+  const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
+  await waitFor(() => expect(ui.getByRole('status').textContent).not.toContain('Loading sheet'))
+  go(ui, 'A1')
+
+  const charges: number[] = [], set = ledger.set.bind(ledger)
+  vi.spyOn(ledger, 'set').mockImplementation((pool, owner, bytes) => {
+    set(pool, owner, bytes)
+    if (pool === 'copy') charges.push(bytes)
+  })
+  fireEvent.click(ui.getByRole('button', { name: 'Copy selection' }))
+  await waitFor(() => expect(writes.jobs.length).toBe(1))
+  expect(charges.slice(0, 3)).toEqual([64, 128, 192])
+  await act(async () => writes.jobs[0].resolve())
+  expect(ledger.snapshot().byPool.copy).toBe(0)
+})
