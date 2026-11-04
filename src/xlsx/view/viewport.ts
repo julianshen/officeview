@@ -24,6 +24,8 @@ import { createSheetMetrics, type ProjectedSheetMetrics } from './projection'
 import { RectangleIndex } from './structure'
 import { cellSourceRow, drawingExtent } from './sheetCells'
 import { createIntervalSet } from './visibility'
+import { boundOverflowCache, OverflowResourceError } from './overflowCache'
+import { NO_OVERFLOW, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './textOverflow'
 
 // Static-renderer helpers live in a leaf module so the eager static path never
 // reaches the viewport planner; re-exported for existing callers.
@@ -189,12 +191,32 @@ export interface SheetGeometry {
    * when their node weight or the index walk exceeds `budget` records. */
   drawingsIn(left: number, top: number, right: number, bottom: number, budget: number): readonly XlsxDrawing[] | null
 }
+/** Owned viewers share a document cache. A geometry outside that ownership
+ * computes its input on demand without creating retained global state. */
+export function rowOverflowInput(geometry: SheetGeometry, sourceRow: number): RowOverflowInput {
+  const cache = boundOverflowCache(geometry)
+  if (cache) return cache.get(geometry, sourceRow)
+  const metrics = geometry.metrics
+  return rowOverflowFromCells(
+    geometry.cellsOf(sourceRow) ?? [],
+    isValidCoordinate(sourceRow, 0) ? geometry.merges.collect({ r0: sourceRow, r1: sourceRow, c0: 0, c1: MAX_COLS - 1 }) : [],
+    (col: number) => metrics.cols.start(col),
+    metrics.cols.logicalCount - 1,
+  )
+}
+/** The overflow allowance the painter gives one cell (find geometry reuses it). */
+export function cellTextOverflow(geometry: SheetGeometryResult | undefined, source: SourceCell): OverflowAllowance | undefined {
+  if (geometry?.kind !== 'ready') return undefined
+  return textOverflowAllowance(rowOverflowInput(geometry, source.row), source.col)
+}
 export type SheetGeometryResult =
   | SheetGeometry
   | { readonly kind: 'diagnostic'; readonly diagnostics: readonly WorkerDiagnostic[] }
 
 /** Logical CSS box of one painted record; merge anchors span their whole range. */
-export interface CellPlacement { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange }
+export interface CellPlacement { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
+  /** Room the text may use past the box into empty neighbours (S13). */
+  overflow?: OverflowAllowance }
 export interface MergePlacement { range: XlsxMergeRange; x: number; y: number; width: number; height: number }
 export interface ViewportDetail {
   kind: 'detail'
@@ -496,6 +518,13 @@ export function planViewport(geometry: SheetGeometryResult | undefined, viewport
     }
     return plan
   } catch (error) {
+    if (error instanceof OverflowResourceError) {
+      const metrics = geometry.metrics, { x, y, width, height } = viewport.box
+      const groups = coarseGroups(metrics, [{ rows: { start: Math.max(0, y), end: Math.min(metrics.rows.totalCss(), y + height) }, cols: { start: Math.max(0, x), end: Math.min(metrics.cols.totalCss(), x + width) } }], detailScale(viewport), VIEWPORT_DETAIL_LIMITS[profile].overviewGroups)
+      const work = emptyWork(), active = activePlacement(geometry, options.activeCell, work)
+      work.overviewGroups = groups.length
+      return { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code: 'overflow-memory', message: error.message }], groups, extent: { width: metrics.cols.totalCss(), height: metrics.rows.totalCss() }, work, ...(active ? { active } : {}) }
+    }
     if (!(error instanceof AxisMetricsError)) throw error
     return { kind: 'diagnostic', diagnostics: [...geometry.diagnostics, axisDiagnostic(error, 'viewport')] }
   }
@@ -786,7 +815,7 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     const at = anchor ? firstCellAtOrAfter(anchor, range.minCol) : -1
     // An anchor whose own row/column lies outside the window still owns the merged paint.
     if (anchor && at < anchor.length && anchor[at].col === range.minCol) {
-      cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range })
+      cells.push({ cell: anchor[at], source: { row: range.minRow, col: range.minCol }, slot: range.minRow, ...placement, merge: range, overflow: NO_OVERFLOW })
     }
   }
   const locator = new MergeLocator(covering, c0, c1)
@@ -795,15 +824,19 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     const rowCells = geometry.cellsOf(source)
     if (!rowCells) continue
     const top = metrics.rows.start(slot), rowHeight = metrics.rows.size(slot)
-    const end = firstCellAtOrAfter(rowCells, c1 + 1)
-    for (let index = firstCellAtOrAfter(rowCells, c0); index < end; index++) {
+    const end = firstCellAtOrAfter(rowCells, c1 + 1), begin = firstCellAtOrAfter(rowCells, c0)
+    // Text overflow (S13): the row's real occupancy, the same input find
+    // highlight geometry uses (rowOverflowInput), built once per row.
+    let occupancy: RowOverflowInput | undefined
+    const overflowAt = (col: number): OverflowAllowance => textOverflowAllowance(occupancy ??= rowOverflowInput(geometry, source), col)
+    for (let index = begin; index < end; index++) {
       const item = rowCells[index]
       const col = item.col
       work.visitedRecords++
       const colWidth = metrics.cols.size(col)
       // Collapsed rows/columns produce no fill, text or hit target (spec §5.3).
       if (colWidth <= 0 || !colIsDetail(col) || locator.at(source, col)) continue
-      cells.push({ cell: item, source: { row: source, col }, slot, x: metrics.cols.start(col), y: top, width: colWidth, height: rowHeight })
+      cells.push({ cell: item, source: { row: source, col }, slot, x: metrics.cols.start(col), y: top, width: colWidth, height: rowHeight, overflow: overflowAt(col) })
     }
   }
   if (tileOverflow(cells, viewport, scale, limits.tile.records)) {

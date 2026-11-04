@@ -37,6 +37,7 @@ export async function workbookFormatting(workbookRoot: XmlNode, stylesText: stri
         horizontal: xf.horizontal,
         vertical: xf.vertical,
         wrapText: xf.wrapText,
+        ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
       }
     }),
   }

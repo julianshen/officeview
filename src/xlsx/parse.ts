@@ -20,6 +20,8 @@ import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationO
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
+import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
+import { PackageError } from '../core/package-error'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -69,7 +71,7 @@ interface Styles {
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
 
 async function parseStyles(pkg: OfficePackage): Promise<Styles> {
@@ -118,6 +120,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
       const horizontal = typeof align.horizontal === 'string' && align.horizontal !== '' ? align.horizontal : undefined
       const vertical = typeof align.vertical === 'string' && align.vertical !== '' ? align.vertical : undefined
       const wrapText = align.wrapText === '1' || align.wrapText === 'true' ? true : align.wrapText === '0' || align.wrapText === 'false' ? false : undefined
+      const shrinkToFit = align.shrinkToFit === '1' || align.shrinkToFit === 'true' ? true : align.shrinkToFit === '0' || align.shrinkToFit === 'false' ? false : undefined
       styles.xfs.push({
         numFmtId: parseInt(a.numFmtId ?? '0', 10),
         fontId: parseInt(a.fontId ?? '0', 10),
@@ -127,6 +130,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         horizontal,
         vertical,
         wrapText,
+        shrinkToFit,
       })
     }
   }
@@ -460,10 +464,25 @@ async function parseSheet(
     header: inches(ma.header, 0.3), footer: inches(ma.footer, 0.3),
   }
   const sheetData = getChildren(data, 'sheetData')[0]
+  // Excel's implicit positions: a <row> without r follows the previous row and
+  // a <c> without r follows the previous cell of its row (A1-relative start).
+  // An implicit position past the worksheet (more ref-less rows or cells than
+  // it has) is a typed refusal, like the paged reader's, never a thrown
+  // coordinate error. A row number repeated explicitly is merged into its
+  // first record (later cells replace same-column ones) with a sheet
+  // diagnostic; the paged reader refuses such a file instead (documented).
+  let previousRow = -1
+  const rowsByIndex = new Map<number, XlsxRow>()
   for (const rowNode of getChildren(sheetData, 'row')) {
     const ra = attrs(rowNode)
+    const explicitRow = ra.r !== undefined ? parseInt(ra.r as string, 10) - 1 : NaN
+    const explicit = Number.isInteger(explicitRow) && explicitRow >= 0
+    const rowIndex = explicit ? explicitRow : previousRow + 1
+    if (!explicit && rowIndex >= MAX_ROWS) throw new PackageError('unsupported', `a worksheet row without a row number follows row ${rowIndex}, past the last worksheet row`, path)
+    previousRow = rowIndex
+    let previousCol = -1
     const row: XlsxRow = {
-      index: parseInt(ra.r ?? '1', 10) - 1,
+      index: rowIndex,
       heightPt: ra.ht !== undefined ? parseFloat(ra.ht as string) : undefined,
       customHeight: ra.customHeight === '1',
       hidden: ra.hidden === '1' || ra.hidden === 'true',
@@ -471,8 +490,13 @@ async function parseSheet(
     }
     for (const cNode of getChildren(rowNode, 'c')) {
       const ca = attrs(cNode)
-      const ref = (ca.r as string) ?? ''
-      const [rowIdx, colIdx] = parseRef(ref)
+      const explicitRef = typeof ca.r === 'string' && /^[A-Z]+\d+$/.test(ca.r) ? ca.r : undefined
+      const [rowIdx, colIdx] = explicitRef ? parseRef(explicitRef) : [rowIndex, previousCol + 1]
+      if (!explicitRef && (rowIdx >= MAX_ROWS || colIdx >= MAX_COLS)) {
+        throw new PackageError('unsupported', `row ${rowIndex + 1} has a cell without a reference past the last worksheet column`, path)
+      }
+      const ref = explicitRef ?? formatA1({ row: rowIdx, col: colIdx })
+      previousCol = colIdx
       const t = ca.t as string | undefined
       const sIdx = parseInt(ca.s ?? '0', 10)
       let value: string | number | boolean | null = null
@@ -566,10 +590,20 @@ async function parseSheet(
           horizontal: xf.horizontal,
           vertical: xf.vertical,
           wrapText: xf.wrapText,
+          ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
         }
       }
       row.cells.push(cell)
     }
+    const earlier = rowsByIndex.get(row.index)
+    if (earlier) {
+      const replaced = new Set(row.cells.map(cell => cell.col))
+      earlier.cells = [...earlier.cells.filter(cell => !replaced.has(cell.col)), ...row.cells].sort((a, b) => a.col - b.col)
+      const diagnostic = { kind: 'parse', feature: 'duplicate-row', message: `row ${row.index + 1} appears more than once; its cells were merged` }
+      if (!sheet.diagnostics?.some(d => d.feature === diagnostic.feature && d.message === diagnostic.message)) (sheet.diagnostics ??= []).push(diagnostic)
+      continue
+    }
+    rowsByIndex.set(row.index, row)
     sheet.rows.push(row)
   }
   await parseWorksheetDrawings(pkg, sheet, path, data, theme)

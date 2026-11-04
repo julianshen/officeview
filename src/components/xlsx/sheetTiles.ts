@@ -25,7 +25,7 @@ export interface CanvasTile extends TileSurface {
   readonly canvas: HTMLCanvasElement
   close(): void
   /** Detail work the tile embodies, charged whenever it is presented. */
-  cost?: { records: number; gridlines: number }
+  cost?: { records: number; gridlines: number; resourceNotice?: string }
 }
 export interface SheetFrame {
   /** A prepared (worker) plan for a tile; undefined plans it on the main thread. */
@@ -143,14 +143,14 @@ export class SheetTileRenderer {
   /** Paint the pane from tiles. `target` is the device-pixel pane surface; it is
    * repainted only here, so overlay changes never touch it. Returns the device
    * pixel snap applied (the overlay applies the same bias). */
-  present(target: CanvasRenderingContext2D, frame: SheetFrame): { bias: { x: number; y: number } } {
+  present(target: CanvasRenderingContext2D, frame: SheetFrame): { bias: { x: number; y: number }; resourceNotice?: string } {
     const scale = frame.zoom * frame.dpr
     const px = Math.round(frame.origin.x * scale), py = Math.round(frame.origin.y * scale)
     const { visible } = this.ranges(frame)
     this.stats.lastRequests = []
     this.stats.pendingTiles = 0
     const budget = frameBudgetFor(this.profile)
-    let records = 0, gridlines = 0
+    let records = 0, gridlines = 0, resourceNotice: string | undefined
     target.save()
     try {
       target.setTransform(1, 0, 0, 1, 0, 0)
@@ -159,6 +159,7 @@ export class SheetTileRenderer {
       for (let row = visible.r0; row <= visible.r1; row++) {
         for (let col = visible.c0; col <= visible.c1; col++) {
           const tile = this.tile(frame, col, row, true, budget)
+          resourceNotice ??= tile.surface.cost?.resourceNotice
           records += tile.surface.cost?.records ?? 0
           gridlines += tile.surface.cost?.gridlines ?? 0
           // Float64 global device offsets minus the snapped origin: small integers.
@@ -177,7 +178,7 @@ export class SheetTileRenderer {
     // Drop tiles of an older owner/zoom/DPR only after the new frame is up, so the
     // last committed frame stays presented while the replacement paints (§10.1).
     this.cache.invalidate(key => !sameIdentity(key.identity, frame.identity) || key.zoom !== frame.zoom || key.dpr !== frame.dpr)
-    return { bias: { x: (frame.origin.x * scale - px) / frame.dpr, y: (frame.origin.y * scale - py) / frame.dpr } }
+    return { bias: { x: (frame.origin.x * scale - px) / frame.dpr, y: (frame.origin.y * scale - py) / frame.dpr }, ...(resourceNotice ? { resourceNotice } : {}) }
   }
 
   /** Paint up to `limit` missing ring tiles (bounded adjacent prefetch). */
@@ -247,7 +248,7 @@ export class SheetTileRenderer {
     if (visible) this.stats.lastRequests.push(viewport)
     const full = budget.records >= frameBudgetFor(this.profile).records && budget.gridlines >= frameBudgetFor(this.profile).gridlines
     let kind: string = 'pending'
-    let work = { records: 0, gridlines: 0 }
+    let work: NonNullable<CanvasTile['cost']> = { records: 0, gridlines: 0 }
     // Distinct texts this tile's context shapes: the browser keeps each one
     // (per font) while the canvas lives, outside the bitmap.
     const shaped = ctx ? countShapedTexts(ctx) : null
@@ -272,6 +273,8 @@ export class SheetTileRenderer {
         preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
       })
       kind = result.pending ? 'pending' : result.kind
+      const resource = result.diagnostics.find(d => d.code === 'overflow-memory')
+      if (resource) work.resourceNotice = resource.message
       if (result.kind === 'detail') work = { records: result.work.records, gridlines: result.work.gridlines }
       this.stats.maxTileRecords = Math.max(this.stats.maxTileRecords, work.records)
     }
@@ -282,6 +285,7 @@ export class SheetTileRenderer {
       if (ctx) paintPending(ctx, box, pending)
       return { surface, retained: false }
     }
+    if (work.resourceNotice) return { surface, retained: false }
     // A tile made coarse only because earlier tiles spent the frame budget is not
     // the tile's own content: present it, but never cache it.
     if (kind === 'coarse' && !full) return { surface, retained: false }

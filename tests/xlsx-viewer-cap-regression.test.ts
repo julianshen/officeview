@@ -299,7 +299,8 @@ describe('review round 1 (Codex findings)', () => {
       { r: 1, cells: [{ ref: 'A1', v: 1 }] },
       { r: 16386, cells: [{ ref: 'A16386', v: 7 }] },
     ], xml => xml.replace('<row r="16386">', '<row>'))
-    expect(sheet.rows[1].index).toBe(0)
+    // Excel's implicit row position (S13): the ref-less row follows row 1; its cell keeps its explicit reference.
+    expect(sheet.rows[1].index).toBe(1)
     expect(sheet.rows[1].cells[0].row).toBe(16_385)
     const geometry = ready(sheet)
     expect(geometry.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'inconsistent-row-coordinate' })]))

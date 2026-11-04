@@ -13,6 +13,7 @@
  *   copy=0        allowCopy={false}
  *   wcaps=a,b     capabilities the viewer worker denies itself (workerCaps.ts),
  *                 passed as the Worker name since init scripts never reach it
+ *   focus=grid    focus the grid once it has painted (real-keyboard runs)
  *   paged=1       with worker=1: debug-only admission override (forcePaged.ts).
  *                 The page loads through loadOfficeSource with the object cell
  *                 cap lowered to 1 (and the worker kernel likewise), so even a
@@ -168,6 +169,18 @@ function E2EPage(): JSX.Element {
       {...internal}
     />
   )
+}
+
+// focus=grid: focus the grid once it is up, for runs that send real OS key
+// events to a normal (non-automation) Safari window, where no script can.
+if (params.get('focus') === 'grid') {
+  const started = Date.now()
+  const tryFocus = () => {
+    const grid = document.querySelector<HTMLElement>('[role=grid]')
+    if (grid && state.frames > 0) grid.focus()
+    else if (Date.now() - started < 60_000) setTimeout(tryFocus, 200)
+  }
+  tryFocus()
 }
 
 /** `?paged=1&worker=1`: the paged route of useOfficeFile, with admission forced paged. */

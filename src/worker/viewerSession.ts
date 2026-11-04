@@ -125,14 +125,14 @@ export function lowerBound(sorted: ArrayLike<number>, value: number, length = so
 
 /** Exact source membership as ascending inclusive intervals. Resident refs are
  * not resolvable by this interim adapter; the caller reports them unsupported. */
-export function rowSetIntervals(rows: CompactSourceRowSet): SourceRowInterval[] | null {
+export function rowSetIntervals(rows: CompactSourceRowSet, beforeNewRun?: () => void): SourceRowInterval[] | null {
   const out: SourceRowInterval[] = []
   const push = (r0: number, r1: number) => {
     if (!isValidCoordinate(r0, 0) || !isValidCoordinate(r1, 0) || r0 > r1) throw new RangeError('Invalid row set')
     const previous = out[out.length - 1]
     if (previous && r0 <= previous.r1) throw new RangeError('Row set is not ascending')
     if (previous && previous.r1 + 1 === r0) previous.r1 = r1
-    else out.push({ r0, r1 })
+    else { beforeNewRun?.(); out.push({ r0, r1 }) }
   }
   switch (rows.kind) {
     case 'intervals':

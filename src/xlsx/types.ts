@@ -67,6 +67,8 @@ export interface XlsxCellStyle {
   vertical?: string
   /** wrapText as authored. Absent stays undefined. */
   wrapText?: boolean
+  /** alignment@shrinkToFit as authored (ignored when wrapping). Absent stays undefined. */
+  shrinkToFit?: boolean
 }
 
 export interface XlsxRow {

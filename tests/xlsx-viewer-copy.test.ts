@@ -25,7 +25,9 @@ describe('displayed selection copy', () => {
     f.order = createRowOrder([{ r0: 0, r1: 3, sourceAtOffset: Uint32Array.of(3, 2, 0, 1) }])
     f.visibility = visibilityFromHidden(createIntervalSet([{ r0: 1, r1: 1 }]))
     f.columns = visibilityFromHidden(createIntervalSet([{ r0: 1, r1: 1 }]), MAX_COLS)
+    const before = JSON.stringify({ selection: f.selection, bands: f.order.bands, visibility: f.visibility, columns: f.columns })
     expect(await textOf(f)).toBe('3:0\t3:2\n0:0\t0:2\n1:0\t1:2')
+    expect(JSON.stringify({ selection: f.selection, bands: f.order.bands, visibility: f.visibility, columns: f.columns })).toBe(before)
   })
   it('dedupes overlapping ranges and orders disjoint blocks by display top-left', async () => {
     const f = input((r, c) => value(r, c, `${r}:${c}`))
@@ -150,4 +152,260 @@ describe('fragmented selections within the clipboard budget', () => {
 it('scales copy output/projection allowance with the S4.3 main-thread profile', () => {
   expect(copySessionBudget('D')).toBe(24 * 1024 * 1024)
   expect(copySessionBudget('M')).toBe(12 * 1024 * 1024)
+})
+
+it('admits projection before allocating coverage or reading values', async () => {
+  const f = input((r, c) => value(r, c, 'x'))
+  f.selection.ranges = [part(0, 0, 0, 191)]
+  const requests: number[] = []
+  Object.assign(f, { admitBytes: (bytes: number) => { requests.push(bytes); return bytes < 32 * 192 } })
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(requests.some(bytes => bytes >= 32 * 192)).toBe(true)
+  expect(f.store.readCell).not.toHaveBeenCalled()
+})
+
+it('reserves tiny field and quoting growth before constructing escaped text', async () => {
+  const f = input((r, c) => value(r, c, '"'.repeat(200)))
+  f.selection.ranges = [part(0, 0)]
+  const replace = String.prototype.replace, escaped = vi.fn()
+  vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: Parameters<typeof replace>) {
+    if (String(this) === '"'.repeat(200)) escaped()
+    return replace.apply(this, args)
+  })
+  Object.assign(f, { admitBytes: (bytes: number) => bytes < 128 + 4 * 402 })
+  try {
+    expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+    expect(escaped).not.toHaveBeenCalled()
+  } finally { vi.restoreAllMocks() }
+})
+
+it('keeps onBytes notification compatible and never reports denied growth', async () => {
+  const f = input((r, c) => value(r, c, 'x'))
+  f.selection.ranges = [part(0, 0)]
+  const readings: number[] = []
+  f.onBytes = bytes => readings.push(bytes)
+  Object.assign(f, { admitBytes: () => false })
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(readings).toEqual([])
+  expect(f.store.readCell).not.toHaveBeenCalled()
+})
+
+it('guards canonical fourth-section expansion before constructing its full output', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const doc = workbookOf([{ sheetId: 'A', cells: [] }]), sheet = doc.sheets[0]
+  const f = input((r, c) => value(r, c, 'x'.repeat(256)))
+  f.selection.ranges = [part(0, 0)]
+  const code = '0;0;0;' + '@'.repeat(1024), requests: number[] = []
+  f.format = (cell, allocation) => cellDisplayText(sheet, { value: cell.value, style: { numFmtId: 0, formatCode: code } }, allocation)
+  Object.assign(f, { admitBytes: (bytes: number) => { requests.push(bytes); return bytes < 150_000 } })
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(requests.find(bytes => bytes >= 150_000)).toBeLessThan(200_000)
+  Object.assign(f, { admitBytes: () => true })
+  expect(await textOf(f)).toBe('x'.repeat(256 * 1024))
+})
+
+it('shares live headroom between two suspended serializers and leaves refused growth unchanged', async () => {
+  const { MainMemoryLedger } = await import('../src/xlsx/view/mainLedger')
+  const { MAIN_THREAD_BUDGETS } = await import('../src/xlsx/view/tileCache')
+  const ledger = new MainMemoryLedger(), totals: number[] = [], denials: [number, number][] = []
+  ledger.set('controls', 'pressure', MAIN_THREAD_BUDGETS.D - 720)
+  const pending: (() => void)[] = []
+  const make = (owner: string) => {
+    const f = input((r, c) => value(r, c, 'x'.repeat(100)))
+    f.selection.ranges = [part(0, 0)]
+    const read = f.store.readCell.bind(f.store)
+    f.store.readCell = async (...args) => { await new Promise<void>(resolve => pending.push(resolve)); return read(...args) }
+    let held = 0
+    f.admitBytes = next => {
+      const before = ledger.bytes
+      if (next > held && before - held + next > MAIN_THREAD_BUDGETS.D) { denials.push([before, ledger.bytes]); return false }
+      ledger.set('copy', owner, next); held = next; totals.push(ledger.bytes); return true
+    }
+    return f
+  }
+  const a = serializeSelection(make('A')), b = serializeSelection(make('B'))
+  await vi.waitFor(() => expect(pending.length).toBe(2))
+  expect(ledger.snapshot().byPool.copy).toBe(320)
+  pending[0]()
+  expect(await a).toMatchObject({ kind: 'ready', text: 'x'.repeat(100) })
+  pending[1]()
+  expect(await b).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(denials).toHaveLength(1)
+  expect(denials[0][0]).toBe(denials[0][1])
+  expect(ledger.snapshot().byPool.copy).toBe(528)
+  expect(totals.every(bytes => bytes <= MAIN_THREAD_BUDGETS.D)).toBe(true)
+  ledger.release('copy', 'A')
+  expect(ledger.snapshot().byPool.copy).toBe(0)
+})
+
+it.each(['intervals', 'list', 'bitset'] as const)('admits each newly decoded %s run before row projection', async kind => {
+  const f = input((r, c) => value(r, c, 'x'))
+  f.selection.ranges = [{ cols: [{ c0: 0, c1: 0 }], rows: kind === 'intervals'
+    ? { kind, intervals: [{ r0: 0, r1: 0 }, { r0: 2, r1: 2 }] }
+    : kind === 'list' ? { kind, r0: 0, r1: 2, rows: Uint32Array.of(0, 2) }
+    : { kind, space: 'source', r0: 0, r1: 2, words: Uint32Array.of(5), count: 2 } }]
+  const rank = vi.spyOn(f.visibility, 'rank')
+  f.admitBytes = next => next < 128
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(rank).not.toHaveBeenCalled()
+  expect(f.store.readCell).not.toHaveBeenCalled()
+})
+
+it('counts newly formed row runs, events and sorting scratch before source reads', async () => {
+  const f = input((r, c) => value(r, c, 'x'))
+  f.selection.ranges = [{ cols: [{ c0: 0, c1: 1 }, { c0: 3, c1: 3 }], rows: { kind: 'list', r0: 0, r1: 2, rows: Uint32Array.of(0, 2) } }]
+  f.order = createRowOrder([{ r0: 0, r1: 3, sourceAtOffset: Uint32Array.of(2, 1, 0, 3) }])
+  const requests: number[] = []
+  f.admitBytes = next => { requests.push(next); return next < 512 }
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(requests.some(next => next >= 512)).toBe(true)
+  expect(f.store.readCell).not.toHaveBeenCalled()
+})
+
+it.each([480, 479])('small serializer needs its measured %i-byte construction capacity', async capacity => {
+  const f = input((r, c) => value(r, c, 'beta'))
+  f.selection.ranges = [part(0, 0)]
+  f.admitBytes = next => next <= capacity
+  const out = await serializeSelection(f)
+  expect(out).toMatchObject(capacity === 480 ? { kind: 'ready', text: 'beta' } : { kind: 'refused', code: 'resource-limit' })
+})
+
+it('refunds admitted scratch after formatter and observer exceptions', async () => {
+  for (const failure of ['formatter', 'observer']) {
+    const f = input((r, c) => value(r, c, 'beta')), readings: number[] = []
+    f.selection.ranges = [part(0, 0)]
+    let held = 0
+    f.admitBytes = next => { held = next; readings.push(next); return true }
+    if (failure === 'formatter') f.format = (_, allocation) => { allocation?.allocate(512); throw new Error('format failed') }
+    else f.onBytes = bytes => { if (bytes > 0) throw new Error('observer failed') }
+    expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'page-error' })
+    expect(Math.max(...readings)).toBeGreaterThan(0)
+    expect(held).toBe(0)
+  }
+})
+
+it('keeps canonical raw string passthrough borrowed after parsing a format', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const sheet = workbookOf([{ sheetId: 'A', cells: [] }]).sheets[0], f = input((r, c) => value(r, c, 'x'.repeat(100_000)))
+  f.selection.ranges = [part(0, 0)]
+  f.format = (cell, allocation) => cellDisplayText(sheet, { value: cell.value, style: { numFmtId: 0, formatCode: '0' } }, allocation)
+  const requests: number[] = []
+  f.admitBytes = next => { requests.push(next); return true }
+  expect(await textOf(f)).toBe('x'.repeat(100_000))
+  expect(Math.max(...requests)).toBeLessThan(401_000)
+})
+
+it('adopts new canonical diagnostics while duplicates retain only temporary copy storage', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const { MainMemoryLedger } = await import('../src/xlsx/view/mainLedger')
+  const watched: { target: object; token: string }[] = []
+  const ledger = new MainMemoryLedger({ register: (target, token) => watched.push({ target, token }) })
+  const sheet = workbookOf([{ sheetId: 'A', cells: [] }]).sheets[0]
+  const f = input((r, c) => value(r, c, 'beta'))
+  f.selection.ranges = [part(0, 0)]
+  f.format = (cell, allocation) => cellDisplayText(sheet, { value: cell.value, style: { numFmtId: 0, formatCode: '0;0;0;yyyy' } }, allocation)
+  let held = 0
+  f.admitBytes = next => { ledger.set('copy', 'job', next); held = next; return true }
+  f.retainBytes = (targets, bytes, commit) => { ledger.adoptWhileReachable('copy', 'job', 'document', targets, bytes, commit); held -= bytes }
+  expect(await textOf(f)).toBe('beta')
+  const retained = ledger.snapshot().byPool.document
+  expect(retained).toBeGreaterThan(100)
+  expect(held).toBe(144)
+  expect(sheet.diagnostics).toHaveLength(1)
+  ledger.release('copy', 'job')
+  expect(ledger.bytes).toBe(retained)
+  expect(await textOf(f)).toBe('beta')
+  ledger.release('copy', 'job')
+  expect(ledger.bytes).toBe(retained)
+  expect(sheet.diagnostics).toHaveLength(1)
+  expect(watched).toHaveLength(2)
+  const token = watched[0].token
+  // Collection watcher reports the two independently retained targets ending.
+  ledger.collected(token)
+  expect(ledger.bytes).toBe(retained)
+  ledger.collected(token)
+  expect(ledger.bytes).toBe(0)
+})
+
+it('denies canonical diagnostic growth before publication with a typed whole-copy refusal', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const sheet = workbookOf([{ sheetId: 'A', cells: [] }]).sheets[0], f = input((r, c) => value(r, c, 'beta'))
+  sheet.diagnostics = [{ kind: 'test', feature: 'existing', message: 'keep' }]
+  const before = JSON.stringify(sheet.diagnostics)
+  f.selection.ranges = [part(0, 0)]
+  f.format = (cell, allocation) => cellDisplayText(sheet, { value: cell.value, style: { numFmtId: 0, formatCode: '0;0;0;yyyy' } }, allocation)
+  f.admitBytes = next => next <= 384
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+  expect(JSON.stringify(sheet.diagnostics)).toBe(before)
+})
+
+it('reserves an unquoted tiny concat before coercing its formatted input', async () => {
+  const f = input((r, c) => value(r, c, 'tiny'))
+  f.selection.ranges = [part(0, 0)]
+  let held = 0
+  const observed: number[] = [], text = new String('tiny')
+  // A boxed string instruments the concat coercion boundary; source values
+  // remain ordinary valid primitive strings throughout this serializer test.
+  Object.defineProperty(text, Symbol.toPrimitive, { value: () => { observed.push(held); return 'tiny' } })
+  f.format = () => text as unknown as string
+  f.admitBytes = next => { held = next; return true }
+  expect(await textOf(f)).toBe('tiny')
+  expect(observed).toEqual([184]) // metadata128 + slots32 + formatted8 + output16
+})
+
+it('reserves chunk slots and the final join before either constructs output', async () => {
+  const f = input((r, c) => value(r, c, 'x'.repeat(100_000)))
+  f.selection.ranges = [part(0, 0)]
+  let atJoinReservation = 0
+  f.admitBytes = next => next !== 400_136 || ++atJoinReservation < 2
+  const join = Array.prototype.join, joined: number[] = []
+  vi.spyOn(Array.prototype, 'join').mockImplementation(function (this: unknown[], ...args: Parameters<typeof join>) {
+    if (args[0] === '' && this.length === 1 && this[0] === 'x'.repeat(100_000)) joined.push(1)
+    return join.apply(this, args)
+  })
+  try {
+    expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+    expect(joined).toEqual([])
+  } finally { vi.restoreAllMocks() }
+})
+
+it('refused coverage storage constructs neither typed coverage array', async () => {
+  const f = input((r, c) => value(r, c, 'x'))
+  f.selection.ranges = [part(0, 0, 0, 191)]
+  const Original = Int32Array, constructed: number[] = []
+  vi.stubGlobal('Int32Array', class extends Original { constructor(length: number) { constructed.push(length); super(length) } })
+  f.admitBytes = next => next < 32 * 192
+  try {
+    expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'resource-limit' })
+    expect(constructed).toEqual([])
+  } finally { vi.unstubAllGlobals() }
+})
+
+it('failed canonical diagnostic publication leaves existing diagnostics and ownership unchanged', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const { MainMemoryLedger } = await import('../src/xlsx/view/mainLedger')
+  const ledger = new MainMemoryLedger(), sheet = workbookOf([{ sheetId: 'A', cells: [] }]).sheets[0]
+  sheet.diagnostics = Object.freeze([{ kind: 'test', feature: 'existing', message: 'keep' }]) as unknown as NonNullable<typeof sheet.diagnostics>
+  const before = JSON.stringify(sheet.diagnostics), f = input((r, c) => value(r, c, 'beta'))
+  f.selection.ranges = [part(0, 0)]
+  f.format = (cell, allocation) => cellDisplayText(sheet, { value: cell.value, style: { numFmtId: 0, formatCode: '0;0;0;yyyy' } }, allocation)
+  f.admitBytes = next => { ledger.set('copy', 'job', next); return true }
+  f.retainBytes = (targets, bytes, commit) => { ledger.adoptWhileReachable('copy', 'job', 'document', targets, bytes, commit) }
+  expect(await serializeSelection(f)).toMatchObject({ kind: 'refused', code: 'page-error' })
+  expect(JSON.stringify(sheet.diagnostics)).toBe(before)
+  expect(ledger.snapshot().byPool).toMatchObject({ copy: 0, document: 0 })
+})
+
+it('keeps canonical newly formatted strings charged across the next batch source read', async () => {
+  const { cellDisplayText } = await import('../src/xlsx/render')
+  const sheet = workbookOf([{ sheetId: 'A', cells: [] }]).sheets[0], f = input((r, c) => value(r, c, 'x'.repeat(256)))
+  f.selection.ranges = [part(0, 0, 0, 1)]
+  f.format = (cell, allocation) => cellDisplayText(sheet, { value: cell.value, style: { numFmtId: 0, formatCode: '0;0;0;' + '@'.repeat(64) } }, allocation)
+  let held = 0, atSecondRead = 0
+  f.admitBytes = next => { held = next; return true }
+  const read = f.store.readCell.bind(f.store)
+  f.store.readCell = async (...args) => { if (args[0].col === 1) atSecondRead = held; return read(...args) }
+  expect(await textOf(f)).toBe('x'.repeat(16384) + '\t' + 'x'.repeat(16384))
+  expect(atSecondRead).toBe(32960) // owned field32768 + metadata128 + two record/slots64
+  expect(held).toBe(131204)
 })

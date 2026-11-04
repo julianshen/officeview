@@ -17,7 +17,7 @@ vi.mock('../src/xlsx/view/renderViewport', () => ({
     ctx.fillText(`tile ${viewport.box.x},${viewport.box.y}`, 0, 10)
     ctx.fillText('shared', 0, 20)
     ctx.measureText('shared')
-    return { kind: 'detail', work: { records: 1, gridlines: 0 } }
+    return { kind: 'detail', diagnostics: [], work: { records: 1, gridlines: 0 } }
   },
 }))
 

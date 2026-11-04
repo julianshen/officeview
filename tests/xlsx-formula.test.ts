@@ -1830,7 +1830,9 @@ describe('xlsx formula integration & canvas rendering', () => {
       moveTo: () => {},
       lineTo: () => {},
       translate: () => {},
-      measureText: (text: string) => ({ width: text.length * 7 }),
+      // 6 px glyphs keep '12,345.68' inside a default column: this case asserts the
+      // number formats, not the S13 V4 '#' overflow rule (tests/xlsx-number-overflow.test.ts).
+      measureText: (text: string) => ({ width: text.length * 6 }),
       fillText: (text: string) => {
         paintedTexts.push(text)
       },

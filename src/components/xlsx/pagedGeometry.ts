@@ -5,6 +5,7 @@
  * object planner and painter run unchanged on it; rows the cache does not know
  * yet are reported separately (RemoteSheetStore.pendingIn) and paint pending.
  */
+import { bindOverflowCache, type OverflowCache } from '../../xlsx/view/overflowCache'
 import type { RowOrder, RowVisibility } from '../../xlsx/view/contracts'
 import { createSheetMetrics } from '../../xlsx/view/projection'
 import { RectangleIndex } from '../../xlsx/view/structure'
@@ -12,7 +13,7 @@ import type { SheetGeometry } from '../../xlsx/view/viewport'
 import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { projectionBytes } from '../../xlsx/view/mainLedger'
 
-export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility): SheetGeometry {
+export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor()): SheetGeometry {
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
@@ -32,5 +33,6 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
   // are charged for as long as this geometry (a sheet's current or previous
   // view, active or not) is reachable.
   remote.mainLedger.chargeWhileReachable('geometry', [geometry], projectionBytes(metrics) + mergeIndex.estimatedBytes)
+  bindOverflowCache(geometry, cache)
   return geometry
 }

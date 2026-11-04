@@ -5,6 +5,8 @@
  */
 import { describe, expect, test } from 'vitest'
 import { createCanvas } from 'canvas'
+import { hitGeometry } from '../src/xlsx/view/find'
+import { cellTextOverflow } from '../src/xlsx/view/viewport'
 import { computeMetrics, renderSheet } from '../src/xlsx/render'
 import { createCellLayoutHost, renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import {
@@ -77,6 +79,81 @@ function cropParity(sheet: XlsxSheet, box: { x: number; y: number; width: number
   const b = pane.getContext('2d').getImageData(0, 0, box.width, box.height).data
   return { diff: diffPixels(a, b), result, ink: Array.from(b).some(v => v < 200) }
 }
+
+describe('S13 text overflow stops at non-empty neighbours (static and viewer agree)', () => {
+  test('long text clipped by a value, by "" and by a merge: viewer crop equals the static crop', () => {
+    const long = 'overflowing text that runs well past its column'
+    const sheet = sheetOf([
+      { index: 0, cells: [cell(0, 0, long), cell(0, 2, 'x')] },
+      { index: 1, cells: [cell(1, 0, long), cell(1, 1, '')] },
+      { index: 2, cells: [cell(2, 0, long)] },
+      { index: 3, cells: [cell(3, 0, long)] },
+      // Extends the static grid to E5 so the crop compares grid with grid.
+      { index: 4, cells: [cell(4, 4, 'end')] },
+    ], [], { mergeRanges: [{ minRow: 2, maxRow: 2, minCol: 2, maxCol: 3 }], merges: ['C3:D3'] })
+    const m = computeMetrics(sheet)
+    const { diff, ink, result } = cropParity(sheet, { x: 0, y: 0, width: m.widthPx, height: m.heightPx })
+    expect(ink).toBe(true)
+    expect(diff).toBe(0)
+    const clips = result.records.filter(r => r.source.col === 0).map(r => Math.round(r.text[0].clip.x + r.text[0].clip.width))
+    const colB = 64, colC = 128
+    // Row 1 blocked at C ("x"); row 2 blocked at B (""); row 3 blocked at the C:D merge; row 4 runs on.
+    expect(clips.slice(0, 3)).toEqual([colC, colB, colC])
+    expect(clips[3]).toBeGreaterThan(colC)
+  })
+})
+
+describe('S13 one overflow geometry for paint, records and find', () => {
+  const long = 'abcdefghijklmnopqrstuvwxyz0123'
+  test('a centered record carries the painted (widened/cut) clip, not its cell box', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 1, long, { numFmtId: 0, horizontal: 'center' } as XlsxCellStyle), cell(0, 2, 'x')] }])
+    const result = renderSheetViewport(sheet, createCanvas(320, 40).getContext('2d') as never, ready(sheet), view(0, 0, 320, 40), {}, { owner: OWNER })
+    const record = result.records.find(r => r.source.col === 1)!
+    const body = record.body.text!
+    expect(body.kind).toBe('layout')
+    const painted = body.kind === 'layout' ? body.clip : null
+    // Box-local body clip translated to the record's logical box.
+    expect(record.text[0].clip).toEqual({ x: record.logicalBounds.x + painted!.x - record.body.x, y: record.logicalBounds.y + painted!.y - record.body.y, width: painted!.width, height: painted!.height })
+    expect(record.text[0].clip.x).toBeLessThan(64) // widened left into empty A
+    expect(record.text[0].clip.x + record.text[0].clip.width).toBeCloseTo(128, 9) // cut at C ("x")
+  })
+  test('find highlights only painted ink: a blocked plain suffix keeps its hit inside the clip', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, long), cell(0, 1, 'x')] }])
+    const geometry = ready(sheet)
+    const ctx = createCanvas(320, 40).getContext('2d') as never
+    const host = createCellLayoutHost(ctx, sheet)
+    const overflow = cellTextOverflow(geometry, { row: 0, col: 0 })
+    expect(overflow).toEqual({ left: 0, right: 0 })
+    const hit = { sheetId: 'Layout', cellId: 0, source: { row: 0, col: 0 }, text: long, start: 20, end: 26, displaySlot: 0 }
+    const result = hitGeometry(hit, sheet.rows[0].cells[0], geometry.metrics, OWNER, host, new LayoutCache(), overflow)!
+    expect(result.record.text[0].clip.x + result.record.text[0].clip.width).toBeLessThanOrEqual(64 + 1e-9)
+    for (const rect of result.rects) expect(rect.x + rect.width).toBeLessThanOrEqual(64 + 1e-9) // never over B
+    expect(result.rects.length).toBe(1) // the hit itself is preserved
+  })
+  test('viewer allowances stop at the real worksheet edges (A and XFD)', () => {
+    const sheet = sheetOf([{ index: 0, cells: [cell(0, 0, 'left'), cell(0, MAX_COLS - 1, 'right')] }])
+    const geometry = ready(sheet)
+    expect(cellTextOverflow(geometry, { row: 0, col: 0 })!.left).toBe(0)
+    expect(cellTextOverflow(geometry, { row: 0, col: MAX_COLS - 1 })!.right).toBe(0)
+    expect(Number.isFinite(cellTextOverflow(geometry, { row: 0, col: 0 })!.right)).toBe(true)
+  })
+  test('viewer paints overflow over an empty formatted neighbour (fills first)', () => {
+    const sheet = sheetOf([
+      { index: 0, cells: [cell(0, 0, long), cell(0, 1, null, { numFmtId: 0, fillColor: 'FFFF00' } as XlsxCellStyle)] },
+      { index: 1, cells: [cell(1, 4, 'end')] },
+    ])
+    const m = computeMetrics(sheet)
+    const { diff, result } = cropParity(sheet, { x: 0, y: 0, width: m.widthPx, height: m.heightPx })
+    expect(diff).toBe(0)
+    const pane = createCanvas(m.widthPx, m.heightPx)
+    renderSheetViewport(sheet, pane.getContext('2d') as never, ready(sheet), view(0, 0, m.widthPx, m.heightPx), {}, { owner: OWNER })
+    const data = pane.getContext('2d').getImageData(66, 0, 60, 20).data
+    let dark = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] < 100 && data[i + 1] < 100) dark++
+    expect(dark).toBeGreaterThan(20) // text ink inside yellow B1
+    expect(result.records.length).toBeGreaterThan(0)
+  })
+})
 
 describe('canonical records (object sheet)', () => {
   test('each painted cell has one record with source identity, Float64 bounds and the painted text', () => {
@@ -315,6 +392,23 @@ describe('detail admission (SheetZoom x DPR, no font-size floor)', () => {
     expect(out.texts.some(item => item.text.startsWith('tiny'))).toBe(false)
     expect(out.find('Zoom in or inspect a cell for detail')).toHaveLength(1)
     expect(result.kind).toBe('detail')
+  })
+  test('review round 4: the exact active record in a coarse region paints under gridlines and drawings, with its border', () => {
+    const rows: XlsxRow[] = Array.from({ length: 10 }, (_, index) => ({ index, heightPt: 0.75, customHeight: true, cells: [cell(index, 0, `tiny${index}`, index === 3 ? { numFmtId: 0, fillColor: 'FFFF00FF', borders: { left: 'thin' } } as XlsxCellStyle : undefined)] }))
+    rows.push({ index: 10, cells: [cell(10, 0, 'Normal')] })
+    const sheet = sheetOf(rows)
+    const ops: string[] = []
+    const state: Record<string, unknown> = { fillStyle: '', strokeStyle: '', font: '', lineWidth: 1,
+      fillRect: () => ops.push(`fill:${String(state.fillStyle)}`), stroke: () => ops.push(`stroke:${String(state.strokeStyle)}`),
+      measureText: (t: string) => ({ width: t.length * 6, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2, fontBoundingBoxAscent: 9, fontBoundingBoxDescent: 3 }) }
+    const ctx = new Proxy(state, { get: (o, k) => k in o ? o[k as string] : () => {} }) as unknown as CanvasRenderingContext2D
+    const result = renderSheetViewport(sheet, ctx, ready(sheet), view(0, 0, 1280, 800, 0.25, 1), {}, { owner: OWNER, activeCell: { row: 3, col: 0 } })
+    expect(result.active?.source).toEqual({ row: 3, col: 0 })
+    const activeFill = ops.findIndex(op => /fill:#?ff00ff/i.test(op))
+    const gridlines = ops.indexOf('stroke:#d0d0d0')
+    expect(activeFill).toBeGreaterThan(-1)
+    expect(gridlines).toBeGreaterThan(activeFill) // drawn before gridlines (and drawings), like every record
+    expect(ops.slice(gridlines + 1).some(op => op.startsWith('stroke:'))).toBe(true) // its border is painted afterwards
   })
   test('the active cell keeps one exact detail record in a coarse frame', () => {
     const rows: XlsxRow[] = Array.from({ length: 50 }, (_, index) => ({ index, heightPt: 0.75, customHeight: true, cells: [cell(index, 0, `v${index}`)] }))
