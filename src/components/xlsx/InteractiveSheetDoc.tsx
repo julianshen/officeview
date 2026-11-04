@@ -213,7 +213,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(profile) : createDocumentOverflowCache(mainLedger, profile)
     return overflowContext.cache
   }
-  useEffect(() => () => { overflowContext.cache?.close(); overflowContext.cache = undefined }, [overflowContext])
+  useEffect(() => {
+    if (remote) {
+      const lease = remote.retainOverflow(profile)
+      overflowContext.cache = lease.cache
+      return () => { lease.release(); overflowContext.cache = undefined }
+    }
+    return () => { overflowContext.cache?.close(); overflowContext.cache = undefined }
+  }, [overflowContext, remote, profile])
   // View buffers already charged in this ledger (a rebuilt entry may reuse them).
   const viewCharged = useMemo(() => new WeakSet<object>(), [mainLedger])
   // The viewer's own pools end with the viewer; lifetime charges (geometry,
@@ -433,6 +440,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // coarse state); an empty selection always clears it.
   const [selectionIncomplete, setSelectionIncomplete] = useState(false)
   const [overflowNotice, setOverflowNotice] = useState('')
+  const overflowNoticeRef = useRef('')
   const frameOf = (): SheetFrame | null => {
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     return entry && scroll ? {
@@ -503,7 +511,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!ctx) return
     const presented = renderer.present(ctx, frame)
     biasRef.current = presented.bias
-    setOverflowNotice(presented.resourceNotice ?? '')
+    const nextOverflowNotice = presented.resourceNotice ?? ''
+    overflowNoticeRef.current = nextOverflowNotice
+    setOverflowNotice(nextOverflowNotice)
     report()
     // Bounded adjacent prefetch after the visible frame is up, in slices of at
     // most PREFETCH_SLICE_MS so a costly ring never blocks a frame; the batch
@@ -825,7 +835,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       closed = true
       held = 0
       mainLedger.release('copy', copyOwner)
-      if (live.current && token === copyToken.current) setCopyPending(false)
+      if (live.current) {
+        if (token === copyToken.current) setCopyPending(false)
+        // A cancelled or superseded native write still owns its bytes until it
+        // settles. If that release clears overflow pressure, repaint even though
+        // its UI token is stale; it must not change the newer job's pending UI.
+        if (overflowNoticeRef.current) setLoadTick(tick => tick + 1)
+      }
     }
   }
   const [valueNotice, setValueNotice] = useState(() => source.valueStatus?.().message)
