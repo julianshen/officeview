@@ -215,9 +215,9 @@ export class ValueReservation implements LaneAccount {
   get closed(): boolean { return this.released }
   get canAdopt(): boolean { return this.cache.canAdopt }
   adopt(targets: readonly object[], bytes = this.bytes): void {
-    if (this.released || bytes > this.bytes) throw new ValueIndexError('closed', 'Invalid reservation adoption')
-    this.cache.adopt(targets, bytes)
-    this.bytes -= bytes
+    if (this.released) throw new ValueIndexError('closed', 'Invalid reservation adoption')
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.bytes) throw new RangeError('Invalid value index reservation adoption')
+    this.cache.adopt(targets, bytes, () => { this.bytes -= bytes })
   }
   charge(bytes: number): void {
     if (this.released) throw new ValueIndexError('closed', 'Reservation already released')
@@ -226,13 +226,16 @@ export class ValueReservation implements LaneAccount {
   }
   release(bytes = this.bytes): void {
     if (this.released) return
-    const amount = Math.min(bytes, this.bytes)
-    this.cache.release(amount)
-    this.bytes -= amount
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.bytes) throw new RangeError('Invalid value index reservation release')
+    this.bytes -= bytes
+    this.cache.release(bytes)
   }
   close(): void {
-    this.release()
+    if (this.released) return
+    const bytes = this.bytes
+    this.bytes = 0
     this.released = true
+    this.cache.release(bytes)
   }
 }
 
@@ -258,9 +261,13 @@ export class ValueIndexCache {
   private readonly adoption: ((targets: readonly object[], bytes: number) => void) | undefined
   get canAdopt(): boolean { return this.adoption !== undefined }
   /** @internal Move cache bytes onto a surviving rule/page owner atomically. */
-  adopt(targets: readonly object[], bytes: number): void {
+  adopt(targets: readonly object[], bytes: number, transferred?: () => void): void {
     if (!this.adoption) throw new ValueIndexError('invalid-rule', 'Cache has no lifetime account')
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.used) throw new RangeError('Invalid value index memory adoption')
     this.adoption(targets, bytes)
+    // The lifetime owner has the bytes from this point, even if the observer
+    // invoked by release throws. The source reservation must not refund them.
+    transferred?.()
     this.release(bytes)
   }
   private readonly beforeGrowth: ((bytes: number) => boolean) | undefined
@@ -343,7 +350,11 @@ export class ValueIndexCache {
     }
   }
   /** @internal */
-  release(bytes: number): void { this.used -= bytes; this.onUsage?.(this.used) }
+  release(bytes: number): void {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.used) throw new RangeError('Invalid value index memory release')
+    this.used -= bytes
+    this.onUsage?.(this.used)
+  }
   /** @internal */
   forget(key: string, index: ValueIndex): void {
     if (this.indexes.get(key) === index) this.indexes.delete(key)
@@ -442,20 +453,31 @@ export class ValueIndex implements LaneAccount {
   release(result: ValueSearchResult): void
   release(target: number | ValueSearchResult): void {
     if (typeof target === 'number') {
-      this.cache.release(target)
+      if (!Number.isSafeInteger(target) || target < 0 || target > this.ledger.chargedBytes) throw new RangeError('Invalid value index release')
       this.ledger.chargedBytes -= target
+      this.cache.release(target)
       return
     }
     const record = this.results.get(target)
     if (!record || record.reservation.closed) return
-    if (--record.holders > 0) return
+    if (record.holders > 0 && --record.holders > 0) return
     this.retireResult(record.reservation)
     this.reservations.delete(record.reservation)
   }
   private retireResult(reservation: ValueReservation): void {
     const targets = this.escapedResults?.get(reservation)
-    if (targets) { reservation.adopt(targets); this.escapedResults!.delete(reservation) }
-    reservation.close()
+    let failed = false, error: unknown
+    if (targets) {
+      try { reservation.adopt(targets) } catch (cause) { failed = true; error = cause }
+      // A registration failure keeps the reservation for retry; a usage
+      // observer failure follows a completed transfer and must retire it.
+      if (!reservation.bytes) this.escapedResults!.delete(reservation)
+    }
+    if (!targets || !reservation.bytes) {
+      try { reservation.close() } catch (cause) { if (!failed) { failed = true; error = cause } }
+      this.reservations.delete(reservation)
+    }
+    if (failed) throw error
   }
   /** Adds an independent holder to an owned, live search result. */
   acquire(result: ValueSearchResult): void {
@@ -466,10 +488,11 @@ export class ValueIndex implements LaneAccount {
    * keys during the scan with identical results. */
   dropSearchKeys(): void {
     if (this.strategy === EXACT_SEARCH || this.disposed) return
-    this.release(this.keyBytes)
+    const bytes = this.keyBytes
     this.keyBytes = 0
     this.searchKeys = []
     this.keyState = 'streaming'
+    this.release(bytes)
   }
   /** @internal */
   attach(source: ValueColumnSource): void { this.source = source }
@@ -479,9 +502,11 @@ export class ValueIndex implements LaneAccount {
   reserve(): ValueReservation { return this.cache.reserve(this) }
   dispose(): void {
     if (this.disposed) return
-    this.disposed = true
     const bytes = this.ledger.chargedBytes
     for (const reservation of this.reservations) this.retireResult(reservation)
+    // Keep disposal retryable if an escaped-result owner cannot be registered.
+    // A failed transfer must not make the cache forget a still-charged result.
+    this.disposed = true
     this.reservations.clear()
     this.cache.forget(this.scope, this)
     this.kinds = new Uint8Array(0); this.numbers = new Float64Array(0); this.styles = new Uint32Array(0); this.counts = new Uint32Array(0)
@@ -779,7 +804,7 @@ export class ValueIndex implements LaneAccount {
   ownsSearch(result: ValueSearchResult): void {
     this.assertLive()
     const record = this.results.get(result)
-    if (!record || record.reservation.closed || result.searchedEntries > this.count) {
+    if (!record || record.holders <= 0 || record.reservation.closed || result.searchedEntries > this.count) {
       throw new ValueIndexError('stale-source', 'Search result belongs to another or a released value index result')
     }
   }
