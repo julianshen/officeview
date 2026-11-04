@@ -1,3 +1,4 @@
+import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type SourceAllocationOptions } from './allocationAccount'
 /**
  * Source adapters behind the async SourceStore (spec §§4.1-4.2, plan S1.2).
  *
@@ -78,28 +79,59 @@ export class LaneBuilder {
   private styles: number[] = []
   private texts: string[] = []
   private textUnits = 0
-  get count(): number { return this.rows.length }
+  private capacity = 0
+  private length = 0
+  private stagedBytes = 0
+  private finished = false
+  constructor(private readonly account?: AllocationReservation) {}
+  get count(): number { return this.length }
+  private grow(): void {
+    const capacity = Math.max(16, this.capacity * 2), bytes = capacity * 40 + 80
+    this.account?.charge(bytes)
+    try {
+      const rows = new Array<number>(capacity), tags = new Array<number>(capacity), numbers = new Array<number>(capacity)
+      const styles = new Array<number>(capacity), texts = new Array<string>(capacity)
+      for (let i = 0; i < this.length; i++) {
+        rows[i] = this.rows[i]; tags[i] = this.tags[i]; numbers[i] = this.numbers[i]
+        styles[i] = this.styles[i]; texts[i] = this.texts[i]
+      }
+      this.rows = rows; this.tags = tags; this.numbers = numbers; this.styles = styles; this.texts = texts
+      this.account?.release(this.stagedBytes)
+      this.capacity = capacity
+      this.stagedBytes = bytes
+    } catch (error) { this.account?.release(bytes); throw error }
+  }
   /** Same classification as the value index's cell-entry path (valueIndex.place). */
   add(row: number, value: string | number | boolean | null | undefined, valueIsError: boolean | undefined, styleIndex: number, unavailable: boolean): void {
+    if (this.finished) throw new RangeError('Local column producer already finished')
     const { tag, num, text } = laneValue(value, valueIsError, unavailable)
-    this.rows.push(row); this.tags.push(tag); this.numbers.push(num); this.styles.push(styleIndex); this.texts.push(text)
+    if (this.length === this.capacity) this.grow()
+    const i = this.length++
+    this.rows[i] = row; this.tags[i] = tag; this.numbers[i] = num; this.styles[i] = styleIndex; this.texts[i] = text
     this.textUnits += text.length
   }
   build(r0: number, r1: number): ColumnLanes {
-    const n = this.rows.length
+    if (this.finished) throw new RangeError('Local column producer already finished')
+    const n = this.length
+    this.account?.charge(21 * n + 4 + 2 * this.textUnits + 512)
+    const rows = new Uint32Array(n), tags = new Uint8Array(n), numbers = new Float64Array(n), styles = new Uint32Array(n)
     const text = new Uint16Array(this.textUnits), textStart = new Uint32Array(n + 1)
     let at = 0
     for (let i = 0; i < n; i++) {
+      rows[i] = this.rows[i]; tags[i] = this.tags[i]; numbers[i] = this.numbers[i]; styles[i] = this.styles[i]
       textStart[i] = at
       const t = this.texts[i]
-      // charCodeAt copies UTF-16 code units verbatim, lone surrogates included.
       for (let k = 0; k < t.length; k++) text[at++] = t.charCodeAt(k)
     }
     textStart[n] = at
-    return {
-      kind: 'lanes', r0, r1, rows: Uint32Array.from(this.rows), tags: Uint8Array.from(this.tags),
-      numbers: Float64Array.from(this.numbers), styles: Uint32Array.from(this.styles), text, textStart,
+    const result: ColumnLanes = { kind: 'lanes', r0, r1, rows, tags, numbers, styles, text, textStart }
+    if (this.account) {
+      this.rows = []; this.tags = []; this.numbers = []; this.styles = []; this.texts = []
+      this.account.release(this.stagedBytes)
+      this.stagedBytes = 0
+      this.finished = true
     }
+    return result
   }
 }
 /** Bytes a lanes run holds (row 4 + tag 1 + number 8 + style 4 per entry, 2 per code unit). */
@@ -222,7 +254,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const payload = toPayload(cell, this.valuePolicy)
     return isUnavailable(cell, this.valuePolicy) ? { kind: 'unavailable', cell: payload, reason: 'formula-value-unavailable' } : { kind: 'cell', cell: payload }
   }
-  async readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>> {
+  async readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions & SourceAllocationOptions): Promise<Page<SparseRowPage>> {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
     if (!isValidSourceRect(range)) return failedPage(this.stamp, failure('invalid-source-rect', 'Invalid range'))
@@ -235,13 +267,20 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       }
       at = offset
     }
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    try {
     const items: SparseRowPage[] = []
     let visited = 0, cellCount = 0
     while (at < this.rows.length && this.rowIndexes[at] <= range.r1 && visited < READ_ROWS_PAGE_ROWS) {
       const row = this.rows[at]
+      account?.charge(72)
       const cells: AuthoritativeCell[] = []
       for (const cell of row.cells) {
-        if (cell.row === row.index && cell.col >= range.c0 && cell.col <= range.c1) cells.push(toRowCell(cell, this.valuePolicy))
+        if (cell.row === row.index && cell.col >= range.c0 && cell.col <= range.c1) {
+          account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
+          cells.push(toRowCell(cell, this.valuePolicy))
+        }
       }
       // Cell bound: stop before a row would push the page past the cap (a row
       // has at most 16,384 cells, so a first row always fits a sane cap).
@@ -252,11 +291,14 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       if (cells.length) items.push({ row: row.index, cells: cells.sort((a, b) => a.col - b.col) })
     }
     const more = at < this.rows.length && this.rowIndexes[at] <= range.r1
-    return { items, completeness: 'complete', stamp: this.stamp, ...(more ? { nextCursor: `${key}${at}` } : {}) }
+    const page = { items, completeness: 'complete' as const, stamp: this.stamp, ...(more ? { nextCursor: `${key}${at}` } : {}) }
+    if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+    return page
+    } finally { account?.release() }
   }
   /** Column page straight from the row index: populated entries plus explicit
    * blank runs covering every requested row; nothing is cached per column. */
-  async queryColumn(request: ColumnQuery, options: ReadOptions): Promise<Page<ColumnEntry>> {
+  async queryColumn(request: ColumnQuery, options: ReadOptions & SourceAllocationOptions): Promise<Page<ColumnEntry>> {
     const error = this.guard(options)
     if (error) return failedPage(this.stamp, error)
     if (!isValidCoordinate(0, request.col)) return failedPage(this.stamp, failure('invalid-coordinate', 'Invalid column'))
@@ -277,7 +319,11 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       }
       at = i; row = r
     }
-    if (request.encoding === 'lanes') return this.lanesPage(request, intervals, at, row, prefix)
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    try {
+    const finish = (page: Page<ColumnEntry>) => { if (account) adoptAllocation(account, page, account.bytes, [this.stamp]); return page }
+    if (request.encoding === 'lanes') return finish(this.lanesPage(request, intervals, at, row, prefix, account))
     const items: ColumnEntry[] = []
     while (at < intervals.length && items.length < request.limit) {
       const { r1 } = intervals[at]
@@ -289,15 +335,18 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
         if (found) break
       }
       if (!found) {
+        account?.charge(72)
         items.push({ kind: 'blank', r0: row, r1 })
         at++
         if (at < intervals.length) row = intervals[at].r0
         continue
       }
       if (found.row > row) {
+        account?.charge(72)
         items.push({ kind: 'blank', r0: row, r1: found.row - 1 })
         if (items.length >= request.limit) { row = found.row; break }
       }
+      account?.charge(384 + (isUnavailable(found, this.valuePolicy) ? 288 : 0) + (found.sharedFormula ? 96 : 0))
       const payload = toPayload(found, this.valuePolicy)
       items.push(isUnavailable(found, this.valuePolicy)
         ? { kind: 'unavailable', row: found.row, cell: payload, reason: 'formula-value-unavailable' }
@@ -305,33 +354,53 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       row = found.row + 1
       if (row > r1) { at++; if (at < intervals.length) row = intervals[at].r0 }
     }
-    return { items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) }
+    return finish({ items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) })
+    } finally { account?.release() }
   }
-  async *scanPopulated(request: PopulatedQuery, options: ReadOptions): AsyncIterable<Page<AuthoritativeCell>> {
+  async *scanPopulated(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions): AsyncIterable<Page<AuthoritativeCell>> {
     const error = this.guard(options)
     if (error) { yield failedPage(this.stamp, error); return }
     if (!isValidSourceRect(request.range) || !Number.isSafeInteger(request.limit) || request.limit <= 0) {
       yield failedPage(this.stamp, failure('invalid-source-rect', 'Invalid populated query')); return
     }
+    let account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    try {
     let items: AuthoritativeCell[] = []
     for (let at = lowerBound(this.rowIndexes, request.range.r0); at < this.rows.length && this.rowIndexes[at] <= request.range.r1; at++) {
       for (const cell of this.rows[at].cells) {
         if (cell.col < request.range.c0 || cell.col > request.range.c1 || !isPopulated(cell)) continue
+        account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
         items.push(toRowCell(cell, this.valuePolicy))
         if (items.length === request.limit) {
-          yield { items, completeness: 'complete', stamp: this.stamp }
+          const page = { items, completeness: 'complete' as const, stamp: this.stamp }
+          if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+          account?.release()
+          yield page
+          account = options[SOURCE_ALLOCATION]?.reserve()
+          account?.charge(96)
           items = []
           const again = this.guard(options)
           if (again) { yield failedPage(this.stamp, again); return }
         }
       }
     }
-    yield { items, completeness: 'complete', stamp: this.stamp }
+    const page = { items, completeness: 'complete' as const, stamp: this.stamp }
+    if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+    account?.release()
+    yield page
+    } finally { account?.release() }
   }
-  async queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult> {
+  async queryStructural(rect: SourceRect, options: ReadOptions & SourceAllocationOptions): Promise<StructuralResult> {
     const base = { stamp: this.stamp, merges: [], tables: [], spills: [], drawings: [] }
     const error = this.guard(options) ?? (isValidSourceRect(rect) ? undefined : failure('invalid-source-rect', 'Invalid range'))
     if (error) return { ...base, completeness: 'incomplete', missing: [rect], error }
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    // Sparse authored metadata bounds the new records; no full-axis materialization.
+    let spillCount = this.engineSpills?.length ?? 0
+    for (const row of this.rows) for (const cell of row.cells) if (cell.arrayRef !== undefined || cell.dynamicArray) spillCount++
+    account?.charge(256 + 320 * (this.sheet.mergeRanges?.length ?? this.sheet.merges.length) + 256 * (this.tables?.length ?? 0) + 448 * spillCount + 320 * (this.sheet.drawingAnchors?.records.length ?? 0))
+    try {
     const merges = this.validMerges()
       .map(m => ({ id: `merge:${m.minRow}:${m.minCol}:${m.maxRow}:${m.maxCol}`, range: { r0: m.minRow, r1: m.maxRow, c0: m.minCol, c1: m.maxCol }, anchor: { row: m.minRow, col: m.minCol } }))
       .filter(m => isValidSourceRect(m.range) && intersects(m.range, rect))
@@ -372,7 +441,10 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     // Unreadable drawing anchors and an unavailable table inventory cannot prove "none here".
     if (this.unresolvedDrawings > 0 || this.tables === undefined) addMissing(rect)
     const drawings = this.drawings().filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
-    return { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
+    const result: StructuralResult = { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
+    if (account) adoptAllocation(account, result, account.bytes, [this.stamp])
+    return result
+    } finally { account?.release() }
   }
   /** Resolved once: the parsed sheet behind this adapter never changes. */
   private drawings(): DrawingAnchor[] {
@@ -381,13 +453,14 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     return this.drawingCache
   }
   /** One lanes run per interval slice; a page covers at most `limit` rows. */
-  private lanesPage(request: ColumnQuery, intervals: readonly SourceRowInterval[], at: number, row: number, prefix: string): Page<ColumnEntry> {
+  private lanesPage(request: ColumnQuery, intervals: readonly SourceRowInterval[], at: number, row: number, prefix: string, account?: AllocationReservation): Page<ColumnEntry> {
     const items: ColumnEntry[] = []
     let budget = request.limit
     while (at < intervals.length && budget > 0) {
       if (row < intervals[at].r0) row = intervals[at].r0
       const r1 = Math.min(intervals[at].r1, row + budget - 1)
-      const lanes = new LaneBuilder()
+      account?.charge(320)
+      const lanes = new LaneBuilder(account)
       for (let k = lowerBound(this.rowIndexes, row); k < this.rows.length && this.rowIndexes[k] <= r1; k++) {
         const cell = this.cellIn(this.rows[k], request.col)
         if (cell) lanes.add(cell.row, cell.value, cell.valueIsError, cell.styleIndex, isUnavailable(cell, this.valuePolicy))

@@ -92,7 +92,7 @@ it('suppresses a late page after timeout and accepts another request without wai
   } finally { resolve(); spy.mockRestore(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
 })
 
-it.each(['evaluator', 'yield'] as const)('reclaims session leases when the timed-out %s ignores cancellation', async blocked => {
+it.each(['evaluator', 'yield'] as const)('retains evaluator ownership until drain and reclaims idle yield leases after timeout', async blocked => {
   vi.useFakeTimers()
   const document = workbookOf([
     { sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] },
@@ -100,9 +100,11 @@ it.each(['evaluator', 'yield'] as const)('reclaims session leases when the timed
   ])
   let began!: () => void
   const started = new Promise<void>(resolve => { began = resolve })
+  let drain!: () => void
+  const held = new Promise<void>(resolve => { drain = resolve })
   const kernel = new ViewerKernel({ parse: async () => document }, {
     yield: async () => { if (blocked === 'yield') { began(); await new Promise(() => {}) } },
-    filterEvaluator: async () => { began(); return new Promise(() => {}) },
+    filterEvaluator: async () => { began(); await held; return { kind: 'cancelled' } },
   })
   await kernel.handle({ kind: 'open', requestId: 'open', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
   const owner = initialIdentity('doc', 'other'), replies: WorkerReply[] = []
@@ -115,10 +117,17 @@ it.each(['evaluator', 'yield'] as const)('reclaims session leases when the timed
     await vi.advanceTimersByTimeAsync(120_001)
     await pending
     expect(replies.at(-1)).toMatchObject({ kind: 'cancelled', diagnostics: [{ code: 'query-timeout' }] })
-    expect(kernel.lifecycleStats().transientBytes, 'A timeout must unwind operation charges and shipped-key leases').toBe(0)
+    if (blocked === 'evaluator') {
+      expect(kernel.lifecycleStats().transientBytes, 'The live evaluator still owns shipped keys').toBeGreaterThan(0)
+      kernel.session('doc')!.memory.trim(0)
+      expect(kernel.session('doc')!.isResident('other')).toBe(true)
+      drain()
+      await vi.waitFor(() => expect(kernel.lifecycleStats().transientBytes).toBe(0))
+    }
+    expect(kernel.lifecycleStats().transientBytes, 'Drained work releases operation charges and shipped-key leases').toBe(0)
     kernel.session('doc')!.memory.trim(0)
     expect(kernel.session('doc')!.isResident('other'), 'A timed-out evaluator must unpin its inactive view').toBe(false)
-  } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+  } finally { drain(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
 })
 
 

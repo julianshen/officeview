@@ -230,7 +230,9 @@ export class ViewerKernel {
       }
       report = this.reporter(command, entry, emit)
       const work = this.dispatch(command, entry.controller.signal, report)
-      const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, expired.signal)
+      // Sort/filter readers retain their resources through provider drain. Only
+      // their reply is cancelled here; dispatch finally owns eventual cleanup.
+      const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, command.kind === 'sort' || command.kind === 'filter' ? entry.controller.signal : expired.signal)
       dispatched = out
       const after = this.env.afterDispatch?.(command)
       if (after) {

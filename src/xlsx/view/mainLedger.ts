@@ -151,6 +151,11 @@ export class MainMemoryLedger {
     if (this.watcher) this.alive.set(token, { pool, owner: token, remaining: targets.length })
     return token
   }
+  /** Whether an allocation already has a live reachability owner. */
+  hasLifetime(target: object): boolean {
+    const token = this.leases.get(target)
+    return token !== undefined && this.lifetimes.has(token)
+  }
   /**
    * Ends the lifetime charge that `target` (any registered target of it) holds,
    * at once: its consumer has decoded the payload into its own structure and
@@ -187,6 +192,7 @@ export class MainMemoryLedger {
     this.bytes += bytes - old
     if (this.bytes > this.peakBytes) { this.peakBytes = this.bytes; this.peakPools = { ...this.pools } }
   }
+  ownerBytes(pool: MainPool, owner: string): number { return this.charges.get(`${pool}\u0000${owner}`)?.bytes ?? 0 }
   release(pool: MainPool, owner: string): void { this.set(pool, owner, 0) }
   /** Releases every owner of `pool` (or of every pool). */
   releaseAll(pool?: MainPool): void {
