@@ -258,4 +258,19 @@ describe('interactive timeline layer', () => {
     expect(ui.h.posted.map(command => command.kind)).toContain('controlCommit')
     ui.unmount()
   }, 60_000)
+
+  it('covers painted periods at 200% zoom without double scaling', async () => {
+    const { PX_PER_PT } = await import('../src/xlsx/pivots/buttons')
+    const { controller } = setup()
+    const zoomed: ScrollWindow = { ...window, zoom: 2 }
+    render(<TimelineLayer model={model} box={box} window={zoomed} viewport={{ width: 2000, height: 800 }} controller={controller} />)
+    // the layout is worksheet-logical; the viewport applies zoom exactly once
+    const logical = timelineLayout(model, box, PX_PER_PT).periods[0]!
+    const first = screen.getAllByRole('button', { name: /^Select / })[0] as HTMLElement
+    expect(parseFloat(first.style.left)).toBeCloseTo(2 * logical.x, 5)
+    expect(parseFloat(first.style.width)).toBeCloseTo(2 * logical.width, 5)
+    const track = screen.getByRole('button', { name: /Timeline scrolling unavailable/ }) as HTMLElement
+    const trackBox = timelineLayout(model, box, PX_PER_PT).track!
+    expect(parseFloat(track.style.left)).toBeCloseTo(2 * trackBox.x, 5)
+  })
 })

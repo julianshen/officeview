@@ -29,8 +29,9 @@ export function TimelineLayer({ model: savedModel, box, window, viewport, contro
   const [draftLabel, setDraftLabel] = useState('')
   useEffect(() => controller.subscribe(() => tick(value => value + 1)), [controller])
   const model = controller.model(savedModel.name) ?? savedModel
-  const scale = PX_PER_PT * window.zoom
+  const scale = PX_PER_PT
   const layout = timelineLayout(model, box, scale)
+  const levelAt = layout.level ? logicalToViewport(window, { x: layout.level.right - 76, y: layout.level.baseline - 20 }) : undefined
   const rootAt = logicalToViewport(window, { x: box.x, y: box.y })
   const periods = layout.periods.map(period => {
     const at = logicalToViewport(window, { x: period.x, y: layout.bar.y })
@@ -113,7 +114,7 @@ export function TimelineLayer({ model: savedModel, box, window, viewport, contro
         if (event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) lastPeriod(); else if (clearButton.current) clearButton.current.focus(); else focusGrid() }
         else if (event.key === 'Escape') { event.preventDefault(); focusGrid() }
       }}
-      style={{ position: 'absolute', left: Math.max(0, rootAt.x + layout.level!.right - box.x - 76 * scale), top: Math.max(0, rootAt.y + layout.level!.baseline - box.y - 20 * scale), width: 76 * scale, height: 20 * scale, pointerEvents: 'auto' }}>
+      style={{ position: 'absolute', left: Math.max(0, levelAt!.x), top: Math.max(0, levelAt!.y), width: 76 * window.zoom, height: 20 * window.zoom, pointerEvents: 'auto' }}>
       {levels.map(level => <option key={level} value={level}>{level[0]!.toUpperCase() + level.slice(1)}</option>)}
     </select>}
     {model.show?.selectionLabel !== false && <button ref={clearButton} type="button" tabIndex={-1} aria-label="Clear timeline selection" disabled={!model.selection} onClick={() => void controller.clearTimeline(model.name, new AbortController().signal)}
@@ -123,7 +124,7 @@ export function TimelineLayer({ model: savedModel, box, window, viewport, contro
       }}
       style={{ position: 'absolute', left: rootAt.x + Math.max(6, box.width - 138) * window.zoom, top: rootAt.y + 30 * window.zoom, width: 62 * window.zoom, height: 24 * window.zoom, boxSizing: 'border-box', border: '1px solid #888', borderRadius: 3, background: '#fff', color: '#242424', font: 'inherit', cursor: 'pointer', pointerEvents: 'auto' }}>Clear</button>}
     {layout.track && <button type="button" disabled tabIndex={-1} aria-label="Timeline scrolling unavailable; not measured" title="Timeline scrolling is unavailable until measured in Excel."
-      style={styleAt({ ...layout.track, ...logicalToViewport(window, { x: layout.track.x, y: layout.track.y }) })} />}
+      style={styleAt({ ...layout.track, ...logicalToViewport(window, { x: layout.track.x, y: layout.track.y }), width: layout.track.width * window.zoom, height: layout.track.height * window.zoom })} />}
     {draftLabel && <span role="status" style={{ position: 'absolute', left: 1, top: 1, width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }}>{draftLabel}</span>}
   </div>
 }

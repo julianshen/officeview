@@ -27,7 +27,7 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
   const zoom = window.zoom
   const origin = logicalToViewport(window, { x: box.x, y: box.y })
   const viewBox = { x: origin.x, y: origin.y, width: box.width * zoom, height: box.height * zoom }
-  const layout = slicerLayout(model, box, PX_PER_PT * zoom)
+  const layout = slicerLayout(model, box, PX_PER_PT)
   const visible = layout.items.map(item => {
     const at = logicalToViewport(window, { x: item.rect.x, y: item.rect.y })
     return { item, box: { x: at.x, y: at.y, width: item.rect.width * zoom, height: item.rect.height * zoom } }
@@ -75,7 +75,7 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
     {visible.map(({ item: placed }) => {
       const item = model.items[placed.index]!
       return <span key={`label:${item.id}`} aria-hidden="true" style={{ position: 'absolute', left: logicalToViewport(window, { x: placed.text.x, y: placed.rect.y }).x,
-        top: logicalToViewport(window, { x: placed.rect.x, y: placed.rect.y }).y, width: Math.max(0, placed.rect.width - 12 * PX_PER_PT * zoom), height: placed.rect.height * zoom,
+        top: logicalToViewport(window, { x: placed.rect.x, y: placed.rect.y }).y, width: Math.max(0, (placed.rect.width - 12 * PX_PER_PT) * zoom), height: placed.rect.height * zoom,
         lineHeight: `${placed.rect.height * zoom}px`, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', color: model.appearance?.items[placed.state].text ?? '#242424' }}>{item.label || '(blank)'}</span>
     })}
     {model.showCaption && <span aria-hidden="true" style={{ position: 'absolute', left: viewBox.x + 7 * PX_PER_PT * zoom, top: viewBox.y, height: 19 * PX_PER_PT * zoom,

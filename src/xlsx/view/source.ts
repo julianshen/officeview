@@ -64,7 +64,7 @@ function collectObjectPivotCharts(sheetId: string, drawings: readonly XlsxDrawin
 function collectObjectControlLinks(drawings: readonly XlsxDrawing[] | undefined, out: WorkerControlLink[]): void {
   for (const node of drawings ?? []) {
     const content = node.content
-    if (content?.kind === 'slicer') out.push({ name: content.slicer.name, kind: 'slicer', cacheId: content.slicer.cacheId,
+    if (content?.kind === 'slicer') out.push({ name: content.slicer.cacheName ?? content.slicer.name, kind: 'slicer', cacheId: content.slicer.cacheId,
       pivotTables: content.slicer.drives.map(drive => drive.pivotTable ?? '') })
     else if (content?.kind === 'timeline') out.push({ name: content.timeline.name, kind: 'timeline', cacheId: content.timeline.cacheId,
       pivotTables: (content.timeline.drives ?? []).map(drive => drive.pivotTable ?? '') })

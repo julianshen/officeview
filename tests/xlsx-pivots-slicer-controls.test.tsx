@@ -2,6 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SlicerController } from '../src/xlsx/pivots/slicers/controller'
 import { SlicerLayer } from '../src/components/xlsx/pivot/SlicerLayer'
+import { PX_PER_PT } from '../src/xlsx/pivots/buttons'
+import { slicerLayout } from '../src/xlsx/pivots/slicers/paint'
 import type { SlicerModel } from '../src/xlsx/pivots/slicers/model'
 import type { ScrollWindow } from '../src/xlsx/view/contracts'
 
@@ -54,5 +56,16 @@ describe('interactive slicer layer', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Apples, not selected' }).getAttribute('aria-pressed')).toBe('false'))
     fireEvent.click(screen.getByRole('button', { name: 'Clear Filter' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Apples, selected' }).getAttribute('aria-pressed')).toBe('true'))
+  })
+
+  it('covers the painted items at 200% zoom without double scaling', () => {
+    const controller = new SlicerController([model], { apply: vi.fn(), announce: vi.fn() })
+    const zoomed: ScrollWindow = { ...window, zoom: 2 }
+    render(<SlicerLayer model={model} box={box} window={zoomed} viewport={{ width: 800, height: 600 }} controller={controller} />)
+    // the layout is worksheet-logical; the viewport applies zoom exactly once
+    const logical = slicerLayout(model, box, PX_PER_PT).items[0]!
+    const apples = screen.getByRole('button', { name: 'Apples, selected' }) as HTMLElement
+    expect(parseFloat(apples.style.left)).toBeCloseTo(2 * logical.rect.x, 5)
+    expect(parseFloat(apples.style.width)).toBeCloseTo(2 * logical.rect.width, 5)
   })
 })

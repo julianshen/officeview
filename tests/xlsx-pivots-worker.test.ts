@@ -241,6 +241,22 @@ describe('worker pivot protocol', () => {
     } finally { await source.release() }
   })
 
+  it('loads saved slicer linkage into object pivot assets under the cache operation name', async () => {
+    const { createObjectWorkbookSource: createResidentSource } = await import('../src/xlsx/view/source')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(FIXTURE_ROOT, 'controls/controls-seed.xlsx')))))
+    const source = createResidentSource(doc, id())
+    const pivotSheet = doc.sheets.find(sheet => sheet.pivotTables?.length)!
+    const sheetId = source.sheets.find(sheet => sheet.name === pivotSheet.name)!.sheetId
+    try {
+      const assets = await source.pivotAssets?.(sheetId, new AbortController().signal, 'D')
+      // The drawing is labelled Product; InteractiveSheetDoc sends the cache
+      // operation name Slicer_Product, so the worker linkage must use it too.
+      expect(assets?.controlLinks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'Slicer_Product', kind: 'slicer', cacheId: expect.any(Number) }),
+      ]))
+    } finally { await source.release() }
+  })
+
   it('remote pivot adapter sends one linked apply and publishes callbacks only after its single commit', async () => {
     const { kernel, docId, sheetId } = await openObjectPivot({ duplicate: true })
     const port = connectInProcess(kernel), client = new ViewerClient(port), committed = vi.fn(), linkedCommitted = vi.fn((_targets: readonly { pivot: number }[]) => {})
