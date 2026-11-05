@@ -345,4 +345,14 @@ describe('interactive timeline layer', () => {
     await waitFor(() => expect(within(group).getByRole('button', { name: 'Clear timeline selection' }).hasAttribute('disabled')).toBe(true))
     ui.unmount()
   }, 60_000)
+
+  it('flags a page-axis date field with a specific selection as conflicting (PR #60 review 4486162364)', async () => {
+    const { timelinePageSelectionConflicts } = await import('../src/components/xlsx/pivot/pivotClient')
+    // A report-filter date field holding a single-day selection would keep
+    // restricting the pivot after a month filter commits (filter delta preserves pages).
+    expect(timelinePageSelectionConflicts({ axis: 'page', page: [0] })).toBe(true)
+    expect(timelinePageSelectionConflicts({ axis: 'page', page: 'all' })).toBe(false)
+    expect(timelinePageSelectionConflicts({ axis: 'row', page: undefined })).toBe(false)
+    expect(timelinePageSelectionConflicts(undefined)).toBe(false)
+  })
 })

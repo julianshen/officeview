@@ -114,6 +114,14 @@ export function slicerClearDelta(fieldIndex: number, isPageField: boolean): Pivo
     : { kind: 'items', field: fieldIndex, hidden: [] }
 }
 
+/** A timeline `filter` delta preserves the field's report-filter selection, so
+ * a page-axis date field holding a specific selection would keep restricting
+ * the pivot after the month commits (PR #60 review 4486162364). Selection must
+ * refuse; clear reconciles via `clearFilters`, which resets the page to All. */
+export function timelinePageSelectionConflicts(field: { axis: string; page?: readonly number[] | 'all' } | undefined): boolean {
+  return field?.axis === 'page' && field.page !== undefined && field.page !== 'all'
+}
+
 /** A slicer/timeline target pivot resolved across workbook sheets. */
 export interface ControlPivotTarget { sheetId: number; pivot: number; def: NonNullable<XlsxSheet['pivotTables']>[number] }
 /** Resolve a control's target pivot by saved name and cache id. Loaded display

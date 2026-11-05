@@ -1917,6 +1917,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const timelineFilter = ownedFilter ?? savedFilter
         if (field.filters.length && !timelineFilter) return { kind: 'refused', message: 'This date field already has a filter that the timeline cannot safely replace.' }
         if (action.kind === 'clear' && !timelineFilter) return { kind: 'refused', message: 'The saved timeline selection does not match a safely identifiable date filter.' }
+        // A report-filter date field holding a specific page selection would
+        // keep restricting the pivot after the month commits: the filter delta
+        // preserves view.pages[].selected (PR #60 review 4486162364). Clear
+        // reconciles via clearFilters, so only selection refuses here.
+        if (action.kind !== 'clear' && pivotUi.timelinePageSelectionConflicts(field)) return { kind: 'refused', message: 'This date field has a report-filter selection that the timeline cannot safely replace.' }
         const id = timelineFilter?.id ?? opened.model.nextFilterId
         const delta = action.kind === 'clear' ? { kind: 'clearFilters' as const, field: field.index }
           : { kind: 'filter' as const, field: field.index, filter: pivotUi.dateFilter(field.index, id, 'between', dateSerial(action.start), dateSerial(action.end)) }
