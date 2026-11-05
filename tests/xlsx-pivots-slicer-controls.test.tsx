@@ -112,4 +112,20 @@ describe('interactive slicer layer', () => {
     await waitFor(() => expect(within(group).getByRole('button', { name: 'Apples, selected' }).getAttribute('aria-pressed')).toBe('true'))
     ui.unmount()
   }, 60_000)
+
+  it('offers Clear Filter while hidden cache items stay unselected', async () => {
+    const apply = vi.fn(async () => ({ kind: 'committed' as const, revision: 1 }))
+    const restricted = {
+      ...model,
+      items: [{ id: 0, label: 'Apples', selected: true, noData: false }],
+      allItemIds: [0, 1],
+      selectedItemIds: [0],
+    }
+    const controller = new SlicerController([restricted], { apply, announce: vi.fn() })
+    render(<SlicerLayer model={restricted} box={box} window={window} viewport={{ width: 400, height: 300 }} controller={controller} />)
+    const clear = screen.getByRole('button', { name: 'Clear Filter' })
+    expect(clear.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(clear)
+    await waitFor(() => expect(apply).toHaveBeenCalledWith(expect.objectContaining({ name: 'Slicer_Product' }), { kind: 'clear' }, expect.anything()))
+  })
 })

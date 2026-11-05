@@ -42,6 +42,12 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
     return target ? { item, box: target } : undefined
   }).filter((entry): entry is { item: (typeof layout.items)[number]; box: { x: number; y: number; width: number; height: number } } => entry !== undefined)
   if (!visible.length) return null
+  const allIds = model.allItemIds ?? model.items.map(item => item.id)
+  const selectedIds = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
+  // A restricted cache can hide behind an all-selected visible set when
+  // showMissing drops no-data items: Clear stays available until everything
+  // in the cache, not just everything drawn, is selected.
+  const restricted = allIds.some(id => !selectedIds.has(id))
   const captionBox = model.showCaption ? place(box.x + 7 * PX_PER_PT, box.y, Math.max(0, box.width - 120), 19 * PX_PER_PT) : undefined
   const multiBox = place(Math.max(box.x, box.x + box.width - 112), box.y, 58, 19 * PX_PER_PT)
   const clearBox = place(Math.max(box.x, box.x + box.width - 54), box.y, 48, 19 * PX_PER_PT)
@@ -96,7 +102,7 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
       lineHeight: `${19 * PX_PER_PT * zoom}px`, maxWidth: captionBox.width, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', fontWeight: 700 }}>{model.caption ?? model.name}</span>}
     {multiBox && <button type="button" disabled aria-label="Multi-Select unavailable" aria-pressed={controller.multiSelect(model.name)} title="Not available: this interaction has not been measured in Excel."
       style={{ ...buttonStyle, left: multiBox.x, top: multiBox.y, width: multiBox.width, height: multiBox.height, pointerEvents: 'auto', background: '#f3f2f1', color: '#242424' }}>Multi-Select</button>}
-    {clearBox && <button type="button" aria-label="Clear Filter" disabled={model.items.every(item => item.selected)}
+    {clearBox && <button type="button" aria-label="Clear Filter" disabled={!restricted}
       onClick={() => void controller.clearSlicer(model.name, new AbortController().signal)}
       style={{ ...buttonStyle, left: clearBox.x, top: clearBox.y, width: clearBox.width, height: clearBox.height, pointerEvents: 'auto', background: '#f3f2f1', color: '#242424' }}>Clear Filter</button>}
   </div>
