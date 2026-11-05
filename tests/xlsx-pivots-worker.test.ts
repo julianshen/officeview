@@ -318,6 +318,27 @@ describe('worker pivot protocol', () => {
     }
   })
 
+  it('fetches the formula-staleness flag for committed sheets after a linked apply', async () => {
+    const { kernel, docId, sheetId } = await openObjectPivot({ duplicate: true, linkFirstOnly: true })
+    const port = connectInProcess(kernel), client = new ViewerClient(port)
+    const formulaFlagChanged = vi.fn((_sheetId: number, _flag: boolean) => {})
+    const remote = new RemotePivotSessions({ docId, profile: 'D', client, isClosed: () => false, formulaFlagChanged,
+      replyGrant: { reserve: () => true, settle: () => {}, release: () => {} } })
+    const numericSheet = Number(sheetId)
+    try {
+      expect((await remote.open(numericSheet, 0, new AbortController().signal)).kind).toBe('open')
+      const result = await remote.applyLinked({ kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }, [
+        { sheetId: numericSheet, pivot: 0, delta: { kind: 'collapse', field: 0, item: 0, collapsed: true } },
+      ])
+      expect(result, JSON.stringify(result)).toMatchObject({ kind: 'committed' })
+      await vi.waitFor(() => expect(formulaFlagChanged).toHaveBeenCalledWith(numericSheet, expect.any(Boolean)))
+    } finally {
+      remote.close()
+      await run(kernel, { kind: 'close', requestId: id(), docId })
+      await port.idle()
+    }
+  })
+
   it('reserves and settles the main reply grant around linked control apply and commit', async () => {
     const { kernel, docId, sheetId } = await openObjectPivot({ duplicate: true })
     const port = connectInProcess(kernel), client = new ViewerClient(port)

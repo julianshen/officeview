@@ -213,6 +213,9 @@ export class RemotePivotSessions {
       })
       if (this.host.linkedCommitted) this.host.linkedCommitted(published.map(({ sheetId, pivot, result, valueGen }) => ({ sheetId, pivot, result, valueGen })))
       else for (const target of published) this.host.committed?.(target.sheetId, target.pivot, target.result, target.valueGen)
+      // As on the ordinary path: a linked commit can leave formulas outside the
+      // pivots stale, so follow the flag for every committed sheet.
+      for (const sheetId of new Set(published.map(target => target.sheetId))) this.followFormulaFlag(sheetId)
       return { kind: 'committed', revision, selection: commitReply.result.selection, targets: published }
     } finally {
       signal?.removeEventListener('abort', cancel)

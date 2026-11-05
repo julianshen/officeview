@@ -27,6 +27,19 @@ describe('slicer controller', () => {
     expect(committed.revision).toBe(1)
   })
 
+  it('publishes a committed selection to every drawing sharing the slicer cache', async () => {
+    const apply = vi.fn(async () => ({ kind: 'committed' as const, revision: 1 }))
+    const changed = vi.fn()
+    const first = { ...model(), name: 'Product' }
+    const second = { ...model(), name: 'Product 2' }
+    const controller = new SlicerController([first, second], { apply, announce: vi.fn(), onChange: changed })
+    expect(await controller.applySlicer('Product', [0], new AbortController().signal)).toBe(true)
+    expect(controller.model('Product')!.selectedItemIds).toEqual([0])
+    expect(controller.model('Product 2')!.selectedItemIds).toEqual([0])
+    expect(controller.isFieldFiltered(1, 2)).toBe(true)
+    expect(changed).toHaveBeenCalledTimes(2)
+  })
+
   it('preserves the prior selection on stale or refused replies and refuses unmeasured repeat, modifier and multi-select actions', async () => {
     const announce = vi.fn()
     const apply = vi.fn(async () => ({ kind: 'stale' as const }))

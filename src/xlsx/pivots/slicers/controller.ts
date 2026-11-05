@@ -84,13 +84,18 @@ export class SlicerController {
     const run = this.queue.then(async () => {
       const before = this.models.get(name)
       if (this.disposed || signal.aborted || !before) return false
+      const cacheKey = before.cacheName ?? before.name
+      // Drawings sharing one slicer cache show one selection; snapshot them
+      // now so the commit below publishes to all of them or to none.
+      const siblings = [...this.models.values()].filter(candidate => candidate !== before && (candidate.cacheName ?? candidate.name) === cacheKey)
       const itemCount = before.allItemIds?.length ?? before.items.length
       if (!itemCount || itemCount > 10_000 || before.items.length > 10_000) {
         this.host.announce('This slicer selection is unavailable because its item identities are incomplete.')
         return false
       }
-      // Includes transient id vectors/sets and the retained model, before any copies.
-      const candidateBytes = 256 + before.items.length * 128 + itemCount * 128
+      // Includes transient id vectors/sets and every retained model copy, before any copies.
+      const candidateBytes = 256 + [before, ...siblings].reduce((bytes, model) =>
+        bytes + model.items.length * 128 + (model.allItemIds?.length ?? model.items.length) * 128, 0)
       const hold = this.host.admit?.(candidateBytes)
       if (this.host.admit && !hold) { this.host.announce('The slicer selection exceeds the viewer memory budget.'); return false }
       const all = before.allItemIds ?? before.items.map(item => item.id)
@@ -124,10 +129,14 @@ export class SlicerController {
         return false
       }
       const current = this.models.get(name)
-      if (current !== before) { hold?.release(); this.host.announce('The slicer changed meanwhile; try again.'); return false }
+      if (current !== before || siblings.some(sibling => this.models.get(sibling.name) !== sibling)) { hold?.release(); this.host.announce('The slicer changed meanwhile; try again.'); return false }
       this.holds.get(name)?.release()
       if (hold) this.holds.set(name, hold)
       this.publish({ ...before, selectedItemIds: [...selected], revision: Math.max((before.revision ?? 0) + 1, result.revision), items: before.items.map(item => ({ ...item, selected: selected.has(item.id) })) })
+      for (const sibling of siblings) {
+        this.holds.get(sibling.name)?.release()
+        this.publish({ ...sibling, selectedItemIds: [...selected], revision: Math.max((sibling.revision ?? 0) + 1, result.revision), items: sibling.items.map(item => ({ ...item, selected: selected.has(item.id) })) })
+      }
       this.host.announce('Slicer selection applied (view only; the file is unchanged).')
       return true
     }).catch(error => { if (!this.disposed) this.host.announce(error instanceof Error ? error.message.slice(0, 256) : 'Slicer change failed.'); return false })
