@@ -265,7 +265,9 @@ describe('interactive timeline layer', () => {
 
   it('worker/paged timeline selection uses the linked-control transaction', async () => {
     const file = `${__dirname}/fixtures/xlsx-pivots/controls/controls-seed.xlsx`, ui = await renderPagedControls(file)
-    const layer = await ui.findByRole('group', { name: 'Date timeline' })
+    // Paged mount (import + worker boot + chunk loads) can exceed the default
+    // 1 s query timeout under CI load; the mount itself is asserted below.
+    const layer = await ui.findByRole('group', { name: 'Date timeline' }, { timeout: 10_000 })
     const first = (await within(layer).findAllByRole('button', { name: /^Select / }))[0]!
     fireEvent.click(first)
     await waitFor(() => expect(ui.h.posted.map(command => command.kind)).toContain('controlCommit'))
