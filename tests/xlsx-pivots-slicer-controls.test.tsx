@@ -138,4 +138,22 @@ describe('interactive slicer layer', () => {
     expect(screen.queryByRole('button', { name: 'Multi-Select unavailable' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Clear Filter' })).toBeNull()
   })
+
+  it('refuses a slicer change while its pivot field carries a label filter (PR #60 review 4485866932)', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${__dirname}/fixtures/xlsx-pivots/controls/controls-seed.xlsx`))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const def = sheet.pivotTables!.find(table => table.name === '樞紐分析表1') ?? sheet.pivotTables![0]!
+    // The Product field is the column field (index 2). A label filter that
+    // keeps every item still overlaps the slicer: the items delta preserves
+    // filters, so clearing would report success while the pivot stays restricted.
+    // captionNotEqual to an impossible value opens cleanly (no faithful mismatch).
+    def.filters = [{ fld: 2, type: 'captionNotEqual', evalOrder: 0, id: 1,
+      autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true,
+        customFilters: { and: false, filters: [{ operator: 'notEqual', val: '___NO_SUCH___' }] } }] } }]
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const group = await ui.findByRole('group', { name: /Product slicer/i })
+    fireEvent.click(within(group).getByRole('button', { name: 'Apples, selected' }))
+    await waitFor(() => expect(ui.container.querySelector('[data-officeview-ui="viewer-status"]')?.textContent ?? '').toMatch(/overlapping filter/i))
+    ui.unmount()
+  }, 60_000)
 })

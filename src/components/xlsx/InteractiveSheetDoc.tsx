@@ -1810,6 +1810,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const field = opened.model.fields.find(candidate => candidate.index === fieldIndex)
         const pivotItems = target.def.fields[fieldIndex!]!.items
         if (!field || !Array.isArray(pivotItems) || pivotItems.length > 10_000 || pivotItems.some(item => item.type === 'data' && item.x === undefined)) return { kind: 'refused', message: 'This slicer field has an unsupported item mapping.' }
+        // An items delta preserves the field's pivot filters while the engine
+        // keeps applying them: accepting would report success yet leave the
+        // pivot restricted (PR #60 review 4485866932). Refuse like the timeline
+        // adapter does for its overlapping date filters.
+        if (field.filters.length) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
         const current = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
         const expectedHidden = pivotItems.flatMap((item, index) => item.type === 'data' && !current.has(item.x!) ? [index] : [])
         const actualHidden = field.items.filter(item => item.hidden).map(item => item.index)
