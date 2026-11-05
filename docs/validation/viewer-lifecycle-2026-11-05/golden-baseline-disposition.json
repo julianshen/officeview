@@ -1,0 +1,61 @@
+{
+  "base": "c6298f2c5db905f9c46e4eb1b5303c1ea73d22a4",
+  "candidate": "67aae3ba00a85f0ca84fcc050a8a20ec9cb3bb05",
+  "disposition": "Accept unchanged baseline differences for scoped lifecycle patch; do not re-record or relax thresholds; no Office fidelity claim",
+  "rows": [
+    {
+      "unit": "poi-55733.docx.0",
+      "comparison": "305/861,696 px changed (0.035% > 0.00%)",
+      "actualSha256": "98d860dfaa28e641dc8b7fa74f5ab54e391339387e468f4205528ae588e71465",
+      "diffSha256": "d0df62aaa6ed5d0ff1e14544f4b08a89d558f26fff97a4c88e3a37faff51573a"
+    },
+    {
+      "unit": "poi-ExcelPivotTableSample.xlsx.1",
+      "comparison": "10/82,460 px changed (0.012% > 0.00%)",
+      "actualSha256": "bfefffdb0c9dee339340815884fe3e97b1bce3f9e153edbcb6ec5a5986a03f05",
+      "diffSha256": "44ac20bd77167351547239467065377226c273dbd521596dad09f3dc48fd50fe"
+    },
+    {
+      "unit": "poi-ExcelPivotTableSample.xlsx.2",
+      "comparison": "6/36,960 px changed (0.016% > 0.00%)",
+      "actualSha256": "0df8e22fdecc9f69428509eadf27066ae0f49259a8fdf7e22cd41358b69b3282",
+      "diffSha256": "ce4c43a3e4ccbd06933b9f5a5160d22eadc651f93519d2c7e460148f99286841"
+    },
+    {
+      "unit": "poi-ExcelTables.xlsx.0",
+      "comparison": "4/115,840 px changed (0.003% > 0.00%)",
+      "actualSha256": "14edca32c024f0a52286f49990bd397ce88c2a3d5573be506682cc5ad758c2a2",
+      "diffSha256": "ea1c867afba7fd1158b7d9f2e55c247d24cc634e9ecf5c567658dfa1f748c0e3"
+    },
+    {
+      "unit": "poi-picture-transparency.pptx.1",
+      "comparison": "1,024/629,510 px changed (0.163% > 0.00%)",
+      "actualSha256": "2bf2f3bce4ae2537d3c399a3fa1aefcba49ed58ff2168d4ada01bc0a08f602a6",
+      "diffSha256": "7d76cd9fb3e3f393a80edc0e9fed6dd29041255d56be3be8e377d14452254e1a"
+    },
+    {
+      "unit": "poi-picture-transparency.pptx.2",
+      "comparison": "1,024/629,510 px changed (0.163% > 0.00%)",
+      "actualSha256": "0418bc0f6d1fce22b3e0a8964bb5a514028571a66c530a35c036a987712d8e16",
+      "diffSha256": "7d76cd9fb3e3f393a80edc0e9fed6dd29041255d56be3be8e377d14452254e1a"
+    },
+    {
+      "unit": "poi-picture-transparency.pptx.3",
+      "comparison": "1,024/629,510 px changed (0.163% > 0.00%)",
+      "actualSha256": "f27d6a4524ddae6d0987cf356a5c5676125e63d5d501958b6029a8ac9113cc73",
+      "diffSha256": "7d76cd9fb3e3f393a80edc0e9fed6dd29041255d56be3be8e377d14452254e1a"
+    },
+    {
+      "unit": "poi-tableStyle.xlsx.0",
+      "comparison": "5/46,480 px changed (0.011% > 0.00%)",
+      "actualSha256": "739f6ddae7012fc4b9f3cb52acd49933f3375452c12f812130b386b4e9859545",
+      "diffSha256": "a0993ac9161a42b09dafe5c1261f7261b0d3db1098d7f0b429350744b7a9a04a"
+    },
+    {
+      "unit": "pydocx-blk-inner-content.docx.0",
+      "comparison": "3,725/861,696 px changed (0.432% > 0.00%)",
+      "actualSha256": "9153a4b35fd647781142cf0a7c7596acd48238e314eded293bcfdb57713e05c7",
+      "diffSha256": "77add3ea517159544f4f17884f094eec2a5f7732144d943815e726476934f0db"
+    }
+  ]
+}
