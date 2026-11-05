@@ -1,0 +1,492 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "browser": "chromium",
+    "browserVersion": "156.0.8078.80",
+    "requestedFixtureId": "F2",
+    "profile": "desktop",
+    "mode": "smoke",
+    "commit": "67aae3ba00a85f0ca84fcc050a8a20ec9cb3bb05",
+    "repeat": 30,
+    "warmup": 3
+  },
+  "results": [
+    {
+      "schemaVersion": 1,
+      "environment": {
+        "buildCommit": "67aae3ba00a85f0ca84fcc050a8a20ec9cb3bb05",
+        "hardware": {
+          "logicalCores": 14,
+          "deviceMemoryGiB": 16,
+          "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)"
+        },
+        "os": {
+          "platform": "macOS",
+          "platformNote": "reported by the driver host (process.platform); the page user agent is not used for automated runs",
+          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+        },
+        "browser": {
+          "name": "chromium",
+          "version": "156.0.8078.80",
+          "engine": "blink",
+          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+          "automation": "playwright"
+        },
+        "dpr": 2,
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "profileConformance": {
+          "conforms": true,
+          "deviations": []
+        },
+        "fonts": {
+          "status": "ready",
+          "resolved": true
+        },
+        "cache": {
+          "state": "cold",
+          "note": "fresh Playwright browser context per run"
+        },
+        "source": {
+          "adapter": "synthetic-fixture-store",
+          "bytes": 0,
+          "rows": 1048576,
+          "cols": 8
+        },
+        "backend": "none (worker kernel scenario)",
+        "requestedFixtureId": "F2",
+        "fixtureId": "F2",
+        "evidence": "automated-browser",
+        "operator": {
+          "deviceModel": null,
+          "osVersion": null,
+          "thermalState": null,
+          "batteryState": null
+        },
+        "profile": "desktop",
+        "mode": "smoke",
+        "scenario": {
+          "id": "filter-1m-numeric",
+          "kind": "filter",
+          "keys": [
+            4
+          ],
+          "rows": 1048576,
+          "admitted": true
+        },
+        "note": "S8.4 kernel scenario filter-1m-numeric (full scale): F2 1,048,574 body rows, number \"greater than\" rule on amount (blanks every 7th row), about half visible. Delivered S7/S8 kernels in a module worker over the S0.2 F2 fixture store; no XLSX import, no canvas viewport. rule column 4 classified number; lane bytes 9437184"
+      },
+      "samples": [
+        {
+          "name": "prep:prepare-lane",
+          "unit": "ms",
+          "kind": "operation",
+          "values": [
+            9.399999856948853
+          ],
+          "warmupExcluded": 0
+        },
+        {
+          "name": "prep:classify-column",
+          "unit": "ms",
+          "kind": "operation",
+          "values": [
+            15.200000047683716
+          ],
+          "warmupExcluded": 0
+        },
+        {
+          "name": "prep:resident-lane-bytes",
+          "unit": "bytes",
+          "kind": "operation",
+          "values": [
+            9437184
+          ],
+          "warmupExcluded": 0
+        },
+        {
+          "name": "kernel",
+          "unit": "ms",
+          "kind": "operation",
+          "values": [
+            57.5,
+            57.299999952316284,
+            56.90000009536743,
+            57.10000014305115,
+            57.700000047683716,
+            57.40000009536743,
+            57.5,
+            58.60000014305115,
+            57.39999985694885,
+            57.200000047683716,
+            57.200000047683716,
+            57.39999985694885,
+            57.5,
+            57,
+            57.5,
+            58,
+            57.5,
+            57.299999952316284,
+            57.299999952316284,
+            57.19999980926514,
+            58,
+            57,
+            57.5,
+            57.200000047683716,
+            57.200000047683716,
+            57,
+            57.59999990463257,
+            57.10000014305115,
+            56.799999952316284,
+            57.299999952316284
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "kernel-visible-rows",
+          "unit": "count",
+          "kind": "operation",
+          "values": [
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390,
+            449390
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "input-to-present",
+          "unit": "ms",
+          "kind": "operation",
+          "values": [
+            77.29999995231628,
+            80.29999995231628,
+            80.39999985694885,
+            79,
+            78,
+            78.20000004768372,
+            78.30000019073486,
+            78.09999990463257,
+            78.90000009536743,
+            80.5,
+            78.79999995231628,
+            78,
+            78.69999980926514,
+            78.60000014305115,
+            78.59999990463257,
+            77.89999985694885,
+            81,
+            77,
+            79.70000004768372,
+            79,
+            76.89999985694885,
+            79,
+            79.59999990463257,
+            77.70000004768372,
+            81.40000009536743,
+            79.70000004768372,
+            80.90000009536743,
+            77.90000009536743,
+            81.30000019073486,
+            77.89999985694885
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "query-completion",
+          "unit": "ms",
+          "kind": "operation",
+          "values": [
+            70.39999985694885,
+            70.70000004768372,
+            70.20000004768372,
+            70.10000014305115,
+            71.20000004768372,
+            71.5,
+            70.90000009536743,
+            70.89999985694885,
+            70.70000004768372,
+            70.30000019073486,
+            71,
+            70.39999985694885,
+            70.5,
+            71.5,
+            70.59999990463257,
+            70.20000004768372,
+            70.29999995231628,
+            70.30000019073486,
+            70.5,
+            70.39999985694885,
+            70.59999990463257,
+            70.70000004768372,
+            70.19999980926514,
+            70.5,
+            70.30000019073486,
+            71.09999990463257,
+            70.40000009536743,
+            70,
+            70,
+            70.59999990463257
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "query-roundtrip",
+          "unit": "ms",
+          "kind": "operation",
+          "values": [
+            70.5,
+            70.79999995231628,
+            70.39999985694885,
+            70.20000004768372,
+            71.5,
+            71.60000014305115,
+            71,
+            71,
+            70.70000004768372,
+            70.40000009536743,
+            71.10000014305115,
+            70.5,
+            70.59999990463257,
+            71.70000004768372,
+            70.70000004768372,
+            70.29999995231628,
+            70.60000014305115,
+            70.40000009536743,
+            70.5,
+            70.5,
+            70.79999995231628,
+            70.80000019073486,
+            70.29999995231628,
+            70.60000014305115,
+            70.40000009536743,
+            71.09999990463257,
+            70.70000004768372,
+            70.10000014305115,
+            70.10000014305115,
+            70.69999980926514
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "query:worker-pool-peak-bytes",
+          "unit": "bytes",
+          "kind": "operation",
+          "values": [
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624,
+            9839624
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "query:worker-pool-source-bytes",
+          "unit": "bytes",
+          "kind": "operation",
+          "values": [
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184,
+            9437184
+          ],
+          "warmupExcluded": 3
+        },
+        {
+          "name": "longtask-duration",
+          "unit": "ms",
+          "kind": "event",
+          "values": [],
+          "warmupExcluded": 0
+        }
+      ],
+      "metrics": {
+        "prep:prepare-lane": {
+          "status": "insufficient-samples",
+          "p50": 9.399999856948853,
+          "max": 9.399999856948853,
+          "samples": 1,
+          "reason": "prep:prepare-lane: 1 sample(s) is below the 30-sample minimum for operation metrics; p95 refused"
+        },
+        "prep:classify-column": {
+          "status": "insufficient-samples",
+          "p50": 15.200000047683716,
+          "max": 15.200000047683716,
+          "samples": 1,
+          "reason": "prep:classify-column: 1 sample(s) is below the 30-sample minimum for operation metrics; p95 refused"
+        },
+        "prep:resident-lane-bytes": {
+          "status": "insufficient-samples",
+          "p50": 9437184,
+          "max": 9437184,
+          "samples": 1,
+          "reason": "prep:resident-lane-bytes: 1 sample(s) is below the 30-sample minimum for operation metrics; p95 refused"
+        },
+        "kernel": {
+          "status": "ok",
+          "p50": 57.299999952316284,
+          "p95": 58,
+          "max": 58.60000014305115,
+          "samples": 30
+        },
+        "kernel-visible-rows": {
+          "status": "ok",
+          "p50": 449390,
+          "p95": 449390,
+          "max": 449390,
+          "samples": 30
+        },
+        "input-to-present": {
+          "status": "ok",
+          "p50": 78.69999980926514,
+          "p95": 81.30000019073486,
+          "max": 81.40000009536743,
+          "samples": 30
+        },
+        "query-completion": {
+          "status": "ok",
+          "p50": 70.5,
+          "p95": 71.5,
+          "max": 71.5,
+          "samples": 30
+        },
+        "query-roundtrip": {
+          "status": "ok",
+          "p50": 70.60000014305115,
+          "p95": 71.60000014305115,
+          "max": 71.70000004768372,
+          "samples": 30
+        },
+        "query:worker-pool-peak-bytes": {
+          "status": "ok",
+          "p50": 9839624,
+          "p95": 9839624,
+          "max": 9839624,
+          "samples": 30
+        },
+        "query:worker-pool-source-bytes": {
+          "status": "ok",
+          "p50": 9437184,
+          "p95": 9437184,
+          "max": 9437184,
+          "samples": 30
+        },
+        "longtask-duration": {
+          "status": "none-observed",
+          "samples": 0,
+          "reason": "longtask-duration: collection ran and observed no events in the window"
+        },
+        "viewport-frame": {
+          "status": "unavailable",
+          "reason": "viewport-frame: no scroll/frame kernel exists in the S0.3 scaffold; plugs in with the S5 viewport"
+        },
+        "cold-import": {
+          "status": "unavailable",
+          "reason": "cold-import: the fixture import pipeline is not part of the S0.3 scaffold; plugs in with S1"
+        },
+        "progressive-first-viewport": {
+          "status": "unavailable",
+          "reason": "progressive-first-viewport: first-viewport measurement needs the S1 importer and S5 viewport"
+        }
+      },
+      "ledger": {
+        "main": {
+          "retained": 0,
+          "peak": 0,
+          "charged": 0
+        },
+        "worker": {
+          "retained": 0,
+          "peak": 0,
+          "charged": 0
+        },
+        "bitmap": {
+          "retained": 0,
+          "peak": 0,
+          "charged": 0
+        }
+      },
+      "hash": "bdf22e2479140f80790b7f76cca1929d012e91a16f5786959c5b4ea6529c9936"
+    }
+  ]
+}

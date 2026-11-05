@@ -181,7 +181,8 @@ export class RemoteWorkbook implements WorkbookSource {
   /** S10.2 §12.4: the document's main-thread application ledger (row cache,
    * adopted view buffers, in-flight replies; the viewer charges its own pools). */
   readonly mainLedger = new MainMemoryLedger()
-  private overflow: { profile: ProfileId; cache: OverflowCache } | undefined
+  private readonly overflow = new Map<ProfileId, { cache: OverflowCache; owners: number }>()
+  private lastOverflowProfile: ProfileId | undefined
   private closedOverflow: OverflowCache | undefined
   private readonly identities = new Map<string, CacheIdentity>()
   private readonly views = new Map<string, RemoteSheetView>()
@@ -410,16 +411,46 @@ export class RemoteWorkbook implements WorkbookSource {
    * workbook hands out an already-closed owner (no charge): its reads refuse with
    * OverflowResourceError('closed'), which planning turns into a coarse frame and
    * a notice, so render, memo and layout-effect callers never throw. */
-  overflowFor(profile: ProfileId = this.overflow?.profile ?? this.profile): OverflowCache {
+  overflowFor(profile: ProfileId = this.lastOverflowProfile ?? this.profile): OverflowCache {
     if (this.closed) {
       if (!this.closedOverflow) { this.closedOverflow = createDocumentOverflowCache(this.mainLedger, profile); this.closedOverflow.close() }
       return this.closedOverflow
     }
-    if (this.overflow?.profile === profile && !this.overflow.cache.closed) return this.overflow.cache
-    this.overflow?.cache.close()
-    const cache = createDocumentOverflowCache(this.mainLedger, profile)
-    this.overflow = { profile, cache }
-    return cache
+    this.lastOverflowProfile = profile
+    // A profile change replaces idle geometry contexts, but a cache still
+    // leased by another mounted viewer remains live until that viewer releases.
+    for (const [otherProfile, other] of this.overflow) {
+      if (otherProfile !== profile && other.owners === 0) {
+        other.cache.close()
+        this.overflow.delete(otherProfile)
+      }
+    }
+    let entry = this.overflow.get(profile)
+    if (!entry || entry.cache.closed) {
+      entry = { cache: createDocumentOverflowCache(this.mainLedger, profile), owners: 0 }
+      this.overflow.set(profile, entry)
+    }
+    return entry.cache
+  }
+  /** A mounted viewer's lease keeps the shared document cache alive until the last viewer unmounts. */
+  retainOverflow(profile: ProfileId = this.profile): { cache: OverflowCache; release(): void } {
+    const cache = this.overflowFor(profile), entry = this.overflow.get(profile)!
+    if (this.closed) return { cache, release() {} }
+    entry.owners++
+    let released = false
+    return {
+      cache,
+      release: () => {
+        if (released) return
+        released = true
+        if (this.overflow.get(profile) !== entry) return
+        if (entry.owners > 0) entry.owners--
+        if (entry.owners === 0) {
+          entry.cache.close()
+          this.overflow.delete(profile)
+        }
+      },
+    }
   }
 
   /** The active sheet keeps its cache; inactive sheets' caches are released. */
@@ -1009,8 +1040,8 @@ export class RemoteWorkbook implements WorkbookSource {
     this.pivotDisplayCache.close()
     this.regionStyleEvictionListeners.clear()
     this.sparklineChanges.clear()
-    this.overflow?.cache.close()
-    this.overflow = undefined
+    for (const entry of this.overflow.values()) entry.cache.close()
+    this.overflow.clear()
     // Owned caches go with the document: nothing answers from them after close.
     // Document-owned buffers are dropped here; their lifetime charges end when
     // nothing (not even a host still holding this closed workbook) reaches them.

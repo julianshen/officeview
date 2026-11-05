@@ -13,6 +13,7 @@ import { CHECK_WORK_UNITS } from '../../xlsx/view/scheduler'
 import { MainControlMemory, controlSourceStore, controlStructure, controlView } from '../../xlsx/view/mainControlMemory'
 import { MainMemoryLedger, estimatePayloadBytes } from '../../xlsx/view/mainLedger'
 import type { RangeDetection, RangeDetectionRequest } from '../../xlsx/view/rangeDetection'
+import { awaitAbortable } from '../../worker/viewerAbort'
 import { DocumentSession, type OperationOutcome, type WorkbookSource, sameStamp } from '../../worker/viewerSession'
 import { DisplayTextLaneCache, needsDisplayText } from '../../worker/displayTextLane'
 import { createControlsClient, type ControlSnapshot, type ControlsClient, type StagedControl, type ControlProgress, sameControlOwner } from './controlsClient'
@@ -376,6 +377,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
         return { kind: 'complete', matches: createMatcher(state, filter.range.r0) }
       } finally { state.producer = 'done'; drain() }
     } }) } catch (error) { state.consumerDone = true; drain(); sessionMetadata.release(); releaseBefore(); throw error }
+    let operation: Promise<OperationOutcome> | undefined
     let primaryFailure = false, primaryError: unknown
     try {
       if (store.stamp.valueGen > engine.identity(sheetId).valueGen) engine.publishValues(sheetId)
@@ -391,8 +393,14 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       }
       engine.commitDraft(engine.identity(sheetId), { ...before, visibility, matches: row => before.visibility.visible(before.order.sourceToDisplay(row)) })
       const hooks = { progress: (completed: number, total: number) => progress?.({ completed, total, message: kind === 'sort' ? 'Sorting view' : 'Filtering view' }) }
-      const outcome = kind === 'sort' ? await engine.sort(engine.identity(sheetId), spec as Parameters<ControlsClient['sort']>[1], abort, hooks)
-        : await engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], Date.now(), abort, hooks)
+      // Cancel the local reply promptly, as the worker kernel does. The session
+      // operation and evaluator keep their own charges until the producer drains.
+      const work = kind === 'sort' ? engine.sort(engine.identity(sheetId), spec as Parameters<ControlsClient['sort']>[1], abort, hooks)
+        : engine.filter(engine.identity(sheetId), spec as Parameters<ControlsClient['filter']>[1], Date.now(), abort, hooks)
+      // The input view is still borrowed by a held sort/filter continuation.
+      // Its hold ends with that operation, not with the cancelled local reply.
+      operation = work.finally(releaseBefore)
+      const outcome = await awaitAbortable(operation, abort)
       if (disposed || resources.closed || abort.aborted) return { kind: 'cancelled' }
       if (outcome.kind !== 'committed') return failure(outcome)
       const draft = outcome.view
@@ -410,7 +418,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       let cleanupFailed = false, cleanupError: unknown
       try { await engine.release() }
       catch (error) { cleanupFailed = true; cleanupError = error }
-      releaseBefore()
+      if (!operation) releaseBefore()
       try {
         state.consumerDone = true
         drain()

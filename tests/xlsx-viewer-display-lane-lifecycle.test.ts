@@ -8,7 +8,7 @@
  *   pool and the prepared counter through session close until that reader exits.
  * Stores are gated on a chosen read so the overlap is deterministic.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DisplayTextLaneCache } from '../src/worker/displayTextLane'
 import { createWorkerFilterEvaluator } from '../src/worker/viewerFilterEvaluator'
 import { DocumentSession, PREPARED_COLUMN_OVERHEAD, PREPARED_STRING_OVERHEAD, type FilterEvaluator, type WorkbookSource } from '../src/worker/viewerSession'
@@ -327,7 +327,7 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     expect(s.memoryStats().totalBytes).toBe(0)
   })
 
-  it('interruptible raw-provider cancellation ends the actual lane reader before that provider exits', async () => {
+  it('raw-provider cancellation retains the lane reader until that provider exits', async () => {
     const { source, gate: g } = gated(makeDoc(), thirdLaneRead())
     const lanes = new DisplayTextLaneCache()
     const s = session(source, { maxColumns: 4, maxBytes: 8192 }, lanes)
@@ -341,11 +341,11 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     // Closed: new work is refused at once ...
     expect((await s.filter(s.identity('s'), textSpec, 0, signal())).kind).not.toBe('committed')
     expect(g.held).toBe(true)
-    expect((await pending).kind).toBe('cancelled')
-    expect(lanes.bytes).toBe(0)
-    expect(s.preparedStats().bytes).toBe(0)
-    expect(s.memoryStats().totalBytes).toBe(0)
+    expect(lanes.bytes).toBe(LANE)
+    expect(s.preparedStats().bytes).toBe(LANE)
+    expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(LANE)
     await s.release()
+    expect(s.preparedStats().bytes).toBe(LANE)
     g.open()
     expect((await pending).kind).toBe('cancelled')
     expect(lanes.bytes).toBe(0)
@@ -409,9 +409,9 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     await s.release()
     expect(s.preparedStats().bytes).toBe(staged)
     expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(staged)
-    expect((await pending).kind).toBe('cancelled')
     expect(s.preparedStats().bytes).toBe(staged)
     filling.open()
+    expect((await pending).kind).toBe('cancelled')
     await producer.drain()
     expect(grow).toMatchObject({ code: 'cancelled' })
     expect(lanes.bytes).toBe(0)
@@ -474,7 +474,7 @@ describe('codex r3 #2: a lane a real reader holds stays charged through session 
     await filtering
     await oldDrain
     expect(outcome('f1')?.kind).not.toBe('complete')
-    expect(old.memoryStats().totalBytes).toBe(0)
+    await vi.waitFor(() => expect(old.memoryStats().totalBytes).toBe(0))
     expect(old.preparedStats().bytes).toBe(0)
     expect(kernel.session('d')!.preparedStats().bytes).toBe(LANE)
     await send({ kind: 'close', requestId: 'c2', docId: 'd' })
@@ -577,26 +577,20 @@ describe('codex r4 #2: a raw prepared column a real sort still leases stays char
   }
 
   for (const end of ['cancel', 'normal', 'error'] as const) {
-    it(`a held external host yield ${end === 'cancel' ? 'allows the cancelled sort lease to drain' : 'keeps the live sort lease charged until exit'} (${end})`, async () => {
+    it(`a held external host yield keeps the sort lease charged until exit (${end})`, async () => {
       const { s, g, bytes, controller, pending } = await heldSort(end === 'error')
       expect(bytes).toBeGreaterThan(0)
       if (end === 'cancel') controller.abort()
       // Close returns while the external host-yield callback is still paused.
-      // Under cancellation, the lease drains to 0 while the host-yield continuation is still paused (bounded, by design).
+      // Reply cancellation is separate from provider lifetime: a direct session
+      // operation retains its lease until the held yield returns, on every exit.
       await s.release()
-      expect(s.preparedStats().bytes).toBe(end === 'cancel' ? 0 : bytes)
-      if (end === 'cancel') {
-        expect(g.held).toBe(true)
-        expect((await pending).kind).toBe('cancelled')
-        expect(s.memoryStats().totalBytes).toBe(0)
-      } else expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+      expect(g.held).toBe(true)
+      expect(s.preparedStats().bytes).toBe(bytes)
+      expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
       await s.release()
-      expect(s.preparedStats().bytes).toBe(end === 'cancel' ? 0 : bytes)
-      if (end === 'cancel') {
-        expect(g.held).toBe(true)
-        expect((await pending).kind).toBe('cancelled')
-        expect(s.memoryStats().totalBytes).toBe(0)
-      } else expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
+      expect(s.preparedStats().bytes).toBe(bytes)
+      expect(s.memoryStats().totalBytes).toBeGreaterThanOrEqual(bytes)
       g.open()
       expect((await pending).kind).not.toBe('committed')
       expect(s.preparedStats()).toEqual({ columns: 0, bytes: 0 })

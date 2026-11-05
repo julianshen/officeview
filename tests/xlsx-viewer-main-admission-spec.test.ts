@@ -759,3 +759,99 @@ for (const profile of ['D', 'M'] as const) for (const route of ['index', 'cache'
     await source.release()
   })
 }
+
+test('release observer failure after ownership adoption cannot refund transferred bytes twice', () => {
+  const fault = new Error('release observer fault')
+  let failAtZero = false, transferred = 0
+  const cache = new ValueIndexCache({ limitBytes: 32,
+    adopt: (_targets, bytes) => { transferred += bytes },
+    onUsage: bytes => { if (failAtZero && bytes === 0) throw fault },
+  })
+  const reservation = cache.reserve()
+  reservation.charge(8)
+  failAtZero = true
+  expect(() => reservation.adopt([{}], 8)).toThrow(fault)
+  expect(transferred).toBe(8)
+  expect(cache.usedBytes).toBe(0)
+  expect(reservation.bytes).toBe(0)
+  failAtZero = false
+  reservation.close()
+  expect(cache.usedBytes).toBe(0)
+})
+
+test('a result whose lifetime adoption failed is released and cannot be reacquired', async () => {
+  const { source, identity, values } = domain()
+  const fault = new Error('lifetime registration fault')
+  let failAdoption = true
+  const cache = new ValueIndexCache({ limitBytes: 1024 * 1024, adopt: () => { if (failAdoption) throw fault } })
+  const index = cache.open(identity, values)
+  await index.build()
+  const result = await index.search({ text: '5', locale: 'en' }, { label: (_kind, value) => String(value) })
+  expect(() => index.release(result)).toThrow(fault)
+  expect(cache.usedBytes).toBeGreaterThan(0)
+  expect(() => index.acquire(result)).toThrow()
+  expect(() => index.dispose()).toThrow(fault)
+  // Current main invalidates reads immediately but keeps failed retirement retryable.
+  expect(index.disposed).toBe(true)
+  expect(cache.usedBytes).toBeGreaterThan(0)
+  failAdoption = false
+  index.release(result)
+  index.dispose()
+  expect(cache.usedBytes).toBe(0)
+  await source.release()
+})
+
+test('search-result retirement completes its lifetime transfer after a release observer throws', async () => {
+  const { source, identity, values } = domain(), ledger = new MainMemoryLedger()
+  const fault = new Error('retirement observer fault')
+  let fail = false, previous = 0
+  const resources = createViewerControlResources('D', bytes => {
+    const shrinking = bytes < previous
+    previous = bytes
+    if (fail && shrinking) { fail = false; throw fault }
+  }, ledger)
+  const index = resources.cache.open(identity, values)
+  await index.build()
+  const result = await index.search({ text: '', locale: 'en' }), backing = result.matches.buffer
+  const before = resources.cache.usedBytes, main = ledger.bytes
+  fail = true
+  expect(() => index.release(result)).toThrow(fault)
+  expect(resources.cache.usedBytes).toBeLessThan(before)
+  expect(ledger.bytes).toBe(main)
+  expect(resources.memory.owns(backing)).toBe(true)
+  expect(() => index.acquire(result)).toThrow()
+  index.release(result)
+  const retired = resources.cache.usedBytes
+  expect(index.release(result)).toBeUndefined()
+  expect(resources.cache.usedBytes).toBe(retired)
+  index.dispose()
+  expect(resources.cache.usedBytes).toBe(0)
+  expect(resources.memory.owns(backing)).toBe(true)
+  resources.dispose()
+  await source.release()
+})
+
+test('ValueIndexCache rejects invalid releases before changing its retained-byte count', () => {
+  const cache = new ValueIndexCache({ limitBytes: 16 })
+  const reservation = cache.reserve()
+  reservation.charge(8)
+  expect(() => cache.release(-1)).toThrow(RangeError)
+  expect(() => cache.release(9)).toThrow(RangeError)
+  expect(cache.usedBytes).toBe(8)
+  cache.release(8)
+  expect(cache.usedBytes).toBe(0)
+})
+
+test('ValueReservation rejects invalid adoption sizes before transferring ownership', () => {
+  let transferred = 0
+  const cache = new ValueIndexCache({ limitBytes: 32, adopt: (_targets, bytes) => { transferred += bytes } })
+  const reservation = cache.reserve()
+  reservation.charge(8)
+  expect(() => reservation.adopt([{}], -1)).toThrow(RangeError)
+  expect(() => reservation.adopt([{}], Number.NaN)).toThrow(RangeError)
+  expect(transferred).toBe(0)
+  expect(reservation.bytes).toBe(8)
+  expect(cache.usedBytes).toBe(8)
+  reservation.close()
+  expect(cache.usedBytes).toBe(0)
+})

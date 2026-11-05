@@ -370,7 +370,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!overflowContext.cache || overflowContext.cache.closed) overflowContext.cache = remote ? remote.overflowFor(budgetProfile) : createDocumentOverflowCache(mainLedger, budgetProfile)
     return overflowContext.cache
   }
-  useEffect(() => () => { overflowContext.cache?.close(); overflowContext.cache = undefined }, [overflowContext])
+  useEffect(() => {
+    if (remote) {
+      const lease = remote.retainOverflow(budgetProfile)
+      overflowContext.cache = lease.cache
+      return () => { lease.release(); overflowContext.cache = undefined }
+    }
+    return () => { overflowContext.cache?.close(); overflowContext.cache = undefined }
+  }, [overflowContext, remote, budgetProfile])
   // View buffers already charged in this ledger (a rebuilt entry may reuse them).
   const viewCharged = useMemo(() => new WeakSet<object>(), [mainLedger])
   // §§10.1, 12.4: each sheet entry holds the charged buffers it shows (view
@@ -981,6 +988,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Two sources: the base present and the find overlay each own (and clear)
   // only their own refusal, so an unrelated present never hides a find one.
   const [overflowNotice, setOverflowNotice] = useState('')
+  const overflowNoticeRef = useRef('')
   const [findOverflowNotice, setFindOverflowNotice] = useState('')
   const frameOf = (): SheetFrame | null => {
     // Not redundant with entryFor(): a sibling viewer unmounting or a workbook
@@ -1147,7 +1155,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!ctx) return
     const presented = renderer.present(ctx, frame)
     biasRef.current = presented.bias
-    setOverflowNotice(presented.resourceNotice ?? '')
+    overflowNoticeRef.current = presented.resourceNotice ?? ''
+    setOverflowNotice(overflowNoticeRef.current)
     report()
     // Bounded adjacent prefetch after the visible frame is up, in slices of at
     // most PREFETCH_SLICE_MS so a costly ring never blocks a frame; the batch
@@ -1805,7 +1814,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       held = 0
       mainLedger.release('copy', copyOwner)
       releaseEntry()
-      if (live.current && token === copyToken.current) setCopyPending(false)
+      if (live.current) {
+        if (token === copyToken.current) setCopyPending(false)
+        // A stale native write still releases memory when it settles. Repaint a
+        // refused frame without changing a newer copy's pending indicator.
+        if (overflowNoticeRef.current) setLoadTick(tick => tick + 1)
+      }
     }
   }
   const [valueNotice, setValueNotice] = useState(() => savedValuesNotice(source.valueStatus?.()))
