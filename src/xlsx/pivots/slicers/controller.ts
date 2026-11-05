@@ -84,16 +84,23 @@ export class SlicerController {
     const run = this.queue.then(async () => {
       const before = this.models.get(name)
       if (this.disposed || signal.aborted || !before) return false
-      const all = before.allItemIds ?? before.items.map(item => item.id)
-      const selectable = before.items.map(item => item.id)
-      const allSet = new Set(all)
-      if (!all.length || all.length > 10_000 || allSet.size !== all.length || all.some(id => !Number.isSafeInteger(id) || id < 0)) {
+      const itemCount = before.allItemIds?.length ?? before.items.length
+      if (!itemCount || itemCount > 10_000 || before.items.length > 10_000) {
         this.host.announce('This slicer selection is unavailable because its item identities are incomplete.')
         return false
       }
-      const candidateBytes = 256 + before.items.length * 64 + all.length * 8
+      // Includes transient id vectors/sets and the retained model, before any copies.
+      const candidateBytes = 256 + before.items.length * 128 + itemCount * 128
       const hold = this.host.admit?.(candidateBytes)
       if (this.host.admit && !hold) { this.host.announce('The slicer selection exceeds the viewer memory budget.'); return false }
+      const all = before.allItemIds ?? before.items.map(item => item.id)
+      const selectable = before.items.map(item => item.id)
+      const allSet = new Set(all)
+      if (allSet.size !== all.length || all.some(id => !Number.isSafeInteger(id) || id < 0)) {
+        hold?.release()
+        this.host.announce('This slicer selection is unavailable because its item identities are incomplete.')
+        return false
+      }
       const currentSelected = new Set(before.selectedItemIds ?? before.items.filter(item => item.selected).map(item => item.id))
       let selected: ReadonlySet<number>
       if (action.kind === 'clear') selected = allSet
@@ -248,4 +255,11 @@ export class TimelineController {
     this.queue = run
     return run
   }
+}
+
+/** Compares unique source-item indices without depending on menu order. */
+export function sameSlicerHiddenItems(expected: readonly number[], actual: readonly number[]): boolean {
+  if (expected.length !== actual.length) return false
+  const hidden = new Set(actual)
+  return expected.every(index => hidden.has(index))
 }

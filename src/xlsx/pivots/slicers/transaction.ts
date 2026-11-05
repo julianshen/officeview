@@ -165,6 +165,10 @@ export class LinkedControlTransaction<O, C> {
       if (controller.signal.aborted || signal.aborted) return { kind: 'cancelled' }
       return { kind: 'refused', feature: 'pivot-control-stage-failed', message: error instanceof Error ? error.message.slice(0, 256) : 'A linked control target could not be staged.' }
     } finally {
+      // A cancelled producer may ignore its signal. Keep its construction grant
+      // until the awaited producer has returned and its late candidate is discarded.
+      stage.building = false
+      if (stage.disposed) stage.hold.release()
       if (this.staged !== stage) signal.removeEventListener('abort', stage.abortListener)
     }
   }
@@ -172,7 +176,7 @@ export class LinkedControlTransaction<O, C> {
   commit(revision: number): LinkedControlOutcome {
     if (this.released) return { kind: 'released' }
     const stage = this.staged
-    if (!stage) return { kind: 'stale' }
+    if (!stage || stage.building) return { kind: 'stale' }
     if (stage.revision !== revision || stage.controller.signal.aborted) { this.dropStage(); return { kind: 'stale' } }
     if (!stage.candidates.every(({ target, value }) => target.current(value, revision))) {
       this.dropStage()
@@ -214,7 +218,7 @@ export class LinkedControlTransaction<O, C> {
     if (this.staged === stage) this.staged = undefined
     stage.controller.abort()
     for (const candidate of stage.candidates.splice(0)) candidate.target.discard(candidate.value)
-    stage.hold.release()
+    if (!stage.building) stage.hold.release()
   }
   private dropStage(): void {
     const stage = this.staged

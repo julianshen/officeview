@@ -840,8 +840,14 @@ class PivotIndexQuota extends Error {
 }
 /** A sheet's committed pivot overlays as one: a cell is answered by the last overlay whose rectangles hold it,
  * found with one point query over all of them (Task 33 perf: not a walk over every overlay). */
-export function combinePivotOverlays(overlays: readonly import('../xlsx/view/contracts').ValueOverlay[]): import('../xlsx/view/contracts').ValueOverlay | undefined {
+export function combinePivotOverlays(overlays: readonly import('../xlsx/view/contracts').ValueOverlay[], grantBytes = Infinity): import('../xlsx/view/contracts').ValueOverlay | undefined {
   if (!overlays.length) return undefined
+  // Read lengths only: copying vectors and building the index must fit the
+  // already-held grant, not be checked after construction.
+  let rectCount = 0, protectedCount = 0, mergeCount = 0
+  for (const overlay of overlays) { rectCount += overlay.rects.length; protectedCount += overlay.protectedRects.length; mergeCount += overlay.merges.length }
+  const requiredBytes = 512 + OwnedRects.upperBytesFor(rectCount) + rectCount * 64 + protectedCount * 48 + mergeCount * 48
+  if (!Number.isSafeInteger(requiredBytes) || requiredBytes > grantBytes) throw new PivotIndexQuota(requiredBytes, grantBytes)
   const rects = overlays.flatMap(overlay => overlay.rects)
   const protectedRects = overlays.flatMap(overlay => overlay.protectedRects)
   const merges = overlays.flatMap(overlay => overlay.merges)
@@ -1748,7 +1754,13 @@ export class DocumentSession {
         const overlay = candidate ? candidate.overlay : handle.committed?.overlay
         return overlay?.rects.length ? [overlay] : []
       })
-      const composite = combinePivotOverlays(overlays)
+      let composite: import('../xlsx/view/contracts').ValueOverlay | undefined
+      try { composite = combinePivotOverlays(overlays, perSheetCompositeGrant) }
+      catch (error) {
+        releaseAll()
+        if (error instanceof PivotIndexQuota) return { kind: 'quota', requiredBytes: error.requiredBytes, limitBytes: error.limitBytes }
+        throw error
+      }
       const rects = composite?.rects.length ?? 0, protectedRects = composite?.protectedRects.length ?? 0, merges = composite?.merges.length ?? 0
       // The candidate index and copied rectangle vectors are charged before combinePivotOverlays allocates them.
       const compositeBytes = 512 + OwnedRects.upperBytesFor(rects) + rects * 64 + protectedRects * 48 + merges * 48

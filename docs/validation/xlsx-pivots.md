@@ -995,3 +995,73 @@ The Stage 5 case definitions distinguish saved XML state from UI actions. Excel 
 - **Report Connections:** `s5-linked-two-pivots` (R3) requires three distinct layouts and full before/after maps for both linked pivots and the unlinked pivot. The recipe is pending owner observation.
 
 Do not cite these pending cases as Excel measurements until the saved artifacts and owner records exist.
+
+## Stage 5 results (Task 43, 2026-11-06)
+
+This is the verification subset assigned to Codex: performance/memory audit, fixes,
+changelog and evidence reporting. It is **not** a completion claim for every Task 43
+browser interaction or an independent approval of the author's own fixes.
+
+### Supported and refused paths
+
+Supported single-target controls update view-only pivot results through the resident
+client or the worker's staged/committed protocol. Mounted tests exercise selection,
+clear, timeline range/level, control-only sheets and committed canvas state. The
+worker validates saved control linkage and receiver grants before publication.
+
+The UI refuses controls with multiple targets (including same-layout targets); the
+lower-level worker protocol supports a bounded atomic target set. Its per-target
+pivot computation can scan records separately. The shared-index unit test is not
+proof of a shared records scan in the mounted application. Table slicers remain
+refused; they are not advertised as FilterEngine-supported here. The owner recipes
+above remain procedures rather than completed Office measurements.
+
+### Audit results
+
+- A 10,000-item hidden-index comparison fell from **50,005,000** source reads to
+  **10,000**, using a Set rather than repeated linear searches.
+- A denied 10,000-item selection now performs **zero item-id reads** before refusal.
+  Its candidate reservation covers transient vectors/sets and the retained model;
+  at 10,000 visible/all identities the conservative model charge is **2,560,256 B**.
+- Worker composite overlays validate rectangle-vector/index cost against the
+  pre-reserved grant before copying any elements; a 512 B grant refuses the
+  10,000-rectangle probe with zero rectangle reads and rolls back staging charges.
+- Generic linked transactions keep their construction charge until ignoring
+  providers drain; committing an incomplete target set returns stale. This helper
+  currently has no production instantiation, so those regressions are API safety
+  evidence, not a claim about real viewer cancellation measurements.
+- Four-target primitive stress: 20 alternating cancellation/commit-close cycles,
+  80 constructions, peak 400 model bytes, zero bytes after each cycle.
+- The existing shared-index helper test visits 100,000 records once across eight
+  leases (1,500,000 model bytes until last release). A 100-year daily timeline in
+  a 600px box constructs fewer than 100 visible periods, not all 36,525 days.
+
+These are deterministic work/byte-model checks, not a measured native-heap peak.
+See `task-43-audit.md` and `task-43-report.md` in the task evidence directory for
+commands, results and limits. Browser smoke covers saved-paint/collapse parity;
+it does not establish the full Stage 5 keyboard, drag, cross-sheet reset, or CLS
+matrix. Actual Safari, VoiceOver and physical-device validation are not implied.
+
+### Binding Stage 5 rulings
+
+- **S5-A:** independent reviews alternate Codex and agy; implementation and self-audit
+  do not substitute for the different-family review.
+- **S5-B:** generated timeline strings follow measured workbook-language evidence.
+  Current recognition uses saved default pivot-caption forms for en-US/zh-TW;
+  custom, unknown or mixed forms refuse model generation and keep the saved drawing
+  fallback. This is not general workbook-language detection.
+- **S5-C:** R1/R3/R4/R5/R6/R7 are not run for PR 5. Multi-select toggle,
+  already-selected/modifier clicks, different-layout linked pivots, table slicers,
+  timeline scroll/drag and cross-filter ordering remain refused or unverified.
+  The one owner-observed Multi-Select-on deselect-from-All transition is isolated in
+  a helper; it does not authorize enabling the unmeasured toggle or later gestures.
+
+### Task 43 gate receipts
+
+On the Task 43 candidate based on `416e5426`: TypeScript passed; the required
+pivot/viewer/formula suites passed **230 files / 6,319 tests** (59 skipped, 1 todo).
+The eager graph and paged-worker checks passed at **35,977 B gzip** (limit 38,720 B).
+Chromium and Playwright WebKit pivot smoke passed **10 tests**. The Stage 2
+one-million-record benchmark passed at **138.68 ms median-of-medians** over three
+runs against 200 ms, on a shared machine. The final full Vitest run passed **599 files / 12,127 tests** (61 skipped, 1 todo).
+The task report records the lock-sidecar regression and remaining coverage limits.

@@ -1809,7 +1809,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const current = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
         const expectedHidden = pivotItems.flatMap((item, index) => item.type === 'data' && !current.has(item.x!) ? [index] : [])
         const actualHidden = field.items.filter(item => item.hidden).map(item => item.index)
-        if (expectedHidden.length !== actualHidden.length || expectedHidden.some(index => !actualHidden.includes(index))) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        if (!pivotUi.sameSlicerHiddenItems(expectedHidden, actualHidden)) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
         const selected = action.kind === 'clear' ? new Set(model.allItemIds ?? []) : new Set(action.selectedItemIds)
         const hidden = pivotItems.flatMap((item, index) => item.type === 'data' && !selected.has(item.x!) ? [index] : [])
         const cacheName = model.cacheName ?? model.name
