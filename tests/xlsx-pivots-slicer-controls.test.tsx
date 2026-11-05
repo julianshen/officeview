@@ -128,4 +128,14 @@ describe('interactive slicer layer', () => {
     fireEvent.click(clear)
     await waitFor(() => expect(apply).toHaveBeenCalledWith(expect.objectContaining({ name: 'Slicer_Product' }), { kind: 'clear' }, expect.anything()))
   })
+
+  it('hides the header buttons when the caption is absent so first-row items stay clickable', () => {
+    const captionless = { ...model, showCaption: false }
+    const controller = new SlicerController([captionless], { apply: vi.fn(), announce: vi.fn() })
+    render(<SlicerLayer model={captionless} box={box} window={window} viewport={{ width: 400, height: 300 }} controller={controller} />)
+    // Items still render, but the header chrome (Excel's Display-header toggle) is gone.
+    expect(screen.getByRole('button', { name: 'Apples, selected' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Multi-Select unavailable' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear Filter' })).toBeNull()
+  })
 })

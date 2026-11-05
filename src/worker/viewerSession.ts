@@ -314,8 +314,9 @@ interface WorkerLinkedControlStage {
   replyCharge: Charge
   composites: Map<string, import('../xlsx/view/contracts').ValueOverlay | undefined>
   compositeCharges: Map<string, Charge>
-  /** Non-target pivots whose committed overlays a composite captured: the commit
-   * must see the same committed objects, or the composite would restore stale values. */
+  /** Non-target same-sheet pivots the composite depends on: every handle,
+   * including an absent committed overlay, so a first commit or a release
+   * in between still goes stale instead of restoring old displayed values. */
   deps: Array<{ handle: WorkerPivotHandle; committed: unknown }>
 }
 export type WorkerPivotOutcome =
@@ -1757,8 +1758,10 @@ export class DocumentSession {
         const candidate = candidateHandles.get(handle)
         if (candidate) return candidate.overlay?.rects.length ? [candidate.overlay] : []
         const committed = handle.committed
-        if (!committed?.overlay?.rects.length) return []
+        // Snapshot every same-sheet non-target handle, including the absent-committed
+        // state: a first commit between apply and commit must go stale (PR #60 R7).
         deps.push({ handle, committed })
+        if (!committed?.overlay?.rects.length) return []
         return [committed.overlay]
       })
       let composite: import('../xlsx/view/contracts').ValueOverlay | undefined
@@ -1789,15 +1792,24 @@ export class DocumentSession {
       this.cancelControlApply(revision)
       return { kind: 'stale' }
     }
-    // Every other pivot whose committed overlay the composite captured must be
-    // untouched since: an independent commit or release would otherwise have
-    // its displayed values silently restored by this publication.
+    // Every other same-sheet pivot must be untouched since staging: an
+    // independent commit, release, or a first commit from no overlay would
+    // otherwise have its displayed values silently restored by this publication.
     const live = new Set(this.pivotHandles.values())
     if (!stage.deps.every(dep => live.has(dep.handle) && dep.handle.committed === dep.committed)) {
       this.cancelControlApply(revision)
       return { kind: 'stale' }
     }
+    // A handle opened after staging (absent from deps) is also a change:
+    // its later commit would be wiped by the staged composite.
     const sheetIds = new Set(stage.targets.map(target => target.sheetId))
+    const stagedHandles = new Set([...stage.targets.map(target => target.handle), ...stage.deps.map(dep => dep.handle)])
+    for (const handle of this.pivotHandles.values()) {
+      if (sheetIds.has(handle.sheetId) && !stagedHandles.has(handle)) {
+        this.cancelControlApply(revision)
+        return { kind: 'stale' }
+      }
+    }
     for (const sheetId of sheetIds) if (!this.store(sheetId).setValueOverlay) {
       this.cancelControlApply(revision)
       return { kind: 'refused', feature: 'pivot-overlay-unavailable', message: 'A linked-control source cannot publish pivot values.' }

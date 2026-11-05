@@ -49,8 +49,11 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
   // in the cache, not just everything drawn, is selected.
   const restricted = allIds.some(id => !selectedIds.has(id))
   const captionBox = model.showCaption ? place(box.x + 7 * PX_PER_PT, box.y, Math.max(0, box.width - 120), 19 * PX_PER_PT) : undefined
-  const multiBox = place(Math.max(box.x, box.x + box.width - 112), box.y, 58, 19 * PX_PER_PT)
-  const clearBox = place(Math.max(box.x, box.x + box.width - 54), box.y, 48, 19 * PX_PER_PT)
+  // Excel's Display-header toggle removes the whole header chrome: with no
+  // caption the items start 4 pt below the top, so the 19 pt buttons would
+  // cover first-row items and steal their clicks (PR #60 review 4485611461).
+  const multiBox = model.showCaption ? place(Math.max(box.x, box.x + box.width - 112), box.y, 58, 19 * PX_PER_PT) : undefined
+  const clearBox = model.showCaption ? place(Math.max(box.x, box.x + box.width - 54), box.y, 48, 19 * PX_PER_PT) : undefined
   const invoke = (id: number, event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     if (event.ctrlKey || event.metaKey || event.shiftKey) {
       controller.toggleMultiSelect(model.name, true)

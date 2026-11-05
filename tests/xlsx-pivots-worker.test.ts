@@ -173,6 +173,33 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
+  it('goes stale when a never-committed same-sheet pivot commits first between apply and commit', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot({ duplicate: true, linkFirstOnly: true })
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 1, grantBytes: 16 * 1024 * 1024 })
+    const tables = sheet.pivotTables!
+    // Pivot 1 is open but has no committed overlay yet, so the staged
+    // composite omits it (PR #60 review 4485611449).
+    const staged = completed(await run(kernel, { kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024,
+      selection: { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] },
+      targets: [{ sheetId, pivot: 0, name: tables[0]!.name, cacheId: tables[0]!.cacheId, baseRevision: 0, requestRevision: 1,
+        delta: { kind: 'collapse', field: 0, item: 0, collapsed: true } }] }))
+    expect(staged.kind).toBe('controlApply')
+    // Its first ordinary commit lands while the linked stage is open.
+    const applied = await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 1, baseRevision: 0, revision: 1,
+      grantBytes: 16 * 1024 * 1024, delta: { kind: 'collapse', field: 0, item: 0, collapsed: true } })
+    if (applied.kind !== 'complete') throw new Error(`non-target apply: ${JSON.stringify(applied).slice(0, 300)}`)
+    if (applied.result.kind !== 'pivotApply') throw new Error(JSON.stringify(applied.result))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 1, revision: applied.result.revision })
+    const before = session.memoryStats().sourceBytes
+    const reply = await run(kernel, { kind: 'controlCommit', requestId: id(), docId, revision: 1 })
+    expect(reply.kind).toBe('error')
+    expect(reply).toMatchObject({ diagnostics: [{ code: 'pivot-control-revision-stale' }] })
+    const current = await session.pivotOpen(sheetId, 1, 16 * 1024 * 1024, new AbortController().signal)
+    expect(current.kind === 'open' ? current.revision : -1).toBe(applied.result.revision)
+    expect(session.memoryStats().sourceBytes).toBeLessThanOrEqual(before)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('refuses an unknown control name at the worker trust boundary', async () => {
     const { sheet, kernel, docId, sheetId, session } = await openObjectPivot()
     const before = session.memoryStats().sourceBytes
