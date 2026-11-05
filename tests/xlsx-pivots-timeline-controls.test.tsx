@@ -274,6 +274,20 @@ describe('interactive timeline layer', () => {
     expect(parseFloat(track.style.left)).toBeCloseTo(2 * trackBox.x, 5)
   })
 
+  it('clips period hit targets to the painted bar so overflow buttons cannot cover cells', async () => {
+    const { PX_PER_PT } = await import('../src/xlsx/pivots/buttons')
+    const { controller } = setup()
+    const narrow = { x: 0, y: 0, width: 200, height: 120 }
+    render(<TimelineLayer model={model} box={narrow} window={window} viewport={{ width: 1000, height: 400 }} controller={controller} />)
+    const bar = timelineLayout(model, narrow, PX_PER_PT).bar
+    const barRight = bar.x + bar.width
+    const buttons = screen.getAllByRole('button', { name: /^Select / }) as HTMLElement[]
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const button of buttons) {
+      expect(parseFloat(button.style.left) + parseFloat(button.style.width)).toBeLessThanOrEqual(barRight + 1e-6)
+    }
+  })
+
   it('heals a timeline selection after its pivot is reset to the saved view', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${__dirname}/fixtures/xlsx-pivots/controls/controls-seed.xlsx`))))
     const ui = render(<InteractiveSheetDoc doc={doc} />)

@@ -33,10 +33,19 @@ export function TimelineLayer({ model: savedModel, box, window, viewport, contro
   const layout = timelineLayout(model, box, scale)
   const levelAt = layout.level ? logicalToViewport(window, { x: layout.level.right - 76, y: layout.level.baseline - 20 }) : undefined
   const rootAt = logicalToViewport(window, { x: box.x, y: box.y })
+  const barAt = logicalToViewport(window, { x: layout.bar.x, y: layout.bar.y })
+  const barBox = { x: barAt.x, y: barAt.y, width: layout.bar.width * window.zoom, height: layout.bar.height * window.zoom }
   const periods = layout.periods.map(period => {
     const at = logicalToViewport(window, { x: period.x, y: layout.bar.y })
     return { ...period, name: periodName(period), rect: { x: at.x, y: at.y, width: period.width * window.zoom, height: layout.bar.height * window.zoom } }
-  }).filter(period => period.rect.x + period.rect.width > 0 && period.rect.y + period.rect.height > 0 && period.rect.x < viewport.width && period.rect.y < viewport.height)
+  }).map(period => {
+    // Clip hit targets to the painted bar: the layout keeps one lookahead
+    // period past the bar edge that the canvas clips, and unclipped buttons
+    // would cover adjacent worksheet cells.
+    const x0 = Math.max(period.rect.x, barBox.x), x1 = Math.min(period.rect.x + period.rect.width, barBox.x + barBox.width)
+    const y0 = Math.max(period.rect.y, barBox.y), y1 = Math.min(period.rect.y + period.rect.height, barBox.y + barBox.height)
+    return { ...period, rect: { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) } }
+  }).filter(period => period.rect.width > 0 && period.rect.height > 0 && period.rect.x < viewport.width && period.rect.y < viewport.height && period.rect.x + period.rect.width > 0 && period.rect.y + period.rect.height > 0)
   if (!periods.length) return null
   const visibleIndex = (index: number) => Math.max(0, Math.min(periods.length - 1, index))
   const announce = (message: string) => { root.current?.setAttribute('aria-label', `${model.caption ?? model.name} timeline. ${message}`); controller.report(message) }
