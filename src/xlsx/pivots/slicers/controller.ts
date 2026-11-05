@@ -18,6 +18,8 @@ export class SlicerController {
   private readonly listeners = new Set<() => void>()
   private readonly holds = new Map<string, { release(): void }>()
   private disposed = false
+  private pendingOps = 0
+  private disposeRequested = false
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(models: readonly SlicerModel[], private readonly host: SlicerControllerHost) {
@@ -83,7 +85,7 @@ export class SlicerController {
   private enqueue(name: string, action: SlicerAction, signal: AbortSignal): Promise<boolean> {
     const run = this.queue.then(async () => {
       const before = this.models.get(name)
-      if (this.disposed || signal.aborted || !before) return false
+      if (this.disposed || this.disposeRequested || signal.aborted || !before) return false
       const cacheKey = before.cacheName ?? before.name
       // Drawings sharing one slicer cache show one selection; snapshot them
       // now so the commit below publishes to all of them or to none.
@@ -121,8 +123,10 @@ export class SlicerController {
         selected = wanted
       }
       let result: SlicerApplyResult
-      try { result = await this.host.apply(before, action, signal) }
-      catch (error) { result = { kind: 'refused', message: error instanceof Error ? error.message.slice(0, 256) : 'The slicer change failed.' } }
+      this.pendingOps++
+      try {
+        try { result = await this.host.apply(before, action, signal) }
+        catch (error) { result = { kind: 'refused', message: error instanceof Error ? error.message.slice(0, 256) : 'The slicer change failed.' } }
       if (signal.aborted || this.disposed || result.kind !== 'committed') {
         hold?.release()
         if (!signal.aborted && !this.disposed) this.host.announce(result.kind === 'refused' ? result.message : 'The slicer changed meanwhile; try again.')
@@ -139,12 +143,23 @@ export class SlicerController {
       }
       this.host.announce('Slicer selection applied (view only; the file is unchanged).')
       return true
+      } finally { this.pendingOps--; this.finishDisposeIfRequested() }
     }).catch(error => { if (!this.disposed) this.host.announce(error instanceof Error ? error.message.slice(0, 256) : 'Slicer change failed.'); return false })
     this.queue = run
     return run
   }
 
-  dispose(): void { this.disposed = true; this.listeners.clear(); this.models.clear(); this.filteredFields.clear(); for (const hold of this.holds.values()) hold.release(); this.holds.clear() }
+  dispose(): void {
+    if (this.disposed) return
+    // A navigation landing mid-transaction must not discard its commit: the
+    // teardown waits until in-flight operations settle (at most the queued one).
+    if (this.pendingOps > 0) { this.disposeRequested = true; return }
+    this.disposed = true
+    this.listeners.clear(); this.models.clear(); this.filteredFields.clear(); for (const hold of this.holds.values()) hold.release(); this.holds.clear()
+  }
+  private finishDisposeIfRequested(): void {
+    if (this.disposeRequested && this.pendingOps === 0 && !this.disposed) { this.disposeRequested = false; this.dispose() }
+  }
 }
 
 export type TimelineAction = { kind: 'selection'; start: number; end: number } | { kind: 'clear' }
@@ -179,6 +194,8 @@ export class TimelineController {
   private readonly listeners = new Set<() => void>()
   private readonly holds = new Map<string, { release(): void }>()
   private disposed = false
+  private pendingOps = 0
+  private disposeRequested = false
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(models: readonly TimelineModel[], private readonly host: TimelineControllerHost) {
@@ -233,19 +250,31 @@ export class TimelineController {
     return run
   }
 
-  dispose(): void { this.disposed = true; this.listeners.clear(); this.models.clear(); for (const hold of this.holds.values()) hold.release(); this.holds.clear() }
+  dispose(): void {
+    if (this.disposed) return
+    // A navigation landing mid-transaction must not discard its commit: the
+    // teardown waits until in-flight operations settle (at most the queued one).
+    if (this.pendingOps > 0) { this.disposeRequested = true; return }
+    this.disposed = true
+    this.listeners.clear(); this.models.clear(); for (const hold of this.holds.values()) hold.release(); this.holds.clear()
+  }
+  private finishDisposeIfRequested(): void {
+    if (this.disposeRequested && this.pendingOps === 0 && !this.disposed) { this.disposeRequested = false; this.dispose() }
+  }
 
   private enqueue(name: string, signal: AbortSignal, prepare: (model: TimelineModel) => { action: TimelineAction; selection?: { start: number; end: number }; clear?: true } | undefined): Promise<boolean> {
     const run = this.queue.then(async () => {
       const before = this.models.get(name)
-      if (this.disposed || signal.aborted || !before) return false
+      if (this.disposed || this.disposeRequested || signal.aborted || !before) return false
       const prepared = prepare(before)
       if (!prepared) { this.host.announce('This timeline range is outside the supported calendar range.'); return false }
       const hold = this.host.admit?.(128)
       if (this.host.admit && !hold) { this.host.announce('The timeline change exceeds the viewer memory budget.'); return false }
       let result: TimelineApplyResult
-      try { result = await this.host.apply(before, prepared.action, signal) }
-      catch (error) { result = { kind: 'refused', message: error instanceof Error ? error.message.slice(0, 256) : 'The timeline change failed.' } }
+      this.pendingOps++
+      try {
+        try { result = await this.host.apply(before, prepared.action, signal) }
+        catch (error) { result = { kind: 'refused', message: error instanceof Error ? error.message.slice(0, 256) : 'The timeline change failed.' } }
       if (signal.aborted || this.disposed || result.kind !== 'committed' || this.models.get(name) !== before) {
         hold?.release()
         if (!signal.aborted && !this.disposed) this.host.announce(result.kind === 'refused' ? result.message : 'The timeline changed meanwhile; try again.')
@@ -260,6 +289,7 @@ export class TimelineController {
       this.publish(next)
       this.host.announce('Timeline selection applied (view only; the file is unchanged).')
       return true
+      } finally { this.pendingOps--; this.finishDisposeIfRequested() }
     }).catch(error => { if (!this.disposed) this.host.announce(error instanceof Error ? error.message.slice(0, 256) : 'Timeline change failed.'); return false })
     this.queue = run
     return run

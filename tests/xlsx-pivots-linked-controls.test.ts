@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { LinkedControlTransaction, measuredDeselectFromAll, resolveSlicerPivotTargets, resolveWorkerControlLink, SharedControlIndexCache, validateLinkedControlOperation, type LinkedControlOperation, type LinkedControlTarget } from '../src/xlsx/pivots/slicers/transaction'
-import { resolveControlPivotTargets } from '../src/components/xlsx/pivot/pivotClient'
+import { resolveControlPivotTargets, slicerClearDelta } from '../src/components/xlsx/pivot/pivotClient'
 import type { XlsxSheet } from '../src/xlsx/types'
 
 const operation: LinkedControlOperation = { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }
@@ -219,6 +219,11 @@ describe('linked-control bounds and resolution', () => {
     expect(resolveControlPivotTargets(shells, ['a', 'b'], entries, 'Sales', 8)).toEqual([])
     expect(resolveControlPivotTargets(shells, ['a', 'b'], new Map(), 'Sales', 7)).toEqual([])
     expect(resolveControlPivotTargets([{ pivotTables: [def] } as XlsxSheet], ['a'], new Map(), 'Sales', 7)).toEqual([{ sheetId: 0, pivot: 0, def }])
+  })
+
+  it('clears page fields through the page selection that items deltas do not touch', () => {
+    expect(slicerClearDelta(2, true)).toEqual({ kind: 'page', field: 2, selected: 'all' })
+    expect(slicerClearDelta(2, false)).toEqual({ kind: 'items', field: 2, hidden: [] })
   })
 
   it('rejects oversized, duplicate and malformed item selections before target estimates', async () => {

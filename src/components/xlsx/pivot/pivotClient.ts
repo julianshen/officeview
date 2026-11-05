@@ -105,6 +105,15 @@ export type LinkedPivotApplyOutcome = { kind: 'committed'; revision: number; tar
 const refusal = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
 const nameOf = (def: PivotTableDefinition | undefined) => `Pivot table ${String(def?.name ?? '').slice(0, 128)}`
 
+/** Clear restores All everywhere a slicer filters: page fields keep a separate
+ * page selection that an items delta does not touch, so clearing them needs
+ * the page delta. Row and column fields keep the items delta. */
+export function slicerClearDelta(fieldIndex: number, isPageField: boolean): PivotDelta {
+  return isPageField
+    ? { kind: 'page', field: fieldIndex, selected: 'all' }
+    : { kind: 'items', field: fieldIndex, hidden: [] }
+}
+
 /** A slicer/timeline target pivot resolved across workbook sheets. */
 export interface ControlPivotTarget { sheetId: number; pivot: number; def: NonNullable<XlsxSheet['pivotTables']>[number] }
 /** Resolve a control's target pivot by saved name and cache id. Loaded display

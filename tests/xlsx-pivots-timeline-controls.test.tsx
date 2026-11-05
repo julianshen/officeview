@@ -141,6 +141,22 @@ describe('timeline control state', () => {
     expect(announce).toHaveBeenCalledWith(expect.stringMatching(/memory budget/i))
     controller.dispose()
   })
+
+  it('publishes a commit that lands after navigation disposes the controller', async () => {
+    let commit!: () => void
+    const apply = vi.fn(() => new Promise<{ kind: 'committed'; revision: number }>(resolve => { commit = () => resolve({ kind: 'committed', revision: 1 }) }))
+    const changed: TimelineModel[] = []
+    const controller = new TimelineController([{ ...model }], { apply, announce: vi.fn(), onChange: m => { changed.push(m) } })
+    const pending = controller.selectTimeline(model.name, MARCH, MARCH, new AbortController().signal)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    controller.dispose()
+    expect(controller.model(model.name)?.selection).toBeUndefined()
+    commit()
+    expect(await pending).toBe(true)
+    expect(changed).toHaveLength(1)
+    expect(changed[0]!.selection).toEqual({ start: MARCH, end: APRIL - 86_400_000 })
+    expect(controller.model(model.name)).toBeUndefined()
+  })
 })
 
 describe('interactive timeline layer', () => {

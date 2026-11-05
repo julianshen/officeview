@@ -1824,7 +1824,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const selection: import('../../xlsx/view/contracts').LinkedControlSelection = action.kind === 'clear'
           ? { kind: 'slicerClear', name: cacheName }
           : { kind: 'slicerSelection', name: cacheName, selectedItemIds: action.selectedItemIds }
-        const outcome = await pivotController.applyLinked(selection, [{ sheetId: target.sheetId, pivot: target.pivot, delta: { kind: 'items', field: fieldIndex!, hidden } }])
+        const delta = action.kind === 'clear'
+          ? pivotUi.slicerClearDelta(fieldIndex!, opened.model.pages.includes(fieldIndex!))
+          : { kind: 'items', field: fieldIndex!, hidden } as const
+        const outcome = await pivotController.applyLinked(selection, [{ sheetId: target.sheetId, pivot: target.pivot, delta }])
         if (outcome.kind === 'committed') return { kind: 'committed', revision: outcome.targets[0]?.revision ?? outcome.revision }
         return outcome.kind === 'refused' ? outcome : { kind: outcome.kind }
       },

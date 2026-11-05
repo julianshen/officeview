@@ -62,4 +62,20 @@ describe('slicer controller', () => {
     expect(controller.model('Slicer_Product')!.items.every(item => item.selected)).toBe(true)
     expect(controller.isFieldFiltered(1, 2)).toBe(false)
   })
+
+  it('publishes a commit that lands after navigation disposes the controller', async () => {
+    let commit!: () => void
+    const apply = vi.fn(() => new Promise<{ kind: 'committed'; revision: number }>(resolve => { commit = () => resolve({ kind: 'committed', revision: 1 }) }))
+    const changed: SlicerModel[] = []
+    const controller = new SlicerController([model()], { apply, announce: vi.fn(), onChange: m => { changed.push(m) } })
+    const pending = controller.applySlicer('Slicer_Product', [0], new AbortController().signal)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    controller.dispose()
+    expect(controller.model('Slicer_Product')!.selectedItemIds).toEqual([0, 1, 2, 3])
+    commit()
+    expect(await pending).toBe(true)
+    expect(changed).toHaveLength(1)
+    expect(changed[0]!.selectedItemIds).toEqual([0])
+    expect(controller.model('Slicer_Product')).toBeUndefined()
+  })
 })
