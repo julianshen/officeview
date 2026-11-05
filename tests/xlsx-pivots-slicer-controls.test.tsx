@@ -156,4 +156,14 @@ describe('interactive slicer layer', () => {
     await waitFor(() => expect(ui.container.querySelector('[data-officeview-ui="viewer-status"]')?.textContent ?? '').toMatch(/overlapping filter/i))
     ui.unmount()
   }, 60_000)
+
+  it('flags a page-axis slicer field with a specific selection as conflicting (PR #60 review 4486449655)', async () => {
+    const { slicerPageSelectionConflicts } = await import('../src/components/xlsx/pivot/pivotClient')
+    // A slicer items delta preserves the field's report-filter selection, so a
+    // selection action on a page field holding a specific item must refuse (clear reconciles).
+    expect(slicerPageSelectionConflicts({ axis: 'page', page: [0] })).toBe(true)
+    expect(slicerPageSelectionConflicts({ axis: 'page', page: 'all' })).toBe(false)
+    expect(slicerPageSelectionConflicts({ axis: 'col', page: undefined })).toBe(false)
+    expect(slicerPageSelectionConflicts(undefined)).toBe(false)
+  })
 })

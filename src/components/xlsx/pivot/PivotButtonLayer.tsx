@@ -31,7 +31,7 @@ export { PivotFieldList } from './PivotFieldList'
 export { PivotValueSettingsDialog, PIVOT_VALUE_NUMFMT_PRESETS } from './PivotValueSettingsDialog'
 export type { PivotValueSettingsDialogProps } from './PivotValueSettingsDialog'
 
-export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort, resolveControlPivotTargets, slicerClearDelta, timelinePageSelectionConflicts } from './pivotClient'
+export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort, resolveControlPivotTargets, slicerClearDelta, slicerPageSelectionConflicts, timelinePageSelectionConflicts } from './pivotClient'
 export { dateFilter } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind, PivotShownLayout, PendingPivotFits, PivotFitMemory } from './pivotClient'
 export { SlicerLayer } from './SlicerLayer'

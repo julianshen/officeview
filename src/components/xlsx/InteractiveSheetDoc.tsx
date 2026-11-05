@@ -1815,6 +1815,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         // pivot restricted (PR #60 review 4485866932). Refuse like the timeline
         // adapter does for its overlapping date filters.
         if (field.filters.length) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        // A report-filter slicer field holding a specific page selection would
+        // keep restricting the pivot after an items selection commits: the
+        // items delta preserves view.pages[].selected (PR #60 review 4486449655).
+        // Clear reconciles via slicerClearDelta, so only selection refuses here.
+        if (action.kind !== 'clear' && pivotUi.slicerPageSelectionConflicts(field)) return { kind: 'refused', message: 'This slicer field has a report-filter selection that the slicer cannot safely replace.' }
         const current = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
         const expectedHidden = pivotItems.flatMap((item, index) => item.type === 'data' && !current.has(item.x!) ? [index] : [])
         const actualHidden = field.items.filter(item => item.hidden).map(item => item.index)

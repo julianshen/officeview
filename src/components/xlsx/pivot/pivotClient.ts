@@ -122,6 +122,15 @@ export function timelinePageSelectionConflicts(field: { axis: string; page?: rea
   return field?.axis === 'page' && field.page !== undefined && field.page !== 'all'
 }
 
+/** A slicer `items` selection delta preserves the field's report-filter
+ * selection in the same way, so a page-axis slicer field holding a specific
+ * item must refuse the selection (PR #60 review 4486449655). Clear already
+ * reconciles via `slicerClearDelta`, which sends a `page` delta for page
+ * fields, so only the selection branch needs this guard. */
+export function slicerPageSelectionConflicts(field: { axis: string; page?: readonly number[] | 'all' } | undefined): boolean {
+  return field?.axis === 'page' && field.page !== undefined && field.page !== 'all'
+}
+
 /** A slicer/timeline target pivot resolved across workbook sheets. */
 export interface ControlPivotTarget { sheetId: number; pivot: number; def: NonNullable<XlsxSheet['pivotTables']>[number] }
 /** Resolve a control's target pivot by saved name and cache id. Loaded display
