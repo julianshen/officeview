@@ -77,6 +77,18 @@ describe('interactive slicer layer', () => {
     expect(parseFloat(apples.style.width)).toBeCloseTo(2 * logical.rect.width, 5)
   })
 
+  it('hides body controls scrolled under a frozen strip instead of covering pinned cells', () => {
+    const controller = new SlicerController([model], { apply: vi.fn(), announce: vi.fn() })
+    const scrolledBox = { x: 0, y: 100, width: 140, height: 140 }
+    const first = slicerLayout(model, scrolledBox, PX_PER_PT).items[0]!
+    const edge = (first.rect.y - scrolledBox.y) + first.rect.height / 2
+    const frozenWindow: ScrollWindow = { ...window, logicalOrigin: { x: 0, y: scrolledBox.y }, frozen: { rows: 1, cols: 0, left: 0, top: edge } }
+    render(<SlicerLayer model={model} box={scrolledBox} window={frozenWindow} viewport={{ width: 400, height: 300 }} controller={controller} />)
+    const buttons = screen.getAllByRole('button', { name: /selected|not selected/ }) as HTMLElement[]
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const button of buttons) expect(parseFloat(button.style.top)).toBeGreaterThanOrEqual(edge - 1e-6)
+  })
+
   it('heals a slicer selection after its pivot is reset to the saved view', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${__dirname}/fixtures/xlsx-pivots/controls/controls-seed.xlsx`))))
     const ui = render(<InteractiveSheetDoc doc={doc} />)

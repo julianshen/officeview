@@ -274,6 +274,19 @@ describe('interactive timeline layer', () => {
     expect(parseFloat(track.style.left)).toBeCloseTo(2 * trackBox.x, 5)
   })
 
+  it('hides body periods scrolled under a frozen strip instead of covering pinned cells', async () => {
+    const { PX_PER_PT } = await import('../src/xlsx/pivots/buttons')
+    const { controller } = setup()
+    const scrolledBox = { x: 0, y: 100, width: 900, height: 120 }
+    const bar = timelineLayout(model, scrolledBox, PX_PER_PT).bar
+    const edge = (bar.y - scrolledBox.y) + bar.height / 2
+    const frozenWindow: ScrollWindow = { ...window, logicalOrigin: { x: 0, y: scrolledBox.y }, frozen: { rows: 1, cols: 0, left: 0, top: edge } }
+    render(<TimelineLayer model={model} box={scrolledBox} window={frozenWindow} viewport={{ width: 1000, height: 400 }} controller={controller} />)
+    const buttons = screen.getAllByRole('button', { name: /^Select / }) as HTMLElement[]
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const button of buttons) expect(parseFloat(button.style.top)).toBeGreaterThanOrEqual(edge - 1e-6)
+  })
+
   it('clips period hit targets to the painted bar so overflow buttons cannot cover cells', async () => {
     const { PX_PER_PT } = await import('../src/xlsx/pivots/buttons')
     const { controller } = setup()

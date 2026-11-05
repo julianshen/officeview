@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { logicalToViewport, type ViewportSize } from '../../../xlsx/view/scrollWindow'
+import { clipBoxToPaneRegion, paneRegionClips, paneRegionKind } from '../../../xlsx/view/frozenPanes'
 import type { ScrollWindow } from '../../../xlsx/view/contracts'
 import { PX_PER_PT } from '../../../xlsx/pivots/index'
 import { slicerLayout } from '../../../xlsx/pivots/slicers/paint'
@@ -25,14 +26,25 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
   useEffect(() => controller.subscribe(() => tick(value => value + 1)), [controller])
   const model = controller.model(savedModel.name) ?? savedModel
   const zoom = window.zoom
-  const origin = logicalToViewport(window, { x: box.x, y: box.y })
-  const viewBox = { x: origin.x, y: origin.y, width: box.width * zoom, height: box.height * zoom }
   const layout = slicerLayout(model, box, PX_PER_PT)
+  const clips = paneRegionClips(window.frozen, window.logicalOrigin, zoom, viewport)
+  // Worksheet-logical rectangles become viewport boxes clipped to their pane
+  // region: a part scrolled under a frozen strip has no target, as on canvas.
+  const place = (lx: number, ly: number, lw: number, lh: number) => {
+    const at = logicalToViewport(window, { x: lx, y: ly })
+    const clipped = clipBoxToPaneRegion(clips, paneRegionKind(window.frozen, lx, ly), { x: at.x, y: at.y, width: lw * zoom, height: lh * zoom })
+    if (!clipped) return undefined
+    if (clipped.x >= viewport.width || clipped.y >= viewport.height || clipped.x + clipped.width <= 0 || clipped.y + clipped.height <= 0) return undefined
+    return clipped
+  }
   const visible = layout.items.map(item => {
-    const at = logicalToViewport(window, { x: item.rect.x, y: item.rect.y })
-    return { item, box: { x: at.x, y: at.y, width: item.rect.width * zoom, height: item.rect.height * zoom } }
-  }).filter(entry => entry.box.x + entry.box.width > 0 && entry.box.y + entry.box.height > 0 && entry.box.x < viewport.width && entry.box.y < viewport.height)
+    const target = place(item.rect.x, item.rect.y, item.rect.width, item.rect.height)
+    return target ? { item, box: target } : undefined
+  }).filter((entry): entry is { item: (typeof layout.items)[number]; box: { x: number; y: number; width: number; height: number } } => entry !== undefined)
   if (!visible.length) return null
+  const captionBox = model.showCaption ? place(box.x + 7 * PX_PER_PT, box.y, Math.max(0, box.width - 120), 19 * PX_PER_PT) : undefined
+  const multiBox = place(Math.max(box.x, box.x + box.width - 112), box.y, 58, 19 * PX_PER_PT)
+  const clearBox = place(Math.max(box.x, box.x + box.width - 54), box.y, 48, 19 * PX_PER_PT)
   const invoke = (id: number, event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     if (event.ctrlKey || event.metaKey || event.shiftKey) {
       controller.toggleMultiSelect(model.name, true)
@@ -74,16 +86,18 @@ export function SlicerLayer({ model: savedModel, box, window, viewport, controll
     })}
     {visible.map(({ item: placed }) => {
       const item = model.items[placed.index]!
-      return <span key={`label:${item.id}`} aria-hidden="true" style={{ position: 'absolute', left: logicalToViewport(window, { x: placed.text.x, y: placed.rect.y }).x,
-        top: logicalToViewport(window, { x: placed.rect.x, y: placed.rect.y }).y, width: Math.max(0, (placed.rect.width - 12 * PX_PER_PT) * zoom), height: placed.rect.height * zoom,
+      const label = place(placed.text.x, placed.rect.y, Math.max(0, placed.rect.width - 12 * PX_PER_PT), placed.rect.height)
+      if (!label) return null
+      return <span key={`label:${item.id}`} aria-hidden="true" style={{ position: 'absolute', left: label.x,
+        top: label.y, width: label.width, height: label.height,
         lineHeight: `${placed.rect.height * zoom}px`, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', color: model.appearance?.items[placed.state].text ?? '#242424' }}>{item.label || '(blank)'}</span>
     })}
-    {model.showCaption && <span aria-hidden="true" style={{ position: 'absolute', left: viewBox.x + 7 * PX_PER_PT * zoom, top: viewBox.y, height: 19 * PX_PER_PT * zoom,
-      lineHeight: `${19 * PX_PER_PT * zoom}px`, maxWidth: Math.max(0, viewBox.width - 120 * zoom), overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', fontWeight: 700 }}>{model.caption ?? model.name}</span>}
-    <button type="button" disabled aria-label="Multi-Select unavailable" aria-pressed={controller.multiSelect(model.name)} title="Not available: this interaction has not been measured in Excel."
-      style={{ ...buttonStyle, left: Math.max(viewBox.x, viewBox.x + viewBox.width - 112 * zoom), top: viewBox.y, width: 58 * zoom, height: 19 * PX_PER_PT * zoom, pointerEvents: 'auto', background: '#f3f2f1', color: '#242424' }}>Multi-Select</button>
-    <button type="button" aria-label="Clear Filter" disabled={model.items.every(item => item.selected)}
+    {captionBox && <span aria-hidden="true" style={{ position: 'absolute', left: captionBox.x, top: captionBox.y, height: captionBox.height,
+      lineHeight: `${19 * PX_PER_PT * zoom}px`, maxWidth: captionBox.width, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', fontWeight: 700 }}>{model.caption ?? model.name}</span>}
+    {multiBox && <button type="button" disabled aria-label="Multi-Select unavailable" aria-pressed={controller.multiSelect(model.name)} title="Not available: this interaction has not been measured in Excel."
+      style={{ ...buttonStyle, left: multiBox.x, top: multiBox.y, width: multiBox.width, height: multiBox.height, pointerEvents: 'auto', background: '#f3f2f1', color: '#242424' }}>Multi-Select</button>}
+    {clearBox && <button type="button" aria-label="Clear Filter" disabled={model.items.every(item => item.selected)}
       onClick={() => void controller.clearSlicer(model.name, new AbortController().signal)}
-      style={{ ...buttonStyle, left: Math.max(viewBox.x, viewBox.x + viewBox.width - 54 * zoom), top: viewBox.y, width: 48 * zoom, height: 19 * PX_PER_PT * zoom, pointerEvents: 'auto', background: '#f3f2f1', color: '#242424' }}>Clear Filter</button>
+      style={{ ...buttonStyle, left: clearBox.x, top: clearBox.y, width: clearBox.width, height: clearBox.height, pointerEvents: 'auto', background: '#f3f2f1', color: '#242424' }}>Clear Filter</button>}
   </div>
 }

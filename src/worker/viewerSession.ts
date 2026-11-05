@@ -314,6 +314,9 @@ interface WorkerLinkedControlStage {
   replyCharge: Charge
   composites: Map<string, import('../xlsx/view/contracts').ValueOverlay | undefined>
   compositeCharges: Map<string, Charge>
+  /** Non-target pivots whose committed overlays a composite captured: the commit
+   * must see the same committed objects, or the composite would restore stale values. */
+  deps: Array<{ handle: WorkerPivotHandle; committed: unknown }>
 }
 export type WorkerPivotOutcome =
   | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; /** The value cells a fit reads (absent past the payload cap: no autofit). */ cells?: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[]; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
@@ -1747,12 +1750,16 @@ export class DocumentSession {
       return { kind: 'quota', requiredBytes: replyBytes, limitBytes: replyGrant }
     }
     const composites = new Map<string, import('../xlsx/view/contracts').ValueOverlay | undefined>()
+    const deps: WorkerLinkedControlStage['deps'] = []
     for (const sheetId of sheetIds) {
       const candidateHandles = new Map(stagedTargets.filter(target => target.sheetId === sheetId).map(target => [target.handle, target.staged]))
       const overlays = [...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId).flatMap(handle => {
         const candidate = candidateHandles.get(handle)
-        const overlay = candidate ? candidate.overlay : handle.committed?.overlay
-        return overlay?.rects.length ? [overlay] : []
+        if (candidate) return candidate.overlay?.rects.length ? [candidate.overlay] : []
+        const committed = handle.committed
+        if (!committed?.overlay?.rects.length) return []
+        deps.push({ handle, committed })
+        return [committed.overlay]
       })
       let composite: import('../xlsx/view/contracts').ValueOverlay | undefined
       try { composite = combinePivotOverlays(overlays, perSheetCompositeGrant) }
@@ -1771,7 +1778,7 @@ export class DocumentSession {
       }
       composites.set(sheetId, composite)
     }
-    this.linkedControlStage = { revision, selection, targets: stagedTargets, replyCharge, composites, compositeCharges }
+    this.linkedControlStage = { revision, selection, targets: stagedTargets, replyCharge, composites, compositeCharges, deps }
     return response
   }
   /** Synchronous all-target commit: validation, pivot state, overlays and per-sheet generations publish in one worker turn. */
@@ -1779,6 +1786,14 @@ export class DocumentSession {
     const stage = this.linkedControlStage
     if (!stage || stage.revision !== revision || this.closed || signal.aborted) return signal.aborted ? { kind: 'cancelled' } : { kind: 'stale' }
     if (!stage.targets.every(({ handle, staged, revision: targetRevision }) => handle.staged === staged && staged.wireRevision === targetRevision && handle.session.canCommit(staged.result))) {
+      this.cancelControlApply(revision)
+      return { kind: 'stale' }
+    }
+    // Every other pivot whose committed overlay the composite captured must be
+    // untouched since: an independent commit or release would otherwise have
+    // its displayed values silently restored by this publication.
+    const live = new Set(this.pivotHandles.values())
+    if (!stage.deps.every(dep => live.has(dep.handle) && dep.handle.committed === dep.committed)) {
       this.cancelControlApply(revision)
       return { kind: 'stale' }
     }

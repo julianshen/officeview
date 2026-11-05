@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
 import { logicalToViewport, type ViewportSize } from '../../../xlsx/view/scrollWindow'
+import { clipBoxToPaneRegion, paneRegionClips, paneRegionKind } from '../../../xlsx/view/frozenPanes'
 import type { ScrollWindow } from '../../../xlsx/view/contracts'
 import { PX_PER_PT } from '../../../xlsx/pivots/index'
 import { timelineLayout } from '../../../xlsx/pivots/slicers/paint'
@@ -29,24 +30,37 @@ export function TimelineLayer({ model: savedModel, box, window, viewport, contro
   const [draftLabel, setDraftLabel] = useState('')
   useEffect(() => controller.subscribe(() => tick(value => value + 1)), [controller])
   const model = controller.model(savedModel.name) ?? savedModel
-  const scale = PX_PER_PT
-  const layout = timelineLayout(model, box, scale)
-  const levelAt = layout.level ? logicalToViewport(window, { x: layout.level.right - 76, y: layout.level.baseline - 20 }) : undefined
-  const rootAt = logicalToViewport(window, { x: box.x, y: box.y })
+  const zoom = window.zoom
+  const layout = timelineLayout(model, box, PX_PER_PT)
+  const clips = paneRegionClips(window.frozen, window.logicalOrigin, zoom, viewport)
   const barAt = logicalToViewport(window, { x: layout.bar.x, y: layout.bar.y })
-  const barBox = { x: barAt.x, y: barAt.y, width: layout.bar.width * window.zoom, height: layout.bar.height * window.zoom }
+  const barBox = { x: barAt.x, y: barAt.y, width: layout.bar.width * zoom, height: layout.bar.height * zoom }
+  // Worksheet-logical rectangles become viewport boxes clipped to the painted
+  // bar (for periods: the layout keeps one lookahead period the canvas clips)
+  // and to their pane region (parts scrolled under a frozen strip stay hidden).
+  const place = (lx: number, ly: number, lw: number, lh: number, clipBar: boolean) => {
+    const at = logicalToViewport(window, { x: lx, y: ly })
+    let rect = { x: at.x, y: at.y, width: lw * zoom, height: lh * zoom }
+    if (clipBar) {
+      const x0 = Math.max(rect.x, barBox.x), y0 = Math.max(rect.y, barBox.y)
+      const x1 = Math.min(rect.x + rect.width, barBox.x + barBox.width), y1 = Math.min(rect.y + rect.height, barBox.y + barBox.height)
+      if (x1 <= x0 || y1 <= y0) return undefined
+      rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+    }
+    const clipped = clipBoxToPaneRegion(clips, paneRegionKind(window.frozen, lx, ly), rect)
+    if (!clipped) return undefined
+    if (clipped.x >= viewport.width || clipped.y >= viewport.height || clipped.x + clipped.width <= 0 || clipped.y + clipped.height <= 0) return undefined
+    return clipped
+  }
   const periods = layout.periods.map(period => {
-    const at = logicalToViewport(window, { x: period.x, y: layout.bar.y })
-    return { ...period, name: periodName(period), rect: { x: at.x, y: at.y, width: period.width * window.zoom, height: layout.bar.height * window.zoom } }
-  }).map(period => {
-    // Clip hit targets to the painted bar: the layout keeps one lookahead
-    // period past the bar edge that the canvas clips, and unclipped buttons
-    // would cover adjacent worksheet cells.
-    const x0 = Math.max(period.rect.x, barBox.x), x1 = Math.min(period.rect.x + period.rect.width, barBox.x + barBox.width)
-    const y0 = Math.max(period.rect.y, barBox.y), y1 = Math.min(period.rect.y + period.rect.height, barBox.y + barBox.height)
-    return { ...period, rect: { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) } }
-  }).filter(period => period.rect.width > 0 && period.rect.height > 0 && period.rect.x < viewport.width && period.rect.y < viewport.height && period.rect.x + period.rect.width > 0 && period.rect.y + period.rect.height > 0)
+    const rect = place(period.x, layout.bar.y, period.width, layout.bar.height, true)
+    if (!rect) return undefined
+    return { start: period.start, index: period.index, selected: period.selected, name: periodName(period), rect }
+  }).filter((entry): entry is { start: number; index: number; selected: boolean; name: string; rect: { x: number; y: number; width: number; height: number } } => entry !== undefined)
   if (!periods.length) return null
+  const levelBox = layout.level ? place(layout.level.right - 76, layout.level.baseline - 20, 76, 20, false) : undefined
+  const clearBox = place(box.x + Math.max(6, box.width - 138), box.y + 30, 62, 24, false)
+  const trackBox = layout.track ? place(layout.track.x, layout.track.y, layout.track.width, layout.track.height, false) : undefined
   const visibleIndex = (index: number) => Math.max(0, Math.min(periods.length - 1, index))
   const announce = (message: string) => { root.current?.setAttribute('aria-label', `${model.caption ?? model.name} timeline. ${message}`); controller.report(message) }
   const commitRange = (a: number, b: number) => {
@@ -118,22 +132,22 @@ export function TimelineLayer({ model: savedModel, box, window, viewport, contro
           }
         }} />
     })}
-    {model.show?.timeLevel !== false && <select ref={levelPicker} tabIndex={-1} aria-label="Timeline level" value={model.level} onChange={event => selectLevel(event.currentTarget.value as TimelineLevel)}
+    {model.show?.timeLevel !== false && levelBox && <select ref={levelPicker} tabIndex={-1} aria-label="Timeline level" value={model.level} onChange={event => selectLevel(event.currentTarget.value as TimelineLevel)}
       onKeyDown={event => {
         if (event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) lastPeriod(); else if (clearButton.current) clearButton.current.focus(); else focusGrid() }
         else if (event.key === 'Escape') { event.preventDefault(); focusGrid() }
       }}
-      style={{ position: 'absolute', left: Math.max(0, levelAt!.x), top: Math.max(0, levelAt!.y), width: 76 * window.zoom, height: 20 * window.zoom, pointerEvents: 'auto' }}>
+      style={{ position: 'absolute', left: levelBox.x, top: levelBox.y, width: levelBox.width, height: levelBox.height, pointerEvents: 'auto' }}>
       {levels.map(level => <option key={level} value={level}>{level[0]!.toUpperCase() + level.slice(1)}</option>)}
     </select>}
-    {model.show?.selectionLabel !== false && <button ref={clearButton} type="button" tabIndex={-1} aria-label="Clear timeline selection" disabled={!model.selection} onClick={() => void controller.clearTimeline(model.name, new AbortController().signal)}
+    {model.show?.selectionLabel !== false && clearBox && <button ref={clearButton} type="button" tabIndex={-1} aria-label="Clear timeline selection" disabled={!model.selection} onClick={() => void controller.clearTimeline(model.name, new AbortController().signal)}
       onKeyDown={event => {
         if (event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) { if (levelPicker.current) levelPicker.current.focus(); else lastPeriod() } else focusGrid() }
         else if (event.key === 'Escape') { event.preventDefault(); focusGrid() }
       }}
-      style={{ position: 'absolute', left: rootAt.x + Math.max(6, box.width - 138) * window.zoom, top: rootAt.y + 30 * window.zoom, width: 62 * window.zoom, height: 24 * window.zoom, boxSizing: 'border-box', border: '1px solid #888', borderRadius: 3, background: '#fff', color: '#242424', font: 'inherit', cursor: 'pointer', pointerEvents: 'auto' }}>Clear</button>}
-    {layout.track && <button type="button" disabled tabIndex={-1} aria-label="Timeline scrolling unavailable; not measured" title="Timeline scrolling is unavailable until measured in Excel."
-      style={styleAt({ ...layout.track, ...logicalToViewport(window, { x: layout.track.x, y: layout.track.y }), width: layout.track.width * window.zoom, height: layout.track.height * window.zoom })} />}
+      style={{ position: 'absolute', left: clearBox.x, top: clearBox.y, width: clearBox.width, height: clearBox.height, boxSizing: 'border-box', border: '1px solid #888', borderRadius: 3, background: '#fff', color: '#242424', font: 'inherit', cursor: 'pointer', pointerEvents: 'auto' }}>Clear</button>}
+    {trackBox && <button type="button" disabled tabIndex={-1} aria-label="Timeline scrolling unavailable; not measured" title="Timeline scrolling is unavailable until measured in Excel."
+      style={styleAt(trackBox)} />}
     {draftLabel && <span role="status" style={{ position: 'absolute', left: 1, top: 1, width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }}>{draftLabel}</span>}
   </div>
 }

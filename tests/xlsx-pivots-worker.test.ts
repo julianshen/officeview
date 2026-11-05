@@ -142,6 +142,37 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
+  it('goes stale when a non-target pivot on the same sheet commits between apply and commit', async () => {
+    const { sheet, kernel, docId, sheetId, session } = await openObjectPivot({ duplicate: true, linkFirstOnly: true })
+    await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 1, grantBytes: 16 * 1024 * 1024 })
+    const tables = sheet.pivotTables!
+    const collapse = async (pivot: number, baseRevision: number, requestRevision: number, collapsed: boolean, tag: string) => {
+      const reply = await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId, pivot, baseRevision, revision: requestRevision, grantBytes: 16 * 1024 * 1024,
+        delta: { kind: 'collapse', field: 0, item: 0, collapsed } })
+      if (reply.kind !== 'complete') throw new Error(`${tag}: ${JSON.stringify(reply).slice(0, 300)}`)
+      return reply.result
+    }
+    const first = await collapse(1, 0, 1, true, 'first')
+    if (first.kind !== 'pivotApply') throw new Error(JSON.stringify(first))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 1, revision: first.revision })
+    const staged = completed(await run(kernel, { kind: 'controlApply', requestId: id(), docId, revision: 1, grantBytes: 32 * 1024 * 1024,
+      selection: { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] },
+      targets: [{ sheetId, pivot: 0, name: tables[0]!.name, cacheId: tables[0]!.cacheId, baseRevision: 0, requestRevision: 1,
+        delta: { kind: 'collapse', field: 0, item: 0, collapsed: true } }] }))
+    expect(staged.kind).toBe('controlApply')
+    // an unrelated pivot on the same sheet commits while the linked stage is open
+    const second = await collapse(1, first.revision, 2, false, 'second')
+    if (second.kind !== 'pivotApply') throw new Error(JSON.stringify(second))
+    await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 1, revision: second.revision })
+    const before = session.memoryStats().sourceBytes
+    const reply = await run(kernel, { kind: 'controlCommit', requestId: id(), docId, revision: 1 })
+    expect(reply.kind).toBe('error')
+    const current = await session.pivotOpen(sheetId, 1, 16 * 1024 * 1024, new AbortController().signal)
+    expect(current.kind === 'open' ? current.revision : -1).toBe(second.revision)
+    expect(session.memoryStats().sourceBytes).toBeLessThanOrEqual(before)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('refuses an unknown control name at the worker trust boundary', async () => {
     const { sheet, kernel, docId, sheetId, session } = await openObjectPivot()
     const before = session.memoryStats().sourceBytes

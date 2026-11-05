@@ -292,10 +292,13 @@ export type WorkerControlLinkResult = { ok: true; link: WorkerControlLink } | { 
 export function resolveWorkerControlLink(selection: LinkedControlOperation, links: readonly WorkerControlLink[], targets: readonly WorkerControlTarget[]): WorkerControlLinkResult {
   const kind = selection.kind.startsWith('timeline') ? 'timeline' : 'slicer'
   const matches = links.filter(link => link.name === selection.name && link.kind === kind)
-  if (matches.length !== 1) return { ok: false,
-    feature: matches.length ? 'pivot-control-linkage-ambiguous' : 'pivot-control-linkage-unknown',
-    message: matches.length ? `Control ${selection.name} has ambiguous saved linkage.` : `Control ${selection.name} has no known saved workbook linkage.` }
-  const link = matches[0]!
+  // Repeated drawings of one cache emit identical links; they are one linkage.
+  // Genuinely conflicting links (another cache or other targets) stay ambiguous.
+  const distinct = [...new Map(matches.map(link => [JSON.stringify([link.kind, link.cacheId, [...link.pivotTables].sort()]), link])).values()]
+  if (distinct.length !== 1) return { ok: false,
+    feature: distinct.length ? 'pivot-control-linkage-ambiguous' : 'pivot-control-linkage-unknown',
+    message: distinct.length ? `Control ${selection.name} has ambiguous saved linkage.` : `Control ${selection.name} has no known saved workbook linkage.` }
+  const link = distinct[0]!
   if (!Number.isSafeInteger(link.cacheId) || link.cacheId! < 0 || !link.pivotTables.length || link.pivotTables.length > MAX_LINKED_CONTROL_TARGETS
     || link.pivotTables.some(name => !name) || new Set(link.pivotTables).size !== link.pivotTables.length) {
     return { ok: false, feature: 'pivot-control-linkage-unsupported', message: `Control ${selection.name} has incomplete or unsupported saved linkage.` }

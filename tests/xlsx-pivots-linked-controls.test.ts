@@ -190,6 +190,16 @@ describe('linked-control bounds and resolution', () => {
       .toMatchObject({ ok: false, feature: 'pivot-control-target-limit' })
   })
 
+  it('deduplicates identical cache links from repeated drawings before checking ambiguity', () => {
+    const link = { name: 'Slicer_Product', kind: 'slicer' as const, cacheId: 7, pivotTables: ['Sales'] }
+    const targets = [{ name: 'Sales', cacheId: 7 }]
+    expect(resolveWorkerControlLink({ kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }, [link, { ...link }], targets))
+      .toMatchObject({ ok: true })
+    expect(resolveWorkerControlLink({ kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] },
+      [{ ...link, cacheId: 8 }, link], targets))
+      .toMatchObject({ ok: false, feature: 'pivot-control-linkage-ambiguous' })
+  })
+
   it('refuses unknown controls and any target from a mixed pivot cache at the worker boundary', () => {
     const link = { name: 'Slicer_Product', kind: 'slicer' as const, cacheId: 7, pivotTables: ['Sales', 'Returns'] }
     expect(resolveWorkerControlLink({ kind: 'slicerSelection', name: 'Other', selectedItemIds: [0] }, [link], [
