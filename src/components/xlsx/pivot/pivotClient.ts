@@ -105,6 +105,31 @@ export type LinkedPivotApplyOutcome = { kind: 'committed'; revision: number; tar
 const refusal = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
 const nameOf = (def: PivotTableDefinition | undefined) => `Pivot table ${String(def?.name ?? '').slice(0, 128)}`
 
+/** A slicer/timeline target pivot resolved across workbook sheets. */
+export interface ControlPivotTarget { sheetId: number; pivot: number; def: NonNullable<XlsxSheet['pivotTables']>[number] }
+/** Resolve a control's target pivot by saved name and cache id. Loaded display
+ * entries take precedence over bare sheets: paged shells carry no pivot
+ * definitions, so only the entries know off-sheet targets. */
+export function resolveControlPivotTargets(
+  sheets: readonly XlsxSheet[],
+  sheetIds: readonly string[],
+  entries: ReadonlyMap<string, { sheet: XlsxSheet }>,
+  name: string,
+  cacheId: number | undefined,
+): ControlPivotTarget[] {
+  const matches: ControlPivotTarget[] = []
+  for (const [sheetId, savedSheet] of sheets.entries()) {
+    const sheet = entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
+    for (const [pivot, def] of (sheet.pivotTables ?? []).entries()) {
+      if (def.name !== name || def.cacheId !== cacheId) continue
+      matches.push({ sheetId, pivot, def })
+      if (matches.length > 1) break
+    }
+    if (matches.length > 1) break
+  }
+  return matches
+}
+
 // ---- the remote seam (Task 27) ---------------------------------------------------------------------------------------
 
 /**

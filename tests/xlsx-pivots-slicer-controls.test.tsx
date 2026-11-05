@@ -1,11 +1,19 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SlicerController } from '../src/xlsx/pivots/slicers/controller'
 import { SlicerLayer } from '../src/components/xlsx/pivot/SlicerLayer'
 import { PX_PER_PT } from '../src/xlsx/pivots/buttons'
 import { slicerLayout } from '../src/xlsx/pivots/slicers/paint'
+import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { readFileSync } from 'node:fs'
 import type { SlicerModel } from '../src/xlsx/pivots/slicers/model'
 import type { ScrollWindow } from '../src/xlsx/view/contracts'
+
+function cellText(container: HTMLElement, row: number, col: number): string | undefined {
+  return container.querySelector(`[role=row][aria-rowindex="${row + 2}"]`)?.querySelector(`[role=gridcell][aria-colindex="${col + 2}"]`)?.textContent ?? undefined
+}
 
 const model: SlicerModel = {
   name: 'Slicer_Product', cacheName: 'Slicer_Product', cacheId: 1, sourceFieldIndex: 2, revision: 0, allItemIds: [0, 1, 2], selectedItemIds: [0, 1, 2],
@@ -68,4 +76,28 @@ describe('interactive slicer layer', () => {
     expect(parseFloat(apples.style.left)).toBeCloseTo(2 * logical.rect.x, 5)
     expect(parseFloat(apples.style.width)).toBeCloseTo(2 * logical.rect.width, 5)
   })
+
+  it('heals a slicer selection after its pivot is reset to the saved view', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${__dirname}/fixtures/xlsx-pivots/controls/controls-seed.xlsx`))))
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const group = await ui.findByRole('group', { name: /Product slicer/i })
+    fireEvent.click(within(group).getByRole('button', { name: 'Apples, selected' }))
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Bananas, not selected' })).toBeTruthy())
+    // reset the pivot through its field menu
+    let reset = false
+    for (const button of ui.container.querySelectorAll<HTMLButtonElement>('button[data-officeview-ui="pivot-button"]')) {
+      fireEvent.click(button)
+      const menu = await ui.findByRole('dialog').catch(() => null)
+      const resetButton = menu && within(menu).queryByRole('button', { name: 'Reset to saved view' })
+      if (resetButton) { fireEvent.click(resetButton); reset = true; break }
+      const cancelButton = menu && within(menu).queryByRole('button', { name: 'Cancel' })
+      if (cancelButton) fireEvent.click(cancelButton)
+    }
+    expect(reset).toBe(true)
+    // the pivot is restored while the slicer model still holds Apples only
+    await waitFor(() => expect(cellText(ui.container, 7, 4)).toContain('150'))
+    fireEvent.click(within(group).getByRole('button', { name: 'Clear Filter' }))
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Apples, selected' }).getAttribute('aria-pressed')).toBe('true'))
+    ui.unmount()
+  }, 60_000)
 })

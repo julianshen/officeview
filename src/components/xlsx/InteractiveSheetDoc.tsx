@@ -1794,8 +1794,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const name = drives[0].pivotTable
         const activeSheetIndex = sheetIds.indexOf(activeSheetId)
         const matches = doc.sheets.flatMap((savedSheet, sheetId) => {
-          // The paged shell receives this sheet's definitions through its bounded display entry, not doc.sheets.
-          const sheet = sheetId === activeSheetIndex ? entry?.sheet ?? savedSheet : savedSheet
+          // The active sheet prefers its live entry (a post-commit map entry
+          // can lag it); other sheets prefer their loaded entries, because
+          // paged shells carry no pivot definitions, over bare shells.
+          const sheet = sheetId === activeSheetIndex
+            ? entry?.sheet ?? entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
+            : entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
           return (sheet.pivotTables ?? []).flatMap((def, pivot) => def.name === name && def.cacheId === model.cacheId ? [{ sheetId, pivot, def }] : [])
         })
         if (matches.length !== 1) return { kind: 'refused', message: 'This slicer target is missing or ambiguous; its selection is not available.' }
@@ -1809,7 +1813,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const current = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
         const expectedHidden = pivotItems.flatMap((item, index) => item.type === 'data' && !current.has(item.x!) ? [index] : [])
         const actualHidden = field.items.filter(item => item.hidden).map(item => item.index)
-        if (!pivotUi.sameSlicerHiddenItems(expectedHidden, actualHidden)) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        if (!pivotUi.sameSlicerHiddenItems(expectedHidden, actualHidden)) {
+          // A pivot reset clears the field: reconcile when nothing is hidden;
+          // any other mismatch is an overlapping filter and stays refused.
+          if (actualHidden.length !== 0) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        }
         const selected = action.kind === 'clear' ? new Set(model.allItemIds ?? []) : new Set(action.selectedItemIds)
         const hidden = pivotItems.flatMap((item, index) => item.type === 'data' && !selected.has(item.x!) ? [index] : [])
         const cacheName = model.cacheName ?? model.name
@@ -1823,7 +1831,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
     slicerControllerOwner.current = { sheetId: activeSheetId, doc, pivotController, pivotUi, controller }
     setSlicerController(controller)
-  }, [pivotUi, pivotController, activeSlicerDrawings, activeSheetId, doc])
+  }, [pivotUi, pivotController, activeSlicerDrawings, activeSheetId, doc, entries, sheetIds])
   useEffect(() => () => {
     slicerControllerOwner.current?.controller.dispose()
     slicerControllerOwner.current = null
@@ -1852,16 +1860,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const drives = model.drives ?? []
         if (drives.length !== 1 || !drives[0]?.pivotTable) return { kind: 'refused', message: 'This timeline has multiple or unsupported targets; its selection is not available.' }
         const name = drives[0].pivotTable
-        const matches: Array<{ sheetId: number; pivot: number; def: NonNullable<XlsxSheet['pivotTables']>[number] }> = []
-        for (const [sheetId, savedSheet] of doc.sheets.entries()) {
-          const sheet = entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
-          for (const [pivot, def] of (sheet.pivotTables ?? []).entries()) {
-            if (def.name !== name || def.cacheId !== model.cacheId) continue
-            matches.push({ sheetId, pivot, def })
-            if (matches.length > 1) break
-          }
-          if (matches.length > 1) break
-        }
+        const matches = pivotUi.resolveControlPivotTargets(doc.sheets, sheetIds, entries, name, model.cacheId)
         if (matches.length !== 1) return { kind: 'refused', message: 'This timeline target is missing or ambiguous; its selection is not available.' }
         const target = matches[0]!
         if (!Number.isSafeInteger(model.cacheId) || target.def.cacheId !== model.cacheId) return { kind: 'refused', message: 'This timeline does not match its pivot cache.' }
@@ -1886,8 +1885,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           return (day - epoch) / 86_400_000
         }
         const ownedFilter = model.filterId === undefined ? undefined : field.filters.find(filter => filter.id === model.filterId && filter.type === 'dateBetween')
-        if (model.filterId !== undefined && (!ownedFilter || field.filters.length !== 1)) {
-          return { kind: 'refused', message: 'The timeline filter changed meanwhile; its selection is not available.' }
+        let filterId = model.filterId
+        if (filterId !== undefined && (!ownedFilter || field.filters.length !== 1)) {
+          // A pivot reset removes the owned filter: reconcile only when the
+          // field carries no filters at all, then install fresh (selection) or
+          // drop the dangling ownership (clear). Anything else stays refused.
+          if (field.filters.length !== 0) return { kind: 'refused', message: 'The timeline filter changed meanwhile; its selection is not available.' }
+          if (action.kind === 'clear') return { kind: 'committed', revision: 0 }
+          filterId = undefined
         }
         const matchesSavedSelection = (filter: typeof field.filters[number]): boolean => {
           if (!model.selection || filter.type !== 'dateBetween' || filter.autoFilter.columns.length !== 1) return false

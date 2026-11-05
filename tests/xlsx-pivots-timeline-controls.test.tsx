@@ -273,4 +273,31 @@ describe('interactive timeline layer', () => {
     const trackBox = timelineLayout(model, box, PX_PER_PT).track!
     expect(parseFloat(track.style.left)).toBeCloseTo(2 * trackBox.x, 5)
   })
+
+  it('heals a timeline selection after its pivot is reset to the saved view', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${__dirname}/fixtures/xlsx-pivots/controls/controls-seed.xlsx`))))
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const group = await ui.findByRole('group', { name: /Date timeline/i })
+    const first = (await within(group).findAllByRole('button', { name: /^Select / }))[0]!
+    fireEvent.click(first)
+    const clear = await within(group).findByRole('button', { name: 'Clear timeline selection' })
+    await waitFor(() => expect(clear.hasAttribute('disabled')).toBe(false))
+    // reset the pivot through its field menu
+    let reset = false
+    for (const button of ui.container.querySelectorAll<HTMLButtonElement>('button[data-officeview-ui="pivot-button"]')) {
+      fireEvent.click(button)
+      const menu = await ui.findByRole('dialog').catch(() => null)
+      const resetButton = menu && within(menu).queryByRole('button', { name: 'Reset to saved view' })
+      if (resetButton) { fireEvent.click(resetButton); reset = true; break }
+      const cancelButton = menu && within(menu).queryByRole('button', { name: 'Cancel' })
+      if (cancelButton) fireEvent.click(cancelButton)
+    }
+    expect(reset).toBe(true)
+    // the pivot is restored while the timeline model still holds its selection
+    await waitFor(() => expect(cellText(ui.container, 7, 4)).toContain('150'))
+    expect(clear.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(clear)
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Clear timeline selection' }).hasAttribute('disabled')).toBe(true))
+    ui.unmount()
+  }, 60_000)
 })

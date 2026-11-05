@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { LinkedControlTransaction, measuredDeselectFromAll, resolveSlicerPivotTargets, resolveWorkerControlLink, SharedControlIndexCache, validateLinkedControlOperation, type LinkedControlOperation, type LinkedControlTarget } from '../src/xlsx/pivots/slicers/transaction'
+import { resolveControlPivotTargets } from '../src/components/xlsx/pivot/pivotClient'
+import type { XlsxSheet } from '../src/xlsx/types'
 
 const operation: LinkedControlOperation = { kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }
 
@@ -196,6 +198,17 @@ describe('linked-control bounds and resolution', () => {
     expect(resolveWorkerControlLink({ kind: 'slicerSelection', name: 'Slicer_Product', selectedItemIds: [0] }, [link], [
       { name: 'Sales', cacheId: 7 }, { name: 'Returns', cacheId: 8 },
     ])).toMatchObject({ ok: false, feature: 'pivot-control-linkage-cache-mismatch' })
+  })
+
+  it('resolves off-sheet targets from loaded entries when shells lack definitions', () => {
+    const def = { name: 'Sales', cacheId: 7 } as NonNullable<XlsxSheet['pivotTables']>[number]
+    // paged shells carry no pivot definitions; the display entry does
+    const shells = [{ pivotTables: undefined }, { pivotTables: undefined }] as unknown as XlsxSheet[]
+    const entries = new Map([['b', { sheet: { pivotTables: [def] } as XlsxSheet }]])
+    expect(resolveControlPivotTargets(shells, ['a', 'b'], entries, 'Sales', 7)).toEqual([{ sheetId: 1, pivot: 0, def }])
+    expect(resolveControlPivotTargets(shells, ['a', 'b'], entries, 'Sales', 8)).toEqual([])
+    expect(resolveControlPivotTargets(shells, ['a', 'b'], new Map(), 'Sales', 7)).toEqual([])
+    expect(resolveControlPivotTargets([{ pivotTables: [def] } as XlsxSheet], ['a'], new Map(), 'Sales', 7)).toEqual([{ sheetId: 0, pivot: 0, def }])
   })
 
   it('rejects oversized, duplicate and malformed item selections before target estimates', async () => {
