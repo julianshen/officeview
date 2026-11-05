@@ -1,6 +1,6 @@
 # XLSX Conditional Formatting — Design Spec
 
-**Status:** draft 1.
+**Status:** draft 2 (post-review revision).
 **Date:** 2026-11-06 · **Baseline:** `main` @ `151bc898`.
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -15,274 +15,326 @@ officeview renders Office documents read-only to canvas. Excel conditional forma
 
 **Success** means:
 1. All five staged rule families (§10) render in every view, for resident workbooks and for workbooks opened through the paged (large-file) path.
-2. Every rule type, operator, `dxf` property and geometry in §§4–5 is honoured. Each one has a reference workbook and an Excel reference image (§8), and the comparison passes within tolerance.
-3. A rule whose outcome cannot be resolved never paints a plausible but wrong format (§6.5).
-4. The eager bundle does not grow (§7).
+2. Every rule type, operator, `dxf` property and geometry in §§3–5 is honoured (or explicitly refused per §6.5 when unsupported). Each supported behaviour has a reference workbook and an Excel reference image (§8), and the comparison passes within tolerance.
+3. A rule whose outcome cannot be resolved never paints a plausible but wrong format, never lets a lower-priority rule paint over an unresolved higher-priority conflict, and never retains stale formatting from an older value generation (§5.7, §6.5, §6.6).
+4. The eager bundle stays strictly below the 38,720 B gzip ceiling (`scripts/eager-budget.ts:14`), adding only a minimal sheet-level presence check in eager code while keeping all CF parsing, evaluation and painting in a lazy chunk (§6.1, §7).
 
 ## 2. Non-goals and anti-goals
 
 **Non-goals:**
 - Creating, editing, or deleting rules, and any format picker UI.
-- Rules in chartsheets, dialog sheets, or anywhere outside a worksheet's `conditionalFormatting` list.
-- Data from external workbooks or defined names inside rule formulas or data-bar bounds. These are diagnosed and not evaluated (§6.5).
-- Live recalculation beyond what the viewer already does. A rule reads the same cell values the grid shows; the interactive viewer recomputes CF when values change through its existing invalidation (§6.6).
+- Rules in chartsheets, dialog sheets, or anywhere outside a worksheet's `conditionalFormatting` and `x14:conditionalFormattings` lists.
+- Data from external workbooks or defined names inside rule formulas or `cfvo` bounds. These are diagnosed and not evaluated (§6.5).
 - Pivot-table conditional formats (`pivotTable` `conditionalFormats`, reported and skipped at `src/xlsx/pivots/regions.ts:196`). Those belong to a pivot follow-up, not this spec.
 
 **Anti-goals** (failure even if it technically works):
-- **A wrong format.** A guessed rule outcome, a mislayered dxf, or a silently dropped stopIfTrue is worse than no format. Unresolved means unformatted, plus a diagnostic.
-- **Slower scrolling or zooming on sheets without rules.** The cost is paid only by sheets that have them, and only for cells in range.
-- **CF code in the eager bundle.**
+- **A wrong format.** A guessed rule outcome, a mislayered `dxf`, a silently dropped `stopIfTrue`, a lower-priority rule painting when a higher-priority rule is unresolved, or stale previous-generation CF shown after a cell value changes is worse than no format. Unresolved means unformatted for the affected cell/property, plus a diagnostic.
+- **Slower scrolling or zooming on sheets without rules.** The cost is paid only by sheets that have them, and only for visible cells in range.
+- **CF evaluator or painter code in the eager bundle.**
 
 ## 3. Background: the file format
 
-A worksheet holds a `conditionalFormatting` list. Each entry names one or more ranges in `sqref` and a list of `cfRule` in priority order:
+A worksheet holds zero or more `<conditionalFormatting>` elements (ECMA-376 §18.3.1.18). Each entry names one or more space-separated ranges in `sqref` and a list of `<cfRule>` children (§18.3.1.10):
 
 ```xml
 <conditionalFormatting sqref="B2:B20 D2:D20">
   <cfRule type="cellIs" dxfId="1" priority="1" operator="greaterThan">
-    <formula>B2&gt;100</formula>
+    <formula>100</formula>
   </cfRule>
   <cfRule type="top10" dxfId="2" priority="2" rank="3"/>
   <cfRule type="colorScale" priority="3">
     <colorScale>
-      <cfvo type="min"/><color rgb="FFF8696B"/>
-      <cfvo type="percentile" val="50"/><color rgb="FFFFEB84"/>
-      <cfvo type="max"/><color rgb="FF63BE7B"/>
+      <cfvo type="min"/>
+      <cfvo type="percentile" val="50"/>
+      <cfvo type="max"/>
+      <color rgb="FFF8696B"/>
+      <color rgb="FFFFEB84"/>
+      <color rgb="FF63BE7B"/>
     </colorScale>
   </cfRule>
 </conditionalFormatting>
 ```
 
-**How a rule is defined:**
-- `type` is `cellIs`, `colorScale`, `dataBar`, `iconSet`, `top10`, `uniqueValues`, `duplicateValues`, `containsText`, `notContainsText`, `beginsWith`, `endsWith`, `expression`, or a date period (`yesterday`, `today`, `tomorrow`, `last7Days`, `thisMonth`, `nextWeek`, …; the schema calls these `timePeriod` values on a `cellIs`-shaped rule).
-- `operator` (for `cellIs`) is `lessThan`, `lessThanOrEqual`, `equal`, `notEqual`, `greaterThanOrEqual`, `greaterThan`, `between`, `notBetween`, `containsText`, `notContains`, `beginsWith`, `endsWith`.
-- `dxfId` indexes `styleSheet/dxs/dxf` (absent means the rule carries no direct formatting: color scales, data bars and icon sets have none).
-- `priority` is 1-based, 1 first. `stopIfTrue` halts lower-priority rules for the cell. **[measure]** §5.7 records exactly what "halts" composes with across rule kinds.
-- `sqref` may hold several space-separated ranges; `$` absolutes and whole-column ranges are legal.
-- Percent-bearing attributes (`percent`, and `cfvo type="percent"`) are hypothesised as percent-of-range until §8 says otherwise **[measure]**.
-- `extLst` on the worksheet carries the x14 extensions: `x14:conditionalFormattings` (which can add rules and `dxf` references for data bars with borders/negatives/axis and custom icon sets), the data-bar extension (`x14:dataBar`: `borderColor`, `negativeFillColor`, `negativeBorderColor`, `axisColor`, `direction="leftToRight|rightToLeft|context"`, `gradient`), and the icon-set extension (`x14:iconSet` with custom `cfIcon` entries). Prefixes vary; elements match by namespace URI, on both parse paths (§6.2).
+**Standard OOXML rule surface (ECMA-376 §18.3.1.10, §18.18.12 `ST_CfType`):**
+- All 18 standard `type` values are recognised:
+  - Value & text: `cellIs`, `containsText`, `notContainsText`, `beginsWith`, `endsWith`, `containsBlanks`, `notContainsBlanks`, `containsErrors`, `notContainsErrors`.
+  - Dates: `timePeriod` (with `timePeriod="today | yesterday | tomorrow | last7Days | thisMonth | lastMonth | nextMonth | thisWeek | lastWeek | nextWeek"`, §18.18.82 `ST_TimePeriod`).
+  - Ranking & statistics: `top10` (with `rank`, `percent`, `bottom`), `aboveAverage` (with `aboveAverage`, `equalAverage`, `stdDev`), `uniqueValues`, `duplicateValues`.
+  - Visuals: `colorScale`, `dataBar`, `iconSet`.
+  - Formula: `expression`.
+- `operator` (for `type="cellIs"`, §18.18.15 `ST_ConditionalFormattingOperator`) is `lessThan`, `lessThanOrEqual`, `equal`, `notEqual`, `greaterThanOrEqual`, `greaterThan`, `between`, `notBetween`, `containsText`, `notContains`, `beginsWith`, `endsWith`.
+- Standalone text rules (`type="containsText" | "notContainsText" | "beginsWith" | "endsWith"`) carry the search needle in `<cfRule text="..."/>` and typically also carry an Excel-synthesised `<formula>` child (e.g. `NOT(ISERROR(SEARCH("...",A1)))`).Standalone blank/error rules (`containsBlanks`, `notContainsBlanks`, `containsErrors`, `notContainsErrors`) likewise carry a synthesised `<formula>` alongside their `type` (§5.2).
+- `dxfId` is a 0-based index into `styleSheet/dxfs/dxf` (absent when a rule carries no differential style, such as `colorScale`, `dataBar`, `iconSet`, or a bare `stopIfTrue` blocker).
+- `priority` is a 1-based positive integer (1 = highest precedence). `stopIfTrue` (boolean, default `false`) halts lower-priority rules for the cell when the rule matches.
+- `sqref` holds one or more space-separated A1 ranges or single cells; `$` markers and whole-column/whole-row spans (`A:A`, `1:1`, `A1:XFD1048576`) are legal.
+- `<cfvo>` (`CT_Cfvo`, §18.3.1.11) carries required `type` (`min | max | num | percent | percentile | formula`, plus `x14` `autoMin | autoMax` on data bars), optional `val` (string: number literal or formula text), and optional `gte` (boolean, default `true`, controlling `>=` vs `>` on icon-set thresholds). Note: `type` has no positional default in the OOXML schema; a `<cfvo>` missing `type` fails closed (`cf-invalid-cfvo`) unless measured otherwise on repaired third-party files.
 
-**Schema notes applied at parse time (MS-XLSX CT_CFRule and friends):**
-- `rank` defaults to 10; `percent`, `bottom` default false.
-- `dataBar` `minLength`/`maxLength` default 0/100; `showValue` defaults true.
-- `iconSet` `showValue` defaults true; `reverse` defaults false; `percent` defaults true on its `cfvo` entries.
-- A `cfvo` default type is `min` for the first value object and `max` for the last; middle entries require an explicit type **[measure]** (Excel's UI always writes them; hand files may not).
-- `dxfId` out of range, or a `dxf` with only properties the viewer never paints, is handled per §6.5, never silently normalised.
+**Worksheet `extLst` and `x14:conditionalFormattings` (MS-XLSX `http://schemas.microsoft.com/office/spreadsheetml/2009/9/main`, worksheet `ext` URI `{78C0D931-6437-407d-A8EE-F0AA7539E650}`):**
+- **Identity & merge contract for paired data bars:** Excel 2010+ writes a primary `<cfRule type="dataBar" priority="p">` inside worksheet `<conditionalFormatting>` with positive fill `<color>`, two base `<cfvo>` elements, and `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{GUID}</x14:id></ext></extLst>`. A companion `<x14:cfRule type="dataBar" id="{GUID}">` inside `<x14:conditionalFormattings>` (which omits `priority` and positive fill colour) supplies `<x14:dataBar>` attributes (`minLength`, `maxLength`, `border`, `gradient`, `direction`, `negativeBarColorSameAsPositive`, `negativeBarBorderColorSameAsPositive`, `axisPosition`), colour elements (`<x14:borderColor>`, `<x14:negativeFillColor>`, `<x14:negativeBorderColor>`, `<x14:axisColor>`), and two `<x14:cfvo>` children (supporting `autoMin`/`autoMax` and `<xm:f>` formulas). The parser pairs base and `x14` data-bar rules by exact GUID; an orphan `<x14:cfRule type="dataBar">` without a base rule, a duplicate GUID, or a base rule whose `x14:id` target is missing/malformed fails closed with `cf-invalid-x14-link` (never evaluated as two separate bars or silently stripped).
+- **Standalone `x14:cfRule` entries:** Rules that live solely in `<x14:conditionalFormattings>` (such as custom icon sets, `3Triangles`/`3Stars`/`5Boxes` icon sets, cross-sheet formulas, or data-bar-adjacent rules) carry `<xm:sqref>` (`http://schemas.microsoft.com/office/excel/2006/main`) on `<x14:conditionalFormatting>`, `@priority` and `@id` on `<x14:cfRule>`, optional `@activePresent` (boolean; when a rule or `cfvo` uses `<xm:f>`, MS-XLSX requires `activePresent="1"` for the formula to be active **[measure]**), `<xm:f>` formula children instead of `<formula>`, and inline `<x14:dxf>` (`CT_Dxf`) instead of `@dxfId`.
+- **Schema defaults applied at parse time (ECMA-376 & MS-XLSX):**
+  - `top10`: `rank` defaults to `10`; `percent` and `bottom` default to `false`.
+  - `aboveAverage`: `aboveAverage` defaults to `true`; `equalAverage` defaults to `false`; `stdDev` is optional (integer `1..3`).
+  - `dataBar` (`CT_DataBar` in ECMA-376 §18.3.1.28 and MS-XLSX): schema defaults are `minLength="10"`, `maxLength="90"`, `showValue="1"`. On `<x14:dataBar>`, `minLength` defaults to `10`, `maxLength` to `90` (Excel 2010+ frequently serialises explicit `minLength="0" maxLength="100"` on `<x14:dataBar>` while leaving `10`/`90` on the base `<dataBar>`; when paired, `<x14:dataBar>` bounds and `minLength`/`maxLength` take precedence over the legacy base `<dataBar>` **[measure]**), `gradient` defaults to `true`, `border` to `false`, `negativeBarColorSameAsPositive` to `false`, `negativeBarBorderColorSameAsPositive` to `true`, `axisPosition` (`automatic | middle | none`) to `automatic`, and `direction` (`context | leftToRight | rightToLeft`) to `context`.
+  - `iconSet`: `iconSet` defaults to `3TrafficLights1`; `showValue` defaults to `true`; `percent` (on `<iconSet>`) defaults to `true`; `reverse` defaults to `false`; `custom` (on `<x14:iconSet>`) defaults to `false`. On each `<cfvo>`, `gte` defaults to `true`. In `<x14:iconSet>`, `<x14:cfIcon iconSet="NoIcons" iconId="0"/>` explicitly suppresses the icon for that bucket (not a missing glyph).
+  - Out-of-range `dxfId`, unknown `type`/`operator`/`timePeriod`/`cfvo` type, or a `<dxf>` containing unsupported visual properties (§6.2, §6.5) fails closed with a diagnostic, never silently normalised.
 
 ### 3.1 What the codebase already has (recon 2026-11-06, at `151bc898`)
 
 - **Parsing:**
-  - Nothing reads `conditionalFormatting`, `cfRule`, `dataBar`, `colorScale`, `iconSet` or `x14:conditionalFormattings` (grep confirms zero hits worktree-wide).
-  - `parseDxf` (`src/xlsx/tableStyles/parseStylesExtras.ts:73`) reads one `<dxf>`'s font/fill/border/numFmt only-set parts; `parseDxfList` (`:129`) caps at `MAX_DXFS`; `parseStylesExtras` (`:144`) reads `dxfs`, custom `tableStyles` and x14 slicer styles. `DxfStyle` (`src/xlsx/tableStyles/model.ts:29`) is differential by construction (absent = unset), and `applyDxf` (`src/xlsx/tableStyles/resolve.ts:112`) layers one dxf over a cell style. CF reuses all three.
-  - `parseStyles` (`src/xlsx/parse.ts:104`) reads numFmts, fonts, fills, borders and cellXfs; `resolveXfStyle` (`src/xlsx/parse.ts:219`) resolves one xf to `XlsxCellStyle`, shared by the paged and resident paths; `doc.cellStyles[]` (`src/xlsx/parse.ts:538`) is indexed by `styleIndex`.
-  - Worksheet extensions follow one pattern: `extLst/ext[@uri]` with an `elementNamespaceUri` guard (`src/xlsx/parse.ts:591` → `parseSparklineGroups`), mirrored for slicers/timelines (`src/xlsx/pivots/stub.ts:126`), with a 4-frame namespace+URI check on the streaming path (`src/xlsx/storage/sheetRecords.ts:552`) and namespace-sensitive children kept by the XML layer (`src/core/xml.ts:82,261`). A CF x14 extension adds one more guarded branch in the same places.
-  - The pivot table's own `conditionalFormats` are reported and skipped (`src/xlsx/pivots/regions.ts:196`); this spec does not cover them.
-- **Paint layering today:** `TABLE_STYLE_PRECEDENCE` / `PIVOT_STYLE_PRECEDENCE` (lowest-first, `src/xlsx/tableStyles/resolve.ts:30,49`), per-cell units in `regionLayer.ts:35`, final resolver `styleAt(row,col,own,mode)` (`:200`), single layout source `layoutCellBody` (`src/xlsx/render.ts:1178`), fill/content split `paintCellLayout` (`:1344`), static two-pass in `renderSheet` (`:759`), data-bar-shaped precedent `paintSparklinesIn` in the fill phase (`:878`, interactive twin `src/xlsx/view/renderViewport.ts:325` with range culling at `:111`). CF dxf is a further layer; data bars and icons are further fill-phase paint.
-- **Interactive seam:** `styleForCell` (`src/components/xlsx/InteractiveSheetDoc.tsx:1201`) resolves `own` through the region layer in `screen` mode — the CF insertion point. Bounded per-cell text lives in `SemanticPresentationCache` (`src/components/xlsx/formatPresentation.ts:29`); canvas paints while DOM announces (`src/components/xlsx/GridSemantics.tsx:438`).
-- **Print/export reuse one path:** `sheetPaintable` (`src/render/paint.ts:143`), `getPaintables` (`:409`), print units (`src/components/xlsx/sheetAssets.ts:322`), PNG/PDF via `page.paint` (`src/components/paged/printDocument.ts:42`). Region mode `print` vs `screen` already exists (`src/xlsx/tableStyles/regionLayer.ts:18`).
-- **Formula engine:** `evaluateNode` (`src/xlsx/formula/evaluator.ts:717`) is the bounded entry a CF `expression` rule calls with a supplied context; `EvaluationContext.getCellValue/getRangeValues` (`src/xlsx/formula/types.ts:116,119`) are the value callbacks; `markUnsupported` (`src/xlsx/formula/evaluator.ts:499`) is the diagnostic channel; `recomputeDependents` (`src/xlsx/formula/workbook.ts:623`) with `MAX_DEPENDENT_CELL_VISITS` is the invalidation pattern CF recompute follows; `decideCellCalculation` (`src/xlsx/formula/calc-policy.ts:72`) gates when rules run.
-- **Worker/paged:** per-cell computed display flows through `ViewportCell` (`src/xlsx/view/contracts.ts:549`), `cellDisplayText` (`src/xlsx/render.ts:706`), paged `displayText` (`src/xlsx/view/pagedSource.ts:1629`); invalidation rides `noteValuesChanged`/`valueGen` (`src/xlsx/view/contracts.ts:264`, `src/xlsx/view/source.ts:284`); replies are grant-checked (`src/worker/viewerReplyLimit.ts:26`).
-- **Memory:** `WORKER_BUDGETS`/`MAIN_THREAD_BUDGETS` (`src/xlsx/view/tileCache.ts:31`), `MemoryPool.retain` refusal (`:146`), transient `charge()` shares (`:182`), `MainMemoryLedger` (`src/xlsx/view/mainLedger.ts:103`), per-op `AllocationReservation` (`src/xlsx/view/allocationAccount.ts:5`). CF evaluation reserves before it copies, on both paths.
-- **Eager budget:** 38,720 B gzip ceiling (`scripts/eager-budget.ts:14`), gate (`scripts/check-eager.ts:1`), forbidden list (`tests/helpers/eager-graph.ts:38,66`). Measured 35,976 B at this baseline, leaving about 2.7 KB. CF model stays eager-tiny; evaluation and painting live in a lazy `xlsx/cf` chunk behind the same gates sparklines/pivots/tableStyles use.
-- **Corpus:** no statement yet about which repo workbooks carry CF; the oracle builder inventories them (§8).
-- **Excel automation:** Excel 16.114's AppleScript dictionary has no conditional-formatting commands (like slicers/timelines); the XML route plus Excel re-save is therefore the primary oracle route, per the pivots precedent.
+  - Nothing in `src/` reads `conditionalFormatting`, `cfRule`, `dataBar`, `colorScale`, `iconSet` or `x14:conditionalFormattings`.
+  - `parseDxf` (`src/xlsx/tableStyles/parseStylesExtras.ts:73`) reads one `<dxf>`'s font/fill/border/numFmt parts; module-private `parseDxfList` (`:129`) caps at `MAX_DXFS`; `parseStylesExtras` (`:144`) reads `dxfs`, custom `tableStyles` and x14 slicer styles; `DxfStyle` (`src/xlsx/tableStyles/model.ts:29`) represents differential properties. Note: `parseDxf` currently ignores `<alignment>`, `<protection>`, `<gradientFill>` and diagonal borders, and `applyDxf` (`src/xlsx/tableStyles/resolve.ts:112`) is a private table-band helper that maps interior band edges to `horizontal`/`vertical` (`:143–155`) and approximates non-solid pattern fills to solid foreground colour (`:126–138`). CF therefore exports `parseDxfList`, adds strict `<dxf>` unsupported-property detection, and implements a dedicated per-cell CF `dxf` resolver (§6.2, §6.4).
+  - `parseStyles` (`src/xlsx/parse.ts:104`) reads numFmts, fonts, fills, borders and cellXfs, gating custom format strings with `admittedFormatCode` (`src/xlsx/parse.ts:131`, `src/xlsx/tableStyles/parseStylesExtras.ts:123`, defined at `src/xlsx/formatCodeLimit.ts:9`); `resolveXfStyle` (`src/xlsx/parse.ts:219`) resolves one xf to `XlsxCellStyle`; `doc.cellStyles[]` (`src/xlsx/parse.ts:538`) is indexed by `styleIndex`. Currently `src/xlsx/parse.ts:542`, `src/xlsx/storage/pagedFormatting.ts:44–48`, and `src/xlsx/storage/pagedImport.ts:611` only attach/load `dxfs` when tables, pivots, slicers or timelines are present; CF extends all three gates (§6.2).
+  - Worksheet extensions follow `extLst/ext[@uri]` with `elementNamespaceUri` (`src/xlsx/parse.ts:591` → `parseSparklineGroups`, `src/xlsx/pivots/stub.ts:126` for slicers/timelines, and `src/xlsx/storage/sheetRecords.ts:552` on the streaming path). Note: `src/core/xml.ts:82,261,312–316` currently enables `'subtree'` namespace retention only under worksheet `extLst` when `hasSparklineExtension` is true, and `x14Ext` (`src/xlsx/tableStyles/parseStylesExtras.ts:134`) falls back to `X14_MAIN_NS` when namespace metadata is absent; CF extends `xml.ts` subtree namespace tracking to `<conditionalFormatting>` and `x14:conditionalFormattings` and enforces strict namespace URI checks (§6.2).
+  - Pivot-table `conditionalFormats` are reported and skipped (`src/xlsx/pivots/regions.ts:196`).
+- **Paint layering & views today:**
+  - Precedence arrays `PIVOT_STYLE_PRECEDENCE` and `TABLE_STYLE_PRECEDENCE` (`src/xlsx/tableStyles/resolve.ts:30,49`), per-cell region units (`src/xlsx/tableStyles/regionLayer.ts:35`), final region resolver `styleAt(row,col,own,mode)` (`:200`, with `RegionStyleMode` `'screen' | 'print'` at `:18`), layout `layoutCellBody` (`src/xlsx/render.ts:1178`), fill/content/deferred-border split `paintCellLayout` (`:1344`), static two-pass renderer `renderSheet` (`:763`, two-pass loop at `:865–876`), and sparkline fill-phase painter `paintSparklinesIn` (`:878`, interactive twin `renderSheetViewport` at `src/xlsx/view/renderViewport.ts:187,325` with culling at `viewportSparklineCandidates` `:112` and viewport planning at `planViewport` `src/xlsx/view/viewport.ts:590`).
+  - Gridlines are suppressed over styled regions by `mayHaveRegionGrid` / `regionGrid` (`src/xlsx/regionGrid.ts:62,71`), which currently returns `undefined` when a sheet has no pivot or styled table; CF extends gridline suppression for CF fills (§6.4).
+  - Interactive DOM semantics and active-cell styling use `styleForCell` (`src/components/xlsx/InteractiveSheetDoc.tsx:1201`), `SemanticPresentationCache` (`src/components/xlsx/formatPresentation.ts:29`), and `GridSemantics` (`src/components/xlsx/GridSemantics.tsx:438`).
+  - Static print and PNG/PDF export flow through `sheetPaintable` (`src/render/paint.ts:143`), `getPaintables` (`:354`, spreadsheet branch `:409`), `computePrintMetrics` / `renderPrintPage` (`src/xlsx/render.ts:447,494`), `preparePrintUnits` (`src/components/xlsx/sheetAssets.ts:322`), and browser iframe printing `printDocument` (`src/components/paged/printDocument.ts:42`, `PRINT_SCALE` at `:5`, `page.paint` at `:94`).
+- **Formula engine:** `evaluateNode` (`src/xlsx/formula/evaluator.ts:717`) evaluates an AST against synchronous callbacks `EvaluationContext.getCellValue` / `getRangeValues` (`src/xlsx/formula/types.ts:116,125`) and optional shared `materializationBudget` (`:152`); `markUnsupported` (`src/xlsx/formula/evaluator.ts:499`) records unsupported formula features; `translateSharedFormula` (`src/xlsx/formula/workbook.ts:938`) translates relative references during workbook preprocessing; `recomputeDependents` (`src/xlsx/formula/workbook.ts:627`) recomputes worksheet formula readers of committed pivots (and throws on `cached` value policy at `:632`); `decideCellCalculation` (`src/xlsx/formula/calc-policy.ts:72`) determines workbook calculation policy.
+- **Worker/paged & memory:** per-cell display flows through `ViewportCell` (`src/xlsx/view/contracts.ts:549`), `cellDisplayText` (`src/xlsx/render.ts:706`), and paged `displayText` (`src/xlsx/view/pagedSource.ts:1629`); source value stamps ride `noteValuesChanged`/`valueGen` (`src/xlsx/view/contracts.ts:264`, `src/xlsx/view/source.ts:284`). Paged cross-page data streaming and worker-to-main caching follow `readSparklines` (`src/xlsx/view/pagedSource.ts:884`), `fillCharts` (`:1052`), and `RemoteSparklineCache` (`src/worker/viewerRemoteSparklines.ts:79`). `admitReply` (`src/worker/viewerReplyLimit.ts:26`) measures a constructed `WorkerReply` and replaces the whole reply with `replyLimitRefusal` (`:17`) on overflow. Memory admission uses `WORKER_BUDGETS`/`MAIN_THREAD_BUDGETS` (`src/xlsx/view/tileCache.ts:31`), `MemoryPool.retain` (`:146`), `charge()` (`:182`), `MainMemoryLedger` (`src/xlsx/view/mainLedger.ts:103`), and `AllocationReservation` (`src/xlsx/view/allocationAccount.ts:2`, `trySet` at `:5`).
+- **Eager budget:** 38,720 B gzip ceiling (`scripts/eager-budget.ts:14`), checked by `scripts/check-eager.ts:1`, `EAGER_FORBIDDEN` (`tests/helpers/eager-graph.ts:38`), and `PAGED_WORKER_FORBIDDEN` (`:66`), with lazy chunk naming in `vite.config.ts:64` (and `vite.harness.config.ts`). Baseline measures 35,976 B (2,744 B headroom).
+- **Excel automation:** `/Applications/Microsoft Excel.app/Contents/Resources/Excel.sdef` defines `format condition` (`:3282`), `modify condition` (`:2407`), `modify condition value` (`:2416`), and `set first priority` (`:2750`), alongside `copy picture` (`scripts/sparkline-refs/capture.ts`).
 
 ## 4. Scope **[owner]**: staged as five PRs
 
-| Stage | Rules | Painting |
+| Stage | Rules & Foundation | Painting & Integration |
 |---|---|---|
-| 1 | cell-value and text, date, top/bottom N, above/below average, duplicate/unique (dxf fill/font/border/numFmt) | dxf layered over the resolved cell style |
-| 2 | color scales (2- and 3-colour) | interpolated cell fill |
-| 3 | data bars incl. x14: gradient/solid, negative bars, axis, direction | bar geometry in the cell rect |
-| 4 | icon sets incl. x14 custom sets | icon glyph + optional text |
-| 5 | formula rules (`expression`); rule priority, stopIfTrue, multiple ranges; recompute on value change in the interactive viewer | rule-computed dxf through the same layer |
+| 1 | **Foundation + value/text/blank/error/date/ranking/duplicate rules:** parser (resident & paged, base + `x14` stub recognition), `priority`, `stopIfTrue`, multi-range `sqref`, atomic fail-closed composition, `valueGen` invalidation, and evaluation for `cellIs`, `containsText`, `notContainsText`, `beginsWith`, `endsWith`, `containsBlanks`, `notContainsBlanks`, `containsErrors`, `notContainsErrors`, `timePeriod`, `top10`, `aboveAverage`, `duplicateValues`, `uniqueValues` | Per-cell CF `dxf` layer (fill/font/border/numFmt) over `styleAt`, gridline suppression, blank-cell synthesis, derived text/a11y, every-view wiring, oracle harness + Stage 1 references |
+| 2 | **Color scales (`colorScale`):** 2- and 3-colour scales, `cfvo` bounds (`min`, `max`, `num`, `percent`, `percentile`), range statistics sharing | Interpolated cell fill in all views + Stage 2 references |
+| 3 | **Data bars (`dataBar` + paired `x14:dataBar`):** `minLength`/`maxLength` reconciliation, `autoMin`/`autoMax`, solid/gradient, negative bars, `axisPosition`, `direction`, borders, `showValue` | Bar + axis geometry in fill phase, `showValue="0"` text suppression + Stage 3 references |
+| 4 | **Icon sets (`iconSet` + `x14` custom sets):** `cfvo/@gte`, `percent`, `reverse`, `showValue`, custom `cfIcon` & `NoIcons` | Icon glyph painting, horizontal text inset when `showValue="1"`, screen-reader icon labels + Stage 4 references |
+| 5 | **Formula rules (`expression`) & formula `cfvo` bounds (`formula` / `xm:f`):** relative reference translation from rule anchor, `activePresent`, cross-sheet dependencies, manual/cached calc policy, paged dependency preparation, full cross-kind composition | Formula-driven `dxf` and dynamic `cfvo` bounds across resident & paged views + Stage 5 references |
 
-Each stage meets §7 and passes CI and review before the next starts. Before a stage merges, its rules are absent and show no diagnostic (planned staging), and earlier stages keep passing.
+Each stage meets §7 and passes CI and review before the next starts.
+**Fail-closed staging rule:** Stage 1 builds the complete rule parser and priority/composition pipeline. Before Stages 2–5 merge, rules belonging to not-yet-merged stages are parsed into the priority chain as unresolved rules (`cf-unsupported-rule`): they emit a diagnostic and enforce atomic fail-closed suppression on any lower-priority rules that could be halted or shadowed on the same cells (§5.7, §6.5). They never disappear silently.
 
 ## 5. Behaviour
 
-The evaluator is a pure function of (rule, cell value, range statistics, clock): it returns a dxf id, a scale colour, a bar fraction, or an icon index — or unresolved. Painting consumes only that result. Numbers below state the schema and the MS-XLSX text; anything Excel alone can settle is marked **[measure]** and gets an oracle case before it is coded.
+The evaluator is a pure function of `(rule, cell coordinate, cell value, range statistics, formula adapter, clock)`: for each cell and rule it returns a structured contribution (`dxf` style, `colorScale` RGB fill, `dataBar` layout descriptor, or `iconSet` glyph descriptor), `not-matched`, or `unresolved`. Painting consumes only the composed atomic per-cell result. Schema facts below follow ECMA-376 / MS-XLSX; behaviours that depend on Excel runtime semantics are marked **[measure]** and settled by an oracle case (§8) before coding.
 
 ### 5.1 Cell-value rules (`cellIs`)
 
-- Operators compare the cell's value against one `formula` (two for `between`/`notBetween`). Operands are literals or expressions evaluated in the cell's position; an operand that does not resolve refuses the rule **[call]** (it must not fall back to zero).
-- Text operators (`containsText`, `notContains`, `beginsWith`, `endsWith` and their `cellIs` spellings) match substrings/prefixes/suffixes of the cell's display text. Case and accent behaviour is hypothesised to follow the viewer's text-filter collator (accent-sensitive, case-insensitive) **[measure]**.
-- A number compared with text, or text compared with a number, never matches **[measure]** (Excel's type wall, assumed strict).
-- Booleans and errors as cell values: hypothesised ignored by every `cellIs` operator **[measure]**; errors never match and never throw.
-- Blank cells: hypothesised ignored by every `cellIs` operator, including `equal` against 0 or `""` **[measure]**.
-- Dates are serials: a date operator compares serials, and date-typed `formatCode` display does not change the comparison **[measure]**.
+- Operators compare the cell's value against one `<formula>` operand (two for `between` and `notBetween`). Operands may be literals, cell references, or expressions evaluated at the target cell's translated coordinate; an operand that fails to resolve or evaluates to an error refuses the rule on that cell (§5.7, §6.5) — it never falls back to `0` or `""`.
+- For `between` and `notBetween`, when the first operand exceeds the second (`a > b`), whether Excel normalises the interval to `[min(a, b), max(a, b)]` is **[measure]** (hypothesised: normalised to `[min(a, b), max(a, b)]`).
+- Text operators on `cellIs` (`containsText`, `notContains`, `beginsWith`, `endsWith`) match substrings/prefixes/suffixes: whether they test the raw cell value coerced to text or the `numFmt`-formatted display string, and how case/accent matching behaves, are **[measure]** (hypothesised: case-insensitive raw text coercion, matching Excel's `SEARCH`).
+- A number compared with text, or text compared with a number, under relational operators (`<`, `<=`, `>`, `>=`) follows Excel's type ordering or type wall **[measure]**.
+- Booleans and errors as cell values: hypothesised ignored by `cellIs` operators **[measure]**; error cells never match and never throw.
+- Blank (empty) cells: whether `cellIs` with `equal` to `0` or `""`, `lessThan`, or `notBetween` matches an empty cell is **[measure]**.
+- Dates are numeric serials: comparisons operate on the underlying serial number, unaffected by `formatCode` **[measure]**.
 
-### 5.2 Text rules (`containsText` family as standalone types)
+### 5.2 Standalone text, blank, and error rules (`containsText` family, `*Blanks`, `*Errors`)
 
-- Same matching as §5.1 text operators; leading/trailing whitespace in the rule text is significant **[measure]** (hypothesised: Excel does not trim).
-- `notContainsText` on a blank cell hypothesised to match (vacuous truth) **[measure]** — this is the sharpest blank question in the stage; the oracle decides it.
+- Standalone text rules (`type="containsText" | "notContainsText" | "beginsWith" | "endsWith"`) read their search operand from `<cfRule text="..."/>` (validating consistency against the synthesised `<formula>` when present **[measure]**), so Stage 1 evaluates them without the Stage 5 general formula evaluator. Leading/trailing whitespace in `@text` is significant **[measure]**.
+- `notContainsText` on a blank cell and on numeric cells is **[measure]**.
+- `containsBlanks` and `notContainsBlanks`: whether only empty/unstored cells count as blank or zero-length `""` / whitespace-only strings (per Excel's synthesised `LEN(TRIM(A1))=0`) also match is **[measure]**.
+- `containsErrors` matches any cell whose value is an Excel error (`#N/A`, `#VALUE!`, `#REF!`, `#DIV/0!`, `#NUM!`, `#NAME?`, `#NULL!`, etc.); `notContainsErrors` matches any cell (including blanks **[measure]**) whose value is not an error.
 
-### 5.3 Date rules (periods)
+### 5.3 Date rules (`type="timePeriod"`)
 
-- Periods (`yesterday`, `today`, `tomorrow`, `last7Days`, `thisWeek`, `lastWeek`, `nextWeek`, `thisMonth`, `lastMonth`, `nextMonth`) are day intervals on the workbook calendar. "Today" is hypothesised to be the viewer open date in UTC **[measure]** — the candidates are file-save date, open date, and the calculation chain's date; the oracle builds one case per candidate (a workbook saved on day D asserting `today` contains D's serial, opened on day D+k).
-- Time-of-day is truncated; a serial with a fraction belongs to its day **[measure]**.
-- Week start (Sunday vs Monday) follows the workbook locale hypothesis: Sunday-first unless the file says otherwise **[measure]**.
-- Only date-typed cells participate; text that looks like a date does not **[measure]**.
+- A rule with `type="timePeriod"` reads its period from the `timePeriod` attribute (`yesterday`, `today`, `tomorrow`, `last7Days`, `thisWeek`, `lastWeek`, `nextWeek`, `thisMonth`, `lastMonth`, `nextMonth`) and maps it to a day-serial interval on the workbook calendar (`1900` vs `1904` date system).
+- **Settled default — "today" clock is measured, not assumed:** Whether Excel's `timePeriod` (and CF `TODAY()`) uses the system date at open, a cached calculation date, or UTC vs local midnight is **[measure]**. To avoid multi-day waits or changing the host OS clock, the Stage 1 oracle probe builds a workbook containing serials `D-2..D+2` around capture day `D` alongside a distinct saved `<v>` cache from an earlier date `D_saved ≠ D` and fractional serials (`D + 0.0`, `D + 0.5`, `D + 0.999`).
+- Time-of-day fraction handling (`floor(serial)` vs exact interval) and week start (`Sunday` vs `Monday` under `zh-TW`) are **[measure]**.
+- Only numeric cells (or only date-formatted numeric cells **[measure]**) participate; text, booleans, errors and blanks do not match.
 
 ### 5.4 Top/bottom N (`top10`)
 
-- `rank` N with `bottom` selecting the direction. Ties at the cutoff are hypothesised included even past N (Excel's documented tie behaviour) **[measure]** — the oracle builds a 12-row case with a 3-way tie at rank 3.
-- `percent` selects the top/bottom N percent of the value count, hypothesised rounded up to a whole cell **[measure]**.
-- Non-numeric cells (text, boolean, error, blank) are hypothesised excluded from both the ranking and the count **[measure]**.
-- N larger than the value count selects everything numeric **[measure]**.
+- `rank` $N$ (default `10`) with `bottom` (default `false`) selects the top or bottom $N$ numeric cells in the range. Ties at the $N$-th cutoff value are included even when more than $N$ cells match **[measure]**.
+- `percent="1"` selects the top/bottom $N\%$ of the numeric cell count in the range (`max(1, floor(count * N / 100))` vs `ceil` **[measure]**).
+- Non-numeric cells (text, boolean, error, blank) are excluded from both the ranking and the denominator count **[measure]**.
+- $N \ge \text{numeric count}$ (or $N\% \ge 100\%$) selects all numeric cells in the range **[measure]**.
 
-### 5.5 Above/below average
+### 5.5 Above/below average (`aboveAverage`)
 
-- Strictly above (below) the arithmetic mean of the numeric values in range; blanks, text, booleans and errors excluded from the mean **[measure]**.
-- Equal-to-average selects nothing (strict) **[measure]**.
-- One and two standard deviations (`aboveAverage` with the x14 `stdDev` extension): hypothesised population standard deviation **[measure]**.
+- Evaluates against the arithmetic mean $\mu$ (and population vs sample standard deviation $\sigma$ when `@stdDev` is set **[measure]**) of numeric values in the range; blanks, text, booleans and errors are excluded **[measure]**.
+- Standard `<cfRule>` attributes `@aboveAverage` (boolean, default `true`), `@equalAverage` (boolean, default `false`), and `@stdDev` (integer `1..3`) govern the comparison:
+  - When `@stdDev` is absent: `aboveAverage="1"` and `equalAverage="0"` tests $v > \mu$; `aboveAverage="1"` and `equalAverage="1"` tests $v \ge \mu$; `aboveAverage="0"` and `equalAverage="0"` tests $v < \mu$; `aboveAverage="0"` and `equalAverage="1"` tests $v \le \mu$ **[measure]**.
+  - When `@stdDev="k"` is present: tests $v > \mu + k\sigma$ (or $\ge$, $<$, $\le \mu - k\sigma$ per `@aboveAverage` and `@equalAverage`) **[measure]**.
 
-### 5.6 Duplicate/unique values
+### 5.6 Duplicate/unique values (`duplicateValues`, `uniqueValues`)
 
-- Duplicates are detected by displayed value within the rule's range: a value occurring more than once (unique: exactly once) **[measure]**.
-- Case, accent and surrounding-whitespace sensitivity hypothesised to follow §5.1 text matching **[measure]**; numbers match by value, errors and blanks hypothesised never flagged **[measure]**.
-- Scope is the rule's own `sqref` units, not the whole sheet **[measure]**.
+- Matches cells whose value occurs $>1$ time (`duplicateValues`) or $=1$ time (`uniqueValues`) across the rule's scope.
+- Whether matching compares raw typed values or `numFmt`-formatted display strings, how case/accent/whitespace behave on text, and whether evaluation scope spans the union of all rectangles in `sqref` or each contiguous rectangle independently are **[measure]**.
+- Blank cells and error cells are hypothesised never flagged as duplicate or unique **[measure]**.
 
-### 5.7 Priority, stopIfTrue and multiple rules
+### 5.7 Priority, `stopIfTrue`, multi-range `sqref`, and atomic fail-closed composition
 
-- Rules evaluate in `priority` order, 1 first. Each matching rule contributes its dxf; where two matching rules set the same dxf property, the higher-precedence (lower number) rule wins **[measure]** (hypothesised first-writer-wins per property).
-- `stopIfTrue` halts lower-priority rules for the cell entirely, including data bars and icon sets **[measure]**.
-- A rule with equal priority to another is hypothesised ordered by document order **[measure]**.
-- Only one data bar and one icon set show per cell: the highest-precedence rule of each kind wins **[measure]**.
-- `sqref` units are independent evaluation scopes: statistics (top N, average, min/max) compute per contiguous range, not across the whole `sqref` **[measure]**.
-- A `dxfId` without a matching `dxf`, or a rule whose range no longer intersects the sheet, refuses that rule with a diagnostic **[call]**.
+- **Priority order:** All rules on a sheet (across `<conditionalFormatting>` and `<x14:conditionalFormattings>`) sort by ascending `priority` (1 first), with document order breaking equal-priority ties **[measure]**.
+- **Per-property first-writer-wins:** Each matching `dxf`-bearing rule contributes its set properties; where two matching rules set the same property (`fill`, `font.bold`, `font.color`, `border.top`, `numFmt`, etc.), the higher-priority (lower number) rule wins **[measure]**.
+- **`stopIfTrue`:** When a matching rule has `stopIfTrue="1"`, all lower-priority rules ($>p$) on that cell are skipped, including `colorScale`, `dataBar`, and `iconSet` rules **[measure]**.
+- **Visual slot exclusivity:** At most one `dataBar` and one `iconSet` render per cell (the highest-priority matching rule of each kind that is not halted by an earlier `stopIfTrue`) **[measure]**. How a matching `colorScale` composes with a higher- or lower-priority `dxf` fill is **[measure]**.
+- **Multi-range `sqref`:** Whether range statistics (`top10`, `aboveAverage`, `colorScale`, `dataBar`, `iconSet`, `duplicateValues`) compute over the union of all rectangles in a `<conditionalFormatting sqref="...">` or per contiguous rectangle is **[measure]**.
+- **Atomic fail-closed composition (never a wrong format):** If a rule at priority $p$ covering cell $(r, c)$ is **unresolved** (unimplemented stage family, formula error/unsupported function, unresolvable `cfvo`, out-of-range `dxfId`, unsupported `<dxf>` property, over-cap range, or pending paged data), skipping rule $p$ and letting lower-priority rules ($>p$) paint unrestricted could display a wrong format. Therefore:
+  1. If unresolved rule $p$ has `stopIfTrue="1"`, all lower-priority rules ($>p$) on cell $(r, c)$ are withheld.
+  2. Otherwise, every visual slot or `dxf` property that rule $p$ could have written (`fill`, `font`, `border`, `numFmt`, `colorScale` fill, `dataBar`, or `iconSet`) is marked **tainted** on cell $(r, c)$ and withheld from lower-priority rules ($>p$); only higher-priority resolved rules ($<p$) and non-conflicting slots may paint.
+  3. The sheet records a deduplicated diagnostic (§6.5).
 
-### 5.8 Color scales
+### 5.8 Color scales (`colorScale`)
 
-- Two- and three-colour scales interpolate the cell fill across the value range in RGB, hypothesised linear in sRGB without gamma handling **[measure]**.
-- `cfvo` bound types: `min`/`max` (range extrema), `num` (literal), `percent` (hypothesised percent of the max–min span) **[measure]**, `percentile` (hypothesised Excel PERCENTILE.INC semantics) **[measure]**, `formula` (evaluated once per range, unresolved refuses the rule **[call]**).
-- All-equal values: hypothesised every cell takes the midpoint colour (3-scale) or the max colour (2-scale) **[measure]** — degenerate, must not divide by zero.
-- Text, boolean, error and blank cells take no scale colour **[measure]**; they keep their style.
+- Two- and three-colour scales require 2 or 3 `<cfvo>` children followed by the same number of `<color>` children, interpolating cell fill across the resolved thresholds in sRGB **[measure]**.
+- `<cfvo>` bound types: `min`/`max` (numeric range extrema), `num` (numeric literal in `@val`), `percent` ($v_{\min} + \frac{\text{val}}{100}(v_{\max} - v_{\min})$ **[measure]**), `percentile` (Excel `PERCENTILE.INC` over numeric values in range **[measure]**), and `formula` (evaluated once per range in Stage 5; unresolved refuses the rule).
+- Inverted or degenerate bounds ($t_1 \ge t_2$ or $v_{\min} = v_{\max}$): behaviour (clamping, midpoint vs max colour) is **[measure]** and never divides by zero.
+- Text, boolean, error and blank cells receive no scale colour **[measure]**.
 
-### 5.9 Data bars
+### 5.9 Data bars (`dataBar` and paired `x14:dataBar`)
 
-- The bar fraction maps value across the range min–max (`minLength`/`maxLength` default 0/100): values at or below min show the minimum bar, at or above max the full bar **[measure]**.
-- Negative values with a negative-capable bar draw left/down of the axis; the axis position is hypothesised proportional to `|min| / (max − min)` **[measure]**.
-- `showValue` false hides the cell text (bar only) **[measure]**; borders (`borderColor`), gradient vs solid, and `negativeFillColor`/`axisColor` follow the x14 extension when present, else the plain `dataBar` colour.
-- `direction` `rightToLeft` mirrors the bar; `context` follows the sheet direction **[measure]**.
-- A bar never overflows the cell rect; padding and minimum visible length are measured, not assumed **[measure]**.
-- Text, boolean, error and blank cells show no bar **[measure]**.
+- Evaluates to a structured bar descriptor `{ axisFraction, startFraction, endFraction, fillColor, borderColor?, isGradient, isNegative, axisColor?, showValue, direction }` (never a bare scalar fraction, because negative bars, mid-cell axes, and borders require explicit geometry).
+- Bounds and lengths: base `<cfvo>` / `<x14:cfvo>` support `min`, `max`, `num`, `percent`, `percentile`, `formula`, `autoMin`, and `autoMax`. How `minLength`/`maxLength` (schema default `10`/`90`, explicit `0`/`100` in `<x14:dataBar>`) and `autoMin`/`autoMax` map values to bar lengths for all-positive, all-negative, and mixed-sign ranges is **[measure]**.
+- Axis & negative bars: `axisPosition` (`automatic | middle | none`) places the vertical axis (`automatic` proportional to $|v_{\min}|/(v_{\max}-v_{\min})$ when $v_{\min} < 0 < v_{\max}$, `middle` at cell midpoint, `none` suppresses the axis and draws negative bars in the positive direction **[measure]**). When `negativeBarColorSameAsPositive="1"`, negative bars use the positive fill colour; when `negativeBarBorderColorSameAsPositive="1"` (default `true`), negative borders use the positive border colour.
+- `showValue="0"` suppresses the cell's text on canvas (bar only) **[measure]**.
+- `direction="rightToLeft"` mirrors the bar horizontally; `context` follows sheet reading order (`rightToLeft` on `<sheetViews>/<sheetView>` **[measure]**).
+- Cell insets, border stroke snapping, gradient stops, and minimum visible bar width are **[measure]**. Text, boolean, error and blank cells draw no bar **[measure]**.
 
-### 5.10 Icon sets
+### 5.10 Icon sets (`iconSet` and `x14` custom sets)
 
-- Built-in sets (`3TrafficLights`, `4Arrows`, `5Ratings`, …): thresholds from ordered `cfvo` entries against the cell value; `reverse` swaps the order; `showValue` false hides the cell text (icon only) **[measure]**.
-- Percent vs number thresholds follow the same semantics as §5.8 `cfvo` **[measure]**.
-- Custom x14 sets reference `cfIcon` entries by set id and icon index; an unresolvable custom icon refuses the rule **[call]**.
-- Text, boolean, error and blank cells show no icon **[measure]**.
-- Icons draw from the viewer's bundled icon vocabulary where it matches, else from measured geometry; a missing glyph refuses that icon with a diagnostic, never a wrong glyph **[call]**.
+- Built-in sets (3-, 4-, and 5-icon families, plus `x14` sets `3Triangles`, `3Stars`, `5Boxes`) evaluate $k$ `<cfvo>` thresholds ($k \in \{3, 4, 5\}$, where `<cfvo>[0]` is the lowest bucket floor and `<cfvo>[1..k-1]` define the upper bucket thresholds).
+- Each threshold $i \ge 1$ compares the cell value using `>=` when `cfvo[i].gte` is `true` (default) and `>` when `cfvo[i].gte` is `false` **[measure]**. `reverse="1"` reverses the icon assignment order across buckets.
+- Custom `<x14:iconSet custom="1">` maps each bucket to its `<x14:cfIcon iconSet="..." iconId="..."/>` child. When `iconSet="NoIcons"`, that bucket intentionally draws **no icon** (and no text inset **[measure]**), which is valid output, not a refusal. An unrecognised `iconSet` name or out-of-range `iconId` refuses the rule (`cf-unsupported-icon`).
+- When an icon is drawn and `showValue="1"`, the cell's text layout box is inset from the left (or right in RTL **[measure]**) by the measured icon box width plus gap **[measure]**, so left-aligned text and narrow numbers never collide with the icon. When `showValue="0"`, only the icon draws on canvas **[measure]**.
+- Text, boolean, error and blank cells draw no icon **[measure]**.
 
-### 5.11 Formula rules and recompute (stage 5)
+### 5.11 Formula rules, anchoring, calculation policy, and recompute (Stage 5)
 
-- An `expression` rule evaluates per cell with the formula engine (`evaluateNode`, `src/xlsx/formula/evaluator.ts:717`) against a context supplying that cell's value and neighbours (`getCellValue`, `getRangeValues`, `src/xlsx/formula/types.ts:116,119`). Relative references translate per cell; shared formulas expand as the engine already does.
-- Volatile functions (`TODAY`, `NOW`) re-evaluate on open and on recalc; the interactive viewer recomputes CF through `recomputeDependents` (`src/xlsx/formula/workbook.ts:623`) when values change (pivot changes, filters, dependent formulas), keyed to the same generation as the grid.
-- An expression that errors, references external books or names, or exceeds the engine's depth/budget refuses the rule for that cell with a diagnostic **[call]**.
-- `calc-policy` (`src/xlsx/formula/calc-policy.ts:72`) gates when rules run: manual-calculation workbooks do not evaluate on open.
+- **Rule anchor & relative reference translation:** `evaluateNode` (`src/xlsx/formula/evaluator.ts:717`) evaluates an AST as written; it does not shift relative coordinates from `currentCell`. A CF formula (`type="expression"`, `cellIs` formula operand, or `<cfvo type="formula">` / `<xm:f>`) is anchored at the top-left cell of its applies-to range (whether multi-range `sqref="C5:D10 A1:B4"` anchors at the top-left of the first range in `sqref` or each range's own top-left is **[measure]**). Before evaluation at target cell `(r, c)`, a CF reference translator shifts relative row/column coordinates by `(r - anchorRow, c - anchorCol)` while preserving `$`-pinned axes (`$A$1`, `$A1`, `A$1`, `A1`).
+- **Truthiness & error coercion:** How `expression` rules coerce non-boolean results (numeric `0` = false vs non-zero = true, strings = false, blank = false, multi-cell range/array spill values, and formula errors `#N/A`/`#VALUE!`) and how `x14:cfRule/@activePresent` gates `<xm:f>` activation are **[measure]**. Unresolved functions (`markUnsupported`, `src/xlsx/formula/evaluator.ts:499`), external workbook refs, defined names, circular references, or budget exhaustion refuse the rule for that cell (§5.7, §6.5).
+- **Clock & volatile functions:** `TODAY()` and `NOW()` inside CF formulas read the same `[measure]`d clock established in §5.3 via `EvaluationContext.semantics` (`src/xlsx/formula/types.ts:134`).
+- **Manual / cached calculation policy:** Unlike worksheet formula cells (`<c><f/><v/></c>`), `<cfRule>` stores no cached per-cell boolean result in the file. Whether Excel evaluates CF formulas on open against the sheet's saved `<v>` cell values when `<calcPr calcMode="manual"/>` is set is **[measure]**. The CF adapter reads the same cell values the grid displays (`decideCellCalculation`, `src/xlsx/formula/calc-policy.ts:72`) and **never** calls `recomputeDependents` (`src/xlsx/formula/workbook.ts:627`) when `workbookValuePolicy(doc) === 'cached'` (which throws at `:632`).
+- **Cross-sheet & interactive invalidation:** A CF formula or `cfvo` on `Sheet1` may reference `Sheet2!A1:A10`. CF memoisation is therefore keyed by `(workbookValueGen, sheetCfGen)` (plus referenced sheet value generations on the worker path) rather than the host sheet's `valueGen` alone.
 
 ## 6. Architecture
 
-### 6.1 Model (eager, tiny)
+### 6.1 Model and eager boundary
 
-- The eager model is an index, not the rules: per sheet, the list of (range set, rule kind, priority, dxf id or null). Rule bodies, statistics and paint state live in the lazy chunk. Nothing about CF enters the eager bundle beyond the sheet-level presence flag.
-- Priorities are validated once (unique positive integers; document order breaks ties per §5.7 after measurement).
+- **Zero runtime CF logic in the eager bundle:** Erased TypeScript interfaces (`XlsxConditionalFormattingStub` / resolved CF handles on `XlsxSheet` in `src/xlsx/types.ts`) cost 0 runtime bytes. At runtime, `src/xlsx/parse.ts` adds only a minimal presence check (`hasConditionalFormatting`) that dynamically imports the lazy `src/xlsx/cf/` module when a worksheet contains `<conditionalFormatting>` or `x14:conditionalFormattings`. Rule ASTs, `sqref` intervals, `dxf` resolvers, range statistics, and painters all live in the lazy `src/xlsx/cf/` chunk.
 
-### 6.2 Parsing: both paths
+### 6.2 Parsing: both paths and `<dxf>` resolution
 
-- Resident: one more guarded `extLst` branch beside sparklines (`src/xlsx/parse.ts:591`), plus direct `conditionalFormatting` children of the worksheet. Reuse `parseDxf`/`parseDxfList` (`src/xlsx/tableStyles/parseStylesExtras.ts:73,129`) for rule `dxfId` targets; the existing `MAX_DXFS` cap and the `admittedFormatCode` gate (`src/xlsx/parse.ts:126`) apply unchanged.
-- Paged: extend the streaming guards (`src/xlsx/storage/sheetRecords.ts:552,643`) with a CF frame check in the sparkline/slicer pattern, and resolve lazily through the `pagedFormatting` dynamic-import pattern (`src/xlsx/storage/pagedFormatting.ts:47`).
-- x14: reuse the styles-side `x14Ext` approach (`src/xlsx/tableStyles/parseStylesExtras.ts:134`) for `x14:conditionalFormattings`, the data-bar extension and custom icon sets, matched by namespace URI on both paths (`src/core/xml.ts:82,261`).
-- Caps (sized from realistic workbooks by the builder, stated in the plan): rule count per sheet, ranges per rule, `cfvo` count, icon custom-set size. Over-cap input refuses with a diagnostic **[call]**.
+- **Resident path (`src/xlsx/parse.ts`):** When `<conditionalFormatting>` or the `x14:conditionalFormattings` `extLst` URI (`{78C0D931-6437-407d-A8EE-F0AA7539E650}`) is present on a worksheet, `parseXlsx` loads the lazy CF parser, attaches `styles.tableStyleSource` (`src/xlsx/parse.ts:542`, extended so CF-only sheets without tables or pivots still receive `dxfs`), and parses base and `x14` rules.
+- **Paged path (`src/xlsx/storage/sheetRecords.ts`, `pagedImport.ts`, `pagedFormatting.ts`):**
+  - `src/xlsx/storage/sheetRecords.ts` adds a top-level `<conditionalFormatting>` collector (outside `mc:AlternateContent` at `:641`) and a 4-frame `x14:conditionalFormattings` extension guard alongside `isSparklineExtension` (`:552`).
+  - `src/xlsx/storage/pagedFormatting.ts:44–48` and `src/xlsx/storage/pagedImport.ts:611` (`needsExtras`) are extended to load `parseStylesExtras` whenever any sheet has conditional formatting, so `dxfs` are available on CF-only large workbooks.
+- **Strict XML namespace handling (`src/core/xml.ts`, `parseStylesExtras.ts`):**
+  - `src/core/xml.ts:261,312–316` is extended so `'subtree'` namespace retention covers `<conditionalFormatting>` (for `<extLst><ext><x14:id>`) as well as worksheet `<extLst>` (`x14:conditionalFormattings`, `xm:sqref`, `xm:f`).
+  - `x14` and `xm` elements are matched by explicit namespace URI (`X14_MAIN_NS` and `XM_MAIN_NS` via `elementNamespaceUri`, `src/core/xml.ts:82`) — never by prefix and never by treating `undefined` namespace as `x14`.
+- **Per-cell `<dxf>` parsing & unsupported-property detection:**
+  - `parseDxfList` (`src/xlsx/tableStyles/parseStylesExtras.ts:129`) is exported and shared for `styleSheet/dxfs` (capped at `MAX_DXFS`, with `admittedFormatCode` at `src/xlsx/parse.ts:131` and `parseStylesExtras.ts:123`), and `parseDxf` (`:73`) is also used for inline `<x14:dxf>` children.
+  - Because `parseDxf` currently ignores `<gradientFill>`, `<alignment>`, `<protection>`, diagonal borders, and approximates non-solid `patternFill` in table styles (`src/xlsx/tableStyles/resolve.ts:126–138`), the CF `<dxf>` parser inspects each referenced `<dxf>` (and `<x14:dxf>`) for unsupported visual properties (e.g. `<gradientFill>`, non-solid `patternFill` unless measured and supported, diagonal borders, or layout-altering `<alignment>`). A `<dxf>` with unsupported visual properties — even when mixed with supported font/fill properties — fails closed for that rule (`cf-unsupported-dxf`) rather than silently dropping or approximating properties.
+- **Admission caps at parse time:** Rule count per sheet, range intervals per `sqref`, `<cfvo>` count per rule, custom `<x14:cfIcon>` entries, formula text length / AST token count, and per-sheet diagnostics (capped at 64 deduplicated entries, matching `sparklines`). Over-cap rules fail closed with `cf-resource-limit`.
 
-### 6.3 Evaluation placement and language **[owner] [call]**
+### 6.3 Evaluation, blank-cell synthesis, coordinates, and paged streaming **[owner] [call]**
 
-- Evaluation is pure and viewport-scoped: only cells in range *and* in view evaluate, on both paths. Statistics that need a whole range (top N, average, min/max, percentile) scan that range once per range per rule, memoised for the generation; per-cell predicates never rescan.
-- Resident path: values come from the cell model; formula rules call the engine with a supplied context.
-- Paged path: values come from page reads; statistics stream through the existing page-event pattern (`sharedStringEvents`, `src/xlsx/storage/sheetRecords.ts:240`, is the template). A rule whose range is not yet imported refuses (pending data never draws a partial format), and arrival repaints.
-- The interactive viewer recomputes on `noteValuesChanged`/`valueGen` (`src/xlsx/view/contracts.ts:264`, `src/xlsx/view/source.ts:284`), pivot commits (`publishValues`), and filter/sort commits — the same invalidation the grid already uses.
-- The worker computes CF display state per viewport cell and ships it inside the existing grant-checked replies (`src/worker/viewerReplyLimit.ts:26`); no new protocol beyond a versioned CF payload field, admitted before construction.
+- **Viewport-scoped evaluation & visible blank-cell synthesis:** Only cells intersecting both the visible viewport (or static render area) and a rule's `sqref` are evaluated. Because worksheet storage (`sheet.rows` and paged `SparseRowPage`) omits unstored empty cells, the CF evaluator and viewport planner synthesise candidate coordinates across the intersection of the visible viewport and `sqref` (clamped to the sheet's renderable extent, which is expanded to include bounded CF ranges just as sparkline hosts expand `extent.used` in `src/xlsx/view/source.ts`), allowing blank-matching rules (`containsBlanks`, `notContainsText`, `ISBLANK`, etc.) to format empty cells within explicit per-viewport synthesis caps.
+- **Merged cells, hidden rows/columns, and sort/filter coordinates:**
+  - **Sort/filter (`RowOrder`):** After interactive sort or filter, CF evaluates against **source** coordinates `(sourceRow, col)` and source range statistics, then maps the resolved format to the visible **display** row `(displayRow, col)`.
+  - **Hidden/filtered rows:** Whether rows hidden by row metadata or autofilter participate in CF range statistics (`top10`, `average`, `min`/`max`, `percentile`, `duplicateValues`) is **[measure]**.
+  - **Merged cells:** How a rule covering a merged range evaluates and paints (top-left master cell value applied across the merge rect vs per-subcell evaluation for borders/fills) is **[measure]**.
+- **Shared range statistics, whole-column clamping, and aggregate budgets:**
+  - Whole-column/whole-row ranges (`A:A`, `1:1`, `A1:XFD1048576`) clamp their statistics scan to the sheet's populated row/column bounds while accounting mathematically for unstored blank cells inside the declared `sqref` span where required, so a 50-row sheet with `sqref="A:A"` scans 50 rows, not 1,048,576.
+  - Statistics (`min`, `max`, `mean`, `stdDev`, sorted numeric array for `top10`/`percentile`, and value frequency map for `duplicateValues`/`uniqueValues`) are memoised and **shared** across rules on the same `(sheetId, normalisedRange, hiddenPolicy, valueGen)` under a bounded LRU bytes charge.
+  - Every evaluation pass enforces an **aggregate work, cell-visit, and byte budget** (covering range scans, per-cell formula AST visits, and a mandatory shared `EvaluationContext.materializationBudget` at `src/xlsx/formula/types.ts:152` so an expression like `SUM(A:A)` cannot repeat a million-cell scan across visible cells). Exceeding the aggregate budget refuses the offending rule(s) with `cf-resource-limit` and never monopolises a frame.
+- **Paged path streaming & formula dependency preparation (`src/xlsx/view/pagedSource.ts`):**
+  - Following `readSparklines` (`src/xlsx/view/pagedSource.ts:884`) and `fillCharts` (`:1052`), the worker groups required range-statistic cells and Stage 5 formula dependency ranges by page using `this.workbook.store.pages(sheetId)` summaries, reserves the workspace upfront via `AllocationReservation` (`src/xlsx/view/allocationAccount.ts:2`), yields cooperatively every 128 steps while checking `options.signal.aborted`, and streams committed pages in order (releasing each decoded page before loading the next).
+  - Synchronous `evaluateNode` callbacks (`getCellValue` / `getRangeValues`, `src/xlsx/formula/types.ts:116,125`) read from the pre-populated bounded dependency snapshot. If a formula dynamically branches to a coordinate outside the pre-admitted snapshot or on an unimported page (`row > sheet.importedThroughRow` or status `'unknown'`), the callback marks the evaluation as pending (`pendingSheetIds`) or over-budget, withholding unproven CF on the affected cell until page arrival triggers a targeted tile invalidation (`RemoteSparklineCache` pattern, `src/worker/viewerRemoteSparklines.ts:79`).
 
-### 6.4 Painting
+### 6.4 Painting and derived text across all views
 
-- **dxf layering:** a winning dxf layers over the region layer's resolved style (`styleAt`, `src/xlsx/tableStyles/regionLayer.ts:200`) — that is, over cell, table and pivot styles — and under nothing. Per-property first-writer-wins follows §5.7 after measurement. `applyDxf` (`src/xlsx/tableStyles/resolve.ts:112`) is reused verbatim. `numFmt` from dxf re-runs display-text computation for the cell.
-- **Fill phase extras:** color-scale fills replace the cell fill; data bars and icons paint in the fill phase after fills and before text, following `paintSparklinesIn` (`src/xlsx/render.ts:878`, interactive `src/xlsx/view/renderViewport.ts:325`, culling twin `viewportSparklineCandidates` at `:111`). One shared helper paints bars/icons on canvas in every view (static, interactive, print at `PRINT_SCALE`, PNG/PDF export through `page.paint`), so all five views agree by construction.
-- **Gridlines and borders:** a CF fill covers gridlines like any fill (`regionGrid`, `src/xlsx/regionGrid.ts:71`); CF borders join the deferred border pass (`paintCellLayout`, `src/xlsx/render.ts:1344`) rather than painting early.
-- **Mode split:** `screen` vs `print` region modes already exist (`src/xlsx/tableStyles/regionLayer.ts:18`); any measured screen/print difference gets the same split, otherwise one path serves all.
-- **Tile edges and zoom:** bars and icons clip to the cell rect, repaint on tile invalidation, and are verified straddling tile boundaries at 50/100/175% and DPR 1/2.
+- **Per-cell CF `dxf` resolver (`resolveCfCellStyle`):** A dedicated CF resolver layers winning `dxf` properties in priority 1..N first-writer-wins order over `styleAt(row, col, own, mode)` (`src/xlsx/tableStyles/regionLayer.ts:200`). Unlike `applyDxf` (`src/xlsx/tableStyles/resolve.ts:112`), `resolveCfCellStyle`:
+  1. Applies `dxf.border.left/right/top/bottom` directly to each matching cell's four sides (never substituting `horizontal`/`vertical` interior band edges).
+  2. Clears `underline` when `dxf.font.underline === 'none'` and clears a side border when `dxf.border[side].style === 'none'` **[measure]**.
+  3. Resolves whether a CF `dxf` fill with `pattern="none"` clears a lower cell/table fill per Stage 1 measurement **[measure]**.
+- **Every-view insertion seams:**
+  1. **Static page view & PNG/PDF export:** `renderSheet` (`src/xlsx/render.ts:763`, two-pass loop at `:865–876`) invoked by `sheetPaintable` (`src/render/paint.ts:143`) and `getPaintables` (`src/render/paint.ts:354,409`), preloaded via an `ensureConditionalFormatting(sheets)` loader alongside `ensureSparklinePainter`.
+  2. **Print view:** `computePrintMetrics` / `renderPrintPage` (`src/xlsx/render.ts:447,494`), `preparePrintUnits` (`src/components/xlsx/sheetAssets.ts:322`), and browser iframe print `printDocument` (`src/components/paged/printDocument.ts:42`, `PRINT_SCALE = 2` at `:5`, `page.paint` at `:94`).
+  3. **Interactive canvas tiles (resident & worker/paged):** `planViewport` (`src/xlsx/view/viewport.ts:590`), `renderSheetViewport` (`src/xlsx/view/renderViewport.ts:187`, painting bars and icons in the fill phase beside `paintSparklinesIn` at `:325` and `viewportSparklineCandidates` at `:112`), and worker viewport/read replies (`src/worker/viewerSession.ts`).
+  4. **Derived text, layout, copy/find, and DOM semantics:** A winning `dxf.numFmt` overrides the cell's number format and flows into `layoutCellBody` (`src/xlsx/render.ts:1178`, updating text measurement, column width / `###` overflow, and text spill), `cellDisplayText` (`src/xlsx/render.ts:706`), paged `displayText` (`src/xlsx/view/pagedSource.ts:1629`), `styleForCell` (`src/components/xlsx/InteractiveSheetDoc.tsx:1201`), `SemanticPresentationCache` (`src/components/xlsx/formatPresentation.ts:29`), `GridSemantics` (`src/components/xlsx/GridSemantics.tsx:438`), and interactive copy/find text. Layout and presentation caches include `cfGen` / effective CF `numFmt` and icon state in their keys so they invalidate whenever CF changes.
+- **Fill-phase bars, icons, `showValue="0"`, and icon text inset:**
+  - Color-scale fills replace the cell fill; data bars and icons paint in the fill phase after cell fills and before cell text via one shared canvas helper across static, interactive, print, and export views.
+  - When a winning data bar or icon set has `showValue="0"`, `layoutCellBody` and `renderSheetViewport` suppress drawing the cell's text on canvas.
+  - When a winning icon set draws an icon (not `NoIcons`) and `showValue="1"`, `layoutCellBody` and `renderSheetViewport` inset the horizontal text box by the measured icon width + padding (§5.10 **[measure]**) so text never paints over the icon.
+- **Gridlines and borders:** `mayHaveRegionGrid` (`src/xlsx/regionGrid.ts:62`) and `regionGrid` (`:71`) (plus interactive viewport gridline suppression) are extended so any cell with an active CF fill or `colorScale` fill suppresses underlying gridlines even on a CF-only sheet with no tables or pivots. CF borders join the deferred border pass (`paintCellLayout`, `src/xlsx/render.ts:865,1344`) with measured shared-edge precedence against neighbour cells **[measure]**.
+- **Tile edges and zoom:** Bars and icons clip to the host cell rect, snap to device pixels per §8 measurement, repaint on tile invalidation, and are verified straddling tile boundaries at 50/100/175% zoom and DPR 1/2.
 
-### 6.5 Unresolved and unsupported
+### 6.5 Unresolved and unsupported (atomic fail-closed)
 
-- A rule that cannot be evaluated (unresolvable operand, unknown type/operator, out-of-range `dxfId`, unresolvable custom icon, external references, over-cap input, pending paged data) leaves the cell exactly as the lower layers styled it, and records a diagnostic. The diagnostic surfaces where style diagnostics already surface; it never invents formatting.
-- A workbook with no CF pays nothing: rule lookup is one presence check per sheet, and evaluation runs only for visible in-range cells.
+- Every unsupported or unresolvable condition (unmerged stage rule, unknown rule/operator/period/`cfvo` type, broken `x14:id` pairing, out-of-range `dxfId`, `<dxf>` with unsupported visual properties, unresolvable custom icon, external or defined-name reference, formula error/cycle, over-cap input, or memory/work budget refusal) triggers the atomic fail-closed rule in §5.7: it withholds the rule's own formatting and any lower-priority CF contribution on the same cell that could be halted by `stopIfTrue` or that competes for the same visual slot, leaving non-conflicting base/higher-priority styles intact.
+- Diagnostics are recorded on `XlsxSheet.diagnostics` (`{ kind: 'unsupported' | 'parse', feature: 'cf-…', message }`), deduplicated by `(feature, message)` and capped at 64 entries per sheet.
+- Pending paged data (pages still importing) withholds unproven CF in the same atomic way without emitting a permanent unsupported diagnostic; when the pages commit, the affected tiles invalidate and repaint.
 
-### 6.6 Interactive recompute
+### 6.6 Interactive recompute (atomic generation tagging)
 
-- CF state is keyed to the same value generation as the grid. Pivot commits, filter/sort commits and formula recomputes invalidate through the existing notices; tiles re-read and viewports repaint. A recompute that cannot finish within budget keeps the previous CF state and diagnoses, never a half-evaluated mix **[call]**.
+- Every resolved CF state is tagged with `(workbookValueGen, cfGen)`. Pivot commits (`publishValues`), filter/sort commits, and formula recalculations advance the generation and invalidate affected CF caches and tiles.
+- **No stale previous-generation CF:** When `valueGen` advances, previous-generation CF outcomes are **never** painted onto the new cell values (which could show a positive/green format on a cell whose value just became negative). If a recompute is pending, cancelled, or exceeds its budget, affected cells render without unproven CF (base cell/table/pivot style only, plus a diagnostic if over budget) until the current generation's CF completes.
 
 ### 6.7 Accessibility
 
-- Icon meaning is text: an icon-bearing cell's accessible name gains the icon's name ("green up arrow") in the existing hidden-span pattern (`src/components/xlsx/GridSemantics.tsx:438`), bounded by the presentation cache (`src/components/xlsx/formatPresentation.ts:29`).
-- Data-bar meaning is the cell's value, which is already announced; the bar adds a relative phrase only where the oracle shows Excel surfacing one **[measure]** (hypothesised: it does not, and nothing is added).
-- Color-scale and dxf colour-only meaning is never conveyed by colour alone; no extra text is added for fills **[call]**.
-- Keyboard and focus behaviour do not change: CF adds no tab stops, menus or popups.
+- **Screen-reader presentation (`src/components/xlsx/GridSemantics.tsx:438`, `formatPresentation.ts:29`):** Conditional formatting meaning is never conveyed by colour alone. `SemanticPresentationCache` keys entries by `(value, effectiveFormatCode, dateSystem, locale, cfA11yKey)` and charges all generated strings against its existing `FormatBudget`:
+  - **Icon sets:** Appends the localised (`zh-TW` / viewer locale) icon label (e.g. green up arrow / red down arrow; nothing added for `NoIcons`).
+  - **Data bars, color scales, and `dxf` rules:** Appends a concise, bounded, localised accessible descriptor when a rule formats the cell (without dumping raw formulas or RGB hex strings).
+  - **`showValue="0"` (bar-only / icon-only cells):** Whether Excel's accessibility tree still announces the underlying formatted value or only the visual indicator when `showValue="0"` is **[measure]**, and `GridSemantics` follows that measured contract.
+- Keyboard and focus behaviour do not change: CF adds no tab stops, menus, or popups.
 
-### 6.8 Worker protocol
+### 6.8 Worker protocol and pre-construction admission
 
-- One versioned CF payload field on the existing per-cell/viewport replies, carrying winning dxf ids, scale colours, bar fractions and icon indices. Admission before construction per `viewerReplyLimit.ts:26`; over-grant refuses the CF payload while the cells still ship.
-- No new commands: evaluation happens inside existing viewport/read commands.
+- **Pre-construction byte admission:** `admitReply` (`src/worker/viewerReplyLimit.ts:26–34`) measures an already-built `WorkerReply` and replaces the **entire** reply with a payload-free `replyLimitRefusal` (`:17`) if it exceeds `limit`. Therefore, to guarantee that viewport cells still ship when CF exceeds memory limits, the worker pre-estimates the CF payload size (`cfPayloadBytes`) and checks both `baseReplyBytes + cfPayloadBytes <= limit` and a worker `AllocationReservation` (`src/xlsx/view/allocationAccount.ts:2`) **before** allocating or attaching the CF payload. If admission fails, the worker omits only the CF payload field and attaches a bounded quota/refusal diagnostic so `admitReply` admits and posts the cell reply normally.
+- **Shared definitions & lifecycle:** Shared per-sheet CF definitions (`DxfStyle` table and custom icon descriptors) and any dedicated worker CF read cache follow the exact receiver-granted, transfer/adoption, cancellation, eviction, and close lifecycle of `RemoteSparklineCache` (`src/worker/viewerRemoteSparklines.ts:79`), verified to return worker and main-thread ledgers (`src/xlsx/view/tileCache.ts:31`, `src/xlsx/view/mainLedger.ts:103`) to baseline on eviction and close.
 
 ## 7. Constraints
 
-- **Eager budget:** 38,720 B gzip ceiling (`scripts/eager-budget.ts:14`), enforced by `scripts/check-eager.ts:1` and the forbidden list (`tests/helpers/eager-graph.ts:38,66`, which already bars tableStyles/pivots/sparklines from the eager graph — CF joins that list). Measured 35,976 B at this baseline: about 2.7 KB of headroom for the eager rule index and presence flags. The evaluator, statistics, painters and icon geometry live in a lazy `xlsx/cf` chunk (new `appearance`-style chunk per `vite.config.ts:64`), behind dynamic imports in the sparklines/pivots pattern.
-- **Performance bounds:** rules × in-view in-range cells per frame, never rules × whole sheet; range statistics computed once per range per rule per generation; formula rules bounded by the engine's depth/budget gates; icon/bar geometry is O(1) per cell. Admission before allocation on every path (`MemoryPool.retain` refusal at `src/xlsx/view/tileCache.ts:146`, transient `charge()` shares at `:182`, `MainMemoryLedger` at `src/xlsx/view/mainLedger.ts:103`, per-op `AllocationReservation` at `src/xlsx/view/allocationAccount.ts:5`). Concrete caps stated in the plan.
-- **Determinism:** same file, same view, same pixels — evaluation order fixed (priority, then document order), no wall-clock reads except the `[measure]`d today-clock, no locale-dependent branches except measured ones.
+- **Eager budget:** 38,720 B gzip ceiling (`scripts/eager-budget.ts:14`), enforced by `scripts/check-eager.ts:1`. `src/xlsx/cf/` is added to `EAGER_FORBIDDEN` (`tests/helpers/eager-graph.ts:38`) and `PAGED_WORKER_FORBIDDEN` (`:66`), and `vite.config.ts:64` (plus `vite.harness.config.ts`) names the lazy `cf-[hash].js` chunk. Only erased TypeScript types and a minimal presence check in `src/xlsx/parse.ts` sit in the eager graph.
+- **Performance & memory bounds:** Viewport evaluation is bounded by $\text{active rules} \times \text{visible in-range cells}$ with an aggregate per-pass cell-visit and time ceiling; range statistics compute at most once per unique `(sheetId, range, metric, valueGen)` and clamp whole-column spans to populated sheet bounds; Stage 5 formula evaluation shares a mandatory cumulative `materializationBudget` (`src/xlsx/formula/types.ts:152`); worker operations yield cooperatively every 128 steps under `AbortSignal`. Every allocation reserves upfront via `MemoryPool.retain` / `charge()` (`src/xlsx/view/tileCache.ts:146,182`), `MainMemoryLedger` (`src/xlsx/view/mainLedger.ts:103`), and `AllocationReservation` (`src/xlsx/view/allocationAccount.ts:2`).
+- **Determinism:** Same file, same view, same pixels — fixed evaluation order (`priority`, then document order), no unmeasured wall-clock reads, and no unmeasured locale branches.
 
 ## 8. Reference evidence **[owner]**: match Excel
 
-Excel for Mac is installed on the development machine (`/Applications/Microsoft Excel.app`).
+Excel for Mac 16.114 (`zh-TW` UI locale) is installed on the development machine (`/Applications/Microsoft Excel.app`).
 
-- **Reference workbooks.** A script generates a set of reference workbooks, one or more per stage and per **[measure]** item in §5, into `tests/fixtures/xlsx-cf/`. Each workbook contains a known data block (numbers, text, dates, blanks, errors, ties), fixed column widths and row heights, and gridlines off — plus one variant with gridlines on, borders, fill and text for the layering questions.
-- **Capture.** References are captured from Excel's on-screen rendering, following the sparklines precedent: preferred route AppleScript `copy picture` of the range (screen appearance, bitmap, 100% zoom, selection parked far away, display awake); fallback window screenshot at fixed zoom. Either route needs the owner's one-time automation/screen-recording grant, done outside the agent. The first plan task is a capture probe that settles the route and records the scale.
-- **XML route.** Where AppleScript cannot author a case (data-bar negatives, custom icon sets, repaired-file shapes), agents hand-write the case as XML with `refreshOnLoad="1"`, open it in Excel and save; Excel's saved output is the oracle — the pivots §11 precedent, batched into one owner recipe round per stage where UI work is needed.
-- **Repeatability.** Each reference PNG ships with a sidecar (Excel version, route, scale, range); a script reproduces the whole set, reusing `scripts/xlsx-refs/*`.
-- **Cell geometry first.** Crop both images to the host cell bounds measured in the capture; size mismatches reported separately, never counted against CF geometry.
-- **Authority.** Excel for Mac 16.114 (zh-TW UI) is the reference; Windows Excel differences are out of scope.
-- **Comparison.** The viewer renders the same range at the same scale; pixel diff (meanAbs/rowMax, per-reference tolerance) into `docs/validation/xlsx-cf.md`.
-- **Verified.** A feature counts as verified only when its references pass.
-- **Unverified features ship.** **[owner]** As with sparklines: rendering fidelity a capture cannot establish ships from the best-measured model, labelled *unverified*. Data and evaluation semantics that cannot be resolved still fail closed (§6.5) — a wrong format is an anti-goal, while a slightly-off pixel is not.
-- **Unit tests.** Every measured value is also pinned by an evaluation/geometry unit test (rule in, outcome out), so regressions are caught without Excel.
+- **Settled orchestrator defaults (binding):**
+  1. **Automation grants already exist** on the machine; the capture probe runs directly without blocking on a manual permission prompt (failing closed only if an AppleScript command actually errors).
+  2. **No LibreOffice fixtures:** LibreOffice is not installed on this machine; no LibreOffice-generated `.xlsx` fixture is required (third-party writer shapes are covered by hand-authored XML and XlsxWriter fixtures, matching `docs/validation/xlsx-sparklines.md:359–366`).
+  3. **Print and export tolerance:** Print (`PRINT_SCALE = 2`) and PNG/PDF export comparisons use the **sparklines tolerance policy** (`meanAbs / rowMax / strong` with `STRONG_DELTA = 64` and ±1 px vertical window, `scripts/sparkline-compare.ts:64–98`).
+  4. **The "today" clock is measured, not assumed** via the single-session §5.3 workbook probe.
+  5. **UI locale is `zh-TW`** on Excel for Mac 16.114; Windows Excel differences are out of scope.
+- **Reference workbooks & authoring routes:**
+  - A generator writes reference workbooks per stage and per **[measure]** item in §5 into `tests/fixtures/xlsx-cf/`, each with a known data block (numbers, text, dates, blanks, errors, ties), fixed column widths and row heights, gridlines off, plus a gridlines-on / bordered / table-styled variant for layering and gridline-to-gridline cell-bound cropping (`scripts/sparkline-compare.ts:26–30`).
+  - `/Applications/Microsoft Excel.app/Contents/Resources/Excel.sdef` exposes `format condition` (`:3282`), `modify condition` (`:2407`), `modify condition value` (`:2416`), and `set first priority` (`:2750`). The Stage 1 capture probe tests whether AppleScript authoring or direct OOXML authoring + Excel open/re-save is cleaner per rule family.
+  - **Strict acceptance gate for XML-authored / re-saved oracle workbooks:** Whenever a fixture is authored as XML (with `<calcPr fullCalcOnLoad="1"/>` in `xl/workbook.xml` where formula/clock evaluation is needed) and opened/re-saved in Excel:
+    1. Excel must open the file **without repair** (no repair dialog, log, or `[Repaired]` window title).
+    2. Inspecting the re-saved `.xlsx` archive must confirm that the target `<conditionalFormatting>` / `<x14:conditionalFormattings>` elements, rule attributes, and `<dxf>` definitions were **retained** in the saved XML (proving Excel did not silently strip the rule on open/save).
+    3. Every capture range must include both **positive control cells** (where the rule visibly changes pixels compared to an unformatted baseline row) and **negative control cells** (where the rule does not match), plus a formula/clock refresh check for dynamic rules.
+- **Capture, comparison, and verification:**
+  - Preferred capture route: AppleScript `copy picture … appearance screen format bitmap` at 100% zoom (1 px/pt, 72 dpi, compared at viewer scale `0.75` per `scripts/sparkline-compare.ts:55–57`), with selection parked outside the capture range; fallback window screenshot at fixed zoom. Each reference PNG ships with a JSON sidecar (`excelVersion`, `route`, `scale`, `pxPerPt`, `range`).
+  - Comparison results (`meanAbs / rowMax / strong` against per-case tolerances) are recorded in `docs/validation/xlsx-cf.md`.
+  - **Unverified features ship **[owner]**:** Rendering fidelity a capture cannot establish ships from the best-measured model, labelled `*unverified*` in `docs/validation/xlsx-cf.md`. Evaluation and data semantics that cannot be resolved still fail closed (§5.7, §6.5).
+  - **Unit tests:** Every measured constant and rule outcome is pinned by deterministic unit tests so regressions are caught without Excel.
 
 ## 9. Review focus: inputs most likely to bite
 
-1. **Theme colours with tint in dxf fills and fonts**, on light and non-Office themes (the sparklines precedent: default colours are accents with tints).
-2. **Priority composition**: two rules setting different dxf properties, `stopIfTrue` between a dxf rule and a data bar, equal priorities.
-3. **Data-bar negatives**: axis position with asymmetric min/max, `showValue` false, RTL direction.
-4. **Icon thresholds at exact boundary values**, `reverse`, and custom-set index mapping.
-5. **The paged path**: statistics over ranges spanning unimported pages; pending data must refuse, and arrival must repaint covered tiles.
-6. **Tile edges and zoom** for bars and icons at 50/100/175%, DPR 1/2.
-7. **Files from other writers**: absent attributes (schema defaults), alternate namespace prefixes, `$` and quoted sheet names in `sqref`, multi-range `sqref`, hand-set `percent` flags.
-8. **Formula rules referencing the cell itself**, volatile `TODAY`/`NOW`, and circular references (engine cycle gate must refuse, never loop).
-9. **dxf `numFmt` interplay**: a rule-applied number format changing displayed text, width and `###` overflow.
-10. **Static PNG/PDF export and print** of bars and icons at `PRINT_SCALE`.
+1. **Theme colours with tint in `dxf` fills, fonts, data bars, and color scales**, on light and non-Office themes (`src/xlsx/sheetColors.ts`).
+2. **Priority and atomic fail-closed composition**: two matching rules setting overlapping and non-overlapping `dxf` properties; `stopIfTrue` between a `dxf` rule and a data bar; an unresolved higher-priority rule withholding conflicting lower-priority rules on the same cell.
+3. **Data-bar negatives and `x14` pairing**: `<x14:id>` ↔ `@id` GUID merge, `autoMin`/`autoMax`, `axisPosition="automatic | middle | none"`, `negativeBarColorSameAsPositive`, `showValue="0"`, and `rightToLeft` direction.
+4. **Icon thresholds at exact boundary values**: `cfvo/@gte` (`true` vs `false`), `reverse="1"`, custom `<x14:cfIcon>` index mapping, `iconSet="NoIcons"` blank bucket, and horizontal text inset when `showValue="1"`.
+5. **The paged path & empty cells**: visible unstored blank cells matched by `containsBlanks`/`notContainsText`; statistics and Stage 5 formulas spanning multiple or unimported pages (`pendingSheetIds` withholding CF until arrival repaints); pre-construction byte admission preserving cell replies when CF exceeds grant.
+6. **Tile edges and zoom** for bars and icons at 50/100/175% zoom and DPR 1/2, plus gridline suppression on CF-only sheets (`regionGrid.ts:62,71`).
+7. **Files from third-party writers (XlsxWriter / hand-authored XML)**: omitted schema-default attributes (`minLength="10"`, `maxLength="90"`, `gte="1"`, `equalAverage="0"`), alternate namespace prefixes for `x14`/`xm`, `$` and multi-range `sqref`, whole-column `A:A` ranges.
+8. **Formula rules (`expression`)**: relative reference translation from `sqref` anchor, self-referencing cells, cross-sheet references invalidating on target sheet `valueGen`, volatile `TODAY`/`NOW` under measured clock, manual-calculation workbooks, and circular reference refusal.
+9. **`dxf.numFmt` and `showValue="0"` across all consumers**: rule-applied number formats updating canvas layout (`layoutCellBody`), column width / `###` overflow, `cellDisplayText`, paged `displayText`, `SemanticPresentationCache`, `GridSemantics`, copy/find, and print units.
+10. **Static PNG/PDF export and print** of `dxf`, color scales, data bars, and icon sets at `PRINT_SCALE` under the sparklines tolerance policy.
 
 ## 10. Delivery **[owner]**: five stages, each its own reviewed PR
 
-1. **Value/text/date/top-N/average/duplicate rules + dxf paint.** Parser (both paths), evaluator for non-formula rules, dxf layering, oracle harness + stage-1 references.
-2. **Color scales.** Bound evaluation, interpolation, oracle references.
-3. **Data bars + x14.** Geometry, negatives, axis, direction, borders; oracle references.
-4. **Icon sets + x14 custom.** Thresholds, bundled vs measured glyphs, oracle references.
-5. **Formula rules, priority/stopIfTrue/multi-range, recompute.** Engine-backed evaluation, composition semantics, interactive invalidation, full oracle.
+1. **Stage 1 — Foundation, composition, and value/text/blank/error/date/ranking/duplicate rules + `dxf` paint.** Complete parser (resident & paged, base + `x14` recognition, `dxfs` loading gates), `priority`/`stopIfTrue`/multi-range `sqref`/atomic fail-closed composition, `valueGen` invalidation, evaluator for `cellIs`, `containsText`, `notContainsText`, `beginsWith`, `endsWith`, `containsBlanks`, `notContainsBlanks`, `containsErrors`, `notContainsErrors`, `timePeriod`, `top10`, `aboveAverage`, `duplicateValues`, `uniqueValues`, per-cell `resolveCfCellStyle`, gridline suppression, blank-cell synthesis, derived text/a11y, oracle harness + Stage 1 references.
+2. **Stage 2 — Color scales.** `colorScale` bound evaluation (`min`, `max`, `num`, `percent`, `percentile`), shared range statistics, sRGB interpolation, all-view painting + Stage 2 references.
+3. **Stage 3 — Data bars + `x14:dataBar`.** `<x14:id>` GUID pairing, `minLength`/`maxLength` reconciliation, `autoMin`/`autoMax`, solid/gradient, negative bars, `axisPosition`, `direction`, borders, `showValue="0"` suppression + Stage 3 references.
+4. **Stage 4 — Icon sets + `x14` custom sets.** `cfvo/@gte`, `percent`, `reverse`, `showValue`, custom `<x14:cfIcon>` & `NoIcons`, bundled/measured icon glyphs, horizontal text inset, screen-reader icon labels + Stage 4 references.
+5. **Stage 5 — Formula rules (`expression`) & formula `cfvo` bounds.** Relative reference translation from rule anchor, `activePresent`, cross-sheet invalidation, manual/cached calc policy, paged formula dependency preparation, full cross-kind composition oracle + Stage 5 references.
 
-Each stage meets §7 and passes CI and review before the next starts. Before a stage merges, its rules are absent and show no diagnostic (planned staging), and earlier stages keep passing.
+Each stage meets §7 and passes CI and review before the next starts. Rules belonging to not-yet-merged stages fail closed as unresolved rules (`cf-unsupported-rule`) per §4 and §5.7.
 
 ## 11. Left to the builder
 
-- The module layout under `src/xlsx/cf/`, and the names of types and fields.
-- Concrete caps (rules per sheet, ranges per rule, `cfvo` count, evaluation cells per frame), sized from realistic workbooks and stated in the plan.
-- The exact DOM structure of nothing (CF adds no DOM).
-- Per-reference tolerances, from measured noise.
-- How icon glyphs are encoded compactly in the lazy chunk.
-- The corpus inventory: which repo workbooks already carry CF, for regression cover.
+- The internal module layout under `src/xlsx/cf/` and exact type/field names.
+- Concrete numeric caps (rules per sheet, ranges per rule, `cfvo` count, formula AST tokens, visible blank cells synthesised per viewport, aggregate cell visits and bytes per pass), sized from realistic workbooks and stated in the implementation plan.
+- Compact encoding of icon glyphs inside the lazy `src/xlsx/cf/` chunk.
+- Per-reference tolerances in `docs/validation/xlsx-cf.md` following the sparklines `meanAbs / rowMax / strong` convention (`scripts/sparkline-compare.ts:66`).
+- The corpus inventory of existing repository workbooks that carry conditional formatting for regression tests.
