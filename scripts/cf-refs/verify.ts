@@ -1,69 +1,102 @@
+/**
+ * Part-scoped archive, DXF pairing, provenance, clock-window, geometry, and per-cell pixel verifier
+ * for XLSX Conditional Formatting Stage 1 oracle cases.
+ */
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
-import { parseXml, type XmlNode } from '../../src/core/xml'
-import type { CfOracleCase, CfPartMarker, CfRefusalCode, Refusal, VerifiedEvidence } from './cases'
+import { parseXml } from '../../src/core/xml'
+import type {
+  CfDxfExpectation,
+  CfManifest,
+  CfOracleCase,
+  CfPartMarker,
+  CfRefusalCode,
+  Refusal,
+  VerifiedEvidence,
+} from './cases'
 
 export interface VerifyCfOptions {
   rootDir?: string
 }
 
+type XmlNode = Record<string, unknown>
+
 const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+const isSha256Hex = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f]{64}$/.test(s)
 
-const asArray = <T>(val: T | T[] | undefined): T[] => (val === undefined ? [] : Array.isArray(val) ? val : [val])
+const asArray = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v])
 
-const asNode = (val: unknown): XmlNode | undefined =>
-  val && typeof val === 'object' && !Array.isArray(val) ? (val as XmlNode) : undefined
+const asNode = (v: unknown): XmlNode | undefined =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as XmlNode) : undefined
 
-const attr = (node: XmlNode | undefined, key: string): string | undefined => node?.['@attrs']?.[key]
+const attr = (node: XmlNode | undefined, name: string): string | undefined => {
+  if (!node) return undefined
+  const group = asNode(node['@attrs'])
+  const val = group && name in group ? group[name] : node[`@_${name}`]
+  return val === undefined || val === null ? undefined : String(val)
+}
 
 const textOf = (node: unknown): string | undefined => {
-  if (typeof node === 'string') return node
-  const n = asNode(node)
-  if (!n) return undefined
-  if (typeof n['#text'] === 'string') return n['#text']
+  if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return String(node)
+  const obj = asNode(node)
+  if (!obj) return undefined
+  if (obj['#text'] !== undefined) return String(obj['#text'])
   return undefined
 }
 
-const normalizeSqref = (s: string | undefined): string => (s ?? '').trim().replace(/\s+/g, ' ')
+const normalizeSqref = (s: string | undefined): string => (s ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
 
-/** Synchronous ZIP central-directory reader using node:zlib inflateRawSync. */
-export function readZipPartsSync(archive: Uint8Array): Map<string, Uint8Array> | null {
-  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength)
-  let eocd = -1
-  const minEocd = Math.max(0, archive.byteLength - 65_557)
-  for (let i = archive.byteLength - 22; i >= minEocd; i--) {
+/**
+ * Deliberate formula operand normalization:
+ * Trims surrounding ASCII whitespace and strips an optional leading `=` sign, while preserving exact
+ * operand tokens, string literals, function names, and numeric thresholds (`"100"` !== `"1000"`).
+ */
+export const normalizeFormulaOperand = (s: string): string => s.trim().replace(/^=/, '').trim()
+
+/** Synchronous ZIP reader that extracts all stored/deflated entries from an `.xlsx` buffer. */
+export function readZipPartsSync(zipBytes: Uint8Array): Map<string, Uint8Array> | null {
+  const view = new DataView(zipBytes.buffer, zipBytes.byteOffset, zipBytes.byteLength)
+  let eocdOffset = -1
+  const minEocd = Math.max(0, zipBytes.byteLength - 65557)
+  for (let i = zipBytes.byteLength - 22; i >= minEocd; i--) {
     if (view.getUint32(i, true) === 0x06054b50) {
-      eocd = i
+      eocdOffset = i
       break
     }
   }
-  if (eocd < 0) return null
-  const totalEntries = view.getUint16(eocd + 10, true)
-  const cdOffset = view.getUint32(eocd + 16, true)
+  if (eocdOffset < 0) return null
+
+  const totalEntries = view.getUint16(eocdOffset + 10, true)
+  const cdOffset = view.getUint32(eocdOffset + 16, true)
+  if (cdOffset >= zipBytes.byteLength) return null
+
   const parts = new Map<string, Uint8Array>()
-  let ptr = cdOffset
   const decoder = new TextDecoder()
-  for (let i = 0; i < totalEntries; i++) {
-    if (ptr + 46 > archive.byteLength || view.getUint32(ptr, true) !== 0x02014b50) return null
+  let ptr = cdOffset
+  for (let idx = 0; idx < totalEntries; idx++) {
+    if (ptr + 46 > zipBytes.byteLength || view.getUint32(ptr, true) !== 0x02014b50) return null
     const method = view.getUint16(ptr + 10, true)
     const compSize = view.getUint32(ptr + 20, true)
     const nameLen = view.getUint16(ptr + 28, true)
     const extraLen = view.getUint16(ptr + 30, true)
     const commentLen = view.getUint16(ptr + 32, true)
-    const localOffset = view.getUint32(ptr + 42, true)
-    const name = decoder.decode(archive.subarray(ptr + 46, ptr + 46 + nameLen))
+    const localHeaderOffset = view.getUint32(ptr + 42, true)
+    const name = decoder.decode(zipBytes.subarray(ptr + 46, ptr + 46 + nameLen))
     ptr += 46 + nameLen + extraLen + commentLen
-    if (localOffset + 30 > archive.byteLength || view.getUint32(localOffset, true) !== 0x04034b50) return null
-    const lNameLen = view.getUint16(localOffset + 26, true)
-    const lExtraLen = view.getUint16(localOffset + 28, true)
-    const dataStart = localOffset + 30 + lNameLen + lExtraLen
-    const raw = archive.subarray(dataStart, dataStart + compSize)
+
+    if (localHeaderOffset + 30 > zipBytes.byteLength || view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
+      return null
+    }
+    const localNameLen = view.getUint16(localHeaderOffset + 26, true)
+    const localExtraLen = view.getUint16(localHeaderOffset + 28, true)
+    const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen
+    const compSlice = zipBytes.subarray(dataStart, dataStart + compSize)
     if (method === 0) {
-      parts.set(name, new Uint8Array(raw))
+      parts.set(name, new Uint8Array(compSlice))
     } else if (method === 8) {
-      parts.set(name, new Uint8Array(inflateRawSync(raw)))
+      parts.set(name, new Uint8Array(inflateRawSync(compSlice)))
     } else {
       return null
     }
@@ -71,70 +104,118 @@ export function readZipPartsSync(archive: Uint8Array): Map<string, Uint8Array> |
   return parts
 }
 
-function matchesDxfNode(dxfNode: XmlNode | undefined, expected: NonNullable<CfPartMarker['dxf']>): boolean {
+function parseBoolTag(parent: XmlNode | undefined, tagName: string): boolean | undefined {
+  if (!parent || !(tagName in parent)) return undefined
+  const child = parent[tagName]
+  if (child === '' || child === true) return true
+  const node = asNode(child)
+  if (!node) return undefined
+  const val = attr(node, 'val')
+  if (val === undefined) return true
+  return val !== '0' && val !== 'false'
+}
+
+function matchesDxfNode(dxfNode: XmlNode | undefined, expected: CfDxfExpectation): boolean {
   if (!dxfNode) return false
   const font = asNode(dxfNode.font)
   const fill = asNode(dxfNode.fill)
   const patternFill = asNode(fill?.patternFill)
-  const fgColor = asNode(patternFill?.fgColor)
-  const bgColor = asNode(patternFill?.bgColor)
-  const fontColor = asNode(font?.color)
-  const numFmt = asNode(dxfNode.numFmt)
+  const gradientFill = asNode(fill?.gradientFill)
   const border = asNode(dxfNode.border)
+  const numFmt = asNode(dxfNode.numFmt)
+  const alignment = asNode(dxfNode.alignment)
+  const protection = asNode(dxfNode.protection)
 
+  if (expected.unsupportedKind !== undefined) {
+    switch (expected.unsupportedKind) {
+      case 'gradientFill':
+        return gradientFill !== undefined
+      case 'patternFill': {
+        const pt = attr(patternFill, 'patternType')
+        return pt !== undefined && pt !== 'solid' && pt !== 'none'
+      }
+      case 'diagonalBorder':
+        return (
+          attr(border, 'diagonalUp') === '1' ||
+          attr(border, 'diagonalDown') === '1' ||
+          asNode(border?.diagonal) !== undefined
+        )
+      case 'alignment':
+        return alignment !== undefined
+      case 'protection':
+        return protection !== undefined
+    }
+  }
+
+  if (expected.clearPatternNone) {
+    if (attr(patternFill, 'patternType') !== 'none') return false
+  }
   if (expected.fillRgb !== undefined) {
-    const actualRgb = (attr(fgColor, 'rgb') ?? attr(bgColor, 'rgb') ?? '').toUpperCase()
-    if (actualRgb !== expected.fillRgb.toUpperCase()) return false
+    const fg = attr(asNode(patternFill?.fgColor), 'rgb')
+    const bg = attr(asNode(patternFill?.bgColor), 'rgb')
+    const actualFill = (fg ?? bg ?? '').toUpperCase()
+    if (actualFill !== expected.fillRgb.toUpperCase()) return false
   }
   if (expected.fillTheme !== undefined) {
-    const actualTheme = Number(attr(fgColor, 'theme') ?? attr(bgColor, 'theme'))
-    if (actualTheme !== expected.fillTheme) return false
+    const fgColor = asNode(patternFill?.fgColor) ?? asNode(patternFill?.bgColor)
+    if (Number(attr(fgColor, 'theme')) !== expected.fillTheme) return false
   }
-  if (expected.patternType !== undefined) {
-    if ((attr(patternFill, 'patternType') ?? '') !== expected.patternType) return false
+  if (expected.fillTint !== undefined) {
+    const fgColor = asNode(patternFill?.fgColor) ?? asNode(patternFill?.bgColor)
+    const actualTint = Number(attr(fgColor, 'tint'))
+    if (!Number.isFinite(actualTint) || Math.abs(actualTint - expected.fillTint) > 1e-4) return false
   }
   if (expected.fontRgb !== undefined) {
-    if ((attr(fontColor, 'rgb') ?? '').toUpperCase() !== expected.fontRgb.toUpperCase()) return false
+    const c = (attr(asNode(font?.color), 'rgb') ?? '').toUpperCase()
+    if (c !== expected.fontRgb.toUpperCase()) return false
   }
   if (expected.bold !== undefined) {
-    const bNode = asNode(font?.b)
-    const bVal = bNode ? attr(bNode, 'val') : font?.b !== undefined ? '1' : undefined
-    const actualBold = bVal === undefined ? undefined : bVal !== '0' && bVal !== 'false'
+    const actualBold = parseBoolTag(font, 'b')
     if (actualBold !== expected.bold) return false
   }
   if (expected.italic !== undefined) {
-    const iNode = asNode(font?.i)
-    const iVal = iNode ? attr(iNode, 'val') : font?.i !== undefined ? '1' : undefined
-    const actualItalic = iVal === undefined ? undefined : iVal !== '0' && iVal !== 'false'
+    const actualItalic = parseBoolTag(font, 'i')
     if (actualItalic !== expected.italic) return false
   }
+  if (expected.strikethrough !== undefined) {
+    const actualStrike = parseBoolTag(font, 'strike')
+    if (actualStrike !== expected.strikethrough) return false
+  }
   if (expected.underline !== undefined) {
-    const uNode = asNode(font?.u)
-    const actualU = uNode ? (attr(uNode, 'val') ?? 'single') : font?.u !== undefined ? 'single' : undefined
+    const uChild = font?.u
+    const uNode = asNode(uChild)
+    const actualU = uNode ? (attr(uNode, 'val') ?? 'single') : uChild === '' ? 'single' : undefined
     if (actualU !== expected.underline) return false
   }
-  if (expected.strike !== undefined) {
-    const sNode = asNode(font?.strike)
-    const sVal = sNode ? attr(sNode, 'val') : font?.strike !== undefined ? '1' : undefined
-    const actualStrike = sVal === undefined ? undefined : sVal !== '0' && sVal !== 'false'
-    if (actualStrike !== expected.strike) return false
-  }
   if (expected.numFmtCode !== undefined) {
-    if ((attr(numFmt, 'formatCode') ?? '') !== expected.numFmtCode) return false
+    const code = attr(numFmt, 'formatCode')
+    if (code !== expected.numFmtCode) return false
   }
-  if (expected.borderTopStyle !== undefined) {
-    if ((attr(asNode(border?.top), 'style') ?? 'none') !== expected.borderTopStyle) return false
+  if (expected.borderTop !== undefined) {
+    const topStyle = attr(asNode(border?.top), 'style')
+    if (topStyle !== expected.borderTop) return false
   }
-  if (expected.borderBottomStyle !== undefined) {
-    if ((attr(asNode(border?.bottom), 'style') ?? 'none') !== expected.borderBottomStyle) return false
+  if (expected.borderBottom !== undefined) {
+    const bottomStyle = attr(asNode(border?.bottom), 'style')
+    if (bottomStyle !== expected.borderBottom) return false
   }
-  if (expected.borderLeftStyle !== undefined) {
-    if ((attr(asNode(border?.left), 'style') ?? 'none') !== expected.borderLeftStyle) return false
+  if (expected.borderLeft !== undefined) {
+    const leftStyle = attr(asNode(border?.left), 'style')
+    if (leftStyle !== expected.borderLeft) return false
   }
-  if (expected.borderRightStyle !== undefined) {
-    if ((attr(asNode(border?.right), 'style') ?? 'none') !== expected.borderRightStyle) return false
+  if (expected.borderRight !== undefined) {
+    const rightStyle = attr(asNode(border?.right), 'style')
+    if (rightStyle !== expected.borderRight) return false
   }
   return true
+}
+
+function extractOrderedFormulas(rule: XmlNode, extension: 'legacy' | 'x14'): string[] {
+  const raw =
+    extension === 'x14'
+      ? asArray(rule.f).map(f => textOf(f) ?? String(f))
+      : asArray(rule.formula).map(f => textOf(f) ?? String(f))
+  return raw.map(normalizeFormulaOperand)
 }
 
 function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
@@ -166,16 +247,24 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
     const actualP = pAttr === '1' || pAttr === 'true'
     if (actualP !== marker.percent) return false
   }
-  if (marker.rank !== undefined && Number(attr(rule, 'rank')) !== marker.rank) return false
+  if (marker.rank !== undefined) {
+    const rankAttr = attr(rule, 'rank')
+    if (marker.rank === 'omitted') {
+      if (rankAttr !== undefined) return false
+    } else {
+      if (rankAttr === undefined || Number(rankAttr) !== marker.rank) return false
+    }
+  }
   if (marker.stdDev !== undefined && Number(attr(rule, 'stdDev')) !== marker.stdDev) return false
   if (marker.timePeriod !== undefined && attr(rule, 'timePeriod') !== marker.timePeriod) return false
   if (marker.text !== undefined && attr(rule, 'text') !== marker.text) return false
-  if (marker.formula !== undefined) {
-    const formulas = [
-      ...asArray(rule.formula).map(f => textOf(f) ?? String(f)),
-      ...asArray(rule.f).map(f => textOf(f) ?? String(f)),
-    ]
-    if (!formulas.some(f => f.includes(marker.formula!))) return false
+
+  // Exact ordered operand list check (pins arity, operand values, and absence when formulas === [])
+  const actualFormulas = extractOrderedFormulas(rule, marker.extension)
+  const expectedFormulas = marker.formulas.map(normalizeFormulaOperand)
+  if (actualFormulas.length !== expectedFormulas.length) return false
+  for (let i = 0; i < expectedFormulas.length; i++) {
+    if (actualFormulas[i] !== expectedFormulas[i]) return false
   }
   return true
 }
@@ -207,7 +296,10 @@ function findMatchedRuleInRoot(root: XmlNode, marker: CfPartMarker): XmlNode | u
   return undefined
 }
 
-function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMarker): { ok: true } | { ok: false; code: CfRefusalCode; reason: string } {
+function verifyMarkerInArchive(
+  parts: Map<string, Uint8Array>,
+  marker: CfPartMarker,
+): { ok: true } | { ok: false; code: CfRefusalCode; reason: string } {
   const decoder = new TextDecoder()
   const rawPart = parts.get(marker.part)
   if (!rawPart) {
@@ -221,7 +313,6 @@ function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMar
   }
   const matchedRule = findMatchedRuleInRoot(xmlRoot, marker)
   if (!matchedRule) {
-    // Check if the rule or sqref was moved to another XML part in the archive
     for (const [partName, bytes] of parts.entries()) {
       if (partName === marker.part || !partName.endsWith('.xml')) continue
       try {
@@ -230,7 +321,7 @@ function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMar
           return {
             ok: false,
             code: 'wrong-part-marker',
-            reason: `Marker for ${marker.sqref} (${marker.ruleType}) found in ${partName} instead of ${marker.part}`,
+            reason: `Marker ${marker.capabilityId} for ${marker.sqref} (${marker.ruleType}) found in ${partName} instead of ${marker.part}`,
           }
         }
       } catch {
@@ -240,7 +331,7 @@ function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMar
     return {
       ok: false,
       code: 'stripped-rule',
-      reason: `Rule ${marker.ruleType} on sqref ${marker.sqref} missing from ${marker.part}`,
+      reason: `Rule ${marker.capabilityId} (${marker.ruleType}) on sqref ${marker.sqref} with formulas [${marker.formulas.join(', ')}] missing from ${marker.part}`,
     }
   }
 
@@ -251,7 +342,7 @@ function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMar
         return {
           ok: false,
           code: 'dxf-pairing-failed',
-          reason: `x14 inline <dxf> on ${marker.sqref} (${marker.ruleType}) does not match expected DXF properties`,
+          reason: `x14 inline <dxf> on ${marker.sqref} (${marker.capabilityId}) does not match expected DXF properties`,
         }
       }
     } else {
@@ -262,7 +353,7 @@ function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMar
         return {
           ok: false,
           code: 'dxf-pairing-failed',
-          reason: `Rule ${marker.ruleType} on ${marker.sqref} has invalid or missing dxfId="${dxfIdStr ?? ''}"`,
+          reason: `Rule ${marker.capabilityId} on ${marker.sqref} has invalid or missing dxfId="${dxfIdStr ?? ''}"`,
         }
       }
       const stylesRoot = parseXml(decoder.decode(stylesRaw))
@@ -274,8 +365,21 @@ function verifyMarkerInArchive(parts: Map<string, Uint8Array>, marker: CfPartMar
         return {
           ok: false,
           code: 'dxf-pairing-failed',
-          reason: `dxfId=${dxfId} in xl/styles.xml for ${marker.sqref} (${marker.ruleType}) does not match expected DXF`,
+          reason: `dxfId=${dxfId} in xl/styles.xml for ${marker.sqref} (${marker.capabilityId}) does not match expected DXF`,
         }
+      }
+    }
+  } else if (
+    marker.ruleType !== 'colorScale' &&
+    marker.ruleType !== 'dataBar' &&
+    marker.ruleType !== 'iconSet'
+  ) {
+    // Bare stopIfTrue rule: must not carry a dxfId
+    if (attr(matchedRule, 'dxfId') !== undefined) {
+      return {
+        ok: false,
+        code: 'dxf-pairing-failed',
+        reason: `Bare rule ${marker.capabilityId} on ${marker.sqref} unexpectedly carries dxfId="${attr(matchedRule, 'dxfId')}"`,
       }
     }
   }
@@ -332,7 +436,8 @@ export function decodePngSync(bytes: Uint8Array): DecodedPng | null {
     }
   }
   if (width <= 0 || height <= 0 || bitDepth !== 8 || interlace !== 0 || idatChunks.length === 0) return null
-  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : colorType === 0 || colorType === 3 ? 1 : 0
+  const channels =
+    colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : colorType === 0 || colorType === 3 ? 1 : 0
   if (channels === 0) return null
   const totalIdat = idatChunks.reduce((n, c) => n + c.byteLength, 0)
   const combined = new Uint8Array(totalIdat)
@@ -393,7 +498,6 @@ export function decodePngSync(bytes: Uint8Array): DecodedPng | null {
       g = palette[idx + 1] ?? 255
       b = palette[idx + 2] ?? 255
     }
-    // Composite over opaque white (#ffffff)
     const alpha = a / 255
     rgba[i * 4] = Math.round(r * alpha + 255 * (1 - alpha))
     rgba[i * 4 + 1] = Math.round(g * alpha + 255 * (1 - alpha))
@@ -409,13 +513,15 @@ const colIndex0 = (letters: string): number => {
   return n - 1
 }
 
-const parseA1 = (ref: string): { row: number; col: number } | null => {
+export const parseA1 = (ref: string): { row: number; col: number } | null => {
   const m = /^\$?([A-Z]+)\$?(\d+)$/i.exec(ref.trim())
   if (!m) return null
   return { col: colIndex0(m[1].toUpperCase()), row: Number(m[2]) - 1 }
 }
 
-const parseRangeA1 = (range: string): { minRow: number; maxRow: number; minCol: number; maxCol: number } | null => {
+export const parseRangeA1 = (
+  range: string,
+): { minRow: number; maxRow: number; minCol: number; maxCol: number } | null => {
   const parts = range.split(':')
   const a = parseA1(parts[0] ?? '')
   const b = parseA1(parts[1] ?? parts[0] ?? '')
@@ -428,52 +534,357 @@ const parseRangeA1 = (range: string): { minRow: number; maxRow: number; minCol: 
   }
 }
 
-function comparePositiveNegativeCells(
-  png: DecodedPng,
+export interface WorksheetRangeGeometry {
+  minRow: number
+  maxRow: number
+  minCol: number
+  maxCol: number
+  /** Per-row height in points (`1 px/pt`) for `minRow..maxRow` (`0` when hidden). */
+  rowHeightsPt: readonly number[]
+  /** Per-column width in characters for `minCol..maxCol` (`0` when hidden). */
+  colWidthChars: readonly number[]
+  /** Expected total height in `1 px/pt` points. */
+  expectedHeightPt: number
+  /** Expected minimum total width in `1 px/pt` points (Excel 72dpi `~4.5 pt/char`). */
+  minExpectedWidthPt: number
+  /** Expected maximum total width in `1 px/pt` points (Viewer 96->72dpi `~6 pt/char`). */
+  maxExpectedWidthPt: number
+}
+
+export function computeWorksheetRangeGeometry(
+  parts: Map<string, Uint8Array>,
   rangeStr: string,
-  positiveRefs: readonly string[],
-  negativeRefs: readonly string[],
-): number {
+  sheetPart = 'xl/worksheets/sheet1.xml',
+): WorksheetRangeGeometry | null {
   const bounds = parseRangeA1(rangeStr)
-  if (!bounds || positiveRefs.length === 0 || negativeRefs.length === 0) return 0
-  const nCols = bounds.maxCol - bounds.minCol + 1
-  const nRows = bounds.maxRow - bounds.minRow + 1
-  const cellW = png.width / nCols
-  const cellH = png.height / nRows
+  const raw = parts.get(sheetPart)
+  if (!bounds || !raw) return null
+  const root = parseXml(new TextDecoder().decode(raw))
+  const ws = asNode(root.worksheet) ?? root
+  const fmtPr = asNode(ws?.sheetFormatPr)
+  const defaultRowHeight = Number(attr(fmtPr, 'defaultRowHeight') ?? 18)
+  const defaultColWidth = Number(attr(fmtPr, 'defaultColWidth') ?? 14)
 
-  let maxContrast = 0
-  for (let idx = 0; idx < positiveRefs.length; idx++) {
-    const pos = parseA1(positiveRefs[idx])
-    const neg = parseA1(negativeRefs[idx % negativeRefs.length])
-    if (!pos || !neg) continue
-    const posCol = pos.col - bounds.minCol
-    const posRow = pos.row - bounds.minRow
-    const negCol = neg.col - bounds.minCol
-    const negRow = neg.row - bounds.minRow
-    if (posCol < 0 || posCol >= nCols || posRow < 0 || posRow >= nRows) continue
-    if (negCol < 0 || negCol >= nCols || negRow < 0 || negRow >= nRows) continue
+  const rowMap = new Map<number, { ht: number; hidden: boolean }>()
+  const sheetData = asNode(ws?.sheetData)
+  for (const rowNode of asArray(sheetData?.row).map(asNode)) {
+    if (!rowNode) continue
+    const r1 = Number(attr(rowNode, 'r'))
+    if (!Number.isFinite(r1) || r1 < 1) continue
+    const hidden = attr(rowNode, 'hidden') === '1' || attr(rowNode, 'hidden') === 'true'
+    const ht = Number(attr(rowNode, 'ht') ?? defaultRowHeight)
+    rowMap.set(r1 - 1, { ht: hidden ? 0 : ht, hidden })
+  }
 
-    const w = Math.max(1, Math.floor(cellW) - 4)
-    const h = Math.max(1, Math.floor(cellH) - 4)
-    const px0 = Math.min(png.width - 1, Math.floor(posCol * cellW) + 2)
-    const py0 = Math.min(png.height - 1, Math.floor(posRow * cellH) + 2)
-    const nx0 = Math.min(png.width - 1, Math.floor(negCol * cellW) + 2)
-    const ny0 = Math.min(png.height - 1, Math.floor(negRow * cellH) + 2)
-
-    for (let dy = 0; dy < h; dy++) {
-      for (let dx = 0; dx < w; dx++) {
-        const pi = (Math.min(png.height - 1, py0 + dy) * png.width + Math.min(png.width - 1, px0 + dx)) * 4
-        const ni = (Math.min(png.height - 1, ny0 + dy) * png.width + Math.min(png.width - 1, nx0 + dx)) * 4
-        const delta = Math.max(
-          Math.abs(png.data[pi] - png.data[ni]),
-          Math.abs(png.data[pi + 1] - png.data[ni + 1]),
-          Math.abs(png.data[pi + 2] - png.data[ni + 2]),
-        )
-        if (delta > maxContrast) maxContrast = delta
-      }
+  const colSpecs: Array<{ min: number; max: number; width: number; hidden: boolean }> = []
+  const colsNode = asNode(ws?.cols)
+  for (const colNode of asArray(colsNode?.col).map(asNode)) {
+    if (!colNode) continue
+    const min = Number(attr(colNode, 'min')) - 1
+    const max = Number(attr(colNode, 'max')) - 1
+    const hidden = attr(colNode, 'hidden') === '1' || attr(colNode, 'hidden') === 'true'
+    const width = Number(attr(colNode, 'width') ?? defaultColWidth)
+    if (Number.isFinite(min) && Number.isFinite(max)) {
+      colSpecs.push({ min, max, width: hidden ? 0 : width, hidden })
     }
   }
-  return maxContrast
+
+  const rowHeightsPt: number[] = []
+  for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
+    rowHeightsPt.push(rowMap.get(r)?.ht ?? defaultRowHeight)
+  }
+
+  const colWidthChars: number[] = []
+  for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
+    let w = defaultColWidth
+    for (const spec of colSpecs) {
+      if (c >= spec.min && c <= spec.max) w = spec.width
+    }
+    colWidthChars.push(w)
+  }
+
+  const expectedHeightPt = Math.round(rowHeightsPt.reduce((a, b) => a + b, 0))
+  const minExpectedWidthPt = Math.round(
+    colWidthChars.reduce((sum, w) => sum + (w <= 0 ? 0 : Math.max(12, w * 4.2)), 0),
+  )
+  const maxExpectedWidthPt = Math.round(
+    colWidthChars.reduce((sum, w) => sum + (w <= 0 ? 0 : (w * 7 + 5) * 0.8), 0),
+  )
+
+  return {
+    ...bounds,
+    rowHeightsPt,
+    colWidthChars,
+    expectedHeightPt,
+    minExpectedWidthPt,
+    maxExpectedWidthPt,
+  }
+}
+
+function verifyWorkbookClockStructure(
+  parts: Map<string, Uint8Array>,
+  c: CfOracleCase,
+): { ok: true } | { ok: false; code: CfRefusalCode; reason: string } {
+  const req = c.clockRequirement
+  if (!req) return { ok: true }
+  const decoder = new TextDecoder()
+  const wbRaw = parts.get('xl/workbook.xml')
+  const wsRaw = parts.get('xl/worksheets/sheet1.xml')
+  if (!wbRaw || !wsRaw) {
+    return { ok: false, code: 'missing-part', reason: 'Missing xl/workbook.xml or xl/worksheets/sheet1.xml' }
+  }
+  const wbRoot = parseXml(decoder.decode(wbRaw))
+  const wbNode = asNode(wbRoot.workbook) ?? wbRoot
+  const wbPr = asNode(wbNode?.workbookPr)
+  const date1904Attr = attr(wbPr, 'date1904')
+  const is1904 = date1904Attr === '1' || date1904Attr === 'true'
+  if ((req.dateSystem === '1904') !== is1904) {
+    return {
+      ok: false,
+      code: 'stripped-rule',
+      reason: `Expected dateSystem=${req.dateSystem} in xl/workbook.xml, got date1904="${date1904Attr ?? '0'}"`,
+    }
+  }
+
+  const wsRoot = parseXml(decoder.decode(wsRaw))
+  const wsNode = asNode(wsRoot.worksheet) ?? wsRoot
+  const sheetData = asNode(wsNode?.sheetData)
+  const cellsByRef = new Map<string, XmlNode>()
+  for (const rowNode of asArray(sheetData?.row).map(asNode)) {
+    for (const cNode of asArray(rowNode?.c).map(asNode)) {
+      const r = attr(cNode, 'r')
+      if (r && cNode) cellsByRef.set(r.toUpperCase(), cNode)
+    }
+  }
+  const staleCell = cellsByRef.get(req.staleCacheCellRef.toUpperCase())
+  const staleFormula = normalizeFormulaOperand(textOf(staleCell?.f) ?? '')
+  if (staleFormula !== 'TODAY()') {
+    return {
+      ok: false,
+      code: 'stripped-rule',
+      reason: `Clock stale-cache cell ${req.staleCacheCellRef} must contain <f>TODAY()</f>, got "${staleFormula}"`,
+    }
+  }
+  const localCell = cellsByRef.get(req.localTodayCellRef.toUpperCase())
+  if (Number(textOf(localCell?.v)) !== req.anchorSerial) {
+    return {
+      ok: false,
+      code: 'stripped-rule',
+      reason: `Clock local-today cell ${req.localTodayCellRef} expected serial ${req.anchorSerial}, got "${textOf(localCell?.v) ?? ''}"`,
+    }
+  }
+  const utcCell = cellsByRef.get(req.utcTodayCellRef.toUpperCase())
+  if (Number(textOf(utcCell?.v)) !== req.anchorSerial - 1) {
+    return {
+      ok: false,
+      code: 'stripped-rule',
+      reason: `Clock UTC-today cell ${req.utcTodayCellRef} expected serial ${req.anchorSerial - 1}, got "${textOf(utcCell?.v) ?? ''}"`,
+    }
+  }
+  return { ok: true }
+}
+
+function parseArgbHex(argb: string): [number, number, number] {
+  const clean = argb.trim().replace(/^#/, '').toUpperCase()
+  const hex6 = clean.length === 8 ? clean.slice(2) : clean
+  return [
+    Number.parseInt(hex6.slice(0, 2), 16),
+    Number.parseInt(hex6.slice(2, 4), 16),
+    Number.parseInt(hex6.slice(4, 6), 16),
+  ]
+}
+
+const rgbMaxDelta = (a: readonly [number, number, number], b: readonly [number, number, number]): number =>
+  Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
+
+function cellPixelBox(
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  cellRef: string,
+): { x0: number; y0: number; x1: number; y1: number } | null {
+  const pos = parseA1(cellRef)
+  if (!pos) return null
+  const colIdx = pos.col - geom.minCol
+  const rowIdx = pos.row - geom.minRow
+  if (colIdx < 0 || colIdx >= geom.colWidthChars.length || rowIdx < 0 || rowIdx >= geom.rowHeightsPt.length) {
+    return null
+  }
+  const totalW = geom.colWidthChars.reduce((a, b) => a + b, 0)
+  const totalH = geom.rowHeightsPt.reduce((a, b) => a + b, 0)
+  if (totalW <= 0 || totalH <= 0) return null
+
+  const colBefore = geom.colWidthChars.slice(0, colIdx).reduce((a, b) => a + b, 0)
+  const colSpan = geom.colWidthChars[colIdx]
+  const rowBefore = geom.rowHeightsPt.slice(0, rowIdx).reduce((a, b) => a + b, 0)
+  const rowSpan = geom.rowHeightsPt[rowIdx]
+  if (colSpan <= 0 || rowSpan <= 0) return null
+
+  const x0 = Math.floor((colBefore / totalW) * png.width)
+  const x1 = Math.max(x0 + 1, Math.floor(((colBefore + colSpan) / totalW) * png.width))
+  const y0 = Math.floor((rowBefore / totalH) * png.height)
+  const y1 = Math.max(y0 + 1, Math.floor(((rowBefore + rowSpan) / totalH) * png.height))
+  return { x0, y0, x1: Math.min(png.width, x1), y1: Math.min(png.height, y1) }
+}
+
+const median = (vals: number[]): number => {
+  if (vals.length === 0) return 255
+  const sorted = [...vals].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)]
+}
+
+/**
+ * Samples the cell's background fill RGB from its inner perimeter padding (inset 2px from gridlines),
+ * avoiding central text glyph ink so text-only captures cannot masquerade as background fills.
+ */
+export function sampleCellBackgroundRgb(
+  png: DecodedPng,
+  box: { x0: number; y0: number; x1: number; y1: number },
+): [number, number, number] {
+  const ix0 = Math.min(png.width - 1, box.x0 + 2)
+  const iy0 = Math.min(png.height - 1, box.y0 + 2)
+  const ix1 = Math.max(ix0 + 1, box.x1 - 2)
+  const iy1 = Math.max(iy0 + 1, box.y1 - 2)
+
+  const rs: number[] = []
+  const gs: number[] = []
+  const bs: number[] = []
+  for (let y = iy0; y < iy1; y++) {
+    for (let x = ix0; x < ix1; x++) {
+      // Sample the 2px inner padding ring around the cell perimeter where single-line glyphs do not sit
+      const onPerimeter = y <= iy0 + 1 || y >= iy1 - 2 || x <= ix0 + 1 || x >= ix1 - 2
+      if (!onPerimeter && iy1 - iy0 > 4 && ix1 - ix0 > 4) continue
+      const idx = (y * png.width + x) * 4
+      rs.push(png.data[idx])
+      gs.push(png.data[idx + 1])
+      bs.push(png.data[idx + 2])
+    }
+  }
+  return [median(rs), median(gs), median(bs)]
+}
+
+function maxCellBoxPixelDelta(
+  png: DecodedPng,
+  boxA: { x0: number; y0: number; x1: number; y1: number },
+  boxB: { x0: number; y0: number; x1: number; y1: number },
+): number {
+  const w = Math.max(1, Math.min(boxA.x1 - boxA.x0, boxB.x1 - boxB.x0) - 2)
+  const h = Math.max(1, Math.min(boxA.y1 - boxA.y0, boxB.y1 - boxB.y0) - 2)
+  let maxDelta = 0
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      const ax = Math.min(png.width - 1, boxA.x0 + 1 + dx)
+      const ay = Math.min(png.height - 1, boxA.y0 + 1 + dy)
+      const bx = Math.min(png.width - 1, boxB.x0 + 1 + dx)
+      const by = Math.min(png.height - 1, boxB.y0 + 1 + dy)
+      const ai = (ay * png.width + ax) * 4
+      const bi = (by * png.width + bx) * 4
+      const delta = Math.max(
+        Math.abs(png.data[ai] - png.data[bi]),
+        Math.abs(png.data[ai + 1] - png.data[bi + 1]),
+        Math.abs(png.data[ai + 2] - png.data[bi + 2]),
+      )
+      if (delta > maxDelta) maxDelta = delta
+    }
+  }
+  return maxDelta
+}
+
+export interface ObservedCellSummary {
+  ref: string
+  controlRef: string
+  bgRgb: [number, number, number]
+  controlBgRgb: [number, number, number]
+  bgContrastDelta: number
+  interiorMaxDelta: number
+}
+
+export function observeCellsFromCapture(
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  c: CfOracleCase,
+): ObservedCellSummary[] | null {
+  const out: ObservedCellSummary[] = []
+  for (const cell of c.expected.cells) {
+    const box = cellPixelBox(png, geom, cell.ref)
+    const ctrlBox = cellPixelBox(png, geom, cell.controlRef)
+    if (!box || !ctrlBox) return null
+    const bgRgb = sampleCellBackgroundRgb(png, box)
+    const controlBgRgb = sampleCellBackgroundRgb(png, ctrlBox)
+    const bgContrastDelta = rgbMaxDelta(bgRgb, controlBgRgb)
+    const interiorMaxDelta = maxCellBoxPixelDelta(png, box, ctrlBox)
+    out.push({
+      ref: cell.ref,
+      controlRef: cell.controlRef,
+      bgRgb,
+      controlBgRgb,
+      bgContrastDelta,
+      interiorMaxDelta,
+    })
+  }
+  return out
+}
+
+function verifyClockWindowAndBinding(
+  c: CfOracleCase,
+  sidecar: Record<string, unknown>,
+): { ok: true } | { ok: false; code: CfRefusalCode; reason: string } {
+  const req = c.clockRequirement
+  if (!req) return { ok: true }
+
+  if (sidecar.hostTimeZone !== req.requiredTimeZone) {
+    return {
+      ok: false,
+      code: 'clock-window-invalid',
+      reason: `Clock capture requires hostTimeZone="${req.requiredTimeZone}", got "${String(sidecar.hostTimeZone ?? '')}"`,
+    }
+  }
+
+  const capturedAtStr = String(sidecar.capturedAt ?? '')
+  const tsMs = Date.parse(capturedAtStr)
+  if (!Number.isFinite(tsMs)) {
+    return {
+      ok: false,
+      code: 'clock-window-invalid',
+      reason: `Invalid capturedAt timestamp "${capturedAtStr}"`,
+    }
+  }
+
+  const utcDate = new Date(tsMs)
+  const utcDateStr = utcDate.toISOString().slice(0, 10)
+  // Asia/Taipei is fixed UTC+08:00 (no DST)
+  const taipeiDate = new Date(tsMs + 8 * 3_600_000)
+  const taipeiDateStr = taipeiDate.toISOString().slice(0, 10)
+  const taipeiMinutesOfDay = taipeiDate.getUTCHours() * 60 + taipeiDate.getUTCMinutes()
+
+  // Must be captured during 00:05..07:55 Asia/Taipei when local date != UTC date
+  if (taipeiDateStr === utcDateStr || taipeiMinutesOfDay < 5 || taipeiMinutesOfDay > 475) {
+    return {
+      ok: false,
+      code: 'clock-window-invalid',
+      reason: `Capture timestamp ${capturedAtStr} (Asia/Taipei ${taipeiDateStr} ${String(taipeiDate.getUTCHours()).padStart(2, '0')}:${String(taipeiDate.getUTCMinutes()).padStart(2, '0')}, UTC ${utcDateStr}) is outside the 00:05-07:55 Asia/Taipei UTC/local distinguishing window`,
+    }
+  }
+
+  if (taipeiDateStr !== req.anchorLocalDate || sidecar.excelTodaySerial !== req.anchorSerial) {
+    return {
+      ok: false,
+      code: 'clock-fixture-expired',
+      reason: `Clock fixture anchorLocalDate=${req.anchorLocalDate} (serial ${req.anchorSerial}) does not match capture local date ${taipeiDateStr} (excelTodaySerial=${String(sidecar.excelTodaySerial ?? 'missing')}); regenerate with --refresh-clock-date`,
+    }
+  }
+
+  if (
+    sidecar.staleTodayCacheRefreshed !== true ||
+    (sidecar.observedTodayBranch !== 'local' && sidecar.observedTodayBranch !== 'utc')
+  ) {
+    return {
+      ok: false,
+      code: 'clock-window-invalid',
+      reason: `Clock sidecar must record staleTodayCacheRefreshed=true and observedTodayBranch ('local' | 'utc')`,
+    }
+  }
+
+  return { ok: true }
 }
 
 export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): VerifiedEvidence | Refusal {
@@ -490,8 +901,23 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  const inputAbs = resolve(rootDir, c.input)
+  if (!existsSync(inputAbs)) {
+    return {
+      kind: 'refusal',
+      id: c.id,
+      status: c.status,
+      code: 'missing-saved-workbook',
+      reason: `Input workbook not found at ${c.input}`,
+      structuralValid: false,
+    }
+  }
+
   const savedBytes = new Uint8Array(readFileSync(savedAbs))
   const savedSha256 = sha256Hex(savedBytes)
+  const inputBytes = new Uint8Array(readFileSync(inputAbs))
+  const inputSha256 = sha256Hex(inputBytes)
+
   const parts = readZipPartsSync(savedBytes)
   if (!parts) {
     return {
@@ -517,6 +943,18 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  const clockStruct = verifyWorkbookClockStructure(parts, c)
+  if (!clockStruct.ok) {
+    return {
+      kind: 'refusal',
+      id: c.id,
+      status: c.status,
+      code: clockStruct.code,
+      reason: clockStruct.reason,
+      structuralValid: false,
+    }
+  }
+
   for (const marker of c.markers) {
     const check = verifyMarkerInArchive(parts, marker)
     if (!check.ok) {
@@ -531,31 +969,53 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
-  let inputSha256: string | undefined
-  if (c.input) {
-    const inputAbs = resolve(rootDir, c.input)
-    if (existsSync(inputAbs)) {
-      inputSha256 = sha256Hex(new Uint8Array(readFileSync(inputAbs)))
-      if (c.expected.inputSha256 && c.expected.inputSha256 !== inputSha256) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'hash-mismatch',
-          reason: `Input hash mismatch for ${c.input}: expected ${c.expected.inputSha256}, got ${inputSha256}`,
-          structuralValid: true,
-        }
+  const rangeGeom = computeWorksheetRangeGeometry(parts, c.range)
+  if (!rangeGeom) {
+    return {
+      kind: 'refusal',
+      id: c.id,
+      status: c.status,
+      code: 'geometry-mismatch',
+      reason: `Could not compute worksheet range geometry for ${c.sheet}!${c.range}`,
+      structuralValid: false,
+    }
+  }
+
+  for (const cell of c.expected.cells) {
+    if (
+      !cellPixelBox({ width: 1000, height: 1000, data: new Uint8ClampedArray(0) }, rangeGeom, cell.ref) ||
+      !cellPixelBox({ width: 1000, height: 1000, data: new Uint8ClampedArray(0) }, rangeGeom, cell.controlRef) ||
+      cell.ref.toUpperCase() === cell.controlRef.toUpperCase()
+    ) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'cell-expectation-mismatch',
+        reason: `Cell expectation ${cell.ref} or controlRef ${cell.controlRef} is invalid or outside capture range ${c.range}`,
+        structuralValid: false,
       }
     }
   }
 
-  if (c.expected.savedSha256 && c.expected.savedSha256 !== savedSha256) {
+  if (!isSha256Hex(c.expected.inputSha256) || c.expected.inputSha256 !== inputSha256) {
     return {
       kind: 'refusal',
       id: c.id,
       status: c.status,
       code: 'hash-mismatch',
-      reason: `Saved workbook hash mismatch for ${c.saved}: expected ${c.expected.savedSha256}, got ${savedSha256}`,
+      reason: `Input hash mismatch for ${c.input}: expected ${c.expected.inputSha256 || '<missing>'}, got ${inputSha256}`,
+      structuralValid: true,
+    }
+  }
+
+  if (!isSha256Hex(c.expected.savedSha256) || c.expected.savedSha256 !== savedSha256) {
+    return {
+      kind: 'refusal',
+      id: c.id,
+      status: c.status,
+      code: 'hash-mismatch',
+      reason: `Saved workbook hash mismatch for ${c.saved}: expected ${c.expected.savedSha256 || '<missing>'}, got ${savedSha256}`,
       structuralValid: true,
     }
   }
@@ -582,8 +1042,35 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  if (c.expected.provenance !== 'excel-observed') {
+    return {
+      kind: 'refusal',
+      id: c.id,
+      status: c.status,
+      code: 'unobserved-expectation',
+      reason: `Case ${c.id} has expected.provenance="${c.expected.provenance}"; seed hypotheses cannot be promoted to measured without independent Excel per-cell observation`,
+      structuralValid: true,
+    }
+  }
+
+  const requiredApps = c.requiredAppearances ?? ['screen']
+  for (const reqApp of requiredApps) {
+    if (!c.captures.some(cap => cap.appearance === reqApp)) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'missing-capture',
+        reason: `Missing required ${reqApp} capture for ${c.id}`,
+        structuralValid: true,
+      }
+    }
+  }
+
   const captureHashes: Record<string, string> = {}
   let positiveContrastMaxDelta = 0
+  let minPositiveContrastDelta = Number.POSITIVE_INFINITY
+
   for (const cap of c.captures) {
     const pngAbs = resolve(rootDir, cap.pngPath)
     const sidecarAbs = resolve(rootDir, cap.sidecarPath)
@@ -600,13 +1087,13 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     const pngBytes = new Uint8Array(readFileSync(pngAbs))
     const pngHash = sha256Hex(pngBytes)
     captureHashes[cap.appearance] = pngHash
-    if (cap.pngSha256 && cap.pngSha256 !== pngHash) {
+    if (!isSha256Hex(cap.pngSha256) || cap.pngSha256 !== pngHash) {
       return {
         kind: 'refusal',
         id: c.id,
         status: c.status,
         code: 'sidecar-mismatch',
-        reason: `Capture PNG hash mismatch for ${cap.pngPath}: expected ${cap.pngSha256}, got ${pngHash}`,
+        reason: `Capture PNG hash binding missing or mismatched for ${cap.pngPath}: expected ${cap.pngSha256 ?? '<missing>'}, got ${pngHash}`,
         structuralValid: true,
       }
     }
@@ -626,18 +1113,36 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     if (
       sidecar.sheet !== c.sheet ||
       sidecar.range !== c.range ||
+      sidecar.appearance !== cap.appearance ||
+      sidecar.route !== 'copy-picture' ||
+      sidecar.scale !== 1 ||
       sidecar.pxPerPt !== 1 ||
       typeof sidecar.excelVersion !== 'string' ||
-      !sidecar.excelVersion.startsWith('16.') ||
-      (typeof sidecar.savedSha256 === 'string' && sidecar.savedSha256 !== savedSha256) ||
-      (typeof sidecar.pngSha256 === 'string' && sidecar.pngSha256 !== pngHash)
+      !/^16\.(11[4-9]|[2-9]\d\d)(\.|$)/.test(sidecar.excelVersion) ||
+      sidecar.savedSha256 !== savedSha256 ||
+      sidecar.pngSha256 !== pngHash ||
+      typeof sidecar.capturedAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(sidecar.capturedAt) ||
+      Number.isNaN(Date.parse(sidecar.capturedAt))
     ) {
       return {
         kind: 'refusal',
         id: c.id,
         status: c.status,
         code: 'sidecar-mismatch',
-        reason: `Sidecar metadata mismatch in ${cap.sidecarPath}`,
+        reason: `Sidecar provenance or hash binding mismatch in ${cap.sidecarPath}`,
+        structuralValid: true,
+      }
+    }
+
+    const clockCheck = verifyClockWindowAndBinding(c, sidecar)
+    if (!clockCheck.ok) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: clockCheck.code,
+        reason: clockCheck.reason,
         structuralValid: true,
       }
     }
@@ -653,19 +1158,140 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
         structuralValid: true,
       }
     }
-    const contrast = comparePositiveNegativeCells(decoded, c.range, c.expected.positiveRefs, c.expected.negativeRefs)
-    if (contrast > positiveContrastMaxDelta) positiveContrastMaxDelta = contrast
-  }
 
-  if (positiveContrastMaxDelta < 16) {
-    return {
-      kind: 'refusal',
-      id: c.id,
-      status: c.status,
-      code: 'unchanged-control-capture',
-      reason: `Positive cells (${c.expected.positiveRefs.join(',')}) do not visually differ from negative control cells (${c.expected.negativeRefs.join(',')}); max delta ${positiveContrastMaxDelta}`,
-      structuralValid: true,
+    if (
+      (typeof sidecar.width === 'number' && sidecar.width !== decoded.width) ||
+      (typeof sidecar.height === 'number' && sidecar.height !== decoded.height)
+    ) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'sidecar-mismatch',
+        reason: `Sidecar dimensions (${String(sidecar.width)}x${String(sidecar.height)}) do not match decoded PNG (${decoded.width}x${decoded.height})`,
+        structuralValid: true,
+      }
     }
+
+    if (
+      Math.abs(decoded.height - rangeGeom.expectedHeightPt) > 4 ||
+      decoded.width < rangeGeom.minExpectedWidthPt - 4 ||
+      decoded.width > rangeGeom.maxExpectedWidthPt + 4
+    ) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match worksheet range ${c.range} metrics (expected width ${rangeGeom.minExpectedWidthPt}..${rangeGeom.maxExpectedWidthPt}, height ${rangeGeom.expectedHeightPt}±4)`,
+        structuralValid: true,
+      }
+    }
+
+    const observations = observeCellsFromCapture(decoded, rangeGeom, c)
+    if (!observations || observations.length === 0) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'cell-expectation-mismatch',
+        reason: `No valid cell observations could be sampled for ${c.id} (${cap.appearance})`,
+        structuralValid: true,
+      }
+    }
+
+    let captureMinPositive = Number.POSITIVE_INFINITY
+    let captureMaxPositive = 0
+    for (let i = 0; i < c.expected.cells.length; i++) {
+      const exp = c.expected.cells[i]
+      const obs = observations[i]
+      if (exp.matched) {
+        if (exp.fillRgb !== undefined) {
+          const targetRgb = parseArgbHex(exp.fillRgb)
+          const fillErr = rgbMaxDelta(obs.bgRgb, targetRgb)
+          if (fillErr > 28) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected fill ${exp.fillRgb} (${targetRgb.join(',')}), but observed background RGB (${obs.bgRgb.join(',')}) (delta ${fillErr})`,
+              structuralValid: true,
+            }
+          }
+          if (obs.bgContrastDelta < 16) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'unchanged-control-capture',
+              reason: `Positive cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) does not differ from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}); delta ${obs.bgContrastDelta}`,
+              structuralValid: true,
+            }
+          }
+          captureMinPositive = Math.min(captureMinPositive, obs.bgContrastDelta)
+          captureMaxPositive = Math.max(captureMaxPositive, obs.bgContrastDelta)
+        } else {
+          if (obs.bgContrastDelta > 12) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expects no fill override, but background (${obs.bgRgb.join(',')}) differs from control ${exp.controlRef} (${obs.controlBgRgb.join(',')})`,
+              structuralValid: true,
+            }
+          }
+          if (obs.interiorMaxDelta < 16) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'unchanged-control-capture',
+              reason: `Matched non-fill cell ${exp.ref} (${cap.appearance}) does not visually differ from control ${exp.controlRef}; max interior delta ${obs.interiorMaxDelta}`,
+              structuralValid: true,
+            }
+          }
+          captureMinPositive = Math.min(captureMinPositive, obs.interiorMaxDelta)
+          captureMaxPositive = Math.max(captureMaxPositive, obs.interiorMaxDelta)
+        }
+      } else {
+        if (exp.fillRgb !== undefined) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'cell-expectation-mismatch',
+            reason: `Unmatched cell expectation ${exp.ref} cannot specify fillRgb=${exp.fillRgb}`,
+            structuralValid: true,
+          }
+        }
+        if (obs.bgContrastDelta > 12) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'cell-expectation-mismatch',
+            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}) by ${obs.bgContrastDelta}`,
+            structuralValid: true,
+          }
+        }
+      }
+    }
+
+    if (!Number.isFinite(captureMinPositive) || captureMinPositive < 16) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'unchanged-control-capture',
+        reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive cell contrast (min delta ${captureMinPositive})`,
+        structuralValid: true,
+      }
+    }
+
+    minPositiveContrastDelta = Math.min(minPositiveContrastDelta, captureMinPositive)
+    positiveContrastMaxDelta = Math.max(positiveContrastMaxDelta, captureMaxPositive)
   }
 
   return {
@@ -673,9 +1299,23 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     id: c.id,
     status: 'measured',
     savedSha256,
-    ...(inputSha256 ? { inputSha256 } : {}),
+    inputSha256,
     captureHashes,
     positiveContrastMaxDelta,
+    minPositiveContrastDelta,
     matchedRules: c.markers.length,
+    verifiedCapabilities: c.markers.map(m => m.capabilityId),
   }
+}
+
+/** Returns true only when the capability's owning oracle case is fully `verified` (`status: 'measured'`). */
+export function isCapabilityVerified(
+  capabilityId: string,
+  manifest: CfManifest,
+  options: VerifyCfOptions = {},
+): boolean {
+  const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId))
+  if (!owningCase) return false
+  const res = verifyCfCase(owningCase, options)
+  return res.kind === 'verified' && res.verifiedCapabilities.includes(capabilityId)
 }

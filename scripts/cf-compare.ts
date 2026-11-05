@@ -50,7 +50,7 @@ export interface CfCompareResult {
 }
 
 export function resolvePixelTolerance(c: CfOracleCase, width: number, height: number): Tolerance {
-  const base = c.expected.tolerance ?? { meanAbs: 2.0 / 255, rowMax: 4.0 / 255, strong: 0.003 }
+  const base = c.tolerance ?? { meanAbs: 2.0 / 255, rowMax: 4.0 / 255, strong: 0.003 }
   const strongPixels = base.strong < 1 ? Math.max(1, Math.round(base.strong * width * height)) : Math.round(base.strong)
   return {
     meanAbs: base.meanAbs,

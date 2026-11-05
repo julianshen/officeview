@@ -1,114 +1,230 @@
+/**
+ * Stage 1 Excel oracle case catalog and verification contracts for XLSX Conditional Formatting.
+ *
+ * Rules:
+ * - Markers are part-scoped (`part`, `extension`, `sqref`, `ruleType`, ordered `formulas`, and `dxf` pairing).
+ * - Every marker carries a distinct `capabilityId` mapped in `CF_STAGE1_CAPABILITIES` so each unresolved variant
+ *   remains independently refused until its workbook and captures are verified.
+ * - Expected outcomes and capture sidecars are hash-bound (`inputSha256`, `savedSha256`, `pngSha256`) to the
+ *   saved workbook.
+ * - No boolean or DXF expectation derives from the viewer's conditional formatting evaluator.
+ */
+
 export type CfOracleStatus = 'measured' | 'unsupported' | 'recipe-pending' | 'geometry-unverified'
 
-export interface CfPartMarker {
-  part: string
-  extension?: 'legacy' | 'x14'
-  sqref: string
-  ruleType: string
-  operator?: string
-  priority?: number
-  stopIfTrue?: boolean
-  aboveAverage?: boolean
-  equalAverage?: boolean
-  bottom?: boolean
-  percent?: boolean
-  rank?: number
-  stdDev?: number
-  timePeriod?: string
-  text?: string
-  formula?: string
-  dxf?: {
-    fillRgb?: string
-    fillTheme?: number
-    fontRgb?: string
-    bold?: boolean
-    italic?: boolean
-    underline?: string
-    strike?: boolean
-    numFmtCode?: string
-    borderTopStyle?: string
-    borderBottomStyle?: string
-    borderLeftStyle?: string
-    borderRightStyle?: string
-    patternType?: string
-  }
-}
+export type CfAppearance = 'screen' | 'printer'
 
-export interface CfCellExpectation {
-  ref: string
-  matched: boolean
+export type CfExpectationProvenance = 'seed-hypothesis' | 'excel-observed'
+
+export interface CfDxfExpectation {
   fillRgb?: string
+  fillTheme?: number
+  fillTint?: number
   fontRgb?: string
   bold?: boolean
   italic?: boolean
-  underline?: string
-  strike?: boolean
+  underline?: 'none' | 'single' | 'double'
+  strikethrough?: boolean
   numFmtCode?: string
-  displayText?: string
   borderTop?: string
   borderBottom?: string
   borderLeft?: string
   borderRight?: string
+  clearPatternNone?: boolean
+  /** Unsupported DXF sub-elements for negative/refusal verification (`stage1-dxf-layering-2`). */
+  unsupportedKind?: 'gradientFill' | 'patternFill' | 'diagonalBorder' | 'alignment' | 'protection'
+}
+
+export interface CfPartMarker {
+  /** Package part path inside the `.xlsx` archive, e.g. `xl/worksheets/sheet1.xml`. */
+  part: string
+  /** Whether the rule lives in worksheet `<conditionalFormatting>` or `<extLst>...<x14:conditionalFormattings>`. */
+  extension: 'legacy' | 'x14'
+  /** Independent capability identifier settled by this rule/marker. */
+  capabilityId: string
+  /** Normalized space-separated target range(s), e.g. `B2:B7` or `D2:D4 F2:F4`. */
+  sqref: string
+  /** OOXML `cfRule/@type`. */
+  ruleType:
+    | 'cellIs'
+    | 'containsText'
+    | 'notContainsText'
+    | 'beginsWith'
+    | 'endsWith'
+    | 'containsBlanks'
+    | 'notContainsBlanks'
+    | 'containsErrors'
+    | 'notContainsErrors'
+    | 'timePeriod'
+    | 'top10'
+    | 'aboveAverage'
+    | 'duplicateValues'
+    | 'uniqueValues'
+    | 'expression'
+    | 'colorScale'
+    | 'dataBar'
+    | 'iconSet'
+  /** Optional `cfRule/@operator` for `cellIs` and text rules. */
+  operator?: string
+  /** Expected `cfRule/@priority`. */
+  priority?: number
+  /** Expected `cfRule/@stopIfTrue`. */
+  stopIfTrue?: boolean
+  /** Expected `cfRule/@aboveAverage` (defaults to true in OOXML when omitted). */
+  aboveAverage?: boolean
+  /** Expected `cfRule/@equalAverage`. */
+  equalAverage?: boolean
+  /** Expected `cfRule/@bottom`. */
+  bottom?: boolean
+  /** Expected `cfRule/@percent`. */
+  percent?: boolean
+  /** Expected `cfRule/@rank`, or `'omitted'` when testing omitted `@rank`. */
+  rank?: number | 'omitted'
+  /** Expected `cfRule/@stdDev`. */
+  stdDev?: number
+  /** Expected `cfRule/@timePeriod`. */
+  timePeriod?: string
+  /** Expected `cfRule/@text`. */
+  text?: string
+  /**
+   * Complete ordered `<formula>` / `<xm:f>` operand list.
+   * Empty array `[]` pins the absence of formula children; 2 elements pin both `between`/`notBetween` operands.
+   */
+  formulas: readonly string[]
+  /** Expected `<dxf>` resolved from `xl/styles.xml` via `@dxfId` (legacy) or inline `<x14:dxf>` (x14). */
+  dxf?: CfDxfExpectation
+}
+
+export interface CfCellExpectation {
+  /** Cell reference in `sheet`, e.g. `B7`. */
+  ref: string
+  /** Same-content unformatted control cell in `sheet` inside `range`, e.g. `B20` or `C7`. */
+  controlRef: string
+  /** Whether the conditional format rule(s) match this cell in Excel. */
+  matched: boolean
+  /** Expected winning background fill ARGB hex (`FFFFC7CE`) when matched. */
+  fillRgb?: string
+  /** Expected winning font color ARGB hex (`FF9C0006`) when matched. */
+  fontRgb?: string
+  /** Expected winning bold state when overridden by DXF. */
+  bold?: boolean
+  /** Expected winning underline state when overridden by DXF. */
+  underline?: 'none' | 'single' | 'double'
+  /** Expected winning strikethrough state when overridden by DXF. */
+  strikethrough?: boolean
+  /** Expected top/bottom border presence when overridden by DXF. */
+  borderTop?: boolean
+  borderBottom?: boolean
+  /** Expected formatted display text when `dxf.numFmt` applies, e.g. `1.25`. */
+  formattedText?: string
+  /** Optional note explaining what this cell tests. */
   note?: string
 }
 
 export interface CfExpectedOutcome {
-  inputSha256?: string
-  savedSha256?: string
+  /** SHA-256 hex digest of the input `.xlsx` archive before Excel resave. */
+  inputSha256: string
+  /** SHA-256 hex digest of the saved `.xlsx` archive under `tests/fixtures/xlsx-cf/<id>.xlsx`. */
+  savedSha256: string
+  /**
+   * Whether `cells` are still unverified seed hypotheses (`seed-hypothesis`) or have been independently
+   * observed and verified against live Excel captures (`excel-observed`).
+   */
+  provenance: CfExpectationProvenance
+  /** Positive cells that must visually differ from their `controlRef` in a verified capture. */
   positiveRefs: readonly string[]
+  /** Negative/control cells that must remain unformatted in a verified capture. */
   negativeRefs: readonly string[]
+  /** Independently recorded per-cell outcomes. */
   cells: readonly CfCellExpectation[]
-  tolerance?: { meanAbs: number; rowMax: number; strong: number }
 }
 
 export interface CfCaptureSpec {
-  appearance: 'screen' | 'printer'
+  appearance: CfAppearance
   pngPath: string
   sidecarPath: string
   pngSha256?: string
 }
 
+export interface CfClockRequirement {
+  dateSystem: '1900' | '1904'
+  requiredTimeZone: 'Asia/Taipei'
+  /** Local `Asia/Taipei` calendar date (`YYYY-MM-DD`) baked into the fixture's D-relative serials. */
+  anchorLocalDate: string
+  /** Excel serial corresponding to `anchorLocalDate` in `dateSystem`. */
+  anchorSerial: number
+  /** Stale cached serial written into `<c><f>TODAY()</f><v>...</v></c>` (`D_saved !== D`). */
+  staleSavedTodaySerial: number
+  /** Cell ref holding `<f>TODAY()</f>` with stale cached `<v>staleSavedTodaySerial</v>`. */
+  staleCacheCellRef: string
+  /** Cell ref holding `anchorSerial` (local `Asia/Taipei` today `D`). */
+  localTodayCellRef: string
+  /** Cell ref holding `anchorSerial - 1` (UTC today `D - 1` during `00:05–07:55 Asia/Taipei`). */
+  utcTodayCellRef: string
+}
+
 export interface CfOracleCase {
   id: string
-  variantOf?: string
   stage: 1 | 2 | 3 | 4 | 5
+  /** Question or spec `[measure]` requirement settled by this case. */
+  question: string
+  /** Path to the generator input `.xlsx` relative to repo root. */
   input: string
+  /** Path to the Excel-resaved (or seeded) `.xlsx` relative to repo root. */
   saved: string
+  /** Whether `saved` has already been resaved by Excel (`true`) vs. seeded from `input` (`false`). */
+  resavedByExcel?: boolean
   sheet: string
+  /** Capture range in A1 notation, e.g. `A1:O26`. */
   range: string
+  /** Required capture appearances (`['screen']` or `['screen', 'printer']`). */
+  requiredAppearances?: readonly CfAppearance[]
+  /** Optional clock-window & date-binding contract for `timePeriod` cases. */
+  clockRequirement?: CfClockRequirement
   markers: readonly CfPartMarker[]
   expected: CfExpectedOutcome
   captures: readonly CfCaptureSpec[]
   status: CfOracleStatus
   reason?: string
-  question?: string
-  capability?: string
+  /** Pixel comparison tolerances (`meanAbs`, `rowMax`, `strong`) for `scripts/cf-compare.ts`. */
+  tolerance: {
+    meanAbs: number
+    rowMax: number
+    strong: number
+  }
 }
+
+export type CfRefusalCode =
+  | 'missing-saved-workbook'
+  | 'missing-part'
+  | 'stripped-rule'
+  | 'wrong-part-marker'
+  | 'dxf-pairing-failed'
+  | 'repair-log-present'
+  | 'hash-mismatch'
+  | 'missing-capture'
+  | 'sidecar-mismatch'
+  | 'geometry-mismatch'
+  | 'clock-window-invalid'
+  | 'clock-fixture-expired'
+  | 'unobserved-expectation'
+  | 'cell-expectation-mismatch'
+  | 'unchanged-control-capture'
+  | 'semantic-evidence-pending'
+  | 'unsupported-capability'
 
 export interface VerifiedEvidence {
   kind: 'verified'
   id: string
   status: 'measured'
   savedSha256: string
-  inputSha256?: string
+  inputSha256: string
   captureHashes: Record<string, string>
   positiveContrastMaxDelta: number
+  minPositiveContrastDelta: number
   matchedRules: number
+  verifiedCapabilities: readonly string[]
 }
-
-export type CfRefusalCode =
-  | 'missing-saved-workbook'
-  | 'repair-log-present'
-  | 'hash-mismatch'
-  | 'missing-part'
-  | 'stripped-rule'
-  | 'wrong-part-marker'
-  | 'dxf-pairing-failed'
-  | 'missing-capture'
-  | 'sidecar-mismatch'
-  | 'unchanged-control-capture'
-  | 'semantic-evidence-pending'
-  | 'unsupported-capability'
 
 export interface Refusal {
   kind: 'refusal'
@@ -116,636 +232,2001 @@ export interface Refusal {
   status: CfOracleStatus
   code: CfRefusalCode
   reason: string
+  /** True when the `.xlsx` archive's structural XML markers and DXF pairings are valid, even if host capture is pending. */
   structuralValid: boolean
 }
 
+export interface CfCapabilityEntry {
+  capabilityId: string
+  caseId: string
+  category: string
+  description: string
+  absentOrDivergentFormulaPolicy: string
+  failClosedDisposition: string
+}
+
 export interface CfManifest {
-  schemaVersion: 1
-  excelVersion: string
-  uiLocale: string
+  version: 1
+  excelBuild: string
+  locale: string
+  dateSystem: '1900'
+  hostTimeZone: string
   generatedAt: string
   cases: CfOracleCase[]
 }
 
-const DEFAULT_TOLERANCE = { meanAbs: 2.0 / 255, rowMax: 4.0 / 255, strong: 0.003 }
+const DEFAULT_TOLERANCE = { meanAbs: 0.015, rowMax: 0.08, strong: 12 }
 
-function makeStage1Captures(id: string): readonly CfCaptureSpec[] {
-  return [
-    {
-      appearance: 'screen',
-      pngPath: `tests/fixtures/xlsx-cf/refs/${id}.png`,
-      sidecarPath: `tests/fixtures/xlsx-cf/refs/${id}.json`,
-    },
-    {
-      appearance: 'printer',
-      pngPath: `tests/fixtures/xlsx-cf/refs/${id}-print.png`,
-      sidecarPath: `tests/fixtures/xlsx-cf/refs/${id}-print.json`,
-    },
-  ]
+const DXF_RED: CfDxfExpectation = { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true }
+const DXF_GREEN: CfDxfExpectation = { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' }
+const DXF_YELLOW: CfDxfExpectation = { fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500' }
+
+/** Converts a `YYYY-MM-DD` date string to an Excel serial in the `1900` (Lotus 1-2-3 leap bug) or `1904` date system. */
+export function isoDateToExcelSerial(isoDate: string, dateSystem: '1900' | '1904' = '1900'): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!m) throw new Error(`Invalid ISO date: ${isoDate}`)
+  const utcMs = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  const epoch1900Ms = Date.UTC(1899, 11, 30) // Excel 1900 serial 0 with Lotus 1900-02-29 offset
+  const serial1900 = Math.round((utcMs - epoch1900Ms) / 86_400_000)
+  return dateSystem === '1904' ? serial1900 - 1462 : serial1900
 }
 
+export const DEFAULT_CLOCK_ANCHOR_DATE = '2026-11-06'
+const D1900 = isoDateToExcelSerial(DEFAULT_CLOCK_ANCHOR_DATE, '1900') // 46332
+const D1904 = isoDateToExcelSerial(DEFAULT_CLOCK_ANCHOR_DATE, '1904') // 44870
+
 export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
+  // 1. stage1-cellis-literals
+  // Rows 2..13: inputs [-1, 0, 1, 99, 100, 101, "100", TRUE, FALSE, #N/A, "", unstored blank]
+  // Rows 15..26: same-content unformatted controls in the same columns (row + 13)
   {
     id: 'stage1-cellis-literals',
     stage: 1,
+    question:
+      'Values -1,0,1,99,100,101 plus string "100", TRUE, FALSE, #N/A, "" and unstored blank; threshold 100 for all eight relational operators; between 1,3 and reversed 3,1; notBetween 1,3 and reversed 3,1; numeric/string/boolean/error/empty-string operands.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-cellis-literals.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-cellis-literals.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:G10',
-    question:
-      'Values -1,0,1,99,100,101; threshold 100 for all eight relational operators; between 1,3 and reversed 3,1; numeric/string/boolean/error/unstored blank/empty-string operands. Pair positive and negative cells.',
-    capability: 'cellIs-literal-operators-and-reversed-between',
+    range: 'A1:O26',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B7',
-        ruleType: 'cellIs',
-        operator: 'greaterThan',
-        priority: 1,
-        formula: '100',
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true },
-      },
-      {
-        part: 'xl/worksheets/sheet1.xml',
-        extension: 'legacy',
-        sqref: 'D2:D7',
-        ruleType: 'cellIs',
-        operator: 'between',
-        priority: 2,
-        formula: '3',
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
-      },
-      {
-        part: 'xl/worksheets/sheet1.xml',
-        extension: 'legacy',
-        sqref: 'F2:F7',
+        capabilityId: 'cellIs:equal-numeric',
+        sqref: 'B2:B13',
         ruleType: 'cellIs',
         operator: 'equal',
+        priority: 1,
+        formulas: ['100'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:notEqual-numeric',
+        sqref: 'C2:C13',
+        ruleType: 'cellIs',
+        operator: 'notEqual',
+        priority: 2,
+        formulas: ['100'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:greaterThan-numeric',
+        sqref: 'D2:D13',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
         priority: 3,
-        formula: '"100"',
-        dxf: { fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500' },
+        formulas: ['100'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:lessThan-numeric',
+        sqref: 'E2:E13',
+        ruleType: 'cellIs',
+        operator: 'lessThan',
+        priority: 4,
+        formulas: ['100'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:greaterThanOrEqual-numeric',
+        sqref: 'F2:F13',
+        ruleType: 'cellIs',
+        operator: 'greaterThanOrEqual',
+        priority: 5,
+        formulas: ['100'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:lessThanOrEqual-numeric',
+        sqref: 'G2:G13',
+        ruleType: 'cellIs',
+        operator: 'lessThanOrEqual',
+        priority: 6,
+        formulas: ['100'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:between-ordered',
+        sqref: 'H2:H13',
+        ruleType: 'cellIs',
+        operator: 'between',
+        priority: 7,
+        formulas: ['1', '3'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:between-reversed',
+        sqref: 'I2:I13',
+        ruleType: 'cellIs',
+        operator: 'between',
+        priority: 8,
+        formulas: ['3', '1'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:notBetween-ordered',
+        sqref: 'J2:J13',
+        ruleType: 'cellIs',
+        operator: 'notBetween',
+        priority: 9,
+        formulas: ['1', '3'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:notBetween-reversed',
+        sqref: 'K2:K13',
+        ruleType: 'cellIs',
+        operator: 'notBetween',
+        priority: 10,
+        formulas: ['3', '1'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:equal-string',
+        sqref: 'L2:L13',
+        ruleType: 'cellIs',
+        operator: 'equal',
+        priority: 11,
+        formulas: ['"100"'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:equal-boolean',
+        sqref: 'M2:M13',
+        ruleType: 'cellIs',
+        operator: 'equal',
+        priority: 12,
+        formulas: ['TRUE'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:equal-error',
+        sqref: 'N2:N13',
+        ruleType: 'cellIs',
+        operator: 'equal',
+        priority: 13,
+        formulas: ['#N/A'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'cellIs:equal-empty-string',
+        sqref: 'O2:O13',
+        ruleType: 'cellIs',
+        operator: 'equal',
+        priority: 14,
+        formulas: ['""'],
+        dxf: DXF_RED,
       },
     ],
     expected: {
-      positiveRefs: ['B7', 'D4'],
-      negativeRefs: ['C7', 'E4'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B6', 'C2', 'D7', 'E2', 'F6', 'G6', 'H4', 'I4', 'J2', 'K2', 'L8', 'M9', 'N11', 'O12'],
+      negativeRefs: ['B19', 'C15', 'D20', 'E15', 'F19', 'G19', 'H17', 'I17', 'J15', 'K15', 'L21', 'M22', 'N24', 'O25'],
       cells: [
-        { ref: 'B2', matched: false, note: '-1 > 100 is false' },
-        { ref: 'B6', matched: false, note: '100 > 100 is false' },
-        { ref: 'B7', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '101 > 100 is true' },
-        { ref: 'C7', matched: false, note: 'Unformatted control cell paired with B7 (value 101)' },
-        { ref: 'D4', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '1 in reversed between(3,1)' },
-        { ref: 'E4', matched: false, note: 'Unformatted control cell paired with D4' },
+        { ref: 'B5', controlRef: 'B18', matched: false, note: '99 == 100 is false' },
+        { ref: 'B6', controlRef: 'B19', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '100 == 100' },
+        { ref: 'B8', controlRef: 'B21', matched: false, note: 'string "100" does not equal numeric 100' },
+        { ref: 'C2', controlRef: 'C15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '-1 != 100' },
+        { ref: 'C6', controlRef: 'C19', matched: false, note: '100 != 100 is false' },
+        { ref: 'D6', controlRef: 'D19', matched: false, note: '100 > 100 is false' },
+        { ref: 'D7', controlRef: 'D20', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '101 > 100' },
+        { ref: 'E2', controlRef: 'E15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '-1 < 100' },
+        { ref: 'E6', controlRef: 'E19', matched: false, note: '100 < 100 is false' },
+        { ref: 'F6', controlRef: 'F19', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '100 >= 100' },
+        { ref: 'G6', controlRef: 'G19', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '100 <= 100' },
+        { ref: 'H4', controlRef: 'H17', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '1 between 1..3' },
+        { ref: 'I4', controlRef: 'I17', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '1 between reversed 3..1' },
+        { ref: 'J2', controlRef: 'J15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '-1 notBetween 1..3' },
+        { ref: 'K2', controlRef: 'K15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '-1 notBetween reversed 3..1' },
+        { ref: 'L8', controlRef: 'L21', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'string "100" == "100"' },
+        { ref: 'M9', controlRef: 'M22', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'TRUE == TRUE' },
+        { ref: 'N11', controlRef: 'N24', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '#N/A == #N/A' },
+        { ref: 'O12', controlRef: 'O25', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"" == ""' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-cellis-literals'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-cellis-literals.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-cellis-literals.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 2. stage1-text-predicates
+  // Rows 2..9: ['abc', 'AbC', 'ábc', ' ABC ', 123 (numFmt 00000), 'a"b', '', null]
+  // Rows 11..18: same-content unformatted controls (row + 9)
   {
     id: 'stage1-text-predicates',
     stage: 1,
+    question:
+      'abc, AbC, ábc, " ABC ", numeric 123 formatted 00000, a"b, empty string and unstored blank; contains/notContains/begins/ends; needle ab, whitespace and escaped quotes; base/x14 canonical vs absent vs deliberately divergent formula.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-text-predicates.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-text-predicates.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:G9',
-    question:
-      'abc, AbC, ábc, " ABC ", numeric 123 formatted 00000, empty string and unstored blank; contains/notContains/begins/ends; needle ab, whitespace and escaped quotes; base/x14 canonical formula versus deliberately divergent formula.',
-    capability: 'text-predicates-case-formatted-and-helper-formula',
+    range: 'A1:L18',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B8',
+        capabilityId: 'text:containsText-canonical',
+        sqref: 'B2:B9',
         ruleType: 'containsText',
         operator: 'containsText',
         priority: 1,
         text: 'ab',
-        formula: 'NOT(ISERROR(SEARCH("ab",B2)))',
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006' },
+        formulas: ['NOT(ISERROR(SEARCH("ab",B2)))'],
+        dxf: DXF_RED,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'D2:D8',
+        capabilityId: 'text:notContainsText-canonical',
+        sqref: 'C2:C9',
+        ruleType: 'notContainsText',
+        operator: 'notContains',
+        priority: 2,
+        text: 'ab',
+        formulas: ['ISERROR(SEARCH("ab",C2))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:beginsWith-canonical',
+        sqref: 'D2:D9',
         ruleType: 'beginsWith',
         operator: 'beginsWith',
-        priority: 2,
+        priority: 3,
+        text: 'ab',
+        formulas: ['LEFT(D2,2)="ab"'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:endsWith-canonical',
+        sqref: 'E2:E9',
+        ruleType: 'endsWith',
+        operator: 'endsWith',
+        priority: 4,
+        text: 'bc',
+        formulas: ['RIGHT(E2,2)="bc"'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:whitespace-needle',
+        sqref: 'F2:F9',
+        ruleType: 'containsText',
+        operator: 'containsText',
+        priority: 5,
+        text: ' ABC ',
+        formulas: ['NOT(ISERROR(SEARCH(" ABC ",F2)))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:escaped-quote-needle',
+        sqref: 'G2:G9',
+        ruleType: 'containsText',
+        operator: 'containsText',
+        priority: 6,
+        text: 'a"b',
+        formulas: ['NOT(ISERROR(SEARCH("a""b",G2)))'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:formatted-number-00000',
+        sqref: 'H2:H9',
+        ruleType: 'beginsWith',
+        operator: 'beginsWith',
+        priority: 7,
         text: '00',
-        formula: 'LEFT(D2,2)="00"',
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
+        formulas: ['LEFT(H2,2)="00"'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:absent-formula',
+        sqref: 'I2:I9',
+        ruleType: 'containsText',
+        operator: 'containsText',
+        priority: 8,
+        text: 'ab',
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'text:divergent-formula-base',
+        sqref: 'J2:J9',
+        ruleType: 'containsText',
+        operator: 'containsText',
+        priority: 9,
+        text: 'ab',
+        formulas: ['NOT(ISERROR(SEARCH("zz",J2)))'],
+        dxf: DXF_YELLOW,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'x14',
-        sqref: 'F2:F8',
+        capabilityId: 'text:x14-canonical',
+        sqref: 'K2:K9',
         ruleType: 'containsText',
         operator: 'containsText',
-        priority: 3,
-        formula: 'NOT(ISERROR(SEARCH("zz",F2)))',
-        dxf: { fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500' },
+        priority: 10,
+        text: 'ab',
+        formulas: ['NOT(ISERROR(SEARCH("ab",K2)))'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'x14',
+        capabilityId: 'text:x14-divergent',
+        sqref: 'L2:L9',
+        ruleType: 'containsText',
+        operator: 'containsText',
+        priority: 11,
+        text: 'ab',
+        formulas: ['NOT(ISERROR(SEARCH("zz",L2)))'],
+        dxf: DXF_GREEN,
       },
     ],
     expected: {
-      positiveRefs: ['B2', 'B3'],
-      negativeRefs: ['C2', 'C3'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'B3', 'C4', 'D2', 'E2', 'F5', 'G7', 'K2'],
+      negativeRefs: ['B11', 'B12', 'C13', 'D11', 'E11', 'F14', 'G16', 'K11'],
       cells: [
-        { ref: 'B2', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: '"abc" contains "ab"' },
-        { ref: 'B3', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: '"AbC" case-insensitive contains "ab"' },
-        { ref: 'B4', matched: false, note: '"ábc" accent sensitivity settled by capture' },
-        { ref: 'C2', matched: false, note: 'Unformatted control cell paired with B2' },
+        { ref: 'B2', controlRef: 'B11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"abc" contains "ab"' },
+        { ref: 'B3', controlRef: 'B12', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"AbC" contains "ab" case-insensitively' },
+        { ref: 'B4', controlRef: 'B13', matched: false, note: '"ábc" does not match ASCII "ab"' },
+        { ref: 'C4', controlRef: 'C13', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '"ábc" notContains "ab"' },
+        { ref: 'D2', controlRef: 'D11', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '"abc" beginsWith "ab"' },
+        { ref: 'E2', controlRef: 'E11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"abc" endsWith "bc"' },
+        { ref: 'F5', controlRef: 'F14', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '" ABC " matches whitespace needle' },
+        { ref: 'G7', controlRef: 'G16', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'a"b matches escaped quote needle' },
+        { ref: 'K2', controlRef: 'K11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'x14 canonical containsText' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-text-predicates'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-text-predicates.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-text-predicates.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 3. stage1-blanks-errors
+  // Rows 2..9: [null, "", " ", "\t", 0, FALSE, #N/A, #DIV/0!]
+  // Rows 11..18: same-content unformatted controls (row + 9)
   {
     id: 'stage1-blanks-errors',
     stage: 1,
+    question:
+      'Empty cell, "", " ", tab, 0, FALSE, #N/A, #DIV/0!; all four types (containsBlanks, notContainsBlanks, containsErrors, notContainsErrors) with absent/canonical/divergent formulas, base and x14.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-blanks-errors.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-blanks-errors.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:G10',
-    question:
-      'Empty cell, "", " ", tab, 0, FALSE, #N/A, #DIV/0!; all four types with absent/canonical/divergent formulas, base/x14.',
-    capability: 'blanks-and-errors-canonical-vs-absent-formula',
+    range: 'A1:O18',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
+        capabilityId: 'blanks:containsBlanks-canonical',
         sqref: 'B2:B9',
         ruleType: 'containsBlanks',
         priority: 1,
-        formula: 'LEN(TRIM(B2))=0',
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006' },
+        formulas: ['LEN(TRIM(B2))=0'],
+        dxf: DXF_RED,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'D2:D9',
-        ruleType: 'containsErrors',
+        capabilityId: 'blanks:containsBlanks-absent-formula',
+        sqref: 'C2:C9',
+        ruleType: 'containsBlanks',
         priority: 2,
-        formula: 'ISERROR(D2)',
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'blanks:containsBlanks-divergent-formula',
+        sqref: 'D2:D9',
+        ruleType: 'containsBlanks',
+        priority: 3,
+        formulas: ['ISBLANK(D2)'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'blanks:notContainsBlanks-canonical',
+        sqref: 'E2:E9',
+        ruleType: 'notContainsBlanks',
+        priority: 4,
+        formulas: ['LEN(TRIM(E2))>0'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'blanks:notContainsBlanks-absent-formula',
+        sqref: 'F2:F9',
+        ruleType: 'notContainsBlanks',
+        priority: 5,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'blanks:notContainsBlanks-divergent-formula',
+        sqref: 'G2:G9',
+        ruleType: 'notContainsBlanks',
+        priority: 6,
+        formulas: ['NOT(ISBLANK(G2))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'errors:containsErrors-canonical',
+        sqref: 'H2:H9',
+        ruleType: 'containsErrors',
+        priority: 7,
+        formulas: ['ISERROR(H2)'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'errors:containsErrors-absent-formula',
+        sqref: 'I2:I9',
+        ruleType: 'containsErrors',
+        priority: 8,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'errors:containsErrors-divergent-formula',
+        sqref: 'J2:J9',
+        ruleType: 'containsErrors',
+        priority: 9,
+        formulas: ['ISNA(J2)'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'errors:notContainsErrors-canonical',
+        sqref: 'K2:K9',
+        ruleType: 'notContainsErrors',
+        priority: 10,
+        formulas: ['NOT(ISERROR(K2))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'errors:notContainsErrors-absent-formula',
+        sqref: 'L2:L9',
+        ruleType: 'notContainsErrors',
+        priority: 11,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'errors:notContainsErrors-divergent-formula',
+        sqref: 'M2:M9',
+        ruleType: 'notContainsErrors',
+        priority: 12,
+        formulas: ['NOT(ISNA(M2))'],
+        dxf: DXF_GREEN,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'x14',
-        sqref: 'F2:F9',
+        capabilityId: 'blanks:x14-containsBlanks',
+        sqref: 'N2:N9',
+        ruleType: 'containsBlanks',
+        priority: 13,
+        formulas: ['LEN(TRIM(N2))=0'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'x14',
+        capabilityId: 'errors:x14-notContainsErrors',
+        sqref: 'O2:O9',
         ruleType: 'notContainsErrors',
-        priority: 3,
-        formula: 'NOT(ISERROR(F2))',
-        dxf: { fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500' },
+        priority: 14,
+        formulas: ['NOT(ISERROR(O2))'],
+        dxf: DXF_GREEN,
       },
     ],
     expected: {
-      positiveRefs: ['B2', 'D8'],
-      negativeRefs: ['C2', 'E8'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'B3', 'E6', 'H8', 'H9', 'K6', 'N2', 'O6'],
+      negativeRefs: ['B11', 'B12', 'E15', 'H17', 'H18', 'K15', 'N11', 'O15'],
       cells: [
-        { ref: 'B2', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: 'Empty cell matches containsBlanks' },
-        { ref: 'D8', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '#N/A matches containsErrors' },
-        { ref: 'C2', matched: false, note: 'Unformatted control cell paired with B2' },
-        { ref: 'E8', matched: false, note: 'Unformatted control cell paired with D8' },
+        { ref: 'B2', controlRef: 'B11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'unstored blank matches containsBlanks' },
+        { ref: 'B3', controlRef: 'B12', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"" matches containsBlanks' },
+        { ref: 'B6', controlRef: 'B15', matched: false, note: '0 does not match containsBlanks' },
+        { ref: 'E6', controlRef: 'E15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '0 matches notContainsBlanks' },
+        { ref: 'H8', controlRef: 'H17', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '#N/A matches containsErrors' },
+        { ref: 'H9', controlRef: 'H18', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '#DIV/0! matches containsErrors' },
+        { ref: 'K6', controlRef: 'K15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '0 matches notContainsErrors' },
+        { ref: 'K8', controlRef: 'K17', matched: false, note: '#N/A does not match notContainsErrors' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-blanks-errors'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 4. stage1-timeperiod-today-clock (1900 date system, all 10 timePeriod values)
+  // Rows 2..15: D-2, D-1, D, D+0.5, D+0.999, D+1, D+2, D-6 (last7Days), prevWeekSun, nextWeekSun, prevMonth, nextMonth, yearEdge, stale TODAY() cache (f=TODAY(), v=D-5)
+  // Rows 17..30: same-content unformatted controls (row + 15)
   {
     id: 'stage1-timeperiod-today-clock',
     stage: 1,
+    question:
+      '1900 date system: D-2..D+2, D+0.5, D+0.999, saved TODAY() cache D_saved!=D, Sunday/Monday week edges, month/year edges, and all ten timePeriod operators; captured in the 00:05-07:55 Asia/Taipei UTC/local distinguishing window.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-timeperiod-today-clock.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-timeperiod-today-clock.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:E12',
-    question:
-      'D-2..D+2, D+0.5, D+0.999, saved TODAY cache D_saved≠D; both date systems, Sunday/Monday, month/year edges and all ten periods. Capture the UTC/local distinguishing window; missing window stays refused, not simulated evidence.',
-    capability: 'timePeriod-live-clock-and-utc-local-boundary',
+    range: 'A1:K30',
+    requiredAppearances: ['screen'],
+    clockRequirement: {
+      dateSystem: '1900',
+      requiredTimeZone: 'Asia/Taipei',
+      anchorLocalDate: DEFAULT_CLOCK_ANCHOR_DATE,
+      anchorSerial: D1900,
+      staleSavedTodaySerial: D1900 - 5,
+      staleCacheCellRef: 'B15',
+      localTodayCellRef: 'B4',
+      utcTodayCellRef: 'B3',
+    },
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B11',
+        capabilityId: 'timePeriod:today',
+        sqref: 'B2:B15',
         ruleType: 'timePeriod',
         timePeriod: 'today',
         priority: 1,
-        formula: 'FLOOR(B2,1)=TODAY()',
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true },
+        formulas: ['FLOOR(B2,1)=TODAY()'],
+        dxf: DXF_RED,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'D2:D11',
+        capabilityId: 'timePeriod:yesterday',
+        sqref: 'C2:C15',
+        ruleType: 'timePeriod',
+        timePeriod: 'yesterday',
+        priority: 2,
+        formulas: ['FLOOR(C2,1)=TODAY()-1'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:tomorrow',
+        sqref: 'D2:D15',
+        ruleType: 'timePeriod',
+        timePeriod: 'tomorrow',
+        priority: 3,
+        formulas: ['FLOOR(D2,1)=TODAY()+1'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:last7Days',
+        sqref: 'E2:E15',
+        ruleType: 'timePeriod',
+        timePeriod: 'last7Days',
+        priority: 4,
+        formulas: ['AND(TODAY()-FLOOR(E2,1)<=6,FLOOR(E2,1)<=TODAY())'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:thisWeek',
+        sqref: 'F2:F15',
         ruleType: 'timePeriod',
         timePeriod: 'thisWeek',
-        priority: 2,
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
+        priority: 5,
+        formulas: ['AND(TODAY()-ROUNDDOWN(F2,0)<=(WEEKDAY(TODAY())-1),ROUNDDOWN(F2,0)-TODAY()<=(7-WEEKDAY(TODAY())))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:lastWeek',
+        sqref: 'G2:G15',
+        ruleType: 'timePeriod',
+        timePeriod: 'lastWeek',
+        priority: 6,
+        formulas: ['AND(TODAY()-ROUNDDOWN(G2,0)>(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)<(WEEKDAY(TODAY())+6))'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:nextWeek',
+        sqref: 'H2:H15',
+        ruleType: 'timePeriod',
+        timePeriod: 'nextWeek',
+        priority: 7,
+        formulas: ['AND(ROUNDDOWN(H2,0)-TODAY()>(7-WEEKDAY(TODAY())),ROUNDDOWN(H2,0)-TODAY()<(15-WEEKDAY(TODAY())))'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:thisMonth',
+        sqref: 'I2:I15',
+        ruleType: 'timePeriod',
+        timePeriod: 'thisMonth',
+        priority: 8,
+        formulas: ['AND(MONTH(I2)=MONTH(TODAY()),YEAR(I2)=YEAR(TODAY()))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:lastMonth',
+        sqref: 'J2:J15',
+        ruleType: 'timePeriod',
+        timePeriod: 'lastMonth',
+        priority: 9,
+        formulas: ['AND(MONTH(J2)=MONTH(EDATE(TODAY(),0-1)),YEAR(J2)=YEAR(EDATE(TODAY(),0-1)))'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:nextMonth',
+        sqref: 'K2:K15',
+        ruleType: 'timePeriod',
+        timePeriod: 'nextMonth',
+        priority: 10,
+        formulas: ['AND(MONTH(K2)=MONTH(EDATE(TODAY(),0+1)),YEAR(K2)=YEAR(EDATE(TODAY(),0+1)))'],
+        dxf: DXF_RED,
       },
     ],
     expected: {
-      positiveRefs: ['B4', 'B7'],
-      negativeRefs: ['C4', 'C7'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B4', 'B5', 'B6', 'B15', 'C3', 'D7', 'E9', 'F4', 'G10', 'H11', 'I4', 'J12', 'K13'],
+      negativeRefs: ['B19', 'B20', 'B21', 'B30', 'C18', 'D22', 'E24', 'F19', 'G25', 'H26', 'I19', 'J27', 'K28'],
       cells: [
-        { ref: 'B4', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'D (today integer serial)' },
-        { ref: 'B7', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'D+0.5 (same calendar day)' },
-        { ref: 'C4', matched: false, note: 'Unformatted control cell paired with B4' },
+        { ref: 'B3', controlRef: 'B18', matched: false, note: 'D-1 (UTC date in 00:05-07:55 Asia/Taipei) is not local today' },
+        { ref: 'B4', controlRef: 'B19', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'D is local today' },
+        { ref: 'B5', controlRef: 'B20', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'D+0.5 truncates to D' },
+        { ref: 'B6', controlRef: 'B21', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'D+0.999 truncates to D' },
+        { ref: 'B15', controlRef: 'B30', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'TODAY() formula with stale cache D-5 refreshes to D' },
+        { ref: 'C3', controlRef: 'C18', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'D-1 is yesterday' },
+        { ref: 'D7', controlRef: 'D22', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'D+1 is tomorrow' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-timeperiod-today-clock'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Requires host capture during the 00:00–07:59 Asia/Taipei UTC/local date-divergence window (`docs/validation/xlsx-cf-recipes-stage1.md`). Viewer fails closed near UTC/local boundary until measured.',
+    reason: 'Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window to distinguish local vs UTC date boundary',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 5. stage1-timeperiod-today-clock-2 (1904 date system variant)
   {
-    id: 'stage1-top10-rank-edge',
+    id: 'stage1-timeperiod-today-clock-2',
     stage: 1,
-    input: 'tests/fixtures/xlsx-cf/inputs/stage1-top10-rank-edge.xlsx',
-    saved: 'tests/fixtures/xlsx-cf/stage1-top10-rank-edge.xlsx',
-    sheet: 'Sheet1',
-    range: 'A1:G9',
     question:
-      'Values 1,2,2,3,9; top/bottom N=2, N=99; percent 0,1,40,100; omitted/zero rank; ties and mixed nonnumeric values. Pin which coordinates match, not just a count.',
-    capability: 'top10-ties-percent-clamp-and-rank-edge',
+      '1904 date system (date1904="1"): D_1904-1..D_1904+1, fractional D_1904+0.5, and stale TODAY() cache D_saved!=D across today/yesterday/tomorrow/thisWeek/thisMonth in the 00:05-07:55 Asia/Taipei window.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage1-timeperiod-today-clock-2.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage1-timeperiod-today-clock-2.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F16',
+    requiredAppearances: ['screen'],
+    clockRequirement: {
+      dateSystem: '1904',
+      requiredTimeZone: 'Asia/Taipei',
+      anchorLocalDate: DEFAULT_CLOCK_ANCHOR_DATE,
+      anchorSerial: D1904,
+      staleSavedTodaySerial: D1904 - 5,
+      staleCacheCellRef: 'B7',
+      localTodayCellRef: 'B3',
+      utcTodayCellRef: 'B2',
+    },
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B8',
-        ruleType: 'top10',
-        rank: 2,
+        capabilityId: 'timePeriod:1904-today',
+        sqref: 'B2:B7',
+        ruleType: 'timePeriod',
+        timePeriod: 'today',
         priority: 1,
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true },
+        formulas: ['FLOOR(B2,1)=TODAY()'],
+        dxf: DXF_RED,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'D2:D8',
+        capabilityId: 'timePeriod:1904-yesterday',
+        sqref: 'C2:C7',
+        ruleType: 'timePeriod',
+        timePeriod: 'yesterday',
+        priority: 2,
+        formulas: ['FLOOR(C2,1)=TODAY()-1'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:1904-tomorrow',
+        sqref: 'D2:D7',
+        ruleType: 'timePeriod',
+        timePeriod: 'tomorrow',
+        priority: 3,
+        formulas: ['FLOOR(D2,1)=TODAY()+1'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:1904-thisWeek',
+        sqref: 'E2:E7',
+        ruleType: 'timePeriod',
+        timePeriod: 'thisWeek',
+        priority: 4,
+        formulas: ['AND(TODAY()-ROUNDDOWN(E2,0)<=(WEEKDAY(TODAY())-1),ROUNDDOWN(E2,0)-TODAY()<=(7-WEEKDAY(TODAY())))'],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'timePeriod:1904-thisMonth',
+        sqref: 'F2:F7',
+        ruleType: 'timePeriod',
+        timePeriod: 'thisMonth',
+        priority: 5,
+        formulas: ['AND(MONTH(F2)=MONTH(TODAY()),YEAR(F2)=YEAR(TODAY()))'],
+        dxf: DXF_RED,
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B3', 'B4', 'B7', 'C2', 'D5', 'E3', 'F3'],
+      negativeRefs: ['B11', 'B12', 'B15', 'C10', 'D13', 'E11', 'F11'],
+      cells: [
+        { ref: 'B2', controlRef: 'B10', matched: false, note: '1904 D-1 is not local today' },
+        { ref: 'B3', controlRef: 'B11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '1904 D is local today' },
+        { ref: 'B4', controlRef: 'B12', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '1904 D+0.5 is local today' },
+        { ref: 'B7', controlRef: 'B15', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '1904 stale TODAY() cache refreshes to D' },
+        { ref: 'C2', controlRef: 'C10', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '1904 D-1 is yesterday' },
+        { ref: 'D5', controlRef: 'D13', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '1904 D+1 is tomorrow' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window for 1904 date-system verification',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 6. stage1-top10-rank-edge
+  // Rows 2..10: [1, 2, 2, 3, 9, "999", TRUE, #N/A, ""]
+  // Rows 12..20: same-content unformatted controls (row + 10)
+  {
+    id: 'stage1-top10-rank-edge',
+    stage: 1,
+    question:
+      'Values 1,2,2,3,9 plus "999", TRUE, #N/A, ""; top/bottom N=2, N=99; percent 0,1,40,100; omitted/zero rank; ties and mixed nonnumeric values. Pin exact matching coordinates.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage1-top10-rank-edge.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage1-top10-rank-edge.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:K20',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:top-2',
+        sqref: 'B2:B10',
+        ruleType: 'top10',
+        rank: 2,
+        priority: 1,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:bottom-2-ties',
+        sqref: 'C2:C10',
         ruleType: 'top10',
         bottom: true,
         rank: 2,
         priority: 2,
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
+        formulas: [],
+        dxf: DXF_GREEN,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'F2:F8',
+        capabilityId: 'top10:top-99',
+        sqref: 'D2:D10',
+        ruleType: 'top10',
+        rank: 99,
+        priority: 3,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:bottom-99',
+        sqref: 'E2:E10',
+        ruleType: 'top10',
+        bottom: true,
+        rank: 99,
+        priority: 4,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:percent-0',
+        sqref: 'F2:F10',
+        ruleType: 'top10',
+        percent: true,
+        rank: 0,
+        priority: 5,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:percent-1',
+        sqref: 'G2:G10',
+        ruleType: 'top10',
+        percent: true,
+        rank: 1,
+        priority: 6,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:percent-40',
+        sqref: 'H2:H10',
         ruleType: 'top10',
         percent: true,
         rank: 40,
-        priority: 3,
-        dxf: { fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500' },
+        priority: 7,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:percent-100',
+        sqref: 'I2:I10',
+        ruleType: 'top10',
+        percent: true,
+        rank: 100,
+        priority: 8,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:omitted-rank',
+        sqref: 'J2:J10',
+        ruleType: 'top10',
+        rank: 'omitted',
+        priority: 9,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'top10:zero-rank',
+        sqref: 'K2:K10',
+        ruleType: 'top10',
+        rank: 0,
+        priority: 10,
+        formulas: [],
+        dxf: DXF_RED,
       },
     ],
     expected: {
-      positiveRefs: ['B5', 'B6', 'D2', 'D3', 'D4'],
-      negativeRefs: ['C5', 'C6', 'E2', 'E3', 'E4'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B5', 'B6', 'C2', 'C3', 'C4', 'D2', 'D6', 'E2', 'G6', 'H5', 'H6', 'I2', 'I6'],
+      negativeRefs: ['B15', 'B16', 'C12', 'C13', 'C14', 'D12', 'D16', 'E12', 'G16', 'H15', 'H16', 'I12', 'I16'],
       cells: [
-        { ref: 'B5', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'Value 3 in top 2 of {1,2,2,3,9}' },
-        { ref: 'B6', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'Value 9 in top 2 of {1,2,2,3,9}' },
-        { ref: 'D2', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'Value 1 in bottom 2 of {1,2,2,3,9}' },
-        { ref: 'D3', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'First tied 2 in bottom 2 of {1,2,2,3,9}' },
-        { ref: 'D4', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'Second tied 2 in bottom 2 of {1,2,2,3,9}' },
-        { ref: 'C5', matched: false, note: 'Unformatted control cell paired with B5' },
+        { ref: 'B4', controlRef: 'B14', matched: false, note: '2 is not in top 2 of {1,2,2,3,9}' },
+        { ref: 'B5', controlRef: 'B15', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '3 is in top 2' },
+        { ref: 'B6', controlRef: 'B16', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '9 is in top 2' },
+        { ref: 'B7', controlRef: 'B17', matched: false, note: 'string "999" ignored by top10' },
+        { ref: 'C2', controlRef: 'C12', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '1 is in bottom 2' },
+        { ref: 'C3', controlRef: 'C13', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'first tied 2 included in bottom 2' },
+        { ref: 'C4', controlRef: 'C14', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'second tied 2 included in bottom 2' },
+        { ref: 'D2', controlRef: 'D12', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'top 99 matches all 5 numbers' },
+        { ref: 'D7', controlRef: 'D17', matched: false, note: 'top 99 still excludes string "999"' },
+        { ref: 'G6', controlRef: 'G16', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'top 1% of 5 numbers rounds up to at least 1 cell (9)' },
+        { ref: 'H5', controlRef: 'H15', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'top 40% of 5 numbers = 2 cells (3, 9)' },
+        { ref: 'H6', controlRef: 'H16', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '9 in top 40%' },
+        { ref: 'I2', controlRef: 'I12', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'top 100% matches all numeric cells' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-top10-rank-edge'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 7. stage1-above-average-stddev
+  // Rows 2..9: Dataset A in B..E ([0, 2, 4, "10", TRUE, #DIV/0!, "", null]), Dataset B in F..M ([0, 0, 10, 11, "20", FALSE, #N/A, null])
+  // Rows 11..18: same-content unformatted controls (row + 9)
   {
     id: 'stage1-above-average-stddev',
     stage: 1,
+    question:
+      '0,2,4 (mean 2), below/above/equalAbove/equalBelow; [0,0,10,11] sample vs population stdDev 1,2,3,0,-1,4; stdDev+equalAverage invalid combination; plus errors/text/blanks.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-above-average-stddev.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-above-average-stddev.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:G8',
-    question:
-      '0,2,4 (mean 2), below/above/equalAverage; stdDev 1,2,3,0,-1,4; stdDev+equalAverage invalid; sample/population-distinguishing dataset [0,0,10,11] plus errors/text/blanks.',
-    capability: 'aboveAverage-population-vs-sample-stdDev',
+    range: 'A1:M18',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B5',
+        capabilityId: 'aboveAverage:above',
+        sqref: 'B2:B9',
         ruleType: 'aboveAverage',
         aboveAverage: true,
-        stdDev: 1,
+        equalAverage: false,
         priority: 1,
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true },
+        formulas: [],
+        dxf: DXF_RED,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'D2:D4',
+        capabilityId: 'aboveAverage:below',
+        sqref: 'C2:C9',
+        ruleType: 'aboveAverage',
+        aboveAverage: false,
+        equalAverage: false,
+        priority: 2,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:equalAbove',
+        sqref: 'D2:D9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        equalAverage: true,
+        priority: 3,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:equalBelow',
+        sqref: 'E2:E9',
         ruleType: 'aboveAverage',
         aboveAverage: false,
         equalAverage: true,
-        priority: 2,
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
+        priority: 4,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-1-pop-vs-sample',
+        sqref: 'F2:F9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        stdDev: 1,
+        priority: 5,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-1-below',
+        sqref: 'G2:G9',
+        ruleType: 'aboveAverage',
+        aboveAverage: false,
+        stdDev: 1,
+        priority: 6,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-2',
+        sqref: 'H2:H9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        stdDev: 2,
+        priority: 7,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-3',
+        sqref: 'I2:I9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        stdDev: 3,
+        priority: 8,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-0',
+        sqref: 'J2:J9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        stdDev: 0,
+        priority: 9,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-negative',
+        sqref: 'K2:K9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        stdDev: -1,
+        priority: 10,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-4',
+        sqref: 'L2:L9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        stdDev: 4,
+        priority: 11,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'aboveAverage:stdDev-with-equalAverage',
+        sqref: 'M2:M9',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        equalAverage: true,
+        stdDev: 1,
+        priority: 12,
+        formulas: [],
+        dxf: DXF_YELLOW,
       },
     ],
     expected: {
-      positiveRefs: ['B5', 'D2', 'D3'],
-      negativeRefs: ['C5', 'E2', 'E3'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B4', 'C2', 'D3', 'D4', 'E2', 'E3', 'F5'],
+      negativeRefs: ['B13', 'C11', 'D12', 'D13', 'E11', 'E12', 'F14'],
       cells: [
-        {
-          ref: 'B5',
-          matched: true,
-          fillRgb: 'FFFFC7CE',
-          fontRgb: 'FF9C0006',
-          bold: true,
-          note: 'Value 11 in [0,0,10,11]: mean=5.25, pop_sigma=5.2619 (threshold 10.5119), sample_s=6.0759 (threshold 11.3259)',
-        },
-        { ref: 'D2', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '0 <= mean(0,2,4)=2' },
-        { ref: 'D3', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '2 <= mean(0,2,4)=2' },
-        { ref: 'C5', matched: false, note: 'Unformatted control cell paired with B5' },
+        { ref: 'B3', controlRef: 'B12', matched: false, note: '2 is not strictly above mean 2' },
+        { ref: 'B4', controlRef: 'B13', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '4 > mean 2' },
+        { ref: 'C2', controlRef: 'C11', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '0 < mean 2' },
+        { ref: 'D3', controlRef: 'D12', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '2 >= mean 2' },
+        { ref: 'D4', controlRef: 'D13', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '4 >= mean 2' },
+        { ref: 'E2', controlRef: 'E11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '0 <= mean 2' },
+        { ref: 'E3', controlRef: 'E12', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '2 <= mean 2' },
+        { ref: 'F5', controlRef: 'F14', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '11 > 5.25 + 5.2619 (population stdDev=1)' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-above-average-stddev'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 8. stage1-duplicate-scope
+  // Rows 2..12: single-range duplicate/unique in B/C, disjoint D2:D4 F2:F4 in D/F, overlapping H2:H4 H3:H5 in H
+  // Rows 14..24: same-content unformatted controls (row + 12)
   {
     id: 'stage1-duplicate-scope',
     stage: 1,
+    question:
+      'Numbers 1/1, text "1", A/a/á/" a ", repeated #N/A, repeated "", repeated blanks; single range duplicateValues & uniqueValues; disjoint D2:D4 F2:F4 union scope; overlapping H2:H4 H3:H5 to verify no double-count on H3.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-duplicate-scope.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-duplicate-scope.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:G10',
-    question:
-      'Numbers 1/1, text "1", "A"/"a"/"á"/" a ", repeated errors/blanks; disjoint A1:A3,C1:C3 and overlapping ranges to establish union/per-rectangle and no double-count assumption.',
-    capability: 'duplicateValues-uniqueValues-union-scope-and-coercion',
+    range: 'A1:I24',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B9',
+        capabilityId: 'duplicateValues:single-range',
+        sqref: 'B2:B12',
         ruleType: 'duplicateValues',
         priority: 1,
-        dxf: { fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006' },
+        formulas: [],
+        dxf: DXF_RED,
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
+        capabilityId: 'uniqueValues:single-range',
+        sqref: 'C2:C12',
+        ruleType: 'uniqueValues',
+        priority: 2,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'duplicateValues:disjoint-sqref',
         sqref: 'D2:D4 F2:F4',
         ruleType: 'duplicateValues',
-        priority: 2,
-        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100' },
+        priority: 3,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'duplicateValues:overlapping-sqref-no-double-count',
+        sqref: 'H2:H4 H3:H5',
+        ruleType: 'duplicateValues',
+        priority: 4,
+        formulas: [],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'uniqueValues:overlapping-sqref-no-double-count',
+        sqref: 'I2:I4 I3:I5',
+        ruleType: 'uniqueValues',
+        priority: 5,
+        formulas: [],
+        dxf: DXF_GREEN,
       },
     ],
     expected: {
-      positiveRefs: ['B2', 'B3', 'B5', 'B6', 'D2', 'F3'],
-      negativeRefs: ['C2', 'C3', 'C5', 'C6', 'E2', 'G3'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'B3', 'B5', 'B6', 'C7', 'C8', 'D3', 'F2', 'H4', 'H5', 'I2', 'I3'],
+      negativeRefs: ['B14', 'B15', 'B17', 'B18', 'C19', 'C20', 'D15', 'F14', 'H16', 'H17', 'I14', 'I15'],
       cells: [
-        { ref: 'B2', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: 'Numeric 1 duplicated' },
-        { ref: 'B3', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: 'Numeric 1 duplicated' },
-        { ref: 'B5', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: '"A" duplicated case-insensitively with "a"' },
-        { ref: 'B6', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', note: '"a" duplicated case-insensitively with "A"' },
-        { ref: 'D2', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'Cross-rectangle duplicate in D2:D4 F2:F4' },
-        { ref: 'C2', matched: false, note: 'Unformatted control cell paired with B2' },
+        { ref: 'B2', controlRef: 'B14', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'numeric 1 duplicated' },
+        { ref: 'B3', controlRef: 'B15', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'numeric 1 duplicated' },
+        { ref: 'B5', controlRef: 'B17', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"A" and "a" duplicate case-insensitively' },
+        { ref: 'B6', controlRef: 'B18', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '"a" duplicates "A"' },
+        { ref: 'B12', controlRef: 'B24', matched: false, note: 'unstored blanks never match duplicateValues' },
+        { ref: 'C7', controlRef: 'C19', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '"á" is unique' },
+        { ref: 'D3', controlRef: 'D15', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '20 in D3 duplicates 20 in F2 across disjoint sqref' },
+        { ref: 'F2', controlRef: 'F14', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '20 in F2 duplicates 20 in D3 across disjoint sqref' },
+        { ref: 'H3', controlRef: 'H15', matched: false, note: '77 in H3 covered by overlapping H2:H4 and H3:H5 is NOT double-counted as duplicate' },
+        { ref: 'H4', controlRef: 'H16', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '88 in H4 duplicates 88 in H5' },
+        { ref: 'H5', controlRef: 'H17', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '88 in H5 duplicates 88 in H4' },
+        { ref: 'I3', controlRef: 'I15', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '77 in I3 is unique despite overlapping sqref' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-duplicate-scope'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-duplicate-scope.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-duplicate-scope.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 9. stage1-priority-composition
+  // Rows 2..5: values [25, 15, 5, 0]
+  // Rows 7..10: same-content unformatted controls (row + 5)
+  // Columns:
+  // B: prio 1 red fill (>10) + prio 2 green fill (>0)
+  // C: prio 3 red fill (>10) + prio 4 bold green font (>0)
+  // D: prio 5 bare stopIfTrue (>20, no dxfId) + prio 6 yellow fill (>0)
+  // E: equal priority="7" red fill (>10) then priority="7" green fill (>0) (document order tie-break)
+  // F: cross-visual DXF fill (prio 8) + colorScale (prio 9) + dataBar (prio 10) + iconSet (prio 11)
+  // G: unresolved expression stub (prio 12, type="expression", stopIfTrue="1", formula="A2>0") over prio 13 red fill (>0)
   {
     id: 'stage1-priority-composition',
     stage: 1,
+    question:
+      'True red fill then true green fill; red fill + lower bold font merge; bare stopIfTrue rule (no dxfId); equal priority="7" tie-breaking by document order; cross-visual DXF + colorScale/dataBar/iconSet coexistence; unresolved expression stub testing viewer atomic fail-closed suppression.',
     input: 'tests/fixtures/xlsx-cf/inputs/stage1-priority-composition.xlsx',
     saved: 'tests/fixtures/xlsx-cf/stage1-priority-composition.xlsx',
     sheet: 'Sheet1',
-    range: 'A1:G8',
-    question:
-      'True red fill then true green fill; red + lower bold; bare stop rule; earlier/later scale/bar/icon; equal priority variants and document order. Include unresolved expression stub to test viewer fail-closed independently of Excel resolvable outcome.',
-    capability: 'priority-document-order-stopIfTrue-and-write-once-mask',
+    range: 'A1:G10',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B4',
+        capabilityId: 'priority:fill-winner',
+        sqref: 'B2:B5',
         ruleType: 'cellIs',
         operator: 'greaterThan',
         priority: 1,
-        formula: '0',
+        formulas: ['10'],
         dxf: { fillRgb: 'FFFFC7CE' },
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'B2:B4',
+        capabilityId: 'priority:fill-loser',
+        sqref: 'B2:B5',
         ruleType: 'cellIs',
         operator: 'greaterThan',
         priority: 2,
-        formula: '0',
-        dxf: { fillRgb: 'FFC6EFCE', bold: true },
+        formulas: ['0'],
+        dxf: { fillRgb: 'FFC6EFCE' },
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
+        capabilityId: 'priority:orthogonal-fill',
+        sqref: 'C2:C5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 3,
+        formulas: ['10'],
+        dxf: { fillRgb: 'FFFFC7CE' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:orthogonal-font-bold',
+        sqref: 'C2:C5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 4,
+        formulas: ['0'],
+        dxf: { bold: true, fontRgb: 'FF006100' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:bare-stopIfTrue',
+        sqref: 'D2:D5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 5,
+        stopIfTrue: true,
+        formulas: ['20'],
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:halted-by-bare-stop',
+        sqref: 'D2:D5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 6,
+        formulas: ['0'],
+        dxf: { fillRgb: 'FFFFEB9C' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:equal-priority-first',
+        sqref: 'E2:E5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 7,
+        formulas: ['10'],
+        dxf: { fillRgb: 'FFFFC7CE' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:equal-priority-second',
+        sqref: 'E2:E5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 7,
+        formulas: ['0'],
+        dxf: { fillRgb: 'FFC6EFCE' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:cross-visual-dxf',
+        sqref: 'F2:F5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 8,
+        formulas: ['20'],
+        dxf: { bold: true, fontRgb: 'FF9C0006' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:cross-visual-colorScale',
+        sqref: 'F2:F5',
+        ruleType: 'colorScale',
+        priority: 9,
+        formulas: [],
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:cross-visual-dataBar',
+        sqref: 'F2:F5',
+        ruleType: 'dataBar',
+        priority: 10,
+        formulas: [],
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:cross-visual-iconSet',
+        sqref: 'F2:F5',
+        ruleType: 'iconSet',
+        priority: 11,
+        formulas: [],
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:unresolved-expression-stub',
+        sqref: 'G2:G5',
+        ruleType: 'expression',
+        priority: 12,
+        stopIfTrue: true,
+        formulas: ['MOD(G2,2)=1'],
+        dxf: { fillRgb: 'FFC6EFCE' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'priority:shadowed-by-unresolved-expression',
+        sqref: 'G2:G5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 13,
+        formulas: ['0'],
+        dxf: { fillRgb: 'FFFFC7CE' },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'B4', 'C2', 'D3', 'E2', 'E4'],
+      negativeRefs: ['B7', 'B9', 'C7', 'D8', 'E7', 'E9'],
+      cells: [
+        { ref: 'B2', controlRef: 'B7', matched: true, fillRgb: 'FFFFC7CE', note: 'prio 1 red fill beats prio 2 green fill on 25' },
+        { ref: 'B4', controlRef: 'B9', matched: true, fillRgb: 'FFC6EFCE', note: 'prio 2 green fill applies on 5' },
+        { ref: 'B5', controlRef: 'B10', matched: false, note: '0 matches neither rule' },
+        { ref: 'C2', controlRef: 'C7', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF006100', bold: true, note: 'orthogonal prio 3 fill + prio 4 bold font merge' },
+        { ref: 'D2', controlRef: 'D7', matched: false, note: 'bare stopIfTrue on 25 halts prio 6 yellow fill with no visual change' },
+        { ref: 'D3', controlRef: 'D8', matched: true, fillRgb: 'FFFFEB9C', note: '15 <= 20 so bare stop does not fire; prio 6 yellow fill applies' },
+        { ref: 'E2', controlRef: 'E7', matched: true, fillRgb: 'FFFFC7CE', note: 'equal priority=7 tie broken by document order (red first)' },
+        { ref: 'E4', controlRef: 'E9', matched: true, fillRgb: 'FFC6EFCE', note: 'second priority=7 rule applies when first is false on 5' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-priority-composition.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 10. stage1-dxf-layering (supported DXF layering: own-cell clears, table style, pivot region, theme+tint, neighbor border conflict)
+  // Rows 2..6: [150, 200, 50, 180, 190]
+  // Rows 8..12: same-content unformatted controls (row + 6)
+  {
+    id: 'stage1-dxf-layering',
+    stage: 1,
+    question:
+      'Own/table/pivot fills/fonts/borders/numFmt plus CF; explicit clears (b=0, u=none, strike=0, patternType=none, border=none); neighboring border conflict; theme+tint DXF.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage1-dxf-layering.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage1-dxf-layering.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F12',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:explicit-font-and-border-clears',
+        sqref: 'B2:B6',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 1,
+        formulas: ['100'],
+        dxf: {
+          fillRgb: 'FFC6EFCE',
+          fontRgb: 'FF006100',
+          bold: false,
+          underline: 'none',
+          strikethrough: false,
+          borderTop: 'thin',
+          borderBottom: 'thin',
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:clear-pattern-none',
+        sqref: 'C2:C6',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 2,
+        formulas: ['100'],
+        dxf: {
+          clearPatternNone: true,
+          fontRgb: 'FF9C0006',
+          bold: true,
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:table-style-layering',
+        sqref: 'D2:D6',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 3,
+        formulas: ['100'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:pivot-style-layering',
+        sqref: 'E2:E6',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 4,
+        formulas: ['100'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:theme-tint-and-neighbor-border',
+        sqref: 'F2:F6',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 5,
+        formulas: ['100'],
+        dxf: {
+          fillTheme: 4,
+          fillTint: 0.39997558519241921,
+          borderTop: 'medium',
+          borderBottom: 'thin',
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'B3', 'D2', 'E2', 'F2'],
+      negativeRefs: ['B8', 'B9', 'D8', 'E8', 'F8'],
+      cells: [
+        {
+          ref: 'B2',
+          controlRef: 'B8',
+          matched: true,
+          fillRgb: 'FFC6EFCE',
+          fontRgb: 'FF006100',
+          bold: false,
+          underline: 'none',
+          strikethrough: false,
+          borderTop: true,
+          borderBottom: true,
+          note: 'CF DXF clears cell bold/underline/strike and applies green fill + borders',
+        },
+        { ref: 'B4', controlRef: 'B10', matched: false, note: '50 <= 100 keeps base cell formatting' },
+        { ref: 'D2', controlRef: 'D8', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'CF DXF overrides table style fill' },
+        { ref: 'E2', controlRef: 'E8', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'CF DXF overrides pivot style fill' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-dxf-layering.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-dxf-layering.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 11. stage1-dxf-layering-2 (Unsupported DXF constructs separated into an explicit unsupported-model refusal fixture)
+  {
+    id: 'stage1-dxf-layering-2',
+    stage: 1,
+    question:
+      'Unsupported DXF constructs (gradientFill, non-solid patternFill="gray125", diagonal border, alignment, protection) separated from supported pixel cases to verify strict model refusal.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage1-dxf-layering-2.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage1-dxf-layering-2.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F6',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:unsupported-gradientFill',
+        sqref: 'B2:B4',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 1,
+        formulas: ['0'],
+        dxf: { unsupportedKind: 'gradientFill' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:unsupported-patternFill',
+        sqref: 'C2:C4',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 2,
+        formulas: ['0'],
+        dxf: { unsupportedKind: 'patternFill' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:unsupported-diagonalBorder',
         sqref: 'D2:D4',
         ruleType: 'cellIs',
         operator: 'greaterThan',
         priority: 3,
-        stopIfTrue: true,
-        formula: '0',
+        formulas: ['0'],
+        dxf: { unsupportedKind: 'diagonalBorder' },
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'D2:D4',
+        capabilityId: 'dxf:unsupported-alignment',
+        sqref: 'E2:E4',
         ruleType: 'cellIs',
         operator: 'greaterThan',
         priority: 4,
-        formula: '0',
-        dxf: { fillRgb: 'FFFFEB9C' },
+        formulas: ['0'],
+        dxf: { unsupportedKind: 'alignment' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'dxf:unsupported-protection',
+        sqref: 'F2:F4',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 5,
+        formulas: ['0'],
+        dxf: { unsupportedKind: 'protection' },
       },
     ],
     expected: {
-      positiveRefs: ['B2'],
-      negativeRefs: ['C2', 'D2'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [],
+      negativeRefs: ['B2', 'C2', 'D2', 'E2', 'F2'],
       cells: [
-        {
-          ref: 'B2',
-          matched: true,
-          fillRgb: 'FFFFC7CE',
-          bold: true,
-          note: 'Priority 1 writes red fill; Priority 2 fill is masked out while bold=true merges in',
-        },
-        { ref: 'C2', matched: false, note: 'Unformatted control cell paired with B2' },
-        { ref: 'D2', matched: true, note: 'Bare stopIfTrue rule (no dxfId) halts Priority 4 yellow fill' },
+        { ref: 'B2', controlRef: 'B5', matched: false, note: 'gradientFill DXF fails closed' },
+        { ref: 'C2', controlRef: 'C5', matched: false, note: 'non-solid patternFill DXF fails closed' },
+        { ref: 'D2', controlRef: 'D5', matched: false, note: 'diagonal border DXF fails closed' },
+        { ref: 'E2', controlRef: 'E5', matched: false, note: 'alignment DXF fails closed' },
+        { ref: 'F2', controlRef: 'F5', matched: false, note: 'protection DXF fails closed' },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-priority-composition'),
-    status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    captures: [],
+    status: 'unsupported',
+    reason: 'Unsupported DXF sub-elements (gradientFill, non-solid patternFill, diagonal border, alignment, protection) fail closed by spec §5.4',
+    tolerance: DEFAULT_TOLERANCE,
   },
+
+  // 12. stage1-blank-merge-order
   {
-    id: 'stage1-dxf-layering',
+    id: 'stage1-blank-merge-order',
     stage: 1,
-    input: 'tests/fixtures/xlsx-cf/inputs/stage1-dxf-layering.xlsx',
-    saved: 'tests/fixtures/xlsx-cf/stage1-dxf-layering.xlsx',
-    sheet: 'Sheet1',
-    range: 'A1:G8',
     question:
-      'Own/table/pivot fills/fonts/borders/numFmt plus CF; clears (none underline/border/fill); neighboring border conflict, theme+tint; pattern/gradient/alignment/diagonal/protection detection. Separate supported pixels from unsupported-model refusals.',
-    capability: 'dxf-layering-clears-and-unsupported-dxf-refusal',
+      'CF-only unstored blank B2 and distant Z5 on a sheet containing A1:H1; A4:C4 merge with C hidden and E4:G4 merge with anchor E hidden; hidden/filtered row statistics in A5:A8; sorted source rows in J2:K5; whole-column blank rule M1:M1048576 with small populated extent.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage1-blank-merge-order.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage1-blank-merge-order.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:Z14',
+    requiredAppearances: ['screen'],
     markers: [
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
+        capabilityId: 'layout:sparse-blank-B2',
+        sqref: 'B2',
+        ruleType: 'containsBlanks',
+        priority: 1,
+        formulas: ['LEN(TRIM(B2))=0'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'layout:sparse-blank-Z5',
+        sqref: 'Z5',
+        ruleType: 'containsBlanks',
+        priority: 2,
+        formulas: ['LEN(TRIM(Z5))=0'],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'layout:merge-hidden-endpoint',
+        sqref: 'A4:C4',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 3,
+        formulas: ['50'],
+        dxf: { fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', borderTop: 'thin', borderBottom: 'thin' },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'layout:merge-hidden-anchor',
+        sqref: 'E4:G4',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 4,
+        formulas: ['50'],
+        dxf: DXF_RED,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'layout:hidden-row-statistics',
+        sqref: 'A5:A8',
+        ruleType: 'aboveAverage',
+        aboveAverage: true,
+        priority: 5,
+        formulas: [],
+        dxf: DXF_GREEN,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'layout:sorted-source-rows',
+        sqref: 'J2:J5',
+        ruleType: 'top10',
+        rank: 2,
+        priority: 6,
+        formulas: [],
+        dxf: DXF_YELLOW,
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'layout:whole-column-blank',
+        sqref: 'M1:M1048576',
+        ruleType: 'containsBlanks',
+        priority: 7,
+        formulas: ['LEN(TRIM(M1))=0'],
+        dxf: DXF_RED,
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'Z5', 'A4', 'F4', 'A8', 'J2', 'M2'],
+      negativeRefs: ['B10', 'Z12', 'A11', 'F11', 'A13', 'J10', 'M10'],
+      cells: [
+        { ref: 'B2', controlRef: 'B10', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'unstored blank B2 painted' },
+        { ref: 'Z5', controlRef: 'Z12', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'distant CF-only blank Z5 painted within slack' },
+        { ref: 'A4', controlRef: 'A11', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', borderTop: true, borderBottom: true, note: 'merged A4:C4 with C hidden evaluates anchor A4=100' },
+        { ref: 'F4', controlRef: 'F11', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: 'merged E4:G4 with anchor E hidden evaluates E4=100 on visible F4:G4' },
+        { ref: 'A8', controlRef: 'A13', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: 'aboveAverage on A5:A8 with row 6 hidden' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-blank-merge-order.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-blank-merge-order.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 13. stage1-numfmt-accessibility
+  {
+    id: 'stage1-numfmt-accessibility',
+    stage: 1,
+    question:
+      '1.25 -> 0.00 override, value-only CF numFmt vs CF numFmt+fill, same cell before/after threshold, narrow column ### hashes and text spill, screen and printer appearances, and zh-TW accessible description with no new tab stops.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage1-numfmt-accessibility.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage1-numfmt-accessibility.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:G10',
+    requiredAppearances: ['screen', 'printer'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'numfmt:dxf-with-fill',
         sqref: 'B2:B5',
         ruleType: 'cellIs',
         operator: 'greaterThan',
         priority: 1,
-        formula: '0',
+        formulas: ['1'],
         dxf: {
+          numFmtCode: '0.00',
           fillRgb: 'FFFFC7CE',
           fontRgb: 'FF9C0006',
-          bold: false,
-          underline: 'none',
-          strike: false,
-          borderTopStyle: 'thin',
-          borderBottomStyle: 'thin',
+          bold: true,
         },
-      },
-    ],
-    expected: {
-      positiveRefs: ['B2', 'B3'],
-      negativeRefs: ['C2', 'C3'],
-      cells: [
-        {
-          ref: 'B2',
-          matched: true,
-          fillRgb: 'FFFFC7CE',
-          fontRgb: 'FF9C0006',
-          bold: false,
-          underline: 'none',
-          strike: false,
-          borderTop: 'thin',
-          borderBottom: 'thin',
-          note: 'DXF clears cell bold/underline/strike and applies fill + top/bottom thin borders',
-        },
-        { ref: 'C2', matched: false, note: 'Control cell retaining authored bold/underline/strike without CF' },
-      ],
-      tolerance: DEFAULT_TOLERANCE,
-    },
-    captures: makeStage1Captures('stage1-dxf-layering'),
-    status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
-  },
-  {
-    id: 'stage1-blank-merge-order',
-    stage: 1,
-    input: 'tests/fixtures/xlsx-cf/inputs/stage1-blank-merge-order.xlsx',
-    saved: 'tests/fixtures/xlsx-cf/stage1-blank-merge-order.xlsx',
-    sheet: 'Sheet1',
-    range: 'A1:H6',
-    question:
-      'CF-only B2 and Z5 on a sheet containing A1:H1; A1:C1 merge with C hidden and with anchor hidden; hidden/filtered statistics; sorted source rows; whole-column blank rule with small populated extent.',
-    capability: 'sparse-blank-cells-merge-anchor-and-hidden-statistics',
-    markers: [
-      {
-        part: 'xl/worksheets/sheet1.xml',
-        extension: 'legacy',
-        sqref: 'B2',
-        ruleType: 'containsBlanks',
-        priority: 1,
-        formula: 'LEN(TRIM(B2))=0',
-        dxf: { fillRgb: 'FFFFC7CE' },
       },
       {
         part: 'xl/worksheets/sheet1.xml',
         extension: 'legacy',
-        sqref: 'A4:C4',
-        ruleType: 'cellIs',
-        operator: 'equal',
-        priority: 2,
-        formula: '42',
-        dxf: {
-          fillRgb: 'FFC6EFCE',
-          borderTopStyle: 'thin',
-          borderBottomStyle: 'thin',
-          borderLeftStyle: 'thin',
-          borderRightStyle: 'thin',
-        },
-      },
-    ],
-    expected: {
-      positiveRefs: ['B2', 'A4'],
-      negativeRefs: ['D2', 'D4'],
-      cells: [
-        { ref: 'B2', matched: true, fillRgb: 'FFFFC7CE', note: 'Unstored blank cell B2 painted by containsBlanks' },
-        { ref: 'A4', matched: true, fillRgb: 'FFC6EFCE', note: 'Merged A4:C4 evaluated from anchor A4=42' },
-        { ref: 'D2', matched: false, note: 'Unformatted unstored blank control cell D2' },
-      ],
-      tolerance: DEFAULT_TOLERANCE,
-    },
-    captures: makeStage1Captures('stage1-blank-merge-order'),
-    status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture (`docs/validation/xlsx-cf-recipes-stage1.md`).',
-  },
-  {
-    id: 'stage1-numfmt-accessibility',
-    stage: 1,
-    input: 'tests/fixtures/xlsx-cf/inputs/stage1-numfmt-accessibility.xlsx',
-    saved: 'tests/fixtures/xlsx-cf/stage1-numfmt-accessibility.xlsx',
-    sheet: 'Sheet1',
-    range: 'A1:E6',
-    question:
-      '1.25 -> 0.00, value-only vs CF style, same cell before/after predicate, narrow column hashes/spill, screen/print; zh-TW text descriptions and no new tab stops. Excel AX evidence where accessible, otherwise explicitly record missing evidence.',
-    capability: 'dxf-numFmt-displayText-and-zhTW-accessibility',
-    markers: [
-      {
-        part: 'xl/worksheets/sheet1.xml',
-        extension: 'legacy',
-        sqref: 'B2:B4',
+        capabilityId: 'numfmt:dxf-value-only',
+        sqref: 'D2:D5',
         ruleType: 'cellIs',
         operator: 'greaterThan',
-        priority: 1,
-        formula: '1',
+        priority: 2,
+        formulas: ['1'],
         dxf: {
-          fillRgb: 'FFFFC7CE',
-          fontRgb: 'FF9C0006',
-          numFmtCode: '0.00',
+          numFmtCode: '0.000',
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'numfmt:narrow-col-hashes',
+        sqref: 'F2:F5',
+        ruleType: 'cellIs',
+        operator: 'greaterThan',
+        priority: 3,
+        formulas: ['1'],
+        dxf: {
+          numFmtCode: '"NT$"#,##0.00',
+          fillRgb: 'FFC6EFCE',
         },
       },
     ],
     expected: {
-      positiveRefs: ['B2'],
-      negativeRefs: ['C2'],
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: ['B2', 'B3', 'D2', 'F2'],
+      negativeRefs: ['C2', 'C3', 'E2', 'G2'],
       cells: [
         {
           ref: 'B2',
+          controlRef: 'C2',
           matched: true,
           fillRgb: 'FFFFC7CE',
           fontRgb: 'FF9C0006',
-          numFmtCode: '0.00',
-          displayText: '1.25',
-          note: 'Authored style 0.0 ("1.3") overridden by CF DXF numFmt "0.00" ("1.25") when value 1.25 > 1',
+          bold: true,
+          formattedText: '1.25',
+          note: '1.25 > 1 formatted as "1.25" via CF DXF 0.00 (control C2 is "1.3" via cell 0.0)',
         },
         {
-          ref: 'C2',
+          ref: 'B3',
+          controlRef: 'C3',
+          matched: true,
+          fillRgb: 'FFFFC7CE',
+          fontRgb: 'FF9C0006',
+          bold: true,
+          formattedText: '2.50',
+          note: '2.5 > 1 formatted as "2.50"',
+        },
+        {
+          ref: 'B4',
+          controlRef: 'C4',
           matched: false,
-          displayText: '1.3',
-          note: 'Control cell with same value 1.25 and authored style 0.0 ("1.3") without CF',
+          formattedText: '0.5',
+          note: '0.5 <= 1 keeps base cell numFmt 0.0 ("0.5")',
+        },
+        {
+          ref: 'D2',
+          controlRef: 'E2',
+          matched: true,
+          formattedText: '1.250',
+          note: 'value-only CF numFmt 0.000 without fill changes glyph rendering vs control E2 ("1.3")',
+        },
+        {
+          ref: 'F2',
+          controlRef: 'F7',
+          matched: true,
+          fillRgb: 'FFC6EFCE',
+          formattedText: '###',
+          note: 'narrow column width=3 overflows wider CF currency numFmt',
         },
       ],
-      tolerance: DEFAULT_TOLERANCE,
     },
-    captures: makeStage1Captures('stage1-numfmt-accessibility'),
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility.json',
+      },
+      {
+        appearance: 'printer',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility-printer.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility-printer.json',
+      },
+    ],
     status: 'recipe-pending',
-    reason: 'Structural markers verified in Excel 16.114; awaiting unlocked-display copy-picture capture and AX inspection (`docs/validation/xlsx-cf-recipes-stage1.md`).',
+    reason: 'Awaiting unlocked macOS display session for Excel 16.114 screen and printer copy-picture captures',
+    tolerance: DEFAULT_TOLERANCE,
   },
 ]
+
+/** Complete capability-to-evidence registry for all Stage 1 markers. */
+export const CF_STAGE1_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE1_CASES.flatMap(c =>
+  c.markers.map((m): CfCapabilityEntry => ({
+    capabilityId: m.capabilityId,
+    caseId: c.id,
+    category: m.ruleType,
+    description: `${c.id} :: ${m.extension} ${m.ruleType}${m.operator ? `(${m.operator})` : ''}${m.timePeriod ? `(${m.timePeriod})` : ''} on ${m.sqref}`,
+    absentOrDivergentFormulaPolicy:
+      m.formulas.length === 0
+        ? 'Requires 0 formula children (or refuses if unexpected formula is present)'
+        : `Requires exact ordered formula operands [${m.formulas.join(', ')}]; divergent or non-literal formula refuses`,
+    failClosedDisposition:
+      'While unmeasured or refused, rule is marked unresolved (not known not-matched): if stopIfTrue=true it stop-taints all lower-priority rules on overlapping cells; otherwise its CfWriteMask taints overlapping properties so lower-priority rules cannot paint a potentially wrong winner.',
+  })),
+)

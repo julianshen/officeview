@@ -1,12 +1,13 @@
 /**
  * Builds Stage 1 Conditional Formatting oracle workbooks through Excel for Mac 16.114.
  *
- *   bun scripts/cf-refs/build.ts --stage 1 [--resume] [--case <id>]
+ *   bun scripts/cf-refs/build.ts --stage 1 [--resume] [--case <id>] [--refresh-clock-date]
  *
  * Rules:
- * -With `--resume`, skips ONLY cases where `verifyCfCase(c).kind === 'verified'` AND `inputSha256` matches the current input.
- * -Never closes unrelated open workbooks that were open before `build.ts` started.
- * -Preserves rejected Excel output (`<id>.rejected.xlsx`) and repair diagnostics if Excel strips or repairs a rule.
+ * - With `--resume`, skips ONLY cases where `verifyCfCase(c).kind === 'verified'` AND `inputSha256` matches the current input.
+ * - With `--case <id>`, generates and mutates ONLY the selected case; other cases' resaved workbooks and manifest entries are preserved.
+ * - Never closes unrelated open workbooks that were open before `build.ts` started.
+ * - Preserves rejected Excel output (`<id>.rejected.xlsx`) and repair diagnostics if Excel strips or repairs a rule.
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -53,6 +54,11 @@ export function isDisplayLocked(): boolean {
   } catch {
     return false
   }
+}
+
+/** Returns current `YYYY-MM-DD` in `Asia/Taipei` (`UTC+08:00`). */
+export function currentTaipeiDateIso(nowMs = Date.now()): string {
+  return new Date(nowMs + 8 * 3_600_000).toISOString().slice(0, 10)
 }
 
 export interface LiveExcelProbeResult {
@@ -191,9 +197,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
   const resume = args.includes('--resume')
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
+  const refreshClock = args.includes('--refresh-clock-date')
+  const anchorLocalDate = refreshClock
+    ? currentTaipeiDateIso()
+    : args.includes('--anchor-date')
+      ? args[args.indexOf('--anchor-date') + 1]
+      : undefined
 
-  const manifest: CfManifest = await generateAllStage1()
-  // Ensure Excel is running before reading pre-existing workbooks
+  const manifest: CfManifest = await generateAllStage1({ onlyCaseId: only, anchorLocalDate })
   execFileSync('open', ['-a', 'Microsoft Excel'])
   execFileSync('sleep', ['2'])
   const preExisting = new Set<string>(workbookNames() ?? [])
@@ -204,7 +215,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
   for (let i = 0; i < manifest.cases.length; i++) {
     const c = manifest.cases[i]
-    if (c.stage > stage || (only && c.id !== only)) continue
+    if (c.stage > stage || (only && c.id !== only) || c.status === 'unsupported') continue
     const inputBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input)))
     const currentInputSha256 = sha256Hex(inputBytes)
     if (resume && shouldSkipCaseOnResume(c, currentInputSha256, REPO_ROOT)) {
@@ -215,6 +226,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const savedBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved)))
     manifest.cases[i] = {
       ...c,
+      resavedByExcel: probe.resaved || Boolean(c.resavedByExcel),
       expected: {
         ...c.expected,
         inputSha256: currentInputSha256,
