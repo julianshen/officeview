@@ -20,6 +20,13 @@ Probed via `sdef "/Applications/Microsoft Excel.app"` and live AppleScript execu
 3. **Workbook close semantics (`closeOwnedWorkbook`) & non-destructive single-case rebuild**:
    - When closing the last open workbook in Excel 16.114, `tell application "Microsoft Excel" to get name of every workbook` returns `"missing value"`. `closeOwnedWorkbook` in `scripts/cf-refs/build.ts` treats `workbookNames() === undefined` as closed and enforces `assertCanCloseWorkbook` so pre-existing open workbooks are never closed.
    - `generateAllStage1({ onlyCaseId })` in `scripts/cf-refs/generate.ts` mutates only the targeted case when `--case <id>` is used and preserves any existing Excel-resaved pending workbooks (`resavedByExcel === true` or `savedSha256 !== inputSha256`).
+4. **Host Geometry Conversion & Display Format Inspection (Excel 16.114 macOS Quartz)**:
+   - Live AppleScript inspection on Excel 16.114 confirms:
+     - `string value of range "..."`: returns the rendered display text (e.g. `1.25`, `2.50`, or narrow-column overflow `##`).
+     - `underline of font object of display format of range "..."`: returns the exact CF winning underline state (`underline style none`, `underline style single`, `underline style double`).
+     - `strikethrough of font object of display format of range "..."`: returns `true` or `false`.
+     - `tell range "${range}" of ws to get its width`: returns point width at 72 dpi (width 14 = 84.0 pt; width 3 = 18.0 pt; total A1:G10 = 522.0 pt), confirming Excel for Mac on 72 dpi uses 6 points per character unit (`width * 6`).
+     - `computeWorksheetRangeGeometry` computes point widths via the repository's Calibri 11 MDW model (`(columnWidthPx(w, 7) * 72) / 96`) and accepts measured column point widths from Excel when `geometrySource: 'excel-measured'` is present.
 
 ---
 

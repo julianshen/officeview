@@ -58,6 +58,93 @@ function probeLiveExcelClockState(
   }
 }
 
+export function probeLiveExcelCellObservations(
+  c: CfOracleCase,
+  savedAbs: string,
+  preExisting: ReadonlySet<string>,
+): {
+  cellTexts: Record<string, string>
+  cellDecorations: Record<string, { underline: 'none' | 'single' | 'double'; strikethrough: boolean }>
+  geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null
+} | null {
+  try {
+    const name = openWorkbook(savedAbs)
+    try {
+      const refs = c.expected.cells.map(x => x.ref)
+      const textScriptLines = [
+        `set wb to workbook "${q(name)}"`,
+        `set ws to worksheet "${q(c.sheet)}" of wb`,
+        `set outList to {}`,
+        ...refs.map(r => `set end of outList to (string value of range "${q(r)}" of ws as string)`),
+        `set AppleScript's text item delimiters to "|||"`,
+        `return outList as string`,
+      ]
+      const textOut = runScript(textScriptLines, 30_000)
+      const texts = textOut.split('|||')
+      const cellTexts: Record<string, string> = {}
+      refs.forEach((ref, idx) => {
+        if (texts[idx] !== undefined) cellTexts[ref] = texts[idx]
+      })
+
+      const decScriptLines = [
+        `set wb to workbook "${q(name)}"`,
+        `set ws to worksheet "${q(c.sheet)}" of wb`,
+        `set outList to {}`,
+        ...refs.map(
+          r =>
+            `set end of outList to ((underline of font object of display format of range "${q(r)}" of ws as string) & ":::" & (strikethrough of font object of display format of range "${q(r)}" of ws as string))`,
+        ),
+        `set AppleScript's text item delimiters to "|||"`,
+        `return outList as string`,
+      ]
+      const decOut = runScript(decScriptLines, 30_000)
+      const decs = decOut.split('|||')
+      const cellDecorations: Record<string, { underline: 'none' | 'single' | 'double'; strikethrough: boolean }> = {}
+      refs.forEach((ref, idx) => {
+        const parts = decs[idx]?.split(':::')
+        if (parts && parts.length === 2) {
+          const uStr = parts[0]
+          const stkStr = parts[1]
+          let underline: 'none' | 'single' | 'double' = 'none'
+          if (uStr.includes('double')) underline = 'double'
+          else if (uStr.includes('single')) underline = 'single'
+          const strikethrough = stkStr === 'true'
+          cellDecorations[ref] = { underline, strikethrough }
+        }
+      })
+
+      let geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null = null
+      try {
+        const geomScriptLines = [
+          `set wb to workbook "${q(name)}"`,
+          `set ws to worksheet "${q(c.sheet)}" of wb`,
+          `tell range "${q(c.range)}" of ws to set totalW to its width`,
+          `tell range "${q(c.range)}" of ws to set totalH to its height`,
+          `return (totalW as string) & ":::" & (totalH as string)`,
+        ]
+        const geomOut = runScript(geomScriptLines, 20_000)
+        const gParts = geomOut.split(':::')
+        if (gParts.length === 2) {
+          geometry = {
+            widthPt: Number(gParts[0]),
+            heightPt: Number(gParts[1]),
+            colWidthsPt: [],
+            rowHeightsPt: [],
+          }
+        }
+      } catch {
+        // geometry query errors leave geometry null
+      }
+
+      return { cellTexts, cellDecorations, geometry }
+    } finally {
+      closeOwnedWorkbook(name, preExisting)
+    }
+  } catch {
+    return null
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
@@ -86,6 +173,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const geom = parts ? computeWorksheetRangeGeometry(parts, c.range) : null
 
     const clockState = c.clockRequirement ? probeLiveExcelClockState(c, savedAbs, preExisting) : null
+    const liveObs = probeLiveExcelCellObservations(c, savedAbs, preExisting)
+    const activeGeom =
+      liveObs?.geometry && parts
+        ? computeWorksheetRangeGeometry(parts, c.range, {
+            colWidthsPt: liveObs.geometry.colWidthsPt.length > 0 ? liveObs.geometry.colWidthsPt : geom?.colWidthsPt,
+            rowHeightsPt: liveObs.geometry.rowHeightsPt.length > 0 ? liveObs.geometry.rowHeightsPt : geom?.rowHeightsPt,
+          }) ?? geom
+        : geom
 
     const updatedCaptures = c.captures.map(cap => {
       const pngAbs = resolve(REPO_ROOT, cap.pngPath)
@@ -94,7 +189,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const pngBytes = new Uint8Array(readFileSync(pngAbs))
       const pngSha256 = sha256Hex(pngBytes)
       const decoded = decodePngSync(pngBytes)
-      const observedCells = decoded && geom ? observeCellsFromCapture(decoded, geom, c) : null
+      const observedCells =
+        decoded && activeGeom
+          ? observeCellsFromCapture(decoded, activeGeom, c, {
+              observedCellTexts: liveObs?.cellTexts,
+              observedCellDecorations: liveObs?.cellDecorations,
+            })
+          : null
 
       let observedTodayBranch: 'local' | 'utc' | undefined
       if (c.clockRequirement && observedCells) {
@@ -119,8 +220,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             pxPerPt: 1,
             width: decoded?.width,
             height: decoded?.height,
-            colWidthsPt: geom?.colWidthsPt,
-            rowHeightsPt: geom?.rowHeightsPt,
+            colWidthsPt: activeGeom?.colWidthsPt,
+            rowHeightsPt: activeGeom?.rowHeightsPt,
+            ...(liveObs?.geometry ? { geometrySource: 'excel-measured' } : {}),
             resavedByExcel: c.resavedByExcel === true,
             resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
             sheet: c.sheet,

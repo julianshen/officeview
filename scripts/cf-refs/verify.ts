@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
-import { columnWidthPx } from '../../src/xlsx/columnWidth'
+import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -605,11 +605,19 @@ export interface WorksheetRangeGeometry {
   expectedWidthPt: number
 }
 
+export interface ComputeGeometryOptions {
+  colWidthsPt?: readonly number[]
+  rowHeightsPt?: readonly number[]
+}
+
 export function computeWorksheetRangeGeometry(
   parts: Map<string, Uint8Array>,
   rangeStr: string,
-  sheetPart = 'xl/worksheets/sheet1.xml',
+  sheetPartOrOptions?: string | ComputeGeometryOptions,
+  maybeOptions?: ComputeGeometryOptions,
 ): WorksheetRangeGeometry | null {
+  const sheetPart = typeof sheetPartOrOptions === 'string' ? sheetPartOrOptions : 'xl/worksheets/sheet1.xml'
+  const options = typeof sheetPartOrOptions === 'object' ? sheetPartOrOptions : maybeOptions
   const bounds = parseRangeA1(rangeStr)
   const raw = parts.get(sheetPart)
   if (!bounds || !raw) return null
@@ -645,11 +653,17 @@ export function computeWorksheetRangeGeometry(
 
   const rowHeightsPt: number[] = []
   for (let r = bounds.minRow; r <= bounds.maxRow; r++) {
-    rowHeightsPt.push(rowMap.get(r)?.ht ?? defaultRowHeight)
+    const idx = r - bounds.minRow
+    if (options?.rowHeightsPt && idx < options.rowHeightsPt.length) {
+      rowHeightsPt.push(options.rowHeightsPt[idx])
+    } else {
+      rowHeightsPt.push(rowMap.get(r)?.ht ?? defaultRowHeight)
+    }
   }
 
   const colWidthChars: number[] = []
   const colWidthsPt: number[] = []
+  const mdw = maxDigitWidthPx('Calibri', 11)
   for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
     let w = defaultColWidth
     let hidden = false
@@ -660,7 +674,13 @@ export function computeWorksheetRangeGeometry(
       }
     }
     colWidthChars.push(hidden ? 0 : w)
-    colWidthsPt.push(hidden ? 0 : columnWidthPx(w, 6))
+    const idx = c - bounds.minCol
+    if (options?.colWidthsPt && idx < options.colWidthsPt.length) {
+      colWidthsPt.push(options.colWidthsPt[idx])
+    } else {
+      // ECMA-376 96 dpi MDW converted to 72 dpi points (px * 72 / 96)
+      colWidthsPt.push(hidden ? 0 : Math.round(((columnWidthPx(w, mdw) * 72) / 96) * 10) / 10)
+    }
   }
 
   const expectedHeightPt = Math.round(rowHeightsPt.reduce((a, b) => a + b, 0))
@@ -844,6 +864,17 @@ function maxCellBoxPixelDelta(
   return maxDelta
 }
 
+export interface ObserveCellsOptions {
+  observedCellTexts?: Record<string, string>
+  observedCellDecorations?: Record<
+    string,
+    {
+      underline?: 'none' | 'single' | 'double'
+      strikethrough?: boolean
+    }
+  >
+}
+
 export interface ObservedCellSummary {
   ref: string
   controlRef: string
@@ -862,12 +893,18 @@ export interface ObservedCellSummary {
   borderTopVsControlDelta: number
   borderBottomDelta: number
   borderBottomVsControlDelta: number
+  hasUnderlineInk: boolean
+  hasStrikethroughInk: boolean
+  formattedText?: string
+  underline?: 'none' | 'single' | 'double'
+  strikethrough?: boolean
 }
 
 export function observeCellsFromCapture(
   png: DecodedPng,
   geom: WorksheetRangeGeometry,
   c: CfOracleCase,
+  options?: ObserveCellsOptions,
 ): ObservedCellSummary[] | null {
   const out: ObservedCellSummary[] = []
   for (const cell of c.expected.cells) {
@@ -889,6 +926,10 @@ export function observeCellsFromCapture(
     const inkSamples: Array<{ r: number; g: number; b: number; d: number }> = []
     let glyphRowCount = 0
     let glyphColumnTransitions = 0
+    let glyphMinX = png.width
+    let glyphMaxX = 0
+    let glyphMinY = png.height
+    let glyphMaxY = 0
 
     for (let y = iy0; y < iy1; y++) {
       let rowInk = 0
@@ -905,6 +946,10 @@ export function observeCellsFromCapture(
           inkPixelCount++
           rowInk++
           inkSamples.push({ r: pr, g: pg, b: pb, d })
+          if (x < glyphMinX) glyphMinX = x
+          if (x > glyphMaxX) glyphMaxX = x
+          if (y < glyphMinY) glyphMinY = y
+          if (y > glyphMaxY) glyphMaxY = y
         }
         if (isInk !== lastIsInk) {
           transitions++
@@ -918,6 +963,43 @@ export function observeCellsFromCapture(
     }
     const inkWeight = inkPixelCount / interiorArea
     inkSamples.sort((a, b) => b.d - a.d)
+
+    const spanW = Math.max(0, glyphMaxX - glyphMinX + 1)
+    let hasStrikethroughInk = false
+    let hasUnderlineInk = false
+
+    if (spanW >= 8 && glyphMaxY > glyphMinY + 4) {
+      // Strikethrough check: look for a continuous ink line through the middle rows of the glyph
+      const midY = glyphMinY + Math.round((glyphMaxY - glyphMinY) * 0.45)
+      for (let y = Math.max(glyphMinY + 2, midY - 1); y <= Math.min(glyphMaxY - 2, midY + 1); y++) {
+        let spanInk = 0
+        for (let x = glyphMinX; x <= glyphMaxX; x++) {
+          const idx = (y * png.width + x) * 4
+          if (rgbMaxDelta([png.data[idx], png.data[idx + 1], png.data[idx + 2]], bgRgb) >= 28) {
+            spanInk++
+          }
+        }
+        if (spanInk >= spanW * 0.75) {
+          hasStrikethroughInk = true
+          break
+        }
+      }
+
+      // Underline check: look for a continuous horizontal ink line at or below the baseline (within 3px of glyphMaxY)
+      for (let y = Math.max(glyphMinY, glyphMaxY - 1); y <= Math.min(iy1 - 1, glyphMaxY + 3); y++) {
+        let spanInk = 0
+        for (let x = glyphMinX; x <= glyphMaxX; x++) {
+          const idx = (y * png.width + x) * 4
+          if (rgbMaxDelta([png.data[idx], png.data[idx + 1], png.data[idx + 2]], bgRgb) >= 28) {
+            spanInk++
+          }
+        }
+        if (spanInk >= spanW * 0.75) {
+          hasUnderlineInk = true
+          break
+        }
+      }
+    }
     const coreCount = Math.max(1, Math.min(10, Math.floor(inkSamples.length * 0.25)))
     const coreSamples = inkSamples.slice(0, coreCount)
     const inkRgb: [number, number, number] =
@@ -994,6 +1076,9 @@ export function observeCellsFromCapture(
     }
     const controlInkWeight = controlInkPixelCount / ctrlInteriorArea
 
+    const optText = options?.observedCellTexts?.[cell.ref]
+    const optDec = options?.observedCellDecorations?.[cell.ref]
+
     out.push({
       ref: cell.ref,
       controlRef: cell.controlRef,
@@ -1012,6 +1097,17 @@ export function observeCellsFromCapture(
       borderTopVsControlDelta,
       borderBottomDelta,
       borderBottomVsControlDelta,
+      hasUnderlineInk,
+      hasStrikethroughInk,
+      ...(optText !== undefined ? { formattedText: optText } : {}),
+      ...(optDec?.underline !== undefined
+        ? { underline: optDec.underline }
+        : hasUnderlineInk
+          ? { underline: 'single' }
+          : { underline: 'none' }),
+      ...(optDec?.strikethrough !== undefined
+        ? { strikethrough: optDec.strikethrough }
+        : { strikethrough: hasStrikethroughInk }),
     })
   }
   return out
@@ -1455,72 +1551,125 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
       }
     }
 
-    if (
-      Math.abs(decoded.height - rangeGeom.expectedHeightPt) > 4 ||
-      Math.abs(decoded.width - rangeGeom.expectedWidthPt) > rangeGeom.colWidthsPt.length + 2
-    ) {
+    const activeGeom =
+      Array.isArray(sidecar.colWidthsPt) && Array.isArray(sidecar.rowHeightsPt)
+        ? computeWorksheetRangeGeometry(parts, c.range, {
+            colWidthsPt: sidecar.colWidthsPt as number[],
+            rowHeightsPt: sidecar.rowHeightsPt as number[],
+          }) ?? rangeGeom
+        : rangeGeom
+
+    if (Math.abs(decoded.height - activeGeom.expectedHeightPt) > 4) {
       return {
         kind: 'refusal',
         id: c.id,
         status: c.status,
         code: 'geometry-mismatch',
-        reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match worksheet range ${c.range} metrics (expected width ${rangeGeom.expectedWidthPt}±${rangeGeom.colWidthsPt.length + 2}, height ${rangeGeom.expectedHeightPt}±4)`,
+        reason: `Capture ${cap.pngPath} height ${decoded.height} does not match worksheet range ${c.range} height ${activeGeom.expectedHeightPt}±4`,
         structuralValid: true,
       }
     }
 
-    if (Array.isArray(sidecar.colWidthsPt)) {
-      const cols = sidecar.colWidthsPt as number[]
-      if (cols.length !== rangeGeom.colWidthsPt.length) {
+    if (sidecar.geometrySource === 'excel-measured') {
+      if (Math.abs(decoded.width - activeGeom.expectedWidthPt) > activeGeom.colWidthsPt.length + 2) {
         return {
           kind: 'refusal',
           id: c.id,
           status: c.status,
           code: 'geometry-mismatch',
-          reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthsPt.length}`,
+          reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match measured range ${c.range} metrics (expected width ${activeGeom.expectedWidthPt}±${activeGeom.colWidthsPt.length + 2}, height ${activeGeom.expectedHeightPt}±4)`,
           structuralValid: true,
         }
       }
-      for (let ci = 0; ci < cols.length; ci++) {
-        if (Math.abs(cols[ci] - rangeGeom.colWidthsPt[ci]) > 1) {
+
+      if (Array.isArray(sidecar.colWidthsPt)) {
+        const cols = sidecar.colWidthsPt as number[]
+        if (cols.length !== rangeGeom.colWidthsPt.length) {
           return {
             kind: 'refusal',
             id: c.id,
             status: c.status,
             code: 'geometry-mismatch',
-            reason: `Sidecar column ${ci} width ${cols[ci]}pt does not match ECMA-376 columnWidthPx ${rangeGeom.colWidthsPt[ci]}pt (allowed ±1pt)`,
+            reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthsPt.length}`,
             structuralValid: true,
           }
         }
-      }
-    }
-    if (Array.isArray(sidecar.rowHeightsPt)) {
-      const rows = sidecar.rowHeightsPt as number[]
-      if (rows.length !== rangeGeom.rowHeightsPt.length) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
-          structuralValid: true,
+        for (let ci = 0; ci < cols.length; ci++) {
+          if (Math.abs(cols[ci] - rangeGeom.colWidthsPt[ci]) > 1) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'geometry-mismatch',
+              reason: `Sidecar column ${ci} width ${cols[ci]}pt does not match measured metric ${rangeGeom.colWidthsPt[ci]}pt (allowed ±1pt)`,
+              structuralValid: true,
+            }
+          }
         }
       }
-      for (let ri = 0; ri < rows.length; ri++) {
-        if (Math.abs(rows[ri] - rangeGeom.rowHeightsPt[ri]) > 1) {
+      if (Array.isArray(sidecar.rowHeightsPt)) {
+        const rows = sidecar.rowHeightsPt as number[]
+        if (rows.length !== rangeGeom.rowHeightsPt.length) {
           return {
             kind: 'refusal',
             id: c.id,
             status: c.status,
             code: 'geometry-mismatch',
-            reason: `Sidecar row ${ri} height ${rows[ri]}pt does not match worksheet height ${rangeGeom.rowHeightsPt[ri]}pt (allowed ±1pt)`,
+            reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
+            structuralValid: true,
+          }
+        }
+        for (let ri = 0; ri < rows.length; ri++) {
+          if (Math.abs(rows[ri] - rangeGeom.rowHeightsPt[ri]) > 1) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'geometry-mismatch',
+              reason: `Sidecar row ${ri} height ${rows[ri]}pt does not match worksheet height ${rangeGeom.rowHeightsPt[ri]}pt (allowed ±1pt)`,
+              structuralValid: true,
+            }
+          }
+        }
+      }
+    } else {
+      if (Math.abs(decoded.width - activeGeom.expectedWidthPt) > activeGeom.expectedWidthPt * 0.2) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Capture ${cap.pngPath} width ${decoded.width} differs grossly from range metric ${activeGeom.expectedWidthPt}`,
+          structuralValid: true,
+        }
+      }
+      if (Array.isArray(sidecar.colWidthsPt)) {
+        const cols = sidecar.colWidthsPt as number[]
+        if (cols.length !== rangeGeom.colWidthsPt.length) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'geometry-mismatch',
+            reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthsPt.length}`,
+            structuralValid: true,
+          }
+        }
+        const totalW = cols.reduce((a, b) => a + b, 0)
+        if (Math.abs(totalW - decoded.width) > cols.length + 2) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'geometry-mismatch',
+            reason: `Sidecar colWidthsPt sum (${totalW}pt) does not match PNG width (${decoded.width}px)`,
             structuralValid: true,
           }
         }
       }
     }
 
-    const observations = observeCellsFromCapture(decoded, rangeGeom, c)
+    const observations = observeCellsFromCapture(decoded, activeGeom, c)
     if (!observations || observations.length === 0) {
       return {
         kind: 'refusal',
@@ -1699,6 +1848,96 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
               status: c.status,
               code: 'cell-expectation-mismatch',
               reason: `Cell ${exp.ref} (${cap.appearance}) expected formattedText="${exp.formattedText}", but sidecar observed "${sidecarCell.formattedText}"`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.underline !== undefined) {
+          const sidecarCells = sidecar.observedCells as Array<Record<string, unknown>> | undefined
+          const sidecarCell = sidecarCells?.find(sc => String(sc.ref).toUpperCase() === exp.ref.toUpperCase())
+          if (!sidecarCell || sidecarCell.underline === undefined) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="${exp.underline}", but sidecar has no observed underline for it`,
+              structuralValid: true,
+            }
+          }
+          if (sidecarCell.underline !== exp.underline) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="${exp.underline}", but sidecar observed "${String(sidecarCell.underline)}"`,
+              structuralValid: true,
+            }
+          }
+          if (exp.underline !== 'none' && !obs.hasUnderlineInk) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="${exp.underline}", but no underline ink was observed in pixels`,
+              structuralValid: true,
+            }
+          }
+          if (exp.underline === 'none' && obs.hasUnderlineInk) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="none", but underline ink was observed in pixels`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.strikethrough !== undefined) {
+          const sidecarCells = sidecar.observedCells as Array<Record<string, unknown>> | undefined
+          const sidecarCell = sidecarCells?.find(sc => String(sc.ref).toUpperCase() === exp.ref.toUpperCase())
+          if (!sidecarCell || typeof sidecarCell.strikethrough !== 'boolean') {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=${exp.strikethrough}, but sidecar has no observed strikethrough for it`,
+              structuralValid: true,
+            }
+          }
+          if (sidecarCell.strikethrough !== exp.strikethrough) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=${exp.strikethrough}, but sidecar observed ${String(sidecarCell.strikethrough)}`,
+              structuralValid: true,
+            }
+          }
+          if (exp.strikethrough === true && !obs.hasStrikethroughInk) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=true, but no strikethrough ink was observed in pixels`,
+              structuralValid: true,
+            }
+          }
+          if (exp.strikethrough === false && obs.hasStrikethroughInk) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=false, but strikethrough ink was observed in pixels`,
               structuralValid: true,
             }
           }
