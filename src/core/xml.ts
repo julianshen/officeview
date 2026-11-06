@@ -339,6 +339,18 @@ function asNode(v: unknown, namespace?: string): XmlNode {
   return node
 }
 
+/** Iterate without copying a potentially hostile repeated-child list. */
+export function* iterateChildren(node: XmlNode | undefined, name: string): IterableIterator<XmlNode> {
+  if (!node) return
+  const registered = namespaceChildrenMap.get(node)?.get(name)
+  if (registered) { yield* registered; return }
+  const value = node[name]
+  const namespaces = childNamespaceMap.get(node)?.get(name) ?? []
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) yield asNode(value[i], namespaces[i])
+  } else if (value !== undefined && value !== null) yield asNode(value, namespaces[0])
+}
+
 export function getChildren(node: XmlNode | undefined, name: string): XmlNode[] {
   if (!node) return []
   const namespaceChildren = namespaceChildrenMap.get(node)?.get(name)

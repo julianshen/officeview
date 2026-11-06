@@ -4,7 +4,7 @@
  * pulls in the ZIP/XML readers: only the lazy large-source chunk loads this.
  */
 import type { WorkbookFormatting } from '../view/contracts'
-import { DEFAULT_FORMATTING, workbookFormattingWithColorContext } from './pagedFormatting'
+import { DEFAULT_FORMATTING, pagedCfStyles, pagedCfStylesBytes, workbookFormattingWithColorContext } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import { PackageError, isPackageError, throwIfAborted } from '../../core/package-error'
 import { blobRangeSource, openPart, readPartBytes, readPartPrefixBytes, readZipInventory, type RangeSource, type ZipInventory } from '../../core/zip-stream'
@@ -37,6 +37,9 @@ import { importLimitsFor, type ImportLimits, type ImportLimitOverrides, type Imp
 const MiB = 1024 * 1024
 
 export interface PagedSheet {
+  /** Absent until the complete bounded CF pass and DXF reconciliation finish. */
+  conditionalFormatting?: import('../cf/model').CfSheetRules
+  cfOwner?: import('../cf/model').CfLease<import('../cf/model').CfSheetRules>
   readonly sheetId: string
   readonly name: string
   readonly workbookIndex: number
@@ -227,6 +230,17 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   if (!swept) {
     swept = true
     void store.sweepLeftovers(storageEnv)
+  }
+  let cfMemory: import('../cf/limits').CfMemory | undefined
+  let cfStyles: import('../cf/parse').CfStylesSource | undefined
+  let cfStylesRefused = false
+  let cfStyleHold: import('./constructionMemory').ConstructionShare | undefined
+  const dropCf = () => {
+    for (const sheet of sheets) {
+      delete sheet.conditionalFormatting
+      sheet.cfOwner?.release(); delete sheet.cfOwner
+    }
+    cfMemory?.close()
   }
   let notify: () => void = () => {}
   let changedPromise = new Promise<void>((resolve) => { notify = resolve })
@@ -476,6 +490,41 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         else sheet.invalidMerges++
       }
       sheet.metadata.merges = []
+      if (sheet.metadata.hasConditionalFormatting) {
+        // A second streaming pass keeps the synchronous first-pass callbacks
+        // allocation-free for CF-absent sheets; no suspended event queue.
+        const { createCfStreamEvents, createPagedCfMemory } = await import('../cf/capture')
+        cfMemory ??= createPagedCfMemory(store.construction)
+        if (!cfStyles && !cfStylesRefused) {
+          cfStyleHold = store.construction.share('CF raw DXF XML', { untilReleased: true })
+          // XML objects, ordered-child/namespace maps and simultaneous parser
+          // scratch are bounded by the source units before constructing them.
+          try {
+            cfStyleHold.need(pagedCfStylesBytes(stylesTextForPriority))
+            cfStyles = pagedCfStyles(stylesTextForPriority, sparklineColorContext)
+          } catch (error) {
+            if (signal.aborted || (isPackageError(error) && error.code === 'cancelled')) throw error
+            cfStylesRefused = true
+            cfStyleHold.release(); cfStyleHold = undefined
+          }
+        }
+        if (cfStylesRefused) {
+          const { finalizeCfSubtrees } = await import('../cf/parse')
+          const owner = finalizeCfSubtrees({ base: [], x14: [], sheetNs: undefined, truncated: true }, { colors: {}, dxfNodes: [] }, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath })
+          sheet.cfOwner = owner; sheet.conditionalFormatting = owner.value
+        } else {
+          const capture = createCfStreamEvents(cfStyles!, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath })
+          try {
+            await tokenizeBytes(openPart(src, entry, partOpts(sheet.partPath, limits.paged.expandedBytes)), capture.events, {
+              signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: () => ledger.drainQueue(),
+            })
+            throwIfAborted(signal)
+            const owner = capture.finish()
+            sheet.cfOwner = owner
+            sheet.conditionalFormatting = owner.value
+          } finally { capture.dispose(); ledger.drainQueue() }
+        }
+      }
       compressedRead += entry.compressedSize
       // Declared worksheet filters, then tables through the worksheet's own rels (parse.ts order).
       const state = container.finish()
@@ -637,6 +686,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         completeness = 'incomplete'
         workbook.completeness = 'incomplete'
         workbook.failure = { code: 'cancelled', retryable: true, message: 'Import cancelled' }
+        dropCf()
         await store.abandon(options.docId).catch(() => {})
         ledger.releaseAll()
         return { kind: 'cancelled' }
@@ -649,9 +699,11 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       const memory = isPackageError(error) && error.reason === 'memory-budget'
       workbook.diagnostics.push({ code: memory ? 'import-memory-budget' : `import-${failure.code}`, message: failure.message })
       // A failed page write leaves nothing trustworthy behind: remove every page.
-      if (failure.code === 'storage-error' || failure.code === 'quota') await store.abandon(options.docId).catch(() => {})
+      if (failure.code === 'storage-error' || failure.code === 'quota') { dropCf(); await store.abandon(options.docId).catch(() => {}) }
       return { kind: 'incomplete', failure, stamp }
     } finally {
+      cfStyles = undefined
+      cfStyleHold?.release(); cfStyleHold = undefined
       options.signal?.removeEventListener('abort', forward)
       pulse()
     }
@@ -672,6 +724,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       released = true
       controller.abort()
       await done
+      dropCf()
       await store.close()
       ledger.releaseAll()
     },

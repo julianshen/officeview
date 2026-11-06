@@ -18,9 +18,10 @@
  */
 import { getChildren, registerNamespaceAware, type XmlNode } from '../../core/xml'
 import { localName, type XmlEvents } from '../../core/xml-stream'
-import { CF_LIMITS } from './limits'
+import { CF_LIMITS, createCfMemory } from './limits'
+import type { ConstructionMemory } from '../storage/constructionMemory'
 import type { CfMemory, CfReservation } from './limits'
-import { CF_X14_EXTENSION_URI, finalizeCfSubtrees, type CfParseMeta, type CfStylesSource } from './parse'
+import { CF_X14_EXTENSION_URI, cfChildLimit, finalizeCfSubtrees, type CfParseMeta, type CfStylesSource } from './parse'
 import { X14_MAIN_NS } from '../tableStyles/parseStylesExtras'
 import type { CfLease, CfSheetRules } from './model'
 
@@ -50,6 +51,8 @@ interface Frame {
 
 export interface CfStreamHandle {
   readonly events: XmlEvents
+  readonly stats: { readonly nodes: number; readonly textUnits: number }
+  dispose(): void
   finish(): CfLease<CfSheetRules>
 }
 
@@ -65,6 +68,9 @@ export function createCfStreamEvents(
   let sheetNs: string | undefined
   let sheetSeen = false
   let nodeCount = 0
+  let textUnits = 0
+  let builtNodes = 0
+  let ignoredDepth = 0
   let overCap = false
   let finished = false
   // Working reservation: frames, copied attributes and accumulated text are
@@ -133,6 +139,15 @@ export function createCfStreamEvents(
     open(qname, attrNames, attrValues, count, selfClosing) {
       // Terminal state is inert: post-finish events must neither build nor charge.
       if (finished) return
+      if (ignoredDepth) { if (!selfClosing) ignoredDepth++; return }
+      const earlyLocal = localName(qname)
+      const earlyParent = entries[entries.length - 1]?.frame
+      const earlyLimit = earlyParent ? cfChildLimit(earlyParent.local, earlyLocal) : undefined
+      if (earlyLimit !== undefined && ['formula', 'f', 'cfvo', 'cfIcon'].includes(earlyLocal) &&
+          (earlyParent?.children.get(earlyLocal)?.length ?? 0) >= earlyLimit) {
+        if (!selfClosing) ignoredDepth = 1
+        return
+      }
       // Account for every attribute with plain arithmetic (no allocation), so
       // admission precedes any construction below. xmlns prefixes and values
       // are retained in scope maps; ordinary attributes are copied into
@@ -219,6 +234,17 @@ export function createCfStreamEvents(
       }
 
       if (kind !== undefined) {
+        const parent = entries[entries.length - 1]?.frame
+        const childLimit = parent ? cfChildLimit(parent.local, local) : undefined
+        if (childLimit !== undefined && (parent?.children.get(local)?.length ?? 0) >= childLimit) {
+          if (['formula', 'f', 'cfvo', 'cfIcon'].includes(local)) {
+            // Keep a single overflow witness for the existing rule-level refusal.
+            // Later duplicates (including their text and namespaces) are inert.
+            if (!selfClosing) ignoredDepth = 1
+            return
+          }
+          overCap = true
+        }
         if (overCap || nodeCount >= MAX_CAPTURE_NODES || entries.length >= MAX_CAPTURE_DEPTH) {
           overCap = true
           entries.push({ frame: null, isRoot })
@@ -250,6 +276,7 @@ export function createCfStreamEvents(
     close(_qname) {
       // Terminal state is inert: post-finish events must not build or charge.
       if (finished) return
+      if (ignoredDepth) { ignoredDepth--; return }
       stack.pop()
       scopes.pop()
       if (rootKind === undefined || entries.length === 0) return
@@ -263,6 +290,7 @@ export function createCfStreamEvents(
           // Withhold everything at finish; the partial node is dropped.
         } else {
           const node = finishFrame(entry.frame)
+          builtNodes++
           // Nearest enclosing real frame, if any.
           let parent: Frame | undefined
           for (let i = entries.length - 1; i >= 0; i--) {
@@ -292,7 +320,7 @@ export function createCfStreamEvents(
 
     text(text, _more) {
       // Terminal state is inert: late text must not build or charge.
-      if (finished) return
+      if (finished || overCap || ignoredDepth) return
       void _more
       for (let i = entries.length - 1; i >= 0; i--) {
         const frame = entries[i]!.frame
@@ -302,6 +330,7 @@ export function createCfStreamEvents(
           } else if (!admit(text.length * 2 + 64)) {
             // Admission failed (including the per-chunk slot): withhold everything at finish.
           } else {
+            textUnits += text.length
             frame.texts.push(text)
             frame.textLen += text.length
           }
@@ -355,5 +384,34 @@ export function createCfStreamEvents(
     }
   }
 
-  return { events, finish }
+  function dispose(): void {
+    finished = true
+    base.length = x14blocks.length = entries.length = scopes.length = stack.length = 0
+    skipped.clear(); sheetNs = undefined
+    releaseHold()
+  }
+  return { events, finish, dispose, stats: { get nodes() { return builtNodes }, get textUnits() { return textUnits } } }
+}
+
+/** The provisional worker pool rebinds these shares when the session starts.
+ * Explicit leases, rather than GC, own normalized definitions until release. */
+export function createPagedCfMemory(construction: ConstructionMemory): CfMemory {
+  return createCfMemory({ context: {
+    limitBytes: CF_LIMITS.workbookMetadataBytes,
+    canReserve: () => true, owns: () => false,
+    reserve() {
+      const share = construction.share('conditional formatting', { untilReleased: true })
+      let bytes = 0, released = false
+      const trySet = (next: number) => {
+        if (released) return false
+        try { share.need(next); bytes = next; return true } catch { return false }
+      }
+      return {
+        owner: 'conditional formatting', get bytes() { return bytes }, trySet,
+        charge(n) { if (!trySet(bytes + n)) throw new Error('CF admission refused') },
+        release() { if (!released) { released = true; bytes = 0; share.release() } },
+        adopt() { throw new Error('CF owns explicit leases') },
+      }
+    },
+  } })
 }

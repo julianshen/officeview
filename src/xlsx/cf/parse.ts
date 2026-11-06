@@ -17,7 +17,7 @@
  * integration converts it to a sheet diagnostic with no CF attached), never a
  * partial model.
  */
-import { attrs, elementNamespaceUri, getChildren, textOf, type XmlNode } from '../../core/xml'
+import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type XmlNode } from '../../core/xml'
 import type { SheetColorContext } from '../sheetColors'
 import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
@@ -860,12 +860,15 @@ function readFormulas(
   ns: string | undefined,
   tag: 'formula' | 'f',
 ): { formulas: string[]; foreign: boolean } | undefined {
-  const all = getChildren(ruleNode, tag)
-  const mine = all.filter(n => elementNamespaceUri(n) === ns)
-  const foreign = all.length !== mine.length
-  if (mine.length > CF_LIMITS.formulaChildren) {
-    fin.diag('unsupported', 'cf-resource-limit', `rule carries ${mine.length} ${tag} children (cap ${CF_LIMITS.formulaChildren})`)
-    return undefined
+  const mine: XmlNode[] = []
+  let foreign = false
+  for (const node of iterateChildren(ruleNode, tag)) {
+    if (elementNamespaceUri(node) !== ns) { foreign = true; continue }
+    if (mine.length === CF_LIMITS.formulaChildren) {
+      fin.diag('unsupported', 'cf-resource-limit', `rule carries more than ${CF_LIMITS.formulaChildren} ${tag} children`)
+      return undefined
+    }
+    mine.push(node)
   }
   const formulas: string[] = []
   for (const child of mine) {
@@ -1520,6 +1523,43 @@ export interface CfSubtrees {
   readonly skipped?: readonly string[]
 }
 
+/** Singleton bounds shared with streaming capture. Base rules may carry up to
+ * three formulas; color scales may carry five colors. Duplicates elsewhere
+ * are malformed, not an invitation to retain an unbounded subtree. */
+export function cfChildLimit(parent: string, child: string): number | undefined {
+  if (child === 'formula' || child === 'f') return 4 // one overflow witness
+  if (child === 'cfvo' || child === 'cfIcon') return 6 // one overflow witness
+  if (child === 'color' && parent === 'colorScale') return 5
+  if (['sqref', 'dxf', 'color', 'fill', 'font', 'border', 'numFmt',
+    'patternFill', 'fgColor', 'bgColor', 'negativeFillColor', 'negativeBorderColor',
+    'axisColor', 'borderColor', 'dataBar', 'colorScale', 'iconSet'].includes(child)) return 1
+  return undefined
+}
+function captureOverflow(nodes: readonly XmlNode[]): boolean {
+  let count = 0
+  const visit = (node: XmlNode, local: string, depth: number): boolean => {
+    if (++count > 32768 || depth > 64) return true
+    if (!node || typeof node !== 'object') return false
+    for (const key in node) {
+      if (!Object.prototype.hasOwnProperty.call(node, key)) continue
+      if (key === '@attrs' || key === '#text') continue
+      const limit = cfChildLimit(local, key)
+      const witnessed = ['formula', 'f', 'cfvo', 'cfIcon'].includes(key)
+      let children = 0
+      for (const child of iterateChildren(node, key)) {
+        if (limit !== undefined && ++children > limit) {
+          if (witnessed) break
+          return true
+        }
+        if (visit(child, key, depth + 1)) return true
+      }
+    }
+    return false
+  }
+  for (const node of nodes) if (visit(node, 'conditionalFormatting', 1)) return true
+  return false
+}
+
 /** Shared finalizer for resident nodes and streaming-captured nodes alike. */
 export function finalizeCfSubtrees(
   subtrees: CfSubtrees,
@@ -1527,6 +1567,9 @@ export function finalizeCfSubtrees(
   memory: CfMemory,
   meta: CfParseMeta,
 ): CfLease<CfSheetRules> {
+  if (captureOverflow(subtrees.base) || captureOverflow(subtrees.x14)) {
+    return finalizeCollected({ ...subtrees, base: [], x14: [], truncated: true }, styles, memory, meta)
+  }
   return finalizeCollected(subtrees, styles, memory, meta)
 }
 
@@ -1572,5 +1615,5 @@ export function parseCfSheet(
       }
     }
   }
-  return finalizeCollected({ base, x14, sheetNs, skipped }, styles, memory, meta)
+  return finalizeCfSubtrees({ base, x14, sheetNs, skipped }, styles, memory, meta)
 }

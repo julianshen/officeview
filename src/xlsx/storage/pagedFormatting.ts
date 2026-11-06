@@ -73,3 +73,22 @@ export async function workbookFormattingWithColorContext(workbookRoot: XmlNode, 
 export async function workbookFormatting(workbookRoot: XmlNode, stylesText: string | undefined, themeText?: string): Promise<WorkbookFormatting> {
   return (await workbookFormattingWithColorContext(workbookRoot, stylesText, themeText)).formatting
 }
+
+/** Raw DXFs are required for CF's strict unsupported-property validation. This
+ * is invoked once, lazily, only after worksheet CF presence is established.
+ * The caller owns the conservative XML construction reservation until these
+ * nodes have been normalized and discarded. */
+export function pagedCfStyles(stylesText: string | undefined, colors: SheetColorContext): import('../cf/parse').CfStylesSource {
+  if (!stylesText) return { colors, dxfNodes: [] }
+  const root = parseXml(stylesText)
+  const dxfs = getChildren(root, 'dxfs')[0]
+  return { colors, dxfNodes: dxfs ? getChildren(dxfs, 'dxf') : [] }
+}
+
+/** Includes worst-case inherited namespace-map copies for adversarial nesting;
+ * counting occurrences (even in text) deliberately overestimates declarations. */
+export function pagedCfStylesBytes(text: string | undefined): number {
+  let bindings = 0
+  if (text) for (let at = text.indexOf('xmlns'); at >= 0; at = text.indexOf('xmlns', at + 5)) bindings++
+  return 1024 + (text?.length ?? 0) * 256 + bindings * bindings * 64
+}
