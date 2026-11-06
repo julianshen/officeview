@@ -20,46 +20,37 @@ const UNVERIFIED = 'This slicer action has not been measured in Excel and is not
  * `InteractiveSheetDoc` keeps in `slicerModels` and its drawing caches.
  * The charge ends when the last holder drops it: the model is replaced
  * (a newer commit for the same cache), the cache evicts it, or the viewer
- * unmounts. Release is idempotent and never refunds twice
- * (retainOverflow-style `released` flag plus owners counts for siblings
- * sharing one cache hold); failures never throw out of render.
+ * unmounts. Release is idempotent and never refunds twice: the entry is
+ * deleted when released, so a second release finds nothing (sibling drawings
+ * sharing one cache publish the same hold, which dedups by identity).
+ * Failures never throw out of render.
  */
 export class SlicerRetainedCharges {
-  private readonly charges = new Map<string, { hold: { release(): void }; owners: number; released: boolean }>()
+  private readonly charges = new Map<string, { release(): void }>()
   /** Owns `hold` for `cacheKey`, releasing the previous hold exactly once. */
   retain(cacheKey: string, hold?: { release(): void }): void {
     const current = this.charges.get(cacheKey)
-    if (current && current.hold === hold) {
-      // Sibling drawings sharing one cache publish with the same hold.
-      current.owners++
-      return
+    if (current === hold) return
+    if (current) {
+      try { current.release() } catch { /* fail closed: never throw out of render */ }
     }
-    if (current && !current.released) {
-      current.released = true
-      try { current.hold.release() } catch { /* fail closed: never throw out of render */ }
-    }
-    if (!hold) {
-      this.charges.delete(cacheKey)
-      return
-    }
-    this.charges.set(cacheKey, { hold, owners: 1, released: false })
+    if (hold) this.charges.set(cacheKey, hold)
+    else this.charges.delete(cacheKey)
   }
   /** Ends the cache's charge exactly once (a no-op when already released). */
   evict(cacheKey: string): void {
     const current = this.charges.get(cacheKey)
-    if (!current || current.released) {
-      this.charges.delete(cacheKey)
-      return
-    }
-    current.released = true
+    if (!current) return
     this.charges.delete(cacheKey)
-    try { current.hold.release() } catch { /* fail closed */ }
+    try { current.release() } catch { /* fail closed */ }
   }
   /** Ends every retained charge (viewer unmount). Each releases exactly once. */
   clear(): void {
     for (const key of [...this.charges.keys()]) this.evict(key)
   }
   get size(): number { return this.charges.size }
+  /** The caches currently holding a charge (for sheet-removal eviction). */
+  keys(): IterableIterator<string> { return this.charges.keys() }
 }
 
 /** View-only committed slicer selection. It publishes a new model only after the transaction commits. */
@@ -91,21 +82,21 @@ export class SlicerController {
   multiSelect(_name: string): boolean { return false }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private publish(model: SlicerModel, hold?: { release(): void }): void {
-    if (this.disposed) return
+    if (this.disposed) {
+      // Never published, never transferred: refund the transient reservation.
+      hold?.release()
+      return
+    }
     this.models.set(model.name, model)
     this.reindexField(model)
     // Option A: the admitted hold is transferred to the retained model's
     // lifetime. The controller forgets it here so dispose() never refunds a
     // copy the host still shows; the host releases it exactly once when the
-    // model is replaced, evicted or unmounted (SlicerRetainedCharges).
-    try {
-      this.host.onChange?.(model, hold)
-    } catch {
-      // A retaining host must never throw out of render: fail closed and drop
-      // the transfer so the transient reservation is not leaked.
-      hold?.release()
-      throw new Error('Slicer change failed.')
-    }
+    // model is replaced, evicted or unmounted (SlicerRetainedCharges). A throw
+    // propagates to the publisher, which refunds only when nothing was
+    // transferred yet (a partial sibling publish never refunds a hold the
+    // host already owns).
+    this.host.onChange?.(model, hold)
     for (const listener of this.listeners) listener()
   }
 
@@ -200,17 +191,22 @@ export class SlicerController {
       // forgets `hold` here so disposing the sheet-scoped controller never
       // refunds a copy that is still reachable. The host releases it exactly
       // once via SlicerRetainedCharges (replace, evict, unmount). A host that
-      // throws out of onChange fails closed: the transient is refunded and the
-      // commit reports as failed without leaking or throwing out of render.
+      // throws out of onChange fails closed: the transient is refunded only
+      // when nothing was transferred yet, so a partial sibling publish never
+      // refunds a hold the host already retains, and the commit reports as
+      // failed without leaking or throwing out of render.
       // Siblings share one cache hold: the same object is transferred once per
-      // published copy and the host dedups it by identity (owners counts).
+      // published copy and the host dedups it by identity.
+      let published = 0
       try {
         this.publish({ ...before, selectedItemIds: [...selected], revision: Math.max((before.revision ?? 0) + 1, result.revision), items: before.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold)
+        published++
         for (const sibling of siblings) {
           this.publish({ ...sibling, selectedItemIds: [...selected], revision: Math.max((sibling.revision ?? 0) + 1, result.revision), items: sibling.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold)
+          published++
         }
       } catch {
-        // publish already refunded the transient on a throwing host.
+        if (published === 0) hold?.release()
         this.host.announce('Slicer change failed.')
         return false
       }

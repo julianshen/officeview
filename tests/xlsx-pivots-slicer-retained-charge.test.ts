@@ -26,13 +26,19 @@ function ledgerWithNoGC() {
 describe('slicer retained memory charge (option A)', () => {
   it('repeated cross-sheet filtering with disposal keeps accounted bytes at or above live retained bytes', async () => {
     const ledger = ledgerWithNoGC()
-    const retained = new Map<string, SlicerModel>()
-    const liveRetainedBytes = () => [...retained.values()].reduce((sum, m) => sum + retainedBytes(m), 0)
+    // The host owns each transferred hold exactly like InteractiveSheetDoc
+    // does: one SlicerRetainedCharges entry per slicer cache.
+    const retained = new SlicerRetainedCharges()
+    const kept = new Map<string, SlicerModel>()
+    const liveRetainedBytes = () => [...kept.values()].reduce((sum, m) => sum + retainedBytes(m), 0)
     const accounted = () => ledger.snapshot().byPool.controls
     const makeHost = () => ({
       apply: async () => ({ kind: 'committed' as const, revision: 1 }),
       announce: vi.fn(),
-      onChange: (m: SlicerModel) => { retained.set(m.name, m) },
+      onChange: (m: SlicerModel, hold?: { release(): void }) => {
+        kept.set(m.name, m)
+        retained.retain(m.cacheName ?? m.name, hold)
+      },
       admit: (bytes: number) => {
         if (ledger.bytes + bytes > MAIN_THREAD_BUDGETS.D) return undefined
         const owner = `slicer-selection:test:${Math.random()}`
@@ -45,15 +51,55 @@ describe('slicer retained memory charge (option A)', () => {
     for (let sheet = 0; sheet < 3; sheet++) {
       const name = `Slicer_Sheet${sheet}`
       const controller = new SlicerController([model(name)], makeHost())
-      // Keep the committed copy reachable like InteractiveSheetDoc.slicerModels does.
-      const host = controller as unknown as { host: { onChange: (m: SlicerModel) => void } }
-      void host
       expect(await controller.applySlicer(name, [0], new AbortController().signal)).toBe(true)
       controller.dispose()
       expect(accounted(), `after disposing sheet ${sheet}`).toBeGreaterThanOrEqual(liveRetainedBytes())
     }
     expect(liveRetainedBytes()).toBeGreaterThan(0)
     expect(accounted()).toBeGreaterThanOrEqual(liveRetainedBytes())
+    expect(accounted()).toBe(liveRetainedBytes())
+    retained.clear()
+    expect(accounted()).toBe(0)
+  })
+
+  it('a partial sibling publish never refunds a hold the host still retains', async () => {
+    const ledger = ledgerWithNoGC()
+    const retained = new SlicerRetainedCharges()
+    const accounted = () => ledger.snapshot().byPool.controls
+    const admit = (bytes: number) => {
+      if (ledger.bytes + bytes > MAIN_THREAD_BUDGETS.D) return undefined
+      const owner = `slicer-selection:sibling:${Math.random()}`
+      ledger.set('controls', owner, bytes)
+      let held = true
+      return { release: () => { if (!held) return; held = false; ledger.release('controls', owner) } }
+    }
+    // Two drawings share one slicer cache: one admitted hold covers both copies.
+    const first = model('Product'), second = { ...model('Product 2'), cacheName: 'Product' }
+    const announce = vi.fn()
+    let calls = 0
+    const controller = new SlicerController([first, second], {
+      apply: async () => ({ kind: 'committed' as const, revision: 1 }),
+      announce,
+      admit,
+      onChange: (m: SlicerModel, hold?: { release(): void }) => {
+        calls++
+        // The host retains the first sibling, then fails closed on the second.
+        retained.retain(m.cacheName ?? m.name, hold)
+        if (calls === 2) throw new Error('paint failed')
+      },
+    })
+    const result = await controller.applySlicer('Product', [0], new AbortController().signal)
+    expect(result).toBe(false)
+    expect(calls).toBe(2)
+    // The hold was transferred to the host on the first publish, so the failed
+    // second publish must not refund it: the retained copy stays charged.
+    expect(retained.size).toBe(1)
+    expect(accounted()).toBeGreaterThan(0)
+    const charged = accounted()
+    retained.clear()
+    expect(accounted()).toBe(0)
+    expect(charged).toBeGreaterThan(0)
+    controller.dispose()
   })
 
   it('replacing a model, evicting it, and unmounting the viewer each bring the slicer-model pool back to 0', async () => {
