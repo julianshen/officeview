@@ -19,6 +19,7 @@
  */
 import { attrs, elementNamespaceUri, getChildren, textOf, type XmlNode } from '../../core/xml'
 import type { SheetColorContext } from '../sheetColors'
+import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
 import {
   CF_LIMITS,
@@ -63,9 +64,7 @@ export interface CfParseMeta {
 
 /** Workbook-shared parse account, keyed by the per-workbook styles object. */
 const sharedMemories = new WeakMap<object, CfMemory>()
-/** Retained handles (caps, diagnostics) keyed by their adopted lease. */
-const retainedHandles = new WeakMap<object, unknown>()
-/** Adopted rule leases keyed by their sheet. */
+/** Adopted rule leases keyed by their sheet (for release-on-reattach). */
 const liveSheets = new WeakMap<object, CfLease<CfSheetRules>>()
 
 export function cfMemoryFor(scopeKey: object): CfMemory {
@@ -77,8 +76,10 @@ export function cfMemoryFor(scopeKey: object): CfMemory {
   return memory
 }
 
-/** Attach parsed rules to a sheet and retain the lease (and its charges) with it. */
+/** Attach parsed rules to a sheet, releasing any replaced lease exactly once. */
 export function attachCfSheetRules(sheet: { conditionalFormatting?: CfSheetRules }, lease: CfLease<CfSheetRules>): void {
+  const prev = liveSheets.get(sheet)
+  if (prev !== undefined && prev !== lease) prev.release()
   sheet.conditionalFormatting = lease.value
   liveSheets.set(sheet, lease)
 }
@@ -217,17 +218,32 @@ function parseSqrefToken(token: string): ParsedRange | undefined {
   return undefined
 }
 
-function parseSqref(sqref: string | undefined): ParsedRange[] | undefined {
+function parseSqref(sqref: string | undefined): ParsedRange[] | 'over-cap' | undefined {
   if (sqref === undefined) return undefined
-  const tokens = sqref.trim().split(/\s+/).filter(t => t.length > 0)
-  if (tokens.length === 0) return undefined
+  const text = sqref.trim()
+  if (text.length === 0) return undefined
+  // Incremental scan: never materialize the token array before the range cap
+  // is enforced. Anything past the per-rule bound refuses the whole scope.
   const out: ParsedRange[] = []
-  for (const token of tokens) {
-    const range = parseSqrefToken(token)
+  let start = 0
+  const flush = (end: number): ParsedRange[] | 'over-cap' | undefined => {
+    if (end <= start) return out
+    const range = parseSqrefToken(text.slice(start, end))
     if (!range) return undefined
     out.push(range)
+    if (out.length > CF_LIMITS.rangesPerRule) return 'over-cap'
+    return out
   }
-  return out
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      const r = flush(i)
+      if (r !== out) return r
+      start = i + 1
+    }
+  }
+  const last = flush(text.length)
+  return last === out ? out : last
 }
 
 function parseLiteral(text: string): CfLiteral | undefined {
@@ -237,7 +253,25 @@ function parseLiteral(text: string): CfLiteral | undefined {
     return Number.isFinite(num) ? { kind: 'number', value: num } : undefined
   }
   if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
-    return { kind: 'string', value: t.slice(1, -1).replace(/""/g, '"') }
+    // Complete quoted-literal grammar only: interior quotes must be doubled
+    // ("" escape). Anything else (concatenation, multiple tokens, unterminated)
+    // is an expression, not a constant string.
+    let out = ''
+    let i = 1
+    while (i < t.length - 1) {
+      const ch = t[i]
+      if (ch === '"') {
+        if (i + 1 < t.length - 1 && t[i + 1] === '"') {
+          out += '"'
+          i += 2
+          continue
+        }
+        return undefined
+      }
+      out += ch
+      i++
+    }
+    return { kind: 'string', value: out }
   }
   const lower = t.toLowerCase()
   if (lower === 'true') return { kind: 'boolean', value: true }
@@ -246,6 +280,44 @@ function parseLiteral(text: string): CfLiteral | undefined {
 }
 
 const REF_PATTERN = String.raw`\$?[A-Za-z]{1,3}\$?\d+`
+
+/** Cell references in a whitespace-normalized formula, excluding function calls. */
+function extractCellRefs(formulaNoSpace: string): string[] {
+  const out: string[] = []
+  const re = /\$?[A-Za-z]{1,3}\$?\d+(?!\()/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(formulaNoSpace)) !== null) out.push(m[0].toUpperCase().replace(/\$/g, ''))
+  return out
+}
+
+function colIndexToLetters(col: number): string {
+  let n = col + 1
+  let s = ''
+  while (n > 0) {
+    const r = (n - 1) % 26
+    s = String.fromCharCode(65 + r) + s
+    n = Math.floor((n - 1) / 26)
+  }
+  return s
+}
+
+function anchorOf(range: ParsedRange): string {
+  return `${colIndexToLetters(range.firstCol)}${range.firstRow + 1}`
+}
+
+/**
+ * Measured anchor relationship: a canonical formula must reference the
+ * rule's anchor cell (top-left of a single-range sqref). Multi-range
+ * anchoring is unmeasured, so any present formula there stays unresolved.
+ */
+function refsMatchAnchor(normalizedFormulas: readonly string[], anchor: string | undefined): boolean {
+  if (anchor === undefined) return false
+  if (normalizedFormulas.length === 0) return true
+  return normalizedFormulas.every(f => {
+    const refs = extractCellRefs(f)
+    return refs.length > 0 && refs.every(r => r === anchor)
+  })
+}
 
 /** Remove whitespace outside string literals (whitespace inside needles is significant). */
 function stripOutsideStrings(text: string): string {
@@ -278,9 +350,10 @@ function stripOutsideStrings(text: string): string {
   return out
 }
 
-function canonicalTextFormula(type: string, needle: string, formulas: readonly string[]): boolean {
+function canonicalTextFormula(type: string, needle: string, formulas: readonly string[], anchor: string | undefined): boolean {
   if (formulas.length !== 1) return false
   const f = stripOutsideStrings(formulas[0]!)
+  if (!refsMatchAnchor([f], anchor)) return false
   const q = `"${needle.replace(/"/g, '""')}"`
   const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const ref = REF_PATTERN
@@ -298,9 +371,10 @@ function canonicalTextFormula(type: string, needle: string, formulas: readonly s
   }
 }
 
-function canonicalBlankFormula(type: string, formulas: readonly string[]): boolean {
+function canonicalBlankFormula(type: string, formulas: readonly string[], anchor: string | undefined): boolean {
   if (formulas.length !== 1) return false
   const f = stripOutsideStrings(formulas[0]!)
+  if (!refsMatchAnchor([f], anchor)) return false
   const ref = REF_PATTERN
   switch (type) {
     case 'containsBlanks':
@@ -442,9 +516,9 @@ function boundedTextLength(node: XmlNode | undefined, budget: number): number | 
 class SheetFinalizer {
   charged = 0
   retained = 0
+  metaBytes = 0
   rules: CfRule[] = []
   sentinel: { reason: string } | undefined
-  diagnostics: { kind: 'unsupported' | 'parse'; feature: `cf-${string}`; message: string }[] = []
   aborted = false
 
   constructor(
@@ -462,7 +536,6 @@ class SheetFinalizer {
 
   diag(kind: 'unsupported' | 'parse', feature: `cf-${string}`, message: string): void {
     const bound = `${this.where()}: ${message}`.slice(0, 512)
-    this.diagnostics.push({ kind, feature, message: bound })
     this.diagHandle.add({ kind, feature, message: bound })
   }
 
@@ -485,7 +558,9 @@ class SheetFinalizer {
   }
 
   reserveMeta(bytes: number): boolean {
-    return this.caps.reserveMetadata(bytes).kind === 'ready'
+    if (this.caps.reserveMetadata(bytes).kind !== 'ready') return false
+    this.metaBytes += bytes
+    return true
   }
 }
 
@@ -600,6 +675,10 @@ function buildRuleBody(
     return invalid(priority, stop, `activePresent="1" on non-visual rule type "${type}" is non-conforming`)
   }
 
+  // Measured anchor: canonical formulas reference the top-left of a
+  // single-range sqref. Anything else stays unresolved.
+  const anchor = ranges.length === 1 ? anchorOf(ranges[0]!) : undefined
+
   const finishResolved = (definition: Record<string, unknown>): number => {
     fin.rules.push({
       id: -1, priority, documentOrder, ranges, stopIfTrue: stop,
@@ -644,7 +723,7 @@ function buildRuleBody(
         return invalid(priority, true, `text rule "${type}" is missing its search needle`)
       }
       if (inputs.hasForeignFormula) return finishUnresolved('cf-unsupported-rule', withDxf())
-      if (inputs.formulas.length === 0 || canonicalTextFormula(type, needle, inputs.formulas)) {
+      if (inputs.formulas.length === 0 || canonicalTextFormula(type, needle, inputs.formulas, anchor)) {
         return finishResolved({ kind: 'text', type: type as (typeof TEXT_RULE_TYPES)[number], needle })
       }
       return finishUnresolved('cf-unsupported-rule', withDxf())
@@ -654,7 +733,7 @@ function buildRuleBody(
     case 'containsErrors':
     case 'notContainsErrors': {
       if (inputs.hasForeignFormula) return finishUnresolved('cf-unsupported-rule', withDxf())
-      if (inputs.formulas.length === 0 || canonicalBlankFormula(type, inputs.formulas)) {
+      if (inputs.formulas.length === 0 || canonicalBlankFormula(type, inputs.formulas, anchor)) {
         return finishResolved({ kind: 'predicate', type: type as (typeof BLANK_ERROR_TYPES)[number] })
       }
       return finishUnresolved('cf-unsupported-rule', withDxf())
@@ -668,9 +747,9 @@ function buildRuleBody(
       if (inputs.formulas.length === 0) {
         return finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
       }
-    const pattern = canonicalTimePattern(period)
-    const f = inputs.formulas.length === 1 ? stripOutsideStrings(inputs.formulas[0]!) : ''
-      if (pattern && pattern.test(f)) {
+      const pattern = canonicalTimePattern(period)
+      const f = inputs.formulas.length === 1 ? stripOutsideStrings(inputs.formulas[0]!) : ''
+      if (pattern && refsMatchAnchor(inputs.formulas.length === 1 ? [f] : [], anchor) && pattern.test(f)) {
         return finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
       }
       return finishUnresolved('cf-unsupported-rule', withDxf())
@@ -921,28 +1000,6 @@ interface PendingRule {
   pairRaw: string | undefined
 }
 
-function pushScopeRefusal(
-  fin: SheetFinalizer,
-  ruleNode: XmlNode,
-  kind: 'base' | 'x14',
-  documentOrder: number,
-  fallbackType: CfRuleType | 'unknown',
-): void {
-  const a = attrs(ruleNode)
-  const priority = a['priority'] !== undefined && isIntText(a['priority']) && Number(a['priority']) >= 1
-    ? Number(a['priority'])
-    : 0
-  fin.diag('unsupported', 'cf-resource-limit', `rule priority=${priority} exceeds the per-rule range cap`)
-  fin.admit(256)
-  fin.keep(200)
-  fin.rules.push({
-    id: -1, priority, documentOrder, ranges: [], stopIfTrue: false,
-    writes: new Set(['ALL']),
-    definition: { kind: 'unresolved', type: fallbackType, reason: 'cf-resource-limit', origin: { dialect: kind, formulas: [] } },
-    dxf: undefined,
-  })
-}
-
 function invalidLinkRule(
   fin: SheetFinalizer,
   priority: number,
@@ -997,21 +1054,25 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
   const pending: PendingRule[] = []
   let order = 0
 
-  const admitElement = (sqrefText: string | undefined, ruleCount: number): ParsedRange[] | 'rule-refusal' | undefined => {
-    const ranges = parseSqref(sqrefText)
-    if (!ranges) {
-      fin.failSheet('cf-invalid-rule', 'cf-sqref', `conditionalFormatting sqref "${String(sqrefText)}" has no usable scope`)
-      return undefined
-    }
+  const admitElement = (sqrefText: string | undefined, ruleCount: number): ParsedRange[] | undefined => {
+    // Length gate before any tokenization: an unrepresentable scope string is
+    // rejected without building transient token arrays.
     if (sqrefText !== undefined && sqrefText.length > CF_LIMITS.textUnits * 16) {
       fin.failSheet('cf-invalid-rule', 'cf-sqref', 'conditionalFormatting sqref text is unrepresentable')
       return undefined
     }
-    if (ranges.length > CF_LIMITS.rangesPerRule) {
-      // Per-rule interval overflow withholds only the affected rules (scope is
-      // known); sheet-wide preconditions use the sentinel below.
-      return 'rule-refusal'
+    const parsed = parseSqref(sqrefText)
+    if (parsed === undefined) {
+      fin.failSheet('cf-invalid-rule', 'cf-sqref', `conditionalFormatting sqref "${String(sqrefText)}" has no usable scope`)
+      return undefined
     }
+    if (parsed === 'over-cap') {
+      // The scope cannot be retained within the per-rule range bound, so the
+      // rule's stop intent and taint cannot be represented: withhold the sheet.
+      fin.failSheet('cf-resource-limit', 'cf-resource-limit', 'conditionalFormatting exceeds the per-rule range bound')
+      return undefined
+    }
+    const ranges = parsed
     const elementBytes = 64 + ranges.length * 32 + (sqrefText ? sqrefText.length * 2 : 0)
     fin.admit(elementBytes + 256)
     fin.keep(elementBytes)
@@ -1043,15 +1104,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       fin.diag('unsupported', 'cf-namespace', 'conditionalFormatting holds a wrong-namespace cfRule, skipped')
     }
     if (ruleNodes.length === 0) continue
-    const admitted = admitElement(attrs(element).sqref, ruleNodes.length)
-    if (admitted === undefined) continue
-    if (admitted === 'rule-refusal') {
-      for (const ruleNode of ruleNodes) {
-        pushScopeRefusal(fin, ruleNode, 'base', order++, KNOWN_TYPES.has((attrs(ruleNode)['type'] ?? '').trim()) ? ((attrs(ruleNode)['type'] ?? '').trim() as CfRuleType) : 'unknown')
-      }
-      continue
-    }
-    const ranges = admitted
+    const ranges = admitElement(attrs(element).sqref, ruleNodes.length)
+    if (ranges === undefined) continue
     for (const ruleNode of ruleNodes) {
       pending.push({ kind: 'base', node: ruleNode, element, ranges, sqrefText: attrs(element).sqref, docOrder: order++, pairId: undefined, pairRaw: undefined })
     }
@@ -1148,6 +1202,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       if (extSqref) {
         const r = parseSqref(extSqref)
         scopeOk =
+          typeof r !== 'string' &&
           r !== undefined &&
           r.length === loneBase.ranges.length &&
           r.every((rr, i) => rectsEqual(rr, loneBase.ranges![i]!))
@@ -1180,7 +1235,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
   }
 
   // Resolve x14 scopes after pairing (paired rules inherit base scope).
-  const scopeRefused = new Set<PendingRule>()
+  // Resolve x14 scopes after pairing (paired rules inherit base scope).
   {
     const byElement = new Map<XmlNode, PendingRule[]>()
     for (const p of pending) {
@@ -1193,17 +1248,9 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       if (fin.aborted) break
       // Unorderable extensions already raised the sheet sentinel, which aborts.
       const sqrefText = rules[0]!.sqrefText
-      const admitted = admitElement(sqrefText, rules.length)
-      if (admitted === undefined) continue
-      if (admitted === 'rule-refusal') {
-        for (const r of rules) {
-          const t = (attrs(r.node)['type'] ?? '').trim()
-          pushScopeRefusal(fin, r.node, 'x14', r.docOrder, KNOWN_TYPES.has(t) ? (t as CfRuleType) : 'unknown')
-          scopeRefused.add(r)
-        }
-        continue
-      }
-      for (const r of rules) r.ranges = admitted
+      const ranges = admitElement(sqrefText, rules.length)
+      if (ranges === undefined) continue
+      for (const r of rules) r.ranges = ranges
     }
   }
 
@@ -1267,7 +1314,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
 
   for (const p of ordered) {
     if (fin.aborted) break
-    if (mergedExts.has(p) || scopeRefused.has(p)) continue
+    if (mergedExts.has(p)) continue
     // Invariant: every surviving rule has resolved scope (unresolved scope raises the sentinel, which aborts).
     const ranges = p.ranges!
     if (invalidBases.has(p)) {
@@ -1309,20 +1356,43 @@ function finalizeCollected(
   if (holdRes.kind === 'unresolved') throw new Error('CF admission exhausted')
   const fin = new SheetFinalizer(holdRes, styles, memory, caps, diagHandle, meta)
   try {
+    for (const note of subtrees.skipped ?? []) {
+      fin.diag('unsupported', 'cf-namespace', note)
+    }
     if (subtrees.truncated) {
       fin.failSheet('cf-resource-limit', 'cf-resource-limit', 'CF input was truncated or exceeded the streaming capture bound')
     } else {
       collectAndBuild(fin, subtrees.sheetNs, [...subtrees.base], [...subtrees.x14])
     }
     if (fin.diagHandle.refused) throw new Error('CF admission exhausted')
+    // Publish exactly the admitted, deduplicated, capped collection: copies of
+    // the handle entries, so disposing the handle cannot clear the outcome.
+    const published = diagHandle.entries.map(d => ({ ...d }))
+    let diagBytes = 0
+    for (const d of published) diagBytes += 192 + d.feature.length * 2 + d.message.length * 2
     const value: CfSheetRules = fin.sentinel
-      ? { rules: [], unresolvedSheet: { reason: fin.sentinel.reason, writes: 'ALL' }, diagnostics: fin.diagnostics }
-      : { rules: fin.rules, diagnostics: fin.diagnostics }
-    const total = fin.retained + 256
+      ? { rules: [], unresolvedSheet: { reason: fin.sentinel.reason, writes: 'ALL' }, diagnostics: published }
+      : { rules: fin.rules, diagnostics: published }
+    // Never underprice the transfer: the adopted charge covers the computed
+    // model and at least the repository's measured payload for the same value.
+    const measured = measureCfPayload(value, memory)
+    if (measured.kind !== 'ready') throw new Error('CF admission exhausted')
+    const computed = fin.retained + diagBytes + fin.metaBytes + 256
+    const total = Math.max(computed, measured.value)
     if (total > fin.charged && !fin.hold.grow(total)) throw new Error('CF admission exhausted')
     fin.charged = Math.max(fin.charged, total)
     const lease = fin.hold.adopt(value, total)
-    retainedHandles.set(lease, { caps, diagHandle })
+    // The single adopted lease now owns everything: release the auxiliary holds.
+    try {
+      caps.dispose()
+    } catch {
+      /* release-only path; never masks the original failure */
+    }
+    try {
+      diagHandle.dispose()
+    } catch {
+      /* release-only path; never masks the original failure */
+    }
     return lease
   } catch (error) {
     try {
@@ -1350,6 +1420,8 @@ export interface CfSubtrees {
   readonly sheetNs: string | undefined
   /** Truncated input or structural capture overflow: withhold everything. */
   readonly truncated?: boolean
+  /** Wrong-namespace containers skipped during collection; published as diagnostics. */
+  readonly skipped?: readonly string[]
 }
 
 /** Shared finalizer for resident nodes and streaming-captured nodes alike. */
@@ -1377,17 +1449,32 @@ export function parseCfSheet(
   const sheetNs = elementNamespaceUri(worksheet)
   const base = getChildren(worksheet, 'conditionalFormatting')
   const x14: XmlNode[] = []
+  const skipped: string[] = []
   for (const extList of getChildren(worksheet, 'extLst')) {
-    if (elementNamespaceUri(extList) !== sheetNs) continue
+    if (elementNamespaceUri(extList) !== sheetNs) {
+      if (getChildren(extList, 'ext').length > 0) {
+        skipped.push('worksheet extLst outside the worksheet namespace is skipped')
+      }
+      continue
+    }
     for (const ext of getChildren(extList, 'ext')) {
-      if (elementNamespaceUri(ext) !== sheetNs) continue
+      if (elementNamespaceUri(ext) !== sheetNs) {
+        if (getChildren(ext, 'conditionalFormattings').length > 0) {
+          skipped.push('worksheet ext outside the worksheet namespace is skipped')
+        }
+        continue
+      }
       if (attrs(ext).uri !== CF_X14_EXTENSION_URI) continue
       // Namespace-filtered in collectAndBuild; collect every same-local child first
       // so wrong-namespace content is diagnosed rather than silently skipped.
       for (const cfs of getChildren(ext, 'conditionalFormattings')) {
+        if (elementNamespaceUri(cfs) !== X14_MAIN_NS) {
+          skipped.push('non-x14 conditionalFormattings content is skipped')
+          continue
+        }
         x14.push(...getChildren(cfs, 'conditionalFormatting'))
       }
     }
   }
-  return finalizeCollected({ base, x14, sheetNs }, styles, memory, meta)
+  return finalizeCollected({ base, x14, sheetNs, skipped }, styles, memory, meta)
 }

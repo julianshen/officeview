@@ -35,6 +35,24 @@ const UNDERLINES: ReadonlySet<string> = new Set([
   'doubleAccounting',
   'none',
 ])
+const BORDER_STYLES: ReadonlySet<string> = new Set([
+  'none',
+  'thin',
+  'medium',
+  'dashed',
+  'dotted',
+  'thick',
+  'double',
+  'hair',
+  'mediumDashDot',
+  'dashDotDot',
+  'mediumDashDotDot',
+  'dashDot',
+  'slantDashDot',
+])
+/** Boolean lexical values per ECMA ST_OnOff (case-insensitive core set). */
+const TRUTHY: ReadonlySet<string> = new Set(['1', 'true'])
+const FALSY: ReadonlySet<string> = new Set(['0', 'false'])
 const BORDER_SIDES: ReadonlyArray<string> = ['left', 'right', 'top', 'bottom']
 const FONT_CHILDREN: ReadonlySet<string> = new Set(['name', 'sz', 'b', 'i', 'strike', 'u', 'color'])
 const FILL_CHILDREN: ReadonlySet<string> = new Set(['patternFill'])
@@ -56,9 +74,26 @@ export function encodeCfColor(spec: ColorSpec): string {
   return `indexed:${spec.indexed}`
 }
 
+function strictBool(node: XmlNode | undefined, where: string, unsupported: string[]): boolean | undefined {
+  if (!node) return undefined
+  const raw = attrs(node).val
+  if (raw === undefined) return true
+  const t = raw.trim().toLowerCase()
+  // Deliberately stricter than the legacy table helper (which treats anything
+  // other than 0/false as true): an unrecognized lexical cannot be honored.
+  if (TRUTHY.has(t)) return true
+  if (FALSY.has(t)) return false
+  unsupported.push(`${where} val="${raw}" is not a boolean`)
+  return undefined
+}
+
 function colorOf(node: XmlNode | undefined, where: string, unsupported: string[]): string | undefined {
   if (!node) return undefined
   const a = attrs(node)
+  // Degenerate empty element: legacy-ignored with no claim to honor.
+  if (a.rgb === undefined && a.theme === undefined && a.indexed === undefined && a.auto === undefined) {
+    return undefined
+  }
   if (a.auto === '1' || a.auto === 'true') {
     unsupported.push(`${where}: automatic colour cannot be resolved`)
     return undefined
@@ -67,9 +102,17 @@ function colorOf(node: XmlNode | undefined, where: string, unsupported: string[]
     const hex = (a.rgb.length === 8 ? a.rgb.slice(2) : a.rgb).toUpperCase()
     return `FF${hex}`
   }
-  if (a.theme !== undefined && /^\s*-?\d+\s*$/.test(a.theme) && Number(a.theme) >= 0) {
-    const tint = a.tint !== undefined && Number.isFinite(Number(a.tint)) ? Number(a.tint) : 0
-    return `theme:${Number(a.theme)}:${tint}`
+  if (a.theme !== undefined && /^\s*-?\d+\s*$/.test(a.theme) && Number(a.theme) >= 0 && Number(a.theme) <= 11) {
+    const tint = a.tint === undefined ? undefined : Number(a.tint)
+    if (tint !== undefined && (!Number.isFinite(tint) || tint < -1 || tint > 1)) {
+      unsupported.push(`${where}: theme tint "${a.tint}" is outside [-1, 1]`)
+      return undefined
+    }
+    return tint === undefined ? `theme:${Number(a.theme)}:0` : `theme:${Number(a.theme)}:${tint}`
+  }
+  if (a.theme !== undefined) {
+    unsupported.push(`${where}: theme index "${a.theme}" is not resolvable`)
+    return undefined
   }
   if (a.indexed !== undefined && /^\s*-?\d+\s*$/.test(a.indexed) && Number(a.indexed) >= 0 && Number(a.indexed) < 64) {
     return `indexed:${Number(a.indexed)}`
@@ -78,7 +121,11 @@ function colorOf(node: XmlNode | undefined, where: string, unsupported: string[]
   return undefined
 }
 
-function inspectFont(node: XmlNode, unsupported: string[]): void {
+function inspectFont(
+  node: XmlNode,
+  unsupported: string[],
+  strictBools: Partial<Record<'bold' | 'italic' | 'strike', boolean>>,
+): void {
   for (const name of childNames(node)) {
     if (!FONT_CHILDREN.has(name)) {
       unsupported.push(`font child <${name}> is not a supported differential property`)
@@ -90,8 +137,14 @@ function inspectFont(node: XmlNode, unsupported: string[]): void {
     } else if (name === 'sz') {
       const raw = attrs(getChild(node, 'sz')).val
       // Absent value is legacy-ignored; a present but unusable value is an
-      // explicit claim we cannot honor, so the rule must refuse.
-      if (raw !== undefined && !(Number(raw) > 0)) unsupported.push('font size is not a positive number')
+      // explicit claim (Infinity, NaN, non-positive) that must refuse the rule.
+      if (raw !== undefined && (!Number.isFinite(Number(raw)) || Number(raw) <= 0)) {
+        unsupported.push(`font size "${raw}" is not a positive number`)
+      }
+    } else if (name === 'b' || name === 'i' || name === 'strike') {
+      const key = name === 'b' ? 'bold' : name === 'i' ? 'italic' : 'strike'
+      const value = strictBool(getChild(node, name), `font ${name}`, unsupported)
+      if (value !== undefined) strictBools[key] = value
     } else if (name === 'color') {
       colorOf(getChild(node, 'color'), 'font colour', unsupported)
     }
@@ -135,7 +188,14 @@ function inspectBorder(node: XmlNode, unsupported: string[]): void {
       continue
     }
     const side = getChild(node, name)!
-    if (!attrs(side).style) continue
+    const style = attrs(side).style
+    if (!style) continue
+    // Only schema-enumerated border styles are representable; anything else
+    // (including wrong case) is an unhonorable claim.
+    if (!BORDER_STYLES.has(style)) {
+      unsupported.push(`border ${name} style "${style}" is not a supported border style`)
+      continue
+    }
     colorOf(getChild(side, 'color'), `border ${name} colour`, unsupported)
   }
 }
@@ -143,12 +203,13 @@ function inspectBorder(node: XmlNode, unsupported: string[]): void {
 /** Presence-vs-clear-preserving strict read of one `<dxf>` (or `<x14:dxf>`). */
 export function parseCfDxf(node: XmlNode, colors: SheetColorContext): CfStrictDxf {
   const unsupported: string[] = []
+  const strictBools: Partial<Record<'bold' | 'italic' | 'strike', boolean>> = {}
   for (const name of childNames(node)) {
     if (!DXF_CHILDREN.has(name)) {
       unsupported.push(`dxf child <${name}> is not a supported differential section`)
       continue
     }
-    if (name === 'font') inspectFont(getChild(node, 'font')!, unsupported)
+    if (name === 'font') inspectFont(getChild(node, 'font')!, unsupported, strictBools)
     else if (name === 'fill') inspectFill(getChild(node, 'fill')!, unsupported)
     else if (name === 'border') inspectBorder(getChild(node, 'border')!, unsupported)
     else if (name === 'numFmt') {
@@ -160,6 +221,13 @@ export function parseCfDxf(node: XmlNode, colors: SheetColorContext): CfStrictDx
   }
   if (unsupported.length > 0) return { properties: {}, writes: new Set<string>(), unsupported }
   const dxf: DxfStyle = parseDxf(node, colors)
+  // Strict lexical booleans override the legacy helper (which treats any
+  // non-0/false value, including wrong-case spellings, as true).
+  if (dxf.font) {
+    if ('bold' in strictBools && strictBools.bold !== undefined) dxf.font = { ...dxf.font, bold: strictBools.bold }
+    if ('italic' in strictBools && strictBools.italic !== undefined) dxf.font = { ...dxf.font, italic: strictBools.italic }
+    if ('strike' in strictBools && strictBools.strike !== undefined) dxf.font = { ...dxf.font, strike: strictBools.strike }
+  }
   const properties: Record<string, string | number | boolean | null> = {}
   const writes = new Set<string>()
   const font = dxf.font

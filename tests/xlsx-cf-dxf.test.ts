@@ -188,3 +188,41 @@ describe('CF strict dxf parsing', () => {
     expect(r.properties['fill.fg']).toBe('FFFFC7CE')
   })
 })
+
+
+describe('CF strict dxf review-t3-r1 findings', () => {
+  it('F8 refuses unrepresentable sizes, styles, themes and booleans without cherry-picking', () => {
+    const cases: Array<[string, string]> = [
+      [
+        `<font><sz val="Infinity"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill>`,
+        'infinite size with red fill',
+      ],
+      [`<font><sz val="-2"/></font>`, 'negative size'],
+      [`<border><left style="bogus"/></border>`, 'unknown border style'],
+      [`<border><top style="THIN"/></border>`, 'wrong-case border style'],
+      [`<font><color theme="999"/></font>`, 'unresolvable theme index'],
+      [`<font><color theme="4" tint="5"/></font>`, 'out-of-range tint'],
+      [`<font><color theme="4" tint="abc"/></font>`, 'non-numeric tint'],
+      [`<font><b val="bogus"/></font>`, 'non-boolean bold'],
+      [`<font><strike val="yes"/></font>`, 'non-boolean strike'],
+      [`<font><italic val="maybe"/></font>`, 'non-boolean italic'],
+    ]
+    for (const [inner, marker] of cases) {
+      const r = parseCfDxf(dxfNode(inner), colors)
+      expect(r.unsupported.length, marker).toBeGreaterThan(0)
+      expect(r.writes.size, `${marker}: writes must be empty`).toBe(0)
+      expect(Object.keys(r.properties), `${marker}: properties must be empty`).toHaveLength(0)
+    }
+  })
+
+  it('F8 keeps lexical booleans and bounded themes working', () => {
+    for (const [val, expected] of [['1', true], ['true', true], ['TRUE', true], ['0', false], ['false', false], ['FALSE', false]] as const) {
+      const r = parseCfDxf(dxfNode(`<font><b val="${val}"/></font>`), colors)
+      expect(r.unsupported).toEqual([])
+      expect(r.properties['font.bold']).toBe(expected)
+    }
+    const maxTheme = parseCfDxf(dxfNode(`<font><color theme="11" tint="-1"/></font>`), colors)
+    expect(maxTheme.unsupported).toEqual([])
+    expect(maxTheme.properties['font.color']).toBe('theme:11:-1')
+  })
+})

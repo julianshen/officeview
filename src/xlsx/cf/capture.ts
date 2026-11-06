@@ -19,8 +19,9 @@
 import { getChildren, registerNamespaceAware, type XmlNode } from '../../core/xml'
 import { localName, type XmlEvents } from '../../core/xml-stream'
 import { CF_LIMITS } from './limits'
-import type { CfMemory } from './limits'
+import type { CfMemory, CfReservation } from './limits'
 import { CF_X14_EXTENSION_URI, finalizeCfSubtrees, type CfParseMeta, type CfStylesSource } from './parse'
+import { X14_MAIN_NS } from '../tableStyles/parseStylesExtras'
 import type { CfLease, CfSheetRules } from './model'
 
 const MAX_CAPTURE_NODES = 32768
@@ -55,6 +56,35 @@ export function createCfStreamEvents(
   let sheetSeen = false
   let nodeCount = 0
   let overCap = false
+  let finished = false
+  // Working reservation: frames, copied attributes and accumulated text are
+  // admitted as they grow, before they are built.
+  let hold: CfReservation | undefined
+  const admit = (delta: number): boolean => {
+    if (overCap) return false
+    try {
+      if (!hold) {
+        const first = memory.reserve(256)
+        if (first.kind === 'unresolved') {
+          overCap = true
+          return false
+        }
+        hold = first
+      }
+      if (!hold.grow(hold.bytes + delta)) {
+        overCap = true
+        return false
+      }
+      return true
+    } catch {
+      overCap = true
+      return false
+    }
+  }
+  // Wrong-namespace containers skipped during capture; published as diagnostics.
+  const skipped = new Set<string>()
+  const SKIP_WRAPPER = 'non-x14 conditionalFormattings content is skipped'
+  const SKIP_PATH = 'conditionalFormatting extension outside the worksheet namespace is skipped'
   // Current capture root kind; undefined outside a root.
   let rootKind: 'base' | 'x14' | undefined
   const base: XmlNode[] = []
@@ -120,7 +150,13 @@ export function createCfStreamEvents(
           stack[2]?.extUri === CF_X14_EXTENSION_URI &&
           local === 'conditionalFormattings'
         ) {
-          kind = 'x14'
+          if (stack[1]?.uri === sheetNs && stack[2]?.uri === sheetNs && uri === X14_MAIN_NS) {
+            kind = 'x14'
+          } else {
+            // Claimed CF extension with a non-conforming path or wrapper:
+            // skip the subtree but say so (fail-closed, never silent).
+            skipped.add(stack[1]?.uri === sheetNs && stack[2]?.uri === sheetNs ? SKIP_WRAPPER : SKIP_PATH)
+          }
         }
         if (kind !== undefined) rootKind = kind
       } else {
@@ -133,14 +169,24 @@ export function createCfStreamEvents(
           entries.push({ frame: null, isRoot })
         } else {
           nodeCount++
-          const frameAttrs: Record<string, string> = {}
+          let attrBytes = 0
           for (let i = 0; i < count; i++) {
             const name = attrNames[i]!
             if (name === 'xmlns' || name.startsWith('xmlns:')) continue
-            const stripped = localName(name)
-            if (!(stripped in frameAttrs)) frameAttrs[stripped] = attrValues[i]!
+            attrBytes += localName(name).length + String(attrValues[i]).length
           }
-          entries.push({ frame: { local, uri, scope, attrs: frameAttrs, children: new Map(), childUris: new Map(), texts: [], textLen: 0 }, isRoot })
+          if (!admit(192 + attrBytes * 2)) {
+            entries.push({ frame: null, isRoot })
+          } else {
+            const frameAttrs: Record<string, string> = {}
+            for (let i = 0; i < count; i++) {
+              const name = attrNames[i]!
+              if (name === 'xmlns' || name.startsWith('xmlns:')) continue
+              const stripped = localName(name)
+              if (!(stripped in frameAttrs)) frameAttrs[stripped] = attrValues[i]!
+            }
+            entries.push({ frame: { local, uri, scope, attrs: frameAttrs, children: new Map(), childUris: new Map(), texts: [], textLen: 0 }, isRoot })
+          }
         }
       }
 
@@ -198,6 +244,8 @@ export function createCfStreamEvents(
         if (frame !== null) {
           if (frame.textLen + text.length > CF_LIMITS.textUnits) {
             overCap = true
+          } else if (!admit(text.length * 2)) {
+            // Admission failed: withhold everything at finish.
           } else {
             frame.texts.push(text)
             frame.textLen += text.length
@@ -208,12 +256,30 @@ export function createCfStreamEvents(
     },
   }
 
-  function finish(): CfLease<CfSheetRules> {
-    if (entries.length > 0 || overCap || rootKind !== undefined) {
-      // Truncated stream or structural overflow: withhold everything.
-      return finalizeCfSubtrees({ base: [], x14: [], sheetNs, truncated: true }, styles, memory, meta)
+  function releaseHold(): void {
+    // Idempotent: the hold exists only in the construction phase.
+    try {
+      hold?.release()
+    } catch {
+      /* best effort on teardown paths */
+    } finally {
+      hold = undefined
     }
-    return finalizeCfSubtrees({ base, x14: x14blocks, sheetNs }, styles, memory, meta)
+  }
+
+  function finish(): CfLease<CfSheetRules> {
+    if (finished) throw new Error('CF capture already finished')
+    finished = true
+    try {
+      if (entries.length > 0 || overCap || rootKind !== undefined) {
+        // Truncated stream or structural overflow: withhold everything.
+        return finalizeCfSubtrees({ base: [], x14: [], sheetNs, truncated: true, skipped: [...skipped] }, styles, memory, meta)
+      }
+      return finalizeCfSubtrees({ base, x14: x14blocks, sheetNs, skipped: [...skipped] }, styles, memory, meta)
+    } finally {
+      // The finalizer admits its own normalized copies; drop the transient hold.
+      releaseHold()
+    }
   }
 
   return { events, finish }

@@ -6,7 +6,8 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
-import { parseCfSheet, type CfParseMeta, type CfStylesSource } from '../src/xlsx/cf/parse'
+import { attachCfSheetRules, parseCfSheet, type CfParseMeta, type CfStylesSource } from '../src/xlsx/cf/parse'
+import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import type { CfLease, CfRule, CfSheetRules } from '../src/xlsx/cf/model'
 import { xlsxBytes } from './helpers/xlsx-package'
 
@@ -134,17 +135,18 @@ describe('CF rule parsing: all 18 types', () => {
   })
 
   it('evaluates text, blank and error predicates only for absent or canonical formulas', () => {
+    // One element per rule, mirroring the measured fixtures: each canonical
+    // formula references its own sqref anchor (top-left cell).
+    const el = (sqref: string, inner: string) => `<conditionalFormatting sqref="${sqref}">${inner}</conditionalFormatting>`
     const { value } = parse(
-      `<conditionalFormatting sqref="B2:O2">` +
-        `<cfRule type="containsText" dxfId="0" priority="1" text="ab"><formula>NOT(ISERROR(SEARCH("ab",B2)))</formula></cfRule>` +
-        `<cfRule type="containsText" dxfId="0" priority="2" text="ab"/>` +
-        `<cfRule type="containsText" dxfId="0" priority="3" text="ab"><formula>NOT(ISERROR(SEARCH("zz",D2)))</formula></cfRule>` +
-        `<cfRule type="beginsWith" dxfId="0" priority="4" text="ab"><formula>LEFT(E2,2)="ab"</formula></cfRule>` +
-        `<cfRule type="containsBlanks" dxfId="0" priority="5"><formula>LEN(TRIM(F2))=0</formula></cfRule>` +
-        `<cfRule type="containsBlanks" dxfId="0" priority="6"><formula>ISBLANK(G2)</formula></cfRule>` +
-        `<cfRule type="containsErrors" dxfId="0" priority="7"><formula>ISNA(H2)</formula></cfRule>` +
-        `<cfRule type="notContainsErrors" dxfId="0" priority="8"><formula>NOT(ISERROR(I2))</formula></cfRule>` +
-        `</conditionalFormatting>`,
+      el('B2:B9', `<cfRule type="containsText" dxfId="0" priority="1" text="ab"><formula>NOT(ISERROR(SEARCH("ab",B2)))</formula></cfRule>`) +
+        el('C2:C9', `<cfRule type="containsText" dxfId="0" priority="2" text="ab"/>`) +
+        el('D2:D9', `<cfRule type="containsText" dxfId="0" priority="3" text="ab"><formula>NOT(ISERROR(SEARCH("zz",D2)))</formula></cfRule>`) +
+        el('E2:E9', `<cfRule type="beginsWith" dxfId="0" priority="4" text="ab"><formula>LEFT(E2,2)="ab"</formula></cfRule>`) +
+        el('F2:F9', `<cfRule type="containsBlanks" dxfId="0" priority="5"><formula>LEN(TRIM(F2))=0</formula></cfRule>`) +
+        el('G2:G9', `<cfRule type="containsBlanks" dxfId="0" priority="6"><formula>ISBLANK(G2)</formula></cfRule>`) +
+        el('H2:H9', `<cfRule type="containsErrors" dxfId="0" priority="7"><formula>ISNA(H2)</formula></cfRule>`) +
+        el('I2:I9', `<cfRule type="notContainsErrors" dxfId="0" priority="8"><formula>NOT(ISERROR(I2))</formula></cfRule>`),
     )
     expect(value.unresolvedSheet).toBeUndefined()
     expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'ab' })
@@ -159,10 +161,8 @@ describe('CF rule parsing: all 18 types', () => {
 
   it('keeps quoted needles exact, including whitespace and escaped quotes', () => {
     const { value } = parse(
-      `<conditionalFormatting sqref="F2:G2">` +
-        `<cfRule type="containsText" priority="1" text=" ABC "><formula>NOT(ISERROR(SEARCH(" ABC ",F2)))</formula></cfRule>` +
-        `<cfRule type="containsText" priority="2" text="a&quot;b"><formula>NOT(ISERROR(SEARCH("a""b",G2)))</formula></cfRule>` +
-        `</conditionalFormatting>`,
+      `<conditionalFormatting sqref="F2:F9"><cfRule type="containsText" priority="1" text=" ABC "><formula>NOT(ISERROR(SEARCH(" ABC ",F2)))</formula></cfRule></conditionalFormatting>` +
+        `<conditionalFormatting sqref="G2:G9"><cfRule type="containsText" priority="2" text="a&quot;b"><formula>NOT(ISERROR(SEARCH("a""b",G2)))</formula></cfRule></conditionalFormatting>`,
     )
     expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: ' ABC ' })
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'a"b' })
@@ -182,22 +182,24 @@ describe('CF rule parsing: all 18 types', () => {
   })
 
   it('matches the ten canonical timePeriod patterns and refuses divergent or unknown periods', () => {
-    const periods: Array<[string, string]> = [
-      ['today', 'FLOOR(B2,1)=TODAY()'],
-      ['yesterday', 'FLOOR(C2,1)=TODAY()-1'],
-      ['tomorrow', 'FLOOR(D2,1)=TODAY()+1'],
-      ['last7Days', 'AND(TODAY()-FLOOR(E2,1)&lt;=6,FLOOR(E2,1)&lt;=TODAY())'],
-      ['thisWeek', 'AND(TODAY()-ROUNDDOWN(F2,0)&lt;=(WEEKDAY(TODAY())-1),ROUNDDOWN(F2,0)-TODAY()&lt;=(7-WEEKDAY(TODAY())))'],
-      ['lastWeek', 'AND(TODAY()-ROUNDDOWN(G2,0)&gt;(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+6))'],
-      ['nextWeek', 'AND(ROUNDDOWN(H2,0)-TODAY()&gt;(7-WEEKDAY(TODAY())),ROUNDDOWN(H2,0)-TODAY()&lt;(15-WEEKDAY(TODAY())))'],
-      ['thisMonth', 'AND(MONTH(I2)=MONTH(TODAY()),YEAR(I2)=YEAR(TODAY()))'],
-      ['lastMonth', 'AND(MONTH(J2)=MONTH(EDATE(TODAY(),0-1)),YEAR(J2)=YEAR(EDATE(TODAY(),0-1)))'],
-      ['nextMonth', 'AND(MONTH(K2)=MONTH(EDATE(TODAY(),0+1)),YEAR(K2)=YEAR(EDATE(TODAY(),0+1)))'],
+    // One element per rule with the anchor cell as sqref top-left, mirroring
+    // the measured fixtures (stage1-timeperiod-today-clock).
+    const periods: Array<[string, string, string]> = [
+      ['today', 'B2:B9', 'FLOOR(B2,1)=TODAY()'],
+      ['yesterday', 'C2:C9', 'FLOOR(C2,1)=TODAY()-1'],
+      ['tomorrow', 'D2:D9', 'FLOOR(D2,1)=TODAY()+1'],
+      ['last7Days', 'E2:E9', 'AND(TODAY()-FLOOR(E2,1)&lt;=6,FLOOR(E2,1)&lt;=TODAY())'],
+      ['thisWeek', 'F2:F9', 'AND(TODAY()-ROUNDDOWN(F2,0)&lt;=(WEEKDAY(TODAY())-1),ROUNDDOWN(F2,0)-TODAY()&lt;=(7-WEEKDAY(TODAY())))'],
+      ['lastWeek', 'G2:G9', 'AND(TODAY()-ROUNDDOWN(G2,0)&gt;(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+6))'],
+      ['nextWeek', 'H2:H9', 'AND(ROUNDDOWN(H2,0)-TODAY()&gt;(7-WEEKDAY(TODAY())),ROUNDDOWN(H2,0)-TODAY()&lt;(15-WEEKDAY(TODAY())))'],
+      ['thisMonth', 'I2:I9', 'AND(MONTH(I2)=MONTH(TODAY()),YEAR(I2)=YEAR(TODAY()))'],
+      ['lastMonth', 'J2:J9', 'AND(MONTH(J2)=MONTH(EDATE(TODAY(),0-1)),YEAR(J2)=YEAR(EDATE(TODAY(),0-1)))'],
+      ['nextMonth', 'K2:K9', 'AND(MONTH(K2)=MONTH(EDATE(TODAY(),0+1)),YEAR(K2)=YEAR(EDATE(TODAY(),0+1)))'],
     ]
     const rules = periods
-      .map(([p, f], i) => `<cfRule type="timePeriod" timePeriod="${p}" priority="${i + 1}"><formula>${f}</formula></cfRule>`)
+      .map(([p, sq, f], i) => `<conditionalFormatting sqref="${sq}"><cfRule type="timePeriod" timePeriod="${p}" priority="${i + 1}"><formula>${f}</formula></cfRule></conditionalFormatting>`)
       .join('')
-    const { value } = parse(`<conditionalFormatting sqref="B2:K2">${rules}</conditionalFormatting>`)
+    const { value } = parse(rules)
     expect(value.unresolvedSheet).toBeUndefined()
     expect(value.rules).toHaveLength(10)
     for (const [p, ,] of periods) {
@@ -342,13 +344,10 @@ describe('CF ranges, caps and invalid attributes', () => {
 
     const wide = Array.from({ length: 257 }, (_, i) => `A${i + 1}`).join(' ')
     const wideRes = parse(`<conditionalFormatting sqref="${wide}"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting>`)
-    // Per-rule interval overflow withholds only that rule (scope is known);
-    // sheet-wide preconditions (rule count, total ranges, scope) use the sentinel.
-    expect(wideRes.value.unresolvedSheet).toBeUndefined()
-    expect(wideRes.value.rules).toHaveLength(1)
-    expect(wideRes.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
-    // Refused before dxf resolution, so the write mask stays maximally conservative.
-    expect([...wideRes.value.rules[0]!.writes]).toContain('ALL')
+    // Per-rule interval overflow withholds the sheet: the scope cannot be
+    // retained within the bound, so no later rule may paint (see F5 below).
+    expect(wideRes.value.rules).toHaveLength(0)
+    expect(wideRes.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
   })
 
   it('refuses over-long text, excess formulas, cfvos and custom icons at rule level', () => {
@@ -578,5 +577,232 @@ describe('CF resident workbook integration', () => {
     const sheet = doc.sheets[0]!
     expect(sheet.conditionalFormatting).toBeUndefined()
     expect(sheet.tableStyleSource).toBeUndefined()
+  })
+})
+
+describe('CF fix round 1: review-t3-r1 findings', () => {
+  it('F1 composes all retained charges into the adopted lease', () => {
+    const memory = createCfMemory({})
+    const lease = parseCfSheet(
+      worksheet(
+        `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`,
+      ),
+      stylesFor(DXF_FILL),
+      memory,
+      {},
+    )
+    // Single composed charge: the lease owns rules, diagnostics and metadata.
+    expect(lease.bytes).toBe(memory.currentBytes)
+    expect(lease.bytes).toBeGreaterThan(0)
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+    // Double release stays at zero (idempotent settle).
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F1 never underprices the transferred payload versus the repository model', () => {
+    const memory = createCfMemory({})
+    const lease = parseCfSheet(
+      worksheet(
+        `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`,
+      ),
+      stylesFor(DXF_FILL),
+      memory,
+      {},
+    )
+    expect(lease.bytes).toBeGreaterThanOrEqual(measurePayloadBytes(lease.value) ?? Number.POSITIVE_INFINITY)
+    const dest = createCfMemory({})
+    const moved = lease.transfer(dest)
+    expect(moved.kind).toBe('ready')
+    if (moved.kind === 'ready') {
+      expect(dest.currentBytes).toBe(moved.value.bytes)
+      moved.value.release()
+    }
+    expect(dest.currentBytes).toBe(0)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F1 releases the replaced lease on reattachment', () => {
+    const styles = stylesFor(DXF_FILL)
+    const memory = createCfMemory({})
+    const sheet: { conditionalFormatting?: import('../src/xlsx/cf/model').CfSheetRules } = {}
+    const first = parseCfSheet(
+      worksheet(
+        `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>1</formula></cfRule></conditionalFormatting>`,
+      ),
+      styles,
+      memory,
+      {},
+    )
+    attachCfSheetRules(sheet, first)
+    const afterFirst = memory.currentBytes
+    expect(afterFirst).toBeGreaterThan(0)
+    const second = parseCfSheet(
+      worksheet(
+        `<conditionalFormatting sqref="B2"><cfRule type="cellIs" priority="1" operator="greaterThan"><formula>2</formula></cfRule></conditionalFormatting>`,
+      ),
+      styles,
+      memory,
+      {},
+    )
+    const secondBytes = second.bytes
+    attachCfSheetRules(sheet, second)
+    // The replaced lease settles exactly once; only the live rules stay charged.
+    expect(memory.currentBytes).toBe(secondBytes)
+    expect(sheet.conditionalFormatting).toBe(second.value)
+  })
+
+  it('F2 never materializes an attacker-sized split before admission', () => {
+    const big = `A1 ${'A1 '.repeat(100000)}`.trim()
+    let splitLen = 0
+    const origSplit = String.prototype.split
+    const patched = function (this: string, separator: string | RegExp, limit?: number): string[] {
+      // eslint-disable-next-line prefer-rest-params
+      const result = (origSplit as (...a: unknown[]) => string[]).apply(this, [separator, limit])
+      if (this.length > 10000 && result.length > splitLen) splitLen = result.length
+      return result
+    }
+    ;(String.prototype as unknown as { split: typeof patched }).split = patched
+    try {
+      const memory = createCfMemory({})
+      const lease = parseCfSheet(
+        worksheet(
+          `<conditionalFormatting sqref="${big}"><cfRule type="expression" priority="1"/></conditionalFormatting>`,
+        ),
+        stylesFor(''),
+        memory,
+        {},
+      )
+      // 100k-token scope is unrepresentable: withhold the sheet, fail closed.
+      expect(lease.value.rules).toHaveLength(0)
+      expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL' })
+    } finally {
+      ;(String.prototype as unknown as { split: typeof origSplit }).split = origSplit
+    }
+    // No unbounded transient: the token array is never built.
+    expect(splitLen).toBeLessThanOrEqual(4096)
+  })
+
+  it('F3 charges streaming capture as it grows, even on a zero-byte account', async () => {
+    const memory = createCfMemory({ limitBytes: 0 })
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    stream.events.open('worksheet', [], [], 0, false)
+    for (let i = 0; i < 10; i++) {
+      stream.events.open('conditionalFormatting', ['sqref'], ['A1'], 1, false)
+      stream.events.open('cfRule', ['type', 'priority'], ['expression', String(i + 1)], 2, true)
+      stream.events.close('conditionalFormatting')
+    }
+    // Growth is admitted eagerly: a zero-byte account refuses the first node.
+    expect(memory.currentBytes).toBe(0)
+    expect(() => stream.finish()).toThrow()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F3 settles streaming charges to zero on the success path', async () => {
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const doc = `<worksheet xmlns="${NS}" xmlns:x14="${X14}" xmlns:xm="${XM}"><conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>1</formula></cfRule></conditionalFormatting></worksheet>`
+    const bytes = new TextEncoder().encode(doc)
+    async function* source() {
+      yield bytes
+    }
+    await tokenizeBytes(source(), stream.events)
+    const lease = stream.finish()
+    expect(lease.value.rules).toHaveLength(1)
+    expect(memory.currentBytes).toBe(lease.bytes)
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F4 publishes one admitted, deduplicated, capped diagnostic collection', () => {
+    const identical = Array.from(
+      { length: 100 },
+      () => `<cfRule type="expression" priority="1"><formula>A1</formula></cfRule>`,
+    ).join('')
+    const same = parse(`<conditionalFormatting sqref="A1">${identical}</conditionalFormatting>`)
+    // Same cause deduplicates to one entry.
+    expect(same.value.diagnostics).toHaveLength(1)
+    const varied = Array.from(
+      { length: 100 },
+      (_, i) => `<cfRule type="expression" priority="${i + 1}"><formula>A1</formula></cfRule>`,
+    ).join('')
+    const capped = parse(`<conditionalFormatting sqref="A1">${varied}</conditionalFormatting>`)
+    // Distinct causes stop at the 64-entry cap.
+    expect(capped.value.diagnostics).toHaveLength(64)
+    expect(new Set(capped.value.diagnostics.map(d => d.message)).size).toBe(64)
+  })
+
+  it('F5 withholds the sheet when an over-cap stopping rule loses its scope', () => {
+    const wide = Array.from({ length: 257 }, (_, i) => `A${i + 1}`).join(' ')
+    const { value } = parse(
+      `<conditionalFormatting sqref="${wide}"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan" stopIfTrue="1"><formula>1</formula></cfRule></conditionalFormatting>` +
+        `<conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>2</formula></cfRule></conditionalFormatting>`,
+    )
+    // The 257-interval rule cannot retain its scope or stop intent, so no
+    // later rule may paint: the sheet is withheld, not the single rule.
+    expect(value.rules).toHaveLength(0)
+    expect(value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+  })
+
+  it('F6 rejects non-literal string expressions instead of parsing quotes', () => {
+    const concat = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>"a"&amp;"b"</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(concat.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    const twoTokens = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>"a" "b"</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(twoTokens.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    const unterminated = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>"abc</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(unterminated.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    const escaped = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="cellIs" priority="1" operator="equal"><formula>"a""b"</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(escaped.value.rules[0]!.definition).toMatchObject({ kind: 'cellIs', operands: [{ kind: 'string', value: 'a"b' }] })
+  })
+
+  it('F7 only honours canonical formulas that reference the anchor cell', () => {
+    const offAnchor = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(Z99))=0</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(offAnchor.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    const pinnedAnchor = parse(
+      `<conditionalFormatting sqref="B2:B9"><cfRule type="containsText" priority="1" text="ab"><formula>NOT(ISERROR(SEARCH("ab",$B$2)))</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(pinnedAnchor.value.rules[0]!.definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'ab' })
+    const multiRange = parse(
+      `<conditionalFormatting sqref="B2:B3 D5:D6"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(B2))=0</formula></cfRule></conditionalFormatting>`,
+    )
+    // Multi-range anchoring is unmeasured: the formula stays unresolved.
+    expect(multiRange.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    const mixedRefs = parse(
+      `<conditionalFormatting sqref="B2:B9"><cfRule type="timePeriod" timePeriod="last7Days" priority="1"><formula>AND(TODAY()-FLOOR(E2,1)&lt;=6,FLOOR(B2,1)&lt;=TODAY())</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(mixedRefs.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+
+  it('F9 rejects wrong-namespace x14 containers on both paths', async () => {
+    const evil =
+      `<extLst><ext uri="${CF_EXT}"><evil:conditionalFormattings xmlns:evil="urn:evil" xmlns:x="${X14}" xmlns:m="${XM}">` +
+      `<x:conditionalFormatting><m:sqref>A1</m:sqref><x:cfRule type="containsBlanks" priority="1"/></x:conditionalFormatting>` +
+      `</evil:conditionalFormattings></ext></extLst>`
+    const resident = parse(evil)
+    expect(resident.value.rules).toHaveLength(0)
+    expect(resident.value.diagnostics.some(d => d.feature === 'cf-namespace')).toBe(true)
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const bytes = new TextEncoder().encode(
+      `<worksheet xmlns="${NS}" xmlns:evil="urn:evil" xmlns:x="${X14}" xmlns:m="${XM}">${evil}</worksheet>`,
+    )
+    async function* source() {
+      yield bytes
+    }
+    await tokenizeBytes(source(), stream.events)
+    const streamed = stream.finish()
+    expect(streamed.value.rules).toHaveLength(0)
+    expect(streamed.value.diagnostics.some(d => d.feature === 'cf-namespace')).toBe(true)
   })
 })
