@@ -368,6 +368,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // class, created lazily once `pivotUi` is loaded) ends a cache's charge when
   // the model is replaced, the cache evicts it, or the viewer unmounts.
   const slicerRetainedRef = useRef<PivotUi.SlicerRetainedCharges | null>(null)
+  // Ledger owners for transferred holds must stay unique across controller
+  // instances: the retained charge survives controller disposal, so a
+  // per-controller serial restarting at zero reuses the previous owner's key
+  // and `mainLedger.set()` overwrites its charge (PR #61 review). These
+  // viewer-scoped serials only reset on unmount, which also clears retained.
+  const slicerHoldSerial = useRef(0)
+  const timelineHoldSerial = useRef(0)
   useEffect(() => () => {
     slicerRetainedRef.current?.clear()
     slicerRetainedRef.current = null
@@ -1818,7 +1825,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return
     }
     previous?.controller.dispose()
-    let holdSerial = 0
     for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
     const controller = new pivotUi.SlicerController(activeSlicerDrawings.map(item => item.model), {
       announce: message => pivotHost.current.announce(message),
@@ -1837,7 +1843,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (sheetId !== undefined) localDrawingGens.set(sheetId, (localDrawingGens.get(sheetId) ?? 0) + 1)
       },
       admit: bytes => {
-        const owner = `slicer-selection:${identity}:${++holdSerial}`
+        const owner = `slicer-selection:${identityKey}:${++slicerHoldSerial.current}`
         if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return undefined
         mainLedger.set('controls', owner, bytes)
         let held = true
@@ -1908,7 +1914,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [timelineController, setTimelineController] = useState<PivotUi.TimelineController | null>(null)
   useEffect(() => {
     if (!pivotUi || !pivotController) { setTimelineController(null); return }
-    let holdSerial = 0
     const savedTimelines = doc.sheets.flatMap(sheet => timelineDrawingsOf(sheet.drawings).map(item => item.model))
     const controller = new pivotUi.TimelineController(savedTimelines, {
       announce: message => pivotHost.current.announce(message),
@@ -1918,7 +1923,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (sheetId !== undefined) localDrawingGens.set(sheetId, (localDrawingGens.get(sheetId) ?? 0) + 1)
       },
       admit: bytes => {
-        const owner = `timeline-selection:${identity}:${++holdSerial}`
+        const owner = `timeline-selection:${identityKey}:${++timelineHoldSerial.current}`
         if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return undefined
         mainLedger.set('controls', owner, bytes)
         let held = true

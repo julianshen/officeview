@@ -73,6 +73,29 @@ describe('viewer-level retained slicer charge (review round 1, item 1)', () => {
     expect(slicerBytes(ledger)).toBe(0)
   }, 60_000)
 
+  it('resident: retained ledger owners are unique and never stringify an object identity', async () => {
+    const doc = await seed()
+    let ledger!: MainMemoryLedger
+    const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
+    const group = await apples(ui)
+    const charges = slicerCharges(ledger)
+    expect(charges).toHaveLength(1)
+    // The P1 collision: `${identity}` stringifies the CacheIdentity object and
+    // `holdSerial` restarts per controller, so a second controller reuses the
+    // first owner's ledger key and overwrites its charge.
+    for (const charge of charges) expect(charge.owner).not.toContain('[object Object]')
+    const owners = charges.map(charge => charge.owner)
+    expect(new Set(owners).size).toBe(owners.length)
+    // Replace admits a second hold on the same controller: owners stay unique.
+    fireEvent.click(within(group).getByRole('button', { name: 'Clear Filter' }))
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Apples, selected' }).getAttribute('aria-pressed')).toBe('true'), FIRST_PAINT_WAIT)
+    const after = slicerCharges(ledger)
+    expect(after).toHaveLength(1)
+    for (const charge of after) expect(charge.owner).not.toContain('[object Object]')
+    ui.unmount()
+    expect(slicerBytes(ledger)).toBe(0)
+  }, 60_000)
+
   it('resident: unmounting with a live selection releases its charge', async () => {
     const doc = await seed()
     let ledger!: MainMemoryLedger
