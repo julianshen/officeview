@@ -13,11 +13,13 @@ import {
   CF_STAGE1_CASES,
   type CfManifest,
   type CfOracleCase,
+  type CfResaveReceipt,
 } from '../scripts/cf-refs/cases'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
 import {
   computeWorksheetRangeGeometry,
   isCapabilityVerified,
+  isSupportedExcelVersion,
   parseA1,
   readZipPartsSync,
   verifyCfCase,
@@ -53,7 +55,7 @@ async function makeSyntheticXlsx(opts: {
     'xl/workbook.xml': `${XML_DECL}<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>${opts.workbookExtraXml ?? ''}</workbook>`,
     'xl/_rels/workbook.xml.rels': `${XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${NS_R}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${NS_R}/styles" Target="styles.xml"/></Relationships>`,
     'xl/styles.xml': `${XML_DECL}<styleSheet xmlns="${NS_MAIN}"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>${dxfsXml}</styleSheet>`,
-    'xl/worksheets/sheet1.xml': `${XML_DECL}<worksheet xmlns="${NS_MAIN}"><dimension ref="A1:B3"/><sheetFormatPr defaultRowHeight="18" defaultColWidth="14"/><sheetData><row r="1" ht="18"><c r="A1" t="inlineStr"><is><t>Label</t></is></c><c r="B1" t="inlineStr"><is><t>Value</t></is></c></row><row r="2" ht="18"><c r="A2" t="inlineStr"><is><t>Pos</t></is></c><c r="B2"><v>150</v></c></row><row r="3" ht="18"><c r="A3" t="inlineStr"><is><t>Neg</t></is></c><c r="B3"><v>50</v></c></row></sheetData>${sheetRule}</worksheet>`,
+    'xl/worksheets/sheet1.xml': `${XML_DECL}<worksheet xmlns="${NS_MAIN}"><dimension ref="A1:B3"/><sheetFormatPr defaultRowHeight="18" defaultColWidth="14"/><sheetData><row r="1" ht="18"><c r="A1" t="inlineStr"><is><t>Label</t></is></c><c r="B1" t="inlineStr"><is><t>Value</t></is></c></row><row r="2" ht="18"><c r="A2" t="inlineStr"><is><t>Pos</t></is></c><c r="B2"><v>150</v></c></row><row r="3" ht="18"><c r="A3"><v>50</v></c><c r="B3"><v>50</v></c></row></sheetData>${sheetRule}</worksheet>`,
   }
   if (opts.repaired) {
     files['xl/repairedRecords/repairedRecord1.xml'] = `${XML_DECL}<repairedRecord/>`
@@ -65,18 +67,29 @@ async function makeSyntheticXlsx(opts: {
 }
 
 /**
- * Renders a synthetic `140x54` PNG for `A1:B3` (2 cols x 70px, 3 rows x 18px)
- * where `B2` (`x: 70..140, y: 18..36`) has `#ffc7ce` when `positiveHighlight` is true.
+ * Renders a synthetic `168x54` PNG for `A1:B3` (2 cols x 84px, 3 rows x 18px)
+ * where `B2` (`x: 84..168, y: 18..36`) has `#ffc7ce` and `#9c0006` bold font when `positiveHighlight` is true.
  */
 function makeCapturePng(positiveHighlight: boolean): Uint8Array {
-  const canvas = createCanvas(140, 54)
+  const canvas = createCanvas(168, 54)
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, 140, 54)
+  ctx.fillRect(0, 0, 168, 54)
   if (positiveHighlight) {
     ctx.fillStyle = '#ffc7ce'
-    ctx.fillRect(70, 18, 70, 18)
+    ctx.fillRect(84, 18, 84, 18)
+    ctx.fillStyle = '#9c0006'
+    ctx.font = 'bold 11px sans-serif'
+    ctx.fillText('150', 94, 32)
+  } else {
+    ctx.fillStyle = '#000000'
+    ctx.font = '11px sans-serif'
+    ctx.fillText('150', 94, 32)
   }
+  ctx.fillStyle = '#000000'
+  ctx.font = '11px sans-serif'
+  ctx.fillText('50', 94, 50)
+  ctx.fillText('50', 10, 50)
   return new Uint8Array(canvas.toBuffer('image/png'))
 }
 
@@ -84,37 +97,122 @@ function makeCapturePng(positiveHighlight: boolean): Uint8Array {
 function makeCaseMatchingPng(c: CfOracleCase, savedBytes: Uint8Array, paintMatchedFills: boolean): Uint8Array {
   const parts = readZipPartsSync(savedBytes)!
   const geom = computeWorksheetRangeGeometry(parts, c.range)!
-  const width = Math.round((geom.minExpectedWidthPt + geom.maxExpectedWidthPt) / 2)
+  const width = geom.expectedWidthPt
   const height = geom.expectedHeightPt
   const canvas = createCanvas(width, height)
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, width, height)
 
-  if (paintMatchedFills) {
-    const totalW = geom.colWidthChars.reduce((a, b) => a + b, 0)
-    const totalH = geom.rowHeightsPt.reduce((a, b) => a + b, 0)
-    for (const cell of c.expected.cells) {
-      if (!cell.matched) continue
-      const pos = parseA1(cell.ref)!
-      const colIdx = pos.col - geom.minCol
-      const rowIdx = pos.row - geom.minRow
-      const colBefore = geom.colWidthChars.slice(0, colIdx).reduce((a, b) => a + b, 0)
-      const colSpan = geom.colWidthChars[colIdx]
-      const rowBefore = geom.rowHeightsPt.slice(0, rowIdx).reduce((a, b) => a + b, 0)
-      const rowSpan = geom.rowHeightsPt[rowIdx]
-      const x0 = Math.floor((colBefore / totalW) * width)
-      const x1 = Math.floor(((colBefore + colSpan) / totalW) * width)
-      const y0 = Math.floor((rowBefore / totalH) * height)
-      const y1 = Math.floor(((rowBefore + rowSpan) / totalH) * height)
+  const totalW = geom.expectedWidthPt
+  const totalH = geom.expectedHeightPt
+  for (const cell of c.expected.cells) {
+    const pos = parseA1(cell.ref)!
+    const colIdx = pos.col - geom.minCol
+    const rowIdx = pos.row - geom.minRow
+    const colBefore = geom.colWidthsPt.slice(0, colIdx).reduce((a, b) => a + b, 0)
+    const colSpan = geom.colWidthsPt[colIdx]
+    const rowBefore = geom.rowHeightsPt.slice(0, rowIdx).reduce((a, b) => a + b, 0)
+    const rowSpan = geom.rowHeightsPt[rowIdx]
+    const x0 = Math.round((colBefore / totalW) * width)
+    const x1 = Math.max(x0 + 1, Math.round(((colBefore + colSpan) / totalW) * width))
+    const y0 = Math.round((rowBefore / totalH) * height)
+    const y1 = Math.max(y0 + 1, Math.round(((rowBefore + rowSpan) / totalH) * height))
+
+    if (paintMatchedFills && cell.matched) {
       if (cell.fillRgb) {
         const hex6 = cell.fillRgb.replace(/^#/, '').slice(-6)
         ctx.fillStyle = `#${hex6}`
         ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
-      } else {
-        ctx.fillStyle = '#000000'
-        ctx.fillRect(x0 + 4, y0 + 6, Math.max(4, x1 - x0 - 8), 4)
       }
+      if (cell.borderTop) {
+        ctx.strokeStyle = '#006100'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(x0, y0 + 0.5)
+        ctx.lineTo(x1, y0 + 0.5)
+        ctx.stroke()
+      }
+      if (cell.borderBottom) {
+        ctx.strokeStyle = '#006100'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(x0, y1 - 0.5)
+        ctx.lineTo(x1, y1 - 0.5)
+        ctx.stroke()
+      }
+      const displayText = cell.formattedText ?? cell.ref
+      const fontHex = cell.fontRgb ? cell.fontRgb.replace(/^#/, '').slice(-6) : '000000'
+      ctx.fillStyle = `#${fontHex}`
+      ctx.font = cell.bold ? 'bold 11px sans-serif' : '11px sans-serif'
+      ctx.fillText(displayText, x0 + 4, y0 + 13)
+    } else {
+      const displayText = cell.formattedText ?? cell.ref
+      ctx.fillStyle = '#000000'
+      ctx.font = '11px sans-serif'
+      ctx.fillText(displayText, x0 + 4, y0 + 13)
+    }
+
+    if (cell.controlRef) {
+      const cPos = parseA1(cell.controlRef)
+      if (cPos) {
+        const cColIdx = cPos.col - geom.minCol
+        const cRowIdx = cPos.row - geom.minRow
+        if (cColIdx >= 0 && cRowIdx >= 0 && cColIdx < geom.colWidthsPt.length && cRowIdx < geom.rowHeightsPt.length) {
+          const cColBefore = geom.colWidthsPt.slice(0, cColIdx).reduce((a, b) => a + b, 0)
+          const cRowBefore = geom.rowHeightsPt.slice(0, cRowIdx).reduce((a, b) => a + b, 0)
+          const cx0 = Math.round((cColBefore / totalW) * width)
+          const cy0 = Math.round((cRowBefore / totalH) * height)
+          // For matched cells, control cell has unformatted text (controlRef), not the CF formatted text
+          // For unmatched cells, control cell has identical text as the cell (so they match)
+          const ctrlText = cell.matched
+            ? cell.formattedText !== undefined
+              ? cell.controlRef
+              : cell.ref
+            : (cell.formattedText ?? cell.ref)
+          ctx.fillStyle = '#000000'
+          ctx.font = '11px sans-serif'
+          ctx.fillText(ctrlText, cx0 + 4, cy0 + 13)
+        }
+      }
+    }
+  }
+  return new Uint8Array(canvas.toBuffer('image/png'))
+}
+
+/** Old painter counterexample from r2-probe.ts: only solid rectangles or 4px black bars, no text/font/borders. */
+function makeFillBarOnlyPng(c: CfOracleCase, savedBytes: Uint8Array): Uint8Array {
+  const parts = readZipPartsSync(savedBytes)!
+  const geom = computeWorksheetRangeGeometry(parts, c.range)!
+  const width = geom.expectedWidthPt
+  const height = geom.expectedHeightPt
+  const canvas = createCanvas(width, height)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
+
+  const totalW = geom.expectedWidthPt
+  const totalH = geom.expectedHeightPt
+  for (const cell of c.expected.cells) {
+    if (!cell.matched) continue
+    const pos = parseA1(cell.ref)!
+    const colIdx = pos.col - geom.minCol
+    const rowIdx = pos.row - geom.minRow
+    const colBefore = geom.colWidthsPt.slice(0, colIdx).reduce((a, b) => a + b, 0)
+    const colSpan = geom.colWidthsPt[colIdx]
+    const rowBefore = geom.rowHeightsPt.slice(0, rowIdx).reduce((a, b) => a + b, 0)
+    const rowSpan = geom.rowHeightsPt[rowIdx]
+    const x0 = Math.floor((colBefore / totalW) * width)
+    const x1 = Math.floor(((colBefore + colSpan) / totalW) * width)
+    const y0 = Math.floor((rowBefore / totalH) * height)
+    const y1 = Math.floor(((rowBefore + rowSpan) / totalH) * height)
+    if (cell.fillRgb) {
+      const hex6 = cell.fillRgb.replace(/^#/, '').slice(-6)
+      ctx.fillStyle = `#${hex6}`
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
+    } else {
+      ctx.fillStyle = '#000000'
+      ctx.fillRect(x0 + 4, y0 + 6, Math.max(4, x1 - x0 - 8), 4)
     }
   }
   return new Uint8Array(canvas.toBuffer('image/png'))
@@ -146,8 +244,10 @@ describe('CF oracle verifier', () => {
         appearance: 'screen',
         scale: 1,
         pxPerPt: 1,
-        width: 140,
+        width: 168,
         height: 54,
+        resavedByExcel: true,
+        resaveSavedSha256: validXlsxHash,
         sheet: 'Sheet1',
         range: 'A1:B3',
         savedSha256: validXlsxHash,
@@ -162,6 +262,14 @@ describe('CF oracle verifier', () => {
       question: 'Synthetic test case',
       input: 'valid.xlsx',
       saved: 'valid.xlsx',
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: validXlsxHash,
+        savedSha256: validXlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
       sheet: 'Sheet1',
       range: 'A1:B3',
       requiredAppearances: ['screen'],
@@ -306,8 +414,10 @@ describe('CF oracle verifier', () => {
         appearance: 'screen',
         scale: 1,
         pxPerPt: 1,
-        width: 140,
+        width: 168,
         height: 54,
+        resavedByExcel: true,
+        resaveSavedSha256: validXlsxHash,
         sheet: 'Sheet1',
         range: 'A1:B3',
         savedSha256: validXlsxHash,
@@ -406,6 +516,8 @@ describe('CF oracle verifier', () => {
       route: 'copy-picture',
       appearance: 'screen',
       excelVersion: '16.114',
+      resavedByExcel: true,
+      resaveSavedSha256: savedHash,
       savedSha256: savedHash,
       pngSha256: validMatchingHash,
       capturedAt: '2026-11-06T08:00:00Z',
@@ -418,6 +530,14 @@ describe('CF oracle verifier', () => {
         {
           ...c0,
           status: 'measured',
+          resavedByExcel: true,
+          resaveReceipt: {
+            openedRepairFree: true,
+            excelVersion: '16.114',
+            inputSha256: c0.expected.inputSha256,
+            savedSha256: savedHash,
+            resavedAt: '2026-11-06T08:00:00Z',
+          },
           captures: [
             {
               appearance: 'screen',
@@ -437,6 +557,14 @@ describe('CF oracle verifier', () => {
     const observedC0: CfOracleCase = {
       ...c0,
       status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: c0.expected.inputSha256,
+        savedSha256: savedHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
       expected: { ...c0.expected, provenance: 'excel-observed' },
       captures: [
         {
@@ -452,7 +580,7 @@ describe('CF oracle verifier', () => {
     // Counterexample 2a: White image with only black "101" text (no CF styling), even at exact range dimensions
     const parts = readZipPartsSync(savedBytes)!
     const geom = computeWorksheetRangeGeometry(parts, c0.range)!
-    const exactW = Math.round((geom.minExpectedWidthPt + geom.maxExpectedWidthPt) / 2)
+    const exactW = geom.expectedWidthPt
     const exactH = geom.expectedHeightPt
     const textCanvas = createCanvas(exactW, exactH)
     const ctx = textCanvas.getContext('2d')
@@ -753,6 +881,13 @@ describe('CF oracle verifier', () => {
     const clockPng = makeCaseMatchingPng(clockCase, clockSavedBytes, true)
     const clockPngHash = sha256(clockPng)
     writeFileSync(join(dir, 'clock.png'), clockPng)
+    const clockReceipt: CfResaveReceipt = {
+      openedRepairFree: true,
+      excelVersion: '16.114',
+      inputSha256: clockCase.expected.inputSha256,
+      savedSha256: clockSavedHash,
+      resavedAt: '2026-11-06T08:00:00Z',
+    }
 
     // 5a: Daytime capture (16:00 Asia/Taipei, outside 00:05-07:55 window) -> refused with clock-window-invalid
     writeFileSync(
@@ -766,6 +901,8 @@ describe('CF oracle verifier', () => {
         sheet: clockCase.sheet,
         range: clockCase.range,
         hostTimeZone: 'Asia/Taipei',
+        resavedByExcel: true,
+        resaveSavedSha256: clockSavedHash,
         savedSha256: clockSavedHash,
         pngSha256: clockPngHash,
         capturedAt: '2026-11-06T08:00:00Z',
@@ -779,6 +916,8 @@ describe('CF oracle verifier', () => {
         {
           ...clockCase,
           status: 'measured',
+          resavedByExcel: true,
+          resaveReceipt: clockReceipt,
           expected: { ...clockCase.expected, provenance: 'excel-observed' },
           captures: [
             {
@@ -808,6 +947,8 @@ describe('CF oracle verifier', () => {
         sheet: clockCase.sheet,
         range: clockCase.range,
         hostTimeZone: 'Asia/Taipei',
+        resavedByExcel: true,
+        resaveSavedSha256: clockSavedHash,
         savedSha256: clockSavedHash,
         pngSha256: clockPngHash,
         capturedAt: '2026-11-07T17:30:00Z',
@@ -821,6 +962,8 @@ describe('CF oracle verifier', () => {
         {
           ...clockCase,
           status: 'measured',
+          resavedByExcel: true,
+          resaveReceipt: clockReceipt,
           expected: { ...clockCase.expected, provenance: 'excel-observed' },
           captures: [
             {
@@ -850,6 +993,8 @@ describe('CF oracle verifier', () => {
         sheet: clockCase.sheet,
         range: clockCase.range,
         hostTimeZone: 'Asia/Taipei',
+        resavedByExcel: true,
+        resaveSavedSha256: clockSavedHash,
         savedSha256: clockSavedHash,
         pngSha256: clockPngHash,
         capturedAt: '2026-11-05T17:30:00Z',
@@ -863,6 +1008,8 @@ describe('CF oracle verifier', () => {
         {
           ...clockCase,
           status: 'measured',
+          resavedByExcel: true,
+          resaveReceipt: clockReceipt,
           expected: { ...clockCase.expected, provenance: 'excel-observed' },
           captures: [
             {
@@ -920,5 +1067,243 @@ describe('CF oracle verifier', () => {
     expect(afterFull.cases[0].expected.savedSha256).toBe(resavedHash)
     expect(afterFull.cases[0].resavedByExcel).toBe(true)
     expect(sha256(new Uint8Array(readFileSync(savedCaseAPath)))).toBe(resavedHash)
+  })
+
+  it('rejects review-t1-r2 counterexamples: fill-only/bar-only PNG without text/font/border, mutated non-fill expectations, unobserved capabilities, missing pivot parts, missing Excel resave provenance, proportional vs ECMA-376 column geometry, and Excel version 16.120..199', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-r2-'))
+    dirs.push(dir)
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+
+    // 1. Every marker in every capture-bearing Stage 1 case must have expected.cells observations inside its sqref
+    for (const c of manifest.cases) {
+      if (c.status === 'unsupported') continue
+      for (const m of c.markers) {
+        const covered = c.expected.cells.filter(cell => {
+          const pos = parseA1(cell.ref)
+          if (!pos) return false
+          return m.sqref.trim().split(/\s+/).some(token => {
+            const parts = token.split(':')
+            const a = parseA1(parts[0] ?? '')
+            const b = parseA1(parts[1] ?? parts[0] ?? '')
+            if (!a || !b) return false
+            return (
+              pos.row >= Math.min(a.row, b.row) &&
+              pos.row <= Math.max(a.row, b.row) &&
+              pos.col >= Math.min(a.col, b.col) &&
+              pos.col <= Math.max(a.col, b.col)
+            )
+          })
+        })
+        expect(covered.length, `marker ${m.capabilityId} (${m.sqref}) in ${c.id} has no expected.cells`).toBeGreaterThan(0)
+      }
+    }
+
+    // 2. stage1-dxf-layering must contain real xl/pivotTables/pivotTable1.xml for dxf:pivot-style-layering
+    const dxfLayering = manifest.cases.find(x => x.id === 'stage1-dxf-layering')!
+    const dxfParts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, dxfLayering.saved))))!
+    expect(dxfParts.has('xl/pivotTables/pivotTable1.xml')).toBe(true)
+
+    // 3. r2-probe counterexample: solid-fill / black-bar PNG without text/font/border must be refused
+    const cNumFmt = structuredClone(manifest.cases.find(x => x.id === 'stage1-numfmt-accessibility')!)
+    const numFmtBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, cNumFmt.saved)))
+    const numFmtHash = sha256(numFmtBytes)
+    const fillBarOnlyPng = makeFillBarOnlyPng(cNumFmt, numFmtBytes)
+    writeFileSync(join(dir, 'numfmt-fillbar.png'), fillBarOnlyPng)
+    const fillBarHash = sha256(fillBarOnlyPng)
+    const numFmtReceipt: CfResaveReceipt = {
+      openedRepairFree: true,
+      excelVersion: '16.114',
+      inputSha256: cNumFmt.expected.inputSha256,
+      savedSha256: numFmtHash,
+      resavedAt: '2026-11-06T08:00:00Z',
+    }
+    const fillBarCase: CfOracleCase = {
+      ...cNumFmt,
+      status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: numFmtReceipt,
+      expected: { ...cNumFmt.expected, provenance: 'excel-observed' },
+      captures: (cNumFmt.requiredAppearances ?? ['screen']).map(appearance => {
+        const side = join(dir, `numfmt.${appearance}.json`)
+        writeFileSync(
+          side,
+          JSON.stringify({
+            sheet: cNumFmt.sheet,
+            range: cNumFmt.range,
+            appearance,
+            route: 'copy-picture',
+            scale: 1,
+            pxPerPt: 1,
+            excelVersion: '16.114',
+            resavedByExcel: true,
+            resaveSavedSha256: numFmtHash,
+            savedSha256: numFmtHash,
+            pngSha256: fillBarHash,
+            capturedAt: '2026-11-06T08:00:00Z',
+          }),
+        )
+        return {
+          appearance,
+          pngPath: join(dir, 'numfmt-fillbar.png'),
+          sidecarPath: side,
+          pngSha256: fillBarHash,
+        }
+      }),
+    }
+    const fillBarResult = verifyCfCase(fillBarCase, { rootDir: REPO_ROOT })
+    expect(fillBarResult).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 4. Mutated non-fill expectations on measured case (fontRgb, bold, border, formattedText) must be refused
+    const validNumFmtPng = makeCaseMatchingPng(cNumFmt, numFmtBytes, true)
+    const validNumFmtHash = sha256(validNumFmtPng)
+    writeFileSync(join(dir, 'numfmt-valid.png'), validNumFmtPng)
+    const validNumFmtCase: CfOracleCase = {
+      ...cNumFmt,
+      status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: numFmtReceipt,
+      expected: { ...cNumFmt.expected, provenance: 'excel-observed' },
+      captures: (cNumFmt.requiredAppearances ?? ['screen']).map(appearance => {
+        const side = join(dir, `numfmt-valid.${appearance}.json`)
+        writeFileSync(
+          side,
+          JSON.stringify({
+            sheet: cNumFmt.sheet,
+            range: cNumFmt.range,
+            appearance,
+            route: 'copy-picture',
+            scale: 1,
+            pxPerPt: 1,
+            excelVersion: '16.114',
+            resavedByExcel: true,
+            resaveSavedSha256: numFmtHash,
+            savedSha256: numFmtHash,
+            pngSha256: validNumFmtHash,
+            capturedAt: '2026-11-06T08:00:00Z',
+            observedCells: cNumFmt.expected.cells.map(x => ({
+              ref: x.ref,
+              formattedText: x.formattedText,
+            })),
+          }),
+        )
+        return {
+          appearance,
+          pngPath: join(dir, 'numfmt-valid.png'),
+          sidecarPath: side,
+          pngSha256: validNumFmtHash,
+        }
+      }),
+    }
+    expect(verifyCfCase(validNumFmtCase, { rootDir: REPO_ROOT }).kind).toBe('verified')
+
+    // 4a: Mutate font color to blue
+    const blueFontCase: CfOracleCase = {
+      ...validNumFmtCase,
+      expected: {
+        ...validNumFmtCase.expected,
+        cells: validNumFmtCase.expected.cells.map(x => (x.fontRgb ? { ...x, fontRgb: 'FF0000FF' } : x)),
+      },
+    }
+    expect(verifyCfCase(blueFontCase, { rootDir: REPO_ROOT })).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 4b: Mutate bold expectation to false
+    const noBoldCase: CfOracleCase = {
+      ...validNumFmtCase,
+      expected: {
+        ...validNumFmtCase.expected,
+        cells: validNumFmtCase.expected.cells.map(x => (x.bold ? { ...x, bold: false } : x)),
+      },
+    }
+    expect(verifyCfCase(noBoldCase, { rootDir: REPO_ROOT })).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 4c: Mutate formattedText to WRONG TEXT
+    const wrongTextCase: CfOracleCase = {
+      ...validNumFmtCase,
+      expected: {
+        ...validNumFmtCase.expected,
+        cells: validNumFmtCase.expected.cells.map(x =>
+          x.formattedText ? { ...x, formattedText: 'WRONG TEXT' } : x,
+        ),
+      },
+    }
+    expect(verifyCfCase(wrongTextCase, { rootDir: REPO_ROOT })).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 4d: Expect unexpected top border
+    const unexpectedBorderCase: CfOracleCase = {
+      ...validNumFmtCase,
+      expected: {
+        ...validNumFmtCase.expected,
+        cells: validNumFmtCase.expected.cells.map(x => ({ ...x, borderTop: true })),
+      },
+    }
+    expect(verifyCfCase(unexpectedBorderCase, { rootDir: REPO_ROOT })).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 5. Excel resave provenance: must have resavedByExcel: true and valid resaveReceipt
+    const unresavedCase: CfOracleCase = {
+      ...validNumFmtCase,
+      resavedByExcel: false,
+      resaveReceipt: undefined,
+    }
+    expect(verifyCfCase(unresavedCase, { rootDir: REPO_ROOT })).toMatchObject({
+      kind: 'refusal',
+      code: 'resave-provenance-missing',
+    })
+
+    // 6. Excel version check accepts 16.120..199 and 16.200+, rejects < 16.114
+    expect(isSupportedExcelVersion('16.114')).toBe(true)
+    expect(isSupportedExcelVersion('16.120')).toBe(true)
+    expect(isSupportedExcelVersion('16.199')).toBe(true)
+    expect(isSupportedExcelVersion('16.200')).toBe(true)
+    expect(isSupportedExcelVersion('17.0')).toBe(true)
+    expect(isSupportedExcelVersion('16.113')).toBe(false)
+    expect(isSupportedExcelVersion('16.1')).toBe(false)
+    expect(isSupportedExcelVersion('15.0')).toBe(false)
+    expect(isSupportedExcelVersion('invalid')).toBe(false)
+
+    // 7. Column geometry: sidecar with mismatched colWidthsPt is refused
+    const badGeomSidePath = join(dir, 'numfmt-bad-geom.json')
+    writeFileSync(
+      badGeomSidePath,
+      JSON.stringify({
+        sheet: cNumFmt.sheet,
+        range: cNumFmt.range,
+        appearance: 'screen',
+        route: 'copy-picture',
+        scale: 1,
+        pxPerPt: 1,
+        excelVersion: '16.114',
+        resavedByExcel: true,
+        resaveSavedSha256: numFmtHash,
+        savedSha256: numFmtHash,
+        pngSha256: validNumFmtHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        colWidthsPt: [100, 100, 100, 100, 100, 100, 100], // Mismatched widths
+      }),
+    )
+    const badGeomCase: CfOracleCase = {
+      ...validNumFmtCase,
+      captures: validNumFmtCase.captures.map(cap =>
+        cap.appearance === 'screen' ? { ...cap, sidecarPath: badGeomSidePath } : cap,
+      ),
+    }
+    expect(verifyCfCase(badGeomCase, { rootDir: REPO_ROOT })).toMatchObject({
+      kind: 'refusal',
+      code: 'geometry-mismatch',
+    })
   })
 })

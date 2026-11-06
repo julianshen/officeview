@@ -65,6 +65,12 @@ interface SheetPayload {
   hiddenRows?: readonly number[]
   colWidths?: ReadonlyArray<{ min: number; max: number; width: number }>
   tablePartXml?: string
+  pivotParts?: {
+    pivotTableXml: string
+    pivotCacheDefXml: string
+    pivotCacheRecordsXml: string
+    pivotSrcSheetXml: string
+  }
   legacyCfXml: string
   x14CfXml?: string
   dxfsXml: string
@@ -374,7 +380,7 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
         { label: 'D_Local', val: D },
         { label: 'D+0.5', val: D + 0.5 },
         { label: 'D+1', val: D + 1 },
-        { label: 'D-7', val: D - 7 },
+        { label: 'D-40', val: D - 40 },
         { label: 'StaleTodayCache', val: { f: 'TODAY()', v: D - 5 } },
       ]
       const rows = rawInputs.map(item => ({
@@ -469,6 +475,9 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
         { err: '#DIV/0!' },
         '',
         null,
+        null,
+        null,
+        null,
       ]
       const datasetB: Array<number | string | boolean | null | { err: string }> = [
         0,
@@ -479,30 +488,51 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
         false,
         { err: '#N/A' },
         null,
+        null,
+        null,
+        null,
       ]
+      const datasetG: Array<number | string | boolean | null | { err: string }> = [
+        -2,
+        2,
+        10,
+        11,
+        '20',
+        false,
+        { err: '#N/A' },
+        null,
+        null,
+        null,
+        null,
+      ]
+      const datasetH: Array<number | null> = [0, 0, 0, 0, 0, 0, 0, 100, null, null, null]
+      const datasetI: Array<number> = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100]
       const rows = datasetA.map((valA, idx) => {
         const valB = datasetB[idx]
+        const valG = datasetG[idx]
+        const valH = datasetH[idx]
+        const valI = datasetI[idx]
         return {
           label: `r${idx + 1}`,
-          values: [valA, valA, valA, valA, valB, valB, valB, valB, valB, valB, valB, valB],
+          values: [valA, valA, valA, valA, valB, valG, valH, valI, valB, valB, valI, valB],
         }
       })
       return {
-        dimension: 'A1:M18',
-        cells: replicateWithControlBlock(headers, rows, 9),
+        dimension: 'A1:M25',
+        cells: replicateWithControlBlock(headers, rows, 12),
         legacyCfXml: [
-          '<conditionalFormatting sqref="B2:B9"><cfRule type="aboveAverage" dxfId="0" priority="1"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="C2:C9"><cfRule type="aboveAverage" dxfId="1" priority="2" aboveAverage="0"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="D2:D9"><cfRule type="aboveAverage" dxfId="2" priority="3" equalAverage="1"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="E2:E9"><cfRule type="aboveAverage" dxfId="0" priority="4" aboveAverage="0" equalAverage="1"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="F2:F9"><cfRule type="aboveAverage" dxfId="1" priority="5" stdDev="1"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="G2:G9"><cfRule type="aboveAverage" dxfId="2" priority="6" aboveAverage="0" stdDev="1"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="H2:H9"><cfRule type="aboveAverage" dxfId="0" priority="7" stdDev="2"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="I2:I9"><cfRule type="aboveAverage" dxfId="1" priority="8" stdDev="3"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="J2:J9"><cfRule type="aboveAverage" dxfId="2" priority="9" stdDev="0"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="K2:K9"><cfRule type="aboveAverage" dxfId="0" priority="10" stdDev="-1"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="L2:L9"><cfRule type="aboveAverage" dxfId="1" priority="11" stdDev="4"/></conditionalFormatting>',
-          '<conditionalFormatting sqref="M2:M9"><cfRule type="aboveAverage" dxfId="2" priority="12" equalAverage="1" stdDev="1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="B2:B12"><cfRule type="aboveAverage" dxfId="0" priority="1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C12"><cfRule type="aboveAverage" dxfId="1" priority="2" aboveAverage="0"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D12"><cfRule type="aboveAverage" dxfId="2" priority="3" equalAverage="1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E12"><cfRule type="aboveAverage" dxfId="0" priority="4" aboveAverage="0" equalAverage="1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="F2:F12"><cfRule type="aboveAverage" dxfId="1" priority="5" stdDev="1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="G2:G12"><cfRule type="aboveAverage" dxfId="2" priority="6" aboveAverage="0" stdDev="1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="H2:H12"><cfRule type="aboveAverage" dxfId="0" priority="7" stdDev="2"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="I2:I12"><cfRule type="aboveAverage" dxfId="1" priority="8" stdDev="3"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="J2:J12"><cfRule type="aboveAverage" dxfId="2" priority="9" stdDev="0"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="K2:K12"><cfRule type="aboveAverage" dxfId="0" priority="10" stdDev="-1"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="L2:L12"><cfRule type="aboveAverage" dxfId="1" priority="11" stdDev="4"/></conditionalFormatting>',
+          '<conditionalFormatting sqref="M2:M12"><cfRule type="aboveAverage" dxfId="2" priority="12" equalAverage="1" stdDev="1"/></conditionalFormatting>',
         ].join(''),
         dxfsXml: DEFAULT_DXFS_XML,
       }
@@ -555,11 +585,12 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
 
     case 'stage1-priority-composition': {
       const headers = ['Val', 'FillWins', 'OrthoMerge', 'BareStop', 'EqualPrio', 'CrossVisual', 'UnresStub']
-      const vals = [25, 15, 5, 0]
-      const rows = vals.map(v => ({
-        label: `v=${v}`,
-        values: [v, v, v, v, v, v],
-      }))
+      const rows = [
+        { label: 'v=25', values: [25, 25, 25, 25, 25, 25] },
+        { label: 'v=15_g14', values: [15, 15, 15, 15, 15, 14] },
+        { label: 'v=5', values: [5, 5, 5, 5, 5, 5] },
+        { label: 'v=0', values: [0, 0, 0, 0, 0, 0] },
+      ]
       return {
         dimension: 'A1:G10',
         cells: replicateWithControlBlock(headers, rows, 5),
@@ -621,6 +652,41 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           '<tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>',
           '</table>',
         ].join(''),
+        pivotParts: {
+          pivotTableXml: [
+            XML_DECL,
+            `<pivotTableDefinition xmlns="${NS_MAIN}" name="PivotTable1" cacheId="1" dataOnRows="1" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="1" applyAlignmentFormats="0" applyWidthHeightFormats="0" dataCaption="Values" createdVersion="5" updatedVersion="5" minRefreshableVersion="3">`,
+            '<location ref="E1:E6" firstHeaderRow="0" firstDataRow="1" firstDataCol="0"/>',
+            '<pivotFields count="1"><pivotField dataField="1" showAll="0"/></pivotFields>',
+            '<dataFields count="1"><dataField name="Sum of PivotLayer" fld="0" baseField="0" baseItem="0"/></dataFields>',
+            '<pivotTableStyleInfo name="PivotStyleMedium2" showRowHeaders="1" showColHeaders="1" showRowStripes="1" showColStripes="0" showLastColumn="1"/>',
+            '</pivotTableDefinition>',
+          ].join(''),
+          pivotCacheDefXml: [
+            XML_DECL,
+            `<pivotCacheDefinition xmlns="${NS_MAIN}" xmlns:r="${NS_R}" r:id="rIdCacheRec1" refreshedBy="OfficeView" createdVersion="5" refreshedVersion="5" minRefreshableVersion="3" recordCount="5">`,
+            '<cacheSource type="worksheet"><worksheetSource ref="A1:A6" sheet="PivotSrc"/></cacheSource>',
+            '<cacheFields count="1"><cacheField name="PivotLayer" numFmtId="0"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" containsInteger="1" minValue="50" maxValue="200"/></cacheField></cacheFields>',
+            '</pivotCacheDefinition>',
+          ].join(''),
+          pivotCacheRecordsXml: [
+            XML_DECL,
+            `<pivotCacheRecords xmlns="${NS_MAIN}" count="5">`,
+            '<r><n v="150"/></r><r><n v="200"/></r><r><n v="50"/></r><r><n v="180"/></r><r><n v="190"/></r>',
+            '</pivotCacheRecords>',
+          ].join(''),
+          pivotSrcSheetXml: [
+            XML_DECL,
+            `<worksheet xmlns="${NS_MAIN}"><dimension ref="A1:A6"/><sheetData>`,
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>PivotLayer</t></is></c></row>',
+            '<row r="2"><c r="A2"><v>150</v></c></row>',
+            '<row r="3"><c r="A3"><v>200</v></c></row>',
+            '<row r="4"><c r="A4"><v>50</v></c></row>',
+            '<row r="5"><c r="A5"><v>180</v></c></row>',
+            '<row r="6"><c r="A6"><v>190</v></c></row>',
+            '</sheetData></worksheet>',
+          ].join(''),
+        },
         legacyCfXml: [
           '<conditionalFormatting sqref="B2:B6"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>100</formula></cfRule></conditionalFormatting>',
           '<conditionalFormatting sqref="C2:C6"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>100</formula></cfRule></conditionalFormatting>',
@@ -681,6 +747,7 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           { ref: 'F1', v: 'H6' },
           { ref: 'G1', v: 'H7' },
           { ref: 'H1', v: 'H8' },
+          { ref: 'M1', v: 'H8' },
           { ref: 'A2', v: 'Row2' },
           // B2 is unstored blank (CF target); B10 is unstored blank control
           // Z5 is distant unstored blank (CF target); Z12 is unstored blank control
@@ -693,6 +760,7 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           { ref: 'A6', v: 1000 },
           { ref: 'A7', v: 20 },
           { ref: 'A8', v: 30 },
+          { ref: 'A12', v: 10 },
           { ref: 'A13', v: 30 },
           // Sorted source rows block J2:J5
           { ref: 'J2', v: 90 },
@@ -700,6 +768,7 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           { ref: 'J4', v: 20 },
           { ref: 'J5', v: 10 },
           { ref: 'J10', v: 90 },
+          { ref: 'J13', v: 10 },
         ],
         merges: ['A4:C4', 'E4:G4'],
         hiddenCols: [3, 5],
@@ -756,6 +825,7 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
           { ref: 'B5', v: 'LongSpillTextAcrossCells' },
           { ref: 'C5', v: null },
           { ref: 'F7', v: 123456.78, s: 3 },
+          { ref: 'F8', v: 0.5, s: 3 },
         ],
         legacyCfXml: [
           '<conditionalFormatting sqref="B2:B5"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting>',
@@ -1012,6 +1082,14 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
       '<Default Extension="xml" ContentType="application/xml"/>',
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
       '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+      ...(p.pivotParts
+        ? [
+            '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+            '<Override PartName="/xl/pivotTables/pivotTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>',
+            '<Override PartName="/xl/pivotCache/pivotCacheDefinition1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>',
+            '<Override PartName="/xl/pivotCache/pivotCacheRecords1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>',
+          ]
+        : []),
       '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
       ...(p.tablePartXml
         ? ['<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>']
@@ -1047,7 +1125,9 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
       XML_DECL,
       `<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`,
       wbPrXml,
-      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
+      p.pivotParts
+        ? '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="PivotSrc" sheetId="2" state="hidden" r:id="rId3"/></sheets><pivotCaches><pivotCache cacheId="1" r:id="rId4"/></pivotCaches>'
+        : '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>',
       '</workbook>',
     ].join(''),
     'xl/_rels/workbook.xml.rels': [
@@ -1055,17 +1135,44 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
       `<Relationship Id="rId1" Type="${NS_R}/worksheet" Target="worksheets/sheet1.xml"/>`,
       `<Relationship Id="rId2" Type="${NS_R}/styles" Target="styles.xml"/>`,
+      ...(p.pivotParts
+        ? [
+            `<Relationship Id="rId3" Type="${NS_R}/worksheet" Target="worksheets/sheet2.xml"/>`,
+            `<Relationship Id="rId4" Type="${NS_R}/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>`,
+          ]
+        : []),
       '</Relationships>',
     ].join(''),
     'xl/styles.xml': buildStylesXml(p.dxfsXml),
     'xl/worksheets/sheet1.xml': buildWorksheetXml(p),
   }
-  if (p.tablePartXml) {
-    files['xl/tables/table1.xml'] = p.tablePartXml
+  if (p.tablePartXml || p.pivotParts) {
+    if (p.tablePartXml) {
+      files['xl/tables/table1.xml'] = p.tablePartXml
+    }
+    if (p.pivotParts) {
+      files['xl/worksheets/sheet2.xml'] = p.pivotParts.pivotSrcSheetXml
+      files['xl/pivotTables/pivotTable1.xml'] = p.pivotParts.pivotTableXml
+      files['xl/pivotTables/_rels/pivotTable1.xml.rels'] = [
+        XML_DECL,
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+        `<Relationship Id="rIdCacheDef1" Type="${NS_R}/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition1.xml"/>`,
+        '</Relationships>',
+      ].join('')
+      files['xl/pivotCache/pivotCacheDefinition1.xml'] = p.pivotParts.pivotCacheDefXml
+      files['xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels'] = [
+        XML_DECL,
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+        `<Relationship Id="rIdCacheRec1" Type="${NS_R}/pivotCacheRecords" Target="pivotCacheRecords1.xml"/>`,
+        '</Relationships>',
+      ].join('')
+      files['xl/pivotCache/pivotCacheRecords1.xml'] = p.pivotParts.pivotCacheRecordsXml
+    }
     files['xl/worksheets/_rels/sheet1.xml.rels'] = [
       XML_DECL,
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
-      `<Relationship Id="rIdTable1" Type="${NS_R}/table" Target="../tables/table1.xml"/>`,
+      ...(p.tablePartXml ? [`<Relationship Id="rIdTable1" Type="${NS_R}/table" Target="../tables/table1.xml"/>`] : []),
+      ...(p.pivotParts ? [`<Relationship Id="rIdPivot1" Type="${NS_R}/pivotTable" Target="../pivotTables/pivotTable1.xml"/>`] : []),
       '</Relationships>',
     ].join('')
   }
@@ -1123,16 +1230,17 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
     const inputSha256 = sha256Hex(zipBytes)
 
     const prevVerify = prev ? verifyCfCase(prev, { rootDir }) : null
+    const sameInputAsPrev = prev?.expected.inputSha256 === inputSha256
     const wasResavedByExcel =
-      prev?.resavedByExcel === true ||
-      (prev !== undefined &&
-        existsSync(savedAbs) &&
-        Boolean(prev.expected.savedSha256) &&
-        Boolean(prev.expected.inputSha256) &&
-        prev.expected.savedSha256 !== prev.expected.inputSha256)
+      sameInputAsPrev &&
+      (prev?.resavedByExcel === true ||
+        (prev !== undefined &&
+          existsSync(savedAbs) &&
+          Boolean(prev.expected.savedSha256) &&
+          Boolean(prev.expected.inputSha256) &&
+          prev.expected.savedSha256 !== prev.expected.inputSha256))
     const preserveExistingSaved =
-      existsSync(savedAbs) &&
-      ((prevVerify?.kind === 'verified' && prev?.expected.inputSha256 === inputSha256) || wasResavedByExcel)
+      existsSync(savedAbs) && ((prevVerify?.kind === 'verified' && sameInputAsPrev) || wasResavedByExcel)
 
     if (!preserveExistingSaved) {
       writeFileSync(savedAbs, zipBytes)
@@ -1153,11 +1261,12 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
       ...template,
       ...(updatedClockReq ? { clockRequirement: updatedClockReq } : {}),
       resavedByExcel: preserveExistingSaved ? (prev?.resavedByExcel ?? wasResavedByExcel) : false,
+      ...(preserveExistingSaved && prev?.resaveReceipt ? { resaveReceipt: prev.resaveReceipt } : {}),
       status: preserveExistingSaved && prev ? prev.status : template.status,
       reason: preserveExistingSaved && prev ? prev.reason : template.reason,
       captures: preserveExistingSaved && prev ? prev.captures : template.captures,
       expected: {
-        ...(preserveExistingSaved && prev ? prev.expected : template.expected),
+        ...(preserveExistingSaved && prev && prevVerify?.kind === 'verified' ? prev.expected : template.expected),
         inputSha256,
         savedSha256,
       },

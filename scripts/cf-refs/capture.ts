@@ -119,6 +119,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             pxPerPt: 1,
             width: decoded?.width,
             height: decoded?.height,
+            colWidthsPt: geom?.colWidthsPt,
+            rowHeightsPt: geom?.rowHeightsPt,
+            resavedByExcel: c.resavedByExcel === true,
+            resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
             sheet: c.sheet,
             range: c.range,
             hostTimeZone: 'Asia/Taipei',
@@ -142,15 +146,27 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       return { ...cap, pngSha256 }
     })
 
+    const hasResave =
+      c.resavedByExcel === true &&
+      c.resaveReceipt !== undefined &&
+      c.resaveReceipt.savedSha256 === savedSha256 &&
+      c.resaveReceipt.openedRepairFree === true
+
     const candidate: CfOracleCase = {
       ...c,
-      status: 'measured',
+      status: hasResave ? 'measured' : 'recipe-pending',
       captures: updatedCaptures,
       expected: {
         ...c.expected,
         savedSha256,
-        provenance: 'excel-observed',
+        provenance: hasResave ? 'excel-observed' : 'seed-hypothesis',
       },
+      ...(!hasResave
+        ? {
+            reason:
+              'Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured',
+          }
+        : {}),
     }
     const check = verifyCfCase(candidate, { rootDir: REPO_ROOT })
     if (check.kind === 'verified') {

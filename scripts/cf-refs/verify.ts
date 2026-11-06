@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
+import { columnWidthPx } from '../../src/xlsx/columnWidth'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -25,6 +26,17 @@ type XmlNode = Record<string, unknown>
 
 const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
 const isSha256Hex = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f]{64}$/.test(s)
+
+export function isSupportedExcelVersion(version: unknown): boolean {
+  if (typeof version !== 'string') return false
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version.trim())
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (major > 16) return true
+  if (major === 16) return minor >= 114
+  return false
+}
 
 const asArray = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v])
 
@@ -335,6 +347,29 @@ function verifyMarkerInArchive(
     }
   }
 
+  if (marker.capabilityId === 'dxf:pivot-style-layering') {
+    if (
+      !parts.has('xl/pivotTables/pivotTable1.xml') ||
+      !parts.has('xl/pivotCache/pivotCacheDefinition1.xml') ||
+      !parts.has('xl/pivotCache/pivotCacheRecords1.xml')
+    ) {
+      return {
+        ok: false,
+        code: 'missing-part',
+        reason: 'dxf:pivot-style-layering requires xl/pivotTables/pivotTable1.xml and pivotCache parts',
+      }
+    }
+  }
+  if (marker.capabilityId === 'dxf:table-style-layering') {
+    if (!parts.has('xl/tables/table1.xml')) {
+      return {
+        ok: false,
+        code: 'missing-part',
+        reason: 'dxf:table-style-layering requires xl/tables/table1.xml',
+      }
+    }
+  }
+
   if (marker.dxf) {
     if (marker.extension === 'x14') {
       const inlineDxf = asNode(matchedRule.dxf)
@@ -513,7 +548,8 @@ const colIndex0 = (letters: string): number => {
   return n - 1
 }
 
-export const parseA1 = (ref: string): { row: number; col: number } | null => {
+export const parseA1 = (ref?: string | null): { row: number; col: number } | null => {
+  if (typeof ref !== 'string') return null
   const m = /^\$?([A-Z]+)\$?(\d+)$/i.exec(ref.trim())
   if (!m) return null
   return { col: colIndex0(m[1].toUpperCase()), row: Number(m[2]) - 1 }
@@ -534,6 +570,24 @@ export const parseRangeA1 = (
   }
 }
 
+export function isCellInSqref(cellRef: string, sqref: string): boolean {
+  const pos = parseA1(cellRef)
+  if (!pos) return false
+  const tokens = sqref.trim().split(/\s+/)
+  return tokens.some(tok => {
+    const parts = tok.split(':')
+    const a = parseA1(parts[0] ?? '')
+    const b = parseA1(parts[1] ?? parts[0] ?? '')
+    if (!a || !b) return false
+    return (
+      pos.row >= Math.min(a.row, b.row) &&
+      pos.row <= Math.max(a.row, b.row) &&
+      pos.col >= Math.min(a.col, b.col) &&
+      pos.col <= Math.max(a.col, b.col)
+    )
+  })
+}
+
 export interface WorksheetRangeGeometry {
   minRow: number
   maxRow: number
@@ -543,12 +597,12 @@ export interface WorksheetRangeGeometry {
   rowHeightsPt: readonly number[]
   /** Per-column width in characters for `minCol..maxCol` (`0` when hidden). */
   colWidthChars: readonly number[]
+  /** Per-column width in points (`1 px/pt`) for `minCol..maxCol` via columnWidthPx(w, 6) (`0` when hidden). */
+  colWidthsPt: readonly number[]
   /** Expected total height in `1 px/pt` points. */
   expectedHeightPt: number
-  /** Expected minimum total width in `1 px/pt` points (Excel 72dpi `~4.5 pt/char`). */
-  minExpectedWidthPt: number
-  /** Expected maximum total width in `1 px/pt` points (Viewer 96->72dpi `~6 pt/char`). */
-  maxExpectedWidthPt: number
+  /** Expected total width in `1 px/pt` points. */
+  expectedWidthPt: number
 }
 
 export function computeWorksheetRangeGeometry(
@@ -595,29 +649,30 @@ export function computeWorksheetRangeGeometry(
   }
 
   const colWidthChars: number[] = []
+  const colWidthsPt: number[] = []
   for (let c = bounds.minCol; c <= bounds.maxCol; c++) {
     let w = defaultColWidth
+    let hidden = false
     for (const spec of colSpecs) {
-      if (c >= spec.min && c <= spec.max) w = spec.width
+      if (c >= spec.min && c <= spec.max) {
+        w = spec.width
+        hidden = spec.hidden
+      }
     }
-    colWidthChars.push(w)
+    colWidthChars.push(hidden ? 0 : w)
+    colWidthsPt.push(hidden ? 0 : columnWidthPx(w, 6))
   }
 
   const expectedHeightPt = Math.round(rowHeightsPt.reduce((a, b) => a + b, 0))
-  const minExpectedWidthPt = Math.round(
-    colWidthChars.reduce((sum, w) => sum + (w <= 0 ? 0 : Math.max(12, w * 4.2)), 0),
-  )
-  const maxExpectedWidthPt = Math.round(
-    colWidthChars.reduce((sum, w) => sum + (w <= 0 ? 0 : (w * 7 + 5) * 0.8), 0),
-  )
+  const expectedWidthPt = Math.round(colWidthsPt.reduce((a, b) => a + b, 0))
 
   return {
     ...bounds,
     rowHeightsPt,
     colWidthChars,
+    colWidthsPt,
     expectedHeightPt,
-    minExpectedWidthPt,
-    maxExpectedWidthPt,
+    expectedWidthPt,
   }
 }
 
@@ -706,23 +761,23 @@ function cellPixelBox(
   if (!pos) return null
   const colIdx = pos.col - geom.minCol
   const rowIdx = pos.row - geom.minRow
-  if (colIdx < 0 || colIdx >= geom.colWidthChars.length || rowIdx < 0 || rowIdx >= geom.rowHeightsPt.length) {
+  if (colIdx < 0 || colIdx >= geom.colWidthsPt.length || rowIdx < 0 || rowIdx >= geom.rowHeightsPt.length) {
     return null
   }
-  const totalW = geom.colWidthChars.reduce((a, b) => a + b, 0)
-  const totalH = geom.rowHeightsPt.reduce((a, b) => a + b, 0)
+  const totalW = geom.expectedWidthPt
+  const totalH = geom.expectedHeightPt
   if (totalW <= 0 || totalH <= 0) return null
 
-  const colBefore = geom.colWidthChars.slice(0, colIdx).reduce((a, b) => a + b, 0)
-  const colSpan = geom.colWidthChars[colIdx]
+  const colBefore = geom.colWidthsPt.slice(0, colIdx).reduce((a, b) => a + b, 0)
+  const colSpan = geom.colWidthsPt[colIdx]
   const rowBefore = geom.rowHeightsPt.slice(0, rowIdx).reduce((a, b) => a + b, 0)
   const rowSpan = geom.rowHeightsPt[rowIdx]
   if (colSpan <= 0 || rowSpan <= 0) return null
 
-  const x0 = Math.floor((colBefore / totalW) * png.width)
-  const x1 = Math.max(x0 + 1, Math.floor(((colBefore + colSpan) / totalW) * png.width))
-  const y0 = Math.floor((rowBefore / totalH) * png.height)
-  const y1 = Math.max(y0 + 1, Math.floor(((rowBefore + rowSpan) / totalH) * png.height))
+  const x0 = Math.round((colBefore / totalW) * png.width)
+  const x1 = Math.max(x0 + 1, Math.round(((colBefore + colSpan) / totalW) * png.width))
+  const y0 = Math.round((rowBefore / totalH) * png.height)
+  const y1 = Math.max(y0 + 1, Math.round(((rowBefore + rowSpan) / totalH) * png.height))
   return { x0, y0, x1: Math.min(png.width, x1), y1: Math.min(png.height, y1) }
 }
 
@@ -796,6 +851,17 @@ export interface ObservedCellSummary {
   controlBgRgb: [number, number, number]
   bgContrastDelta: number
   interiorMaxDelta: number
+  inkPixelCount: number
+  inkWeight: number
+  inkRgb: [number, number, number]
+  controlInkPixelCount: number
+  controlInkWeight: number
+  glyphRowCount: number
+  glyphColumnTransitions: number
+  borderTopDelta: number
+  borderTopVsControlDelta: number
+  borderBottomDelta: number
+  borderBottomVsControlDelta: number
 }
 
 export function observeCellsFromCapture(
@@ -812,6 +878,122 @@ export function observeCellsFromCapture(
     const controlBgRgb = sampleCellBackgroundRgb(png, ctrlBox)
     const bgContrastDelta = rgbMaxDelta(bgRgb, controlBgRgb)
     const interiorMaxDelta = maxCellBoxPixelDelta(png, box, ctrlBox)
+
+    const ix0 = Math.min(png.width - 1, box.x0 + 2)
+    const iy0 = Math.min(png.height - 1, box.y0 + 2)
+    const ix1 = Math.max(ix0 + 1, box.x1 - 2)
+    const iy1 = Math.max(iy0 + 1, box.y1 - 2)
+    const interiorArea = Math.max(1, (ix1 - ix0) * (iy1 - iy0))
+
+    let inkPixelCount = 0
+    const inkSamples: Array<{ r: number; g: number; b: number; d: number }> = []
+    let glyphRowCount = 0
+    let glyphColumnTransitions = 0
+
+    for (let y = iy0; y < iy1; y++) {
+      let rowInk = 0
+      let lastIsInk = false
+      let transitions = 0
+      for (let x = ix0; x < ix1; x++) {
+        const idx = (y * png.width + x) * 4
+        const pr = png.data[idx]
+        const pg = png.data[idx + 1]
+        const pb = png.data[idx + 2]
+        const d = rgbMaxDelta([pr, pg, pb], bgRgb)
+        const isInk = d >= 28
+        if (isInk) {
+          inkPixelCount++
+          rowInk++
+          inkSamples.push({ r: pr, g: pg, b: pb, d })
+        }
+        if (isInk !== lastIsInk) {
+          transitions++
+          lastIsInk = isInk
+        }
+      }
+      if (rowInk >= 2) {
+        glyphRowCount++
+        glyphColumnTransitions += transitions
+      }
+    }
+    const inkWeight = inkPixelCount / interiorArea
+    inkSamples.sort((a, b) => b.d - a.d)
+    const coreCount = Math.max(1, Math.min(10, Math.floor(inkSamples.length * 0.25)))
+    const coreSamples = inkSamples.slice(0, coreCount)
+    const inkRgb: [number, number, number] =
+      coreSamples.length > 0
+        ? [
+            median(coreSamples.map(s => s.r)),
+            median(coreSamples.map(s => s.g)),
+            median(coreSamples.map(s => s.b)),
+          ]
+        : [0, 0, 0]
+
+    let borderTopDelta = 0
+    let borderTopVsControlDelta = 0
+    const topYMax = Math.min(png.height - 1, box.y0 + 1)
+    const ctrlTopYMax = Math.min(png.height - 1, ctrlBox.y0 + 1)
+    const borderSpanW = Math.max(1, Math.min(box.x1 - box.x0, ctrlBox.x1 - ctrlBox.x0) - 4)
+    for (let dy = 0; dy <= topYMax - box.y0 && dy <= ctrlTopYMax - ctrlBox.y0; dy++) {
+      for (let dx = 0; dx < borderSpanW; dx++) {
+        const ax = box.x0 + 2 + dx
+        const ay = box.y0 + dy
+        const bx = ctrlBox.x0 + 2 + dx
+        const by = ctrlBox.y0 + dy
+        const ai = (ay * png.width + ax) * 4
+        const bi = (by * png.width + bx) * 4
+        const dCell = rgbMaxDelta([png.data[ai], png.data[ai + 1], png.data[ai + 2]], bgRgb)
+        const dCtrl = rgbMaxDelta(
+          [png.data[ai], png.data[ai + 1], png.data[ai + 2]],
+          [png.data[bi], png.data[bi + 1], png.data[bi + 2]],
+        )
+        if (dCell > borderTopDelta) borderTopDelta = dCell
+        if (dCtrl > borderTopVsControlDelta) borderTopVsControlDelta = dCtrl
+      }
+    }
+
+    let borderBottomDelta = 0
+    let borderBottomVsControlDelta = 0
+    const botYMin = Math.max(0, box.y1 - 2)
+    const ctrlBotYMin = Math.max(0, ctrlBox.y1 - 2)
+    for (let dy = 0; dy < 2; dy++) {
+      const ay = botYMin + dy
+      const by = ctrlBotYMin + dy
+      if (ay >= png.height || by >= png.height) continue
+      for (let dx = 0; dx < borderSpanW; dx++) {
+        const ax = box.x0 + 2 + dx
+        const bx = ctrlBox.x0 + 2 + dx
+        const ai = (ay * png.width + ax) * 4
+        const bi = (by * png.width + bx) * 4
+        const dCell = rgbMaxDelta([png.data[ai], png.data[ai + 1], png.data[ai + 2]], bgRgb)
+        const dCtrl = rgbMaxDelta(
+          [png.data[ai], png.data[ai + 1], png.data[ai + 2]],
+          [png.data[bi], png.data[bi + 1], png.data[bi + 2]],
+        )
+        if (dCell > borderBottomDelta) borderBottomDelta = dCell
+        if (dCtrl > borderBottomVsControlDelta) borderBottomVsControlDelta = dCtrl
+      }
+    }
+
+    const cix0 = Math.min(png.width - 1, ctrlBox.x0 + 2)
+    const ciy0 = Math.min(png.height - 1, ctrlBox.y0 + 2)
+    const cix1 = Math.max(cix0 + 1, ctrlBox.x1 - 2)
+    const ciy1 = Math.max(ciy0 + 1, ctrlBox.y1 - 2)
+    const ctrlInteriorArea = Math.max(1, (cix1 - cix0) * (ciy1 - ciy0))
+    let controlInkPixelCount = 0
+    for (let y = ciy0; y < ciy1; y++) {
+      for (let x = cix0; x < cix1; x++) {
+        const idx = (y * png.width + x) * 4
+        const pr = png.data[idx]
+        const pg = png.data[idx + 1]
+        const pb = png.data[idx + 2]
+        if (rgbMaxDelta([pr, pg, pb], controlBgRgb) >= 28) {
+          controlInkPixelCount++
+        }
+      }
+    }
+    const controlInkWeight = controlInkPixelCount / ctrlInteriorArea
+
     out.push({
       ref: cell.ref,
       controlRef: cell.controlRef,
@@ -819,6 +1001,17 @@ export function observeCellsFromCapture(
       controlBgRgb,
       bgContrastDelta,
       interiorMaxDelta,
+      inkPixelCount,
+      inkWeight,
+      inkRgb,
+      controlInkPixelCount,
+      controlInkWeight,
+      glyphRowCount,
+      glyphColumnTransitions,
+      borderTopDelta,
+      borderTopVsControlDelta,
+      borderBottomDelta,
+      borderBottomVsControlDelta,
     })
   }
   return out
@@ -998,6 +1191,51 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  // Verify positiveRefs and negativeRefs consistency with expected.cells
+  const expectedPos = new Set(c.expected.cells.filter(cell => cell.matched).map(cell => cell.ref.toUpperCase()))
+  const expectedNeg = new Set(c.expected.cells.filter(cell => !cell.matched).map(cell => cell.ref.toUpperCase()))
+  for (const ref of c.expected.positiveRefs) {
+    if (!expectedPos.has(ref.toUpperCase())) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'cell-expectation-mismatch',
+        reason: `positiveRefs contains ${ref} but expected.cells has no matched: true entry for it`,
+        structuralValid: true,
+      }
+    }
+  }
+  for (const ref of c.expected.negativeRefs) {
+    if (!expectedNeg.has(ref.toUpperCase())) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'cell-expectation-mismatch',
+        reason: `negativeRefs contains ${ref} but expected.cells has no matched: false entry for it`,
+        structuralValid: true,
+      }
+    }
+  }
+
+  // Every marker must have at least one covering cell observation in expected.cells
+  const markerCellsMap = new Map<string, typeof c.expected.cells[number][]>()
+  for (const m of c.markers) {
+    const covered = c.expected.cells.filter(cell => isCellInSqref(cell.ref, m.sqref))
+    if (covered.length === 0) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'unobserved-expectation',
+        reason: `Marker ${m.capabilityId} on sqref ${m.sqref} has no covering cell observations in expected.cells`,
+        structuralValid: true,
+      }
+    }
+    markerCellsMap.set(m.capabilityId, covered)
+  }
+
   if (!isSha256Hex(c.expected.inputSha256) || c.expected.inputSha256 !== inputSha256) {
     return {
       kind: 'refusal',
@@ -1053,6 +1291,37 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  if (c.status === 'measured') {
+    if (c.resavedByExcel !== true || !c.resaveReceipt) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'resave-provenance-missing',
+        reason: `Case ${c.id} requires Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) before promotion to measured`,
+        structuralValid: true,
+      }
+    }
+    const rr = c.resaveReceipt
+    if (
+      rr.openedRepairFree !== true ||
+      !isSupportedExcelVersion(rr.excelVersion) ||
+      typeof rr.resavedAt !== 'string' ||
+      Number.isNaN(Date.parse(rr.resavedAt)) ||
+      rr.inputSha256 !== inputSha256 ||
+      rr.savedSha256 !== savedSha256
+    ) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'resave-provenance-missing',
+        reason: `Case ${c.id} has invalid resaveReceipt bound to ${rr.savedSha256} vs actual saved ${savedSha256}`,
+        structuralValid: true,
+      }
+    }
+  }
+
   const requiredApps = c.requiredAppearances ?? ['screen']
   for (const reqApp of requiredApps) {
     if (!c.captures.some(cap => cap.appearance === reqApp)) {
@@ -1068,6 +1337,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
   }
 
   const captureHashes: Record<string, string> = {}
+  const passingCellRefs = new Set<string>()
   let positiveContrastMaxDelta = 0
   let minPositiveContrastDelta = Number.POSITIVE_INFINITY
 
@@ -1117,8 +1387,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
       sidecar.route !== 'copy-picture' ||
       sidecar.scale !== 1 ||
       sidecar.pxPerPt !== 1 ||
-      typeof sidecar.excelVersion !== 'string' ||
-      !/^16\.(11[4-9]|[2-9]\d\d)(\.|$)/.test(sidecar.excelVersion) ||
+      !isSupportedExcelVersion(sidecar.excelVersion) ||
       sidecar.savedSha256 !== savedSha256 ||
       sidecar.pngSha256 !== pngHash ||
       typeof sidecar.capturedAt !== 'string' ||
@@ -1132,6 +1401,19 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
         code: 'sidecar-mismatch',
         reason: `Sidecar provenance or hash binding mismatch in ${cap.sidecarPath}`,
         structuralValid: true,
+      }
+    }
+
+    if (c.status === 'measured') {
+      if (sidecar.resavedByExcel !== true || sidecar.resaveSavedSha256 !== savedSha256) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'resave-provenance-missing',
+          reason: `Capture sidecar ${cap.sidecarPath} missing resavedByExcel: true or resaveSavedSha256 matching saved workbook hash`,
+          structuralValid: true,
+        }
       }
     }
 
@@ -1175,16 +1457,66 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
     if (
       Math.abs(decoded.height - rangeGeom.expectedHeightPt) > 4 ||
-      decoded.width < rangeGeom.minExpectedWidthPt - 4 ||
-      decoded.width > rangeGeom.maxExpectedWidthPt + 4
+      Math.abs(decoded.width - rangeGeom.expectedWidthPt) > rangeGeom.colWidthsPt.length + 2
     ) {
       return {
         kind: 'refusal',
         id: c.id,
         status: c.status,
         code: 'geometry-mismatch',
-        reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match worksheet range ${c.range} metrics (expected width ${rangeGeom.minExpectedWidthPt}..${rangeGeom.maxExpectedWidthPt}, height ${rangeGeom.expectedHeightPt}±4)`,
+        reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match worksheet range ${c.range} metrics (expected width ${rangeGeom.expectedWidthPt}±${rangeGeom.colWidthsPt.length + 2}, height ${rangeGeom.expectedHeightPt}±4)`,
         structuralValid: true,
+      }
+    }
+
+    if (Array.isArray(sidecar.colWidthsPt)) {
+      const cols = sidecar.colWidthsPt as number[]
+      if (cols.length !== rangeGeom.colWidthsPt.length) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthsPt.length}`,
+          structuralValid: true,
+        }
+      }
+      for (let ci = 0; ci < cols.length; ci++) {
+        if (Math.abs(cols[ci] - rangeGeom.colWidthsPt[ci]) > 1) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'geometry-mismatch',
+            reason: `Sidecar column ${ci} width ${cols[ci]}pt does not match ECMA-376 columnWidthPx ${rangeGeom.colWidthsPt[ci]}pt (allowed ±1pt)`,
+            structuralValid: true,
+          }
+        }
+      }
+    }
+    if (Array.isArray(sidecar.rowHeightsPt)) {
+      const rows = sidecar.rowHeightsPt as number[]
+      if (rows.length !== rangeGeom.rowHeightsPt.length) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
+          structuralValid: true,
+        }
+      }
+      for (let ri = 0; ri < rows.length; ri++) {
+        if (Math.abs(rows[ri] - rangeGeom.rowHeightsPt[ri]) > 1) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'geometry-mismatch',
+            reason: `Sidecar row ${ri} height ${rows[ri]}pt does not match worksheet height ${rangeGeom.rowHeightsPt[ri]}pt (allowed ±1pt)`,
+            structuralValid: true,
+          }
+        }
       }
     }
 
@@ -1255,14 +1587,140 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           captureMinPositive = Math.min(captureMinPositive, obs.interiorMaxDelta)
           captureMaxPositive = Math.max(captureMaxPositive, obs.interiorMaxDelta)
         }
+
+        // Non-fill glyph ink validation
+        const requiresGlyph =
+          exp.fontRgb !== undefined ||
+          exp.bold !== undefined ||
+          exp.underline !== undefined ||
+          exp.strikethrough !== undefined ||
+          exp.formattedText !== undefined
+        if (requiresGlyph) {
+          if (obs.inkPixelCount < 6 || obs.glyphRowCount < 5 || obs.glyphColumnTransitions < 4) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected rendered glyph text, but no valid glyph ink observed (inkCount=${obs.inkPixelCount}, glyphRows=${obs.glyphRowCount}, colTrans=${obs.glyphColumnTransitions})`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.fontRgb !== undefined) {
+          const targetFontRgb = parseArgbHex(exp.fontRgb)
+          const fontErr = rgbMaxDelta(obs.inkRgb, targetFontRgb)
+          if (fontErr > 45) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected font ${exp.fontRgb} (${targetFontRgb.join(',')}), but observed ink RGB (${obs.inkRgb.join(',')}) (delta ${fontErr})`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.bold === true) {
+          if (
+            obs.inkWeight < obs.controlInkWeight * 1.08 &&
+            obs.inkPixelCount < obs.controlInkPixelCount + 4
+          ) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected bold text exceeding control ${exp.controlRef}, but observed inkWeight=${obs.inkWeight.toFixed(3)} vs control ${obs.controlInkWeight.toFixed(3)}`,
+              structuralValid: true,
+            }
+          }
+        } else if (exp.bold === false) {
+          if (
+            obs.inkWeight >= obs.controlInkWeight * 1.08 ||
+            obs.inkPixelCount >= obs.controlInkPixelCount + 4
+          ) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected non-bold text, but observed heavier inkWeight=${obs.inkWeight.toFixed(3)} vs control ${obs.controlInkWeight.toFixed(3)}`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.borderTop === true) {
+          if (obs.borderTopDelta < 24 || obs.borderTopVsControlDelta < 20) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected top border, but observed borderTopDelta=${obs.borderTopDelta}, borderTopVsControlDelta=${obs.borderTopVsControlDelta}`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.borderBottom === true) {
+          if (obs.borderBottomDelta < 24 || obs.borderBottomVsControlDelta < 20) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected bottom border, but observed borderBottomDelta=${obs.borderBottomDelta}, borderBottomVsControlDelta=${obs.borderBottomVsControlDelta}`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        if (exp.formattedText !== undefined) {
+          const sidecarCells = sidecar.observedCells as Array<Record<string, unknown>> | undefined
+          const sidecarCell = sidecarCells?.find(sc => String(sc.ref).toUpperCase() === exp.ref.toUpperCase())
+          if (!sidecarCell || typeof sidecarCell.formattedText !== 'string') {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected formattedText="${exp.formattedText}", but sidecar has no observed formattedText for it`,
+              structuralValid: true,
+            }
+          }
+          if (sidecarCell.formattedText !== exp.formattedText) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected formattedText="${exp.formattedText}", but sidecar observed "${sidecarCell.formattedText}"`,
+              structuralValid: true,
+            }
+          }
+        }
+
+        passingCellRefs.add(exp.ref.toUpperCase())
       } else {
-        if (exp.fillRgb !== undefined) {
+        if (
+          exp.fillRgb !== undefined ||
+          exp.fontRgb !== undefined ||
+          exp.bold !== undefined ||
+          exp.borderTop ||
+          exp.borderBottom ||
+          exp.underline !== undefined ||
+          exp.strikethrough !== undefined
+        ) {
           return {
             kind: 'refusal',
             id: c.id,
             status: c.status,
             code: 'cell-expectation-mismatch',
-            reason: `Unmatched cell expectation ${exp.ref} cannot specify fillRgb=${exp.fillRgb}`,
+            reason: `Unmatched cell expectation ${exp.ref} cannot specify override properties`,
             structuralValid: true,
           }
         }
@@ -1276,6 +1734,27 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
             structuralValid: true,
           }
         }
+        if (obs.interiorMaxDelta > 14) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'cell-expectation-mismatch',
+            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) interior unexpectedly differs from control ${exp.controlRef} by ${obs.interiorMaxDelta}`,
+            structuralValid: true,
+          }
+        }
+        if (obs.borderTopVsControlDelta > 14 || obs.borderBottomVsControlDelta > 14) {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'cell-expectation-mismatch',
+            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) border unexpectedly differs from control ${exp.controlRef}`,
+            structuralValid: true,
+          }
+        }
+        passingCellRefs.add(exp.ref.toUpperCase())
       }
     }
 
@@ -1294,6 +1773,14 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     positiveContrastMaxDelta = Math.max(positiveContrastMaxDelta, captureMaxPositive)
   }
 
+  const verifiedCapabilities: string[] = []
+  for (const m of c.markers) {
+    const covered = markerCellsMap.get(m.capabilityId) ?? []
+    if (covered.length > 0 && covered.every(cell => passingCellRefs.has(cell.ref.toUpperCase()))) {
+      verifiedCapabilities.push(m.capabilityId)
+    }
+  }
+
   return {
     kind: 'verified',
     id: c.id,
@@ -1304,7 +1791,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     positiveContrastMaxDelta,
     minPositiveContrastDelta,
     matchedRules: c.markers.length,
-    verifiedCapabilities: c.markers.map(m => m.capabilityId),
+    verifiedCapabilities,
   }
 }
 

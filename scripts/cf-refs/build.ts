@@ -224,13 +224,28 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
     const probe = probeAndBuildCase(c, preExisting, displayLocked)
     const savedBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved)))
+    const savedSha256 = sha256Hex(savedBytes)
+    const isResaved = probe.resaved || Boolean(c.resavedByExcel)
+    const resaveReceipt = probe.resaved
+      ? {
+          resavedAt: new Date().toISOString(),
+          excelVersion: osa(['tell application "Microsoft Excel" to get version']).trim(),
+          inputSha256: currentInputSha256,
+          savedSha256,
+          openedRepairFree: true as const,
+        }
+      : c.resaveReceipt && c.resaveReceipt.savedSha256 === savedSha256
+        ? c.resaveReceipt
+        : undefined
+
     manifest.cases[i] = {
       ...c,
-      resavedByExcel: probe.resaved || Boolean(c.resavedByExcel),
+      resavedByExcel: isResaved,
+      ...(resaveReceipt ? { resaveReceipt } : {}),
       expected: {
         ...c.expected,
         inputSha256: currentInputSha256,
-        savedSha256: sha256Hex(savedBytes),
+        savedSha256,
       },
       reason: probe.diagnostic ?? c.reason,
     }
