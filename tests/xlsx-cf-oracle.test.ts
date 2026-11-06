@@ -307,6 +307,9 @@ describe('CF oracle verifier', () => {
         pxPerPt: 1,
         width: 168,
         height: 54,
+        geometrySource: 'excel-measured',
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
         resavedByExcel: true,
         resaveSavedSha256: validXlsxHash,
         sheet: 'Sheet1',
@@ -477,6 +480,9 @@ describe('CF oracle verifier', () => {
         pxPerPt: 1,
         width: 168,
         height: 54,
+        geometrySource: 'excel-measured',
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
         resavedByExcel: true,
         resaveSavedSha256: validXlsxHash,
         sheet: 'Sheet1',
@@ -569,6 +575,7 @@ describe('CF oracle verifier', () => {
     const validMatchingPng = makeCaseMatchingPng(c0, savedBytes, true)
     const validMatchingHash = sha256(validMatchingPng)
     writeFileSync(join(dir, 'matching.png'), validMatchingPng)
+    const c0Geom = computeWorksheetRangeGeometry(readZipPartsSync(savedBytes)!, c0.range)!
     const baseSide = {
       sheet: c0.sheet,
       range: c0.range,
@@ -577,6 +584,9 @@ describe('CF oracle verifier', () => {
       route: 'copy-picture',
       appearance: 'screen',
       excelVersion: '16.114',
+      geometrySource: 'excel-measured',
+      colWidthsPt: c0Geom.colWidthsPt,
+      rowHeightsPt: c0Geom.rowHeightsPt,
       resavedByExcel: true,
       resaveSavedSha256: savedHash,
       savedSha256: savedHash,
@@ -942,6 +952,7 @@ describe('CF oracle verifier', () => {
     const clockPng = makeCaseMatchingPng(clockCase, clockSavedBytes, true)
     const clockPngHash = sha256(clockPng)
     writeFileSync(join(dir, 'clock.png'), clockPng)
+    const clockGeom = computeWorksheetRangeGeometry(readZipPartsSync(clockSavedBytes)!, clockCase.range)!
     const clockReceipt: CfResaveReceipt = {
       openedRepairFree: true,
       excelVersion: '16.114',
@@ -959,6 +970,9 @@ describe('CF oracle verifier', () => {
         appearance: 'screen',
         scale: 1,
         pxPerPt: 1,
+        geometrySource: 'excel-measured',
+        colWidthsPt: clockGeom.colWidthsPt,
+        rowHeightsPt: clockGeom.rowHeightsPt,
         sheet: clockCase.sheet,
         range: clockCase.range,
         hostTimeZone: 'Asia/Taipei',
@@ -1005,6 +1019,9 @@ describe('CF oracle verifier', () => {
         appearance: 'screen',
         scale: 1,
         pxPerPt: 1,
+        geometrySource: 'excel-measured',
+        colWidthsPt: clockGeom.colWidthsPt,
+        rowHeightsPt: clockGeom.rowHeightsPt,
         sheet: clockCase.sheet,
         range: clockCase.range,
         hostTimeZone: 'Asia/Taipei',
@@ -1051,6 +1068,9 @@ describe('CF oracle verifier', () => {
         appearance: 'screen',
         scale: 1,
         pxPerPt: 1,
+        geometrySource: 'excel-measured',
+        colWidthsPt: clockGeom.colWidthsPt,
+        rowHeightsPt: clockGeom.rowHeightsPt,
         sheet: clockCase.sheet,
         range: clockCase.range,
         hostTimeZone: 'Asia/Taipei',
@@ -1168,6 +1188,7 @@ describe('CF oracle verifier', () => {
     const cNumFmt = structuredClone(manifest.cases.find(x => x.id === 'stage1-numfmt-accessibility')!)
     const numFmtBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, cNumFmt.saved)))
     const numFmtHash = sha256(numFmtBytes)
+    const numFmtGeomEarly = computeWorksheetRangeGeometry(readZipPartsSync(numFmtBytes)!, cNumFmt.range)!
     const fillBarOnlyPng = makeFillBarOnlyPng(cNumFmt, numFmtBytes)
     writeFileSync(join(dir, 'numfmt-fillbar.png'), fillBarOnlyPng)
     const fillBarHash = sha256(fillBarOnlyPng)
@@ -1196,6 +1217,9 @@ describe('CF oracle verifier', () => {
             scale: 1,
             pxPerPt: 1,
             excelVersion: '16.114',
+            geometrySource: 'excel-measured',
+            colWidthsPt: numFmtGeomEarly.colWidthsPt,
+            rowHeightsPt: numFmtGeomEarly.rowHeightsPt,
             resavedByExcel: true,
             resaveSavedSha256: numFmtHash,
             savedSha256: numFmtHash,
@@ -1769,5 +1793,230 @@ describe('CF oracle verifier', () => {
       id: 'stage1-dxf-layering',
       status: 'measured',
     })
+  })
+
+  it('enforces T1-A: unverified geometry never becomes measured; trusted display-format overrides pixel advice', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-r5-'))
+    dirs.push(dir)
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const cNumFmt = structuredClone(manifest.cases.find(x => x.id === 'stage1-numfmt-accessibility')!)
+    const numFmtBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, cNumFmt.saved)))
+    const numFmtHash = sha256(numFmtBytes)
+    const numFmtReceipt: CfResaveReceipt = {
+      openedRepairFree: true,
+      excelVersion: '16.114',
+      inputSha256: cNumFmt.expected.inputSha256,
+      savedSha256: numFmtHash,
+      resavedAt: '2026-11-06T08:00:00Z',
+    }
+    const numFmtParts = readZipPartsSync(numFmtBytes)!
+    const geomNumFmt = computeWorksheetRangeGeometry(numFmtParts, cNumFmt.range)!
+    const validTexts: Record<string, string> = {}
+    for (const cell of cNumFmt.expected.cells) {
+      if (cell.formattedText !== undefined) validTexts[cell.ref] = cell.formattedText
+    }
+    const validDecs: Record<string, { underline?: 'none' | 'single' | 'double'; strikethrough?: boolean }> = {}
+    for (const cell of cNumFmt.expected.cells) {
+      validDecs[cell.ref] = {
+        underline: cell.underline ?? 'none',
+        strikethrough: cell.strikethrough ?? false,
+      }
+    }
+    const validPng = makeCaseMatchingPng(cNumFmt, numFmtBytes, true)
+    const validHash = sha256(validPng)
+    const validPngPath = join(dir, 'r5-valid.png')
+    writeFileSync(validPngPath, validPng)
+    const validObs = observeCellsFromCapture(decodePngSync(validPng)!, geomNumFmt, cNumFmt, {
+      observedCellTexts: validTexts,
+      observedCellDecorations: validDecs,
+    })!
+    const baseMeasured: CfOracleCase = {
+      ...cNumFmt,
+      status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: numFmtReceipt,
+      expected: { ...cNumFmt.expected, provenance: 'excel-observed' },
+      captures: (cNumFmt.requiredAppearances ?? ['screen']).map(appearance => {
+        const side = join(dir, `r5-valid.${appearance}.json`)
+        writeFileSync(
+          side,
+          JSON.stringify({
+            sheet: cNumFmt.sheet,
+            range: cNumFmt.range,
+            appearance,
+            route: 'copy-picture',
+            scale: 1,
+            pxPerPt: 1,
+            excelVersion: '16.114',
+            geometrySource: 'excel-measured',
+            colWidthsPt: geomNumFmt.colWidthsPt,
+            rowHeightsPt: geomNumFmt.rowHeightsPt,
+            resavedByExcel: true,
+            resaveSavedSha256: numFmtHash,
+            savedSha256: numFmtHash,
+            pngSha256: validHash,
+            capturedAt: '2026-11-06T08:00:00Z',
+            observedCells: validObs,
+          }),
+        )
+        return { appearance, pngPath: validPngPath, sidecarPath: side, pngSha256: validHash }
+      }),
+    }
+    expect(verifyCfCase(baseMeasured, { rootDir: REPO_ROOT }).kind).toBe('verified')
+
+    // T1-A(a,c): explicit geometrySource 'unverified' must never become measured,
+    // even when pixel samples match the fallback model.
+    const unverifiedSide = join(dir, 'r5-unverified.json')
+    writeFileSync(
+      unverifiedSide,
+      JSON.stringify({
+        sheet: cNumFmt.sheet,
+        range: cNumFmt.range,
+        appearance: 'screen',
+        route: 'copy-picture',
+        scale: 1,
+        pxPerPt: 1,
+        excelVersion: '16.114',
+        geometrySource: 'unverified',
+        colWidthsPt: geomNumFmt.colWidthsPt,
+        rowHeightsPt: geomNumFmt.rowHeightsPt,
+        resavedByExcel: true,
+        resaveSavedSha256: numFmtHash,
+        savedSha256: numFmtHash,
+        pngSha256: validHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: validObs,
+      }),
+    )
+    expect(
+      verifyCfCase(
+        {
+          ...baseMeasured,
+          captures: baseMeasured.captures.map(cap =>
+            cap.appearance === 'screen' ? { ...cap, sidecarPath: unverifiedSide } : cap,
+          ),
+        },
+        { rootDir: REPO_ROOT },
+      ),
+    ).toMatchObject({ kind: 'refusal', code: 'geometry-mismatch' })
+
+    // T1-A(a,c): missing geometrySource must also fail closed (no silent fallback to measured).
+    const missingGeomSide = join(dir, 'r5-missing-geom.json')
+    writeFileSync(
+      missingGeomSide,
+      JSON.stringify({
+        sheet: cNumFmt.sheet,
+        range: cNumFmt.range,
+        appearance: 'screen',
+        route: 'copy-picture',
+        scale: 1,
+        pxPerPt: 1,
+        excelVersion: '16.114',
+        resavedByExcel: true,
+        resaveSavedSha256: numFmtHash,
+        savedSha256: numFmtHash,
+        pngSha256: validHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: validObs,
+      }),
+    )
+    expect(
+      verifyCfCase(
+        {
+          ...baseMeasured,
+          captures: baseMeasured.captures.map(cap =>
+            cap.appearance === 'screen' ? { ...cap, sidecarPath: missingGeomSide } : cap,
+          ),
+        },
+        { rootDir: REPO_ROOT },
+      ),
+    ).toMatchObject({ kind: 'refusal', code: 'geometry-mismatch' })
+
+    // T1-A(b): trusted excel-display-format observation overrides disagreeing pixel advice.
+    // PNG has no strikethrough ink, but trusted observation says strikethrough=true.
+    const strikeExpectation: CfOracleCase = {
+      ...baseMeasured,
+      expected: {
+        ...baseMeasured.expected,
+        cells: baseMeasured.expected.cells.map(x =>
+          x.ref === 'B2' ? { ...x, strikethrough: true } : x,
+        ),
+      },
+    }
+    const strikeObs = observeCellsFromCapture(decodePngSync(validPng)!, geomNumFmt, strikeExpectation, {
+      observedCellTexts: validTexts,
+      observedCellDecorations: { ...validDecs, B2: { underline: 'none', strikethrough: true } },
+    })!
+    const b2StrikeObs = strikeObs.find(o => o.ref === 'B2')!
+    expect(b2StrikeObs.decorationSource).toBe('excel-display-format')
+    expect(b2StrikeObs.hasStrikethroughInk).toBe(false)
+    const strikeCaptures = (strikeExpectation.requiredAppearances ?? ['screen']).map(appearance => {
+      const side = join(dir, `r5-strike-trusted.${appearance}.json`)
+      writeFileSync(
+        side,
+        JSON.stringify({
+          sheet: cNumFmt.sheet,
+          range: cNumFmt.range,
+          appearance,
+          route: 'copy-picture',
+          scale: 1,
+          pxPerPt: 1,
+          excelVersion: '16.114',
+          geometrySource: 'excel-measured',
+          colWidthsPt: geomNumFmt.colWidthsPt,
+          rowHeightsPt: geomNumFmt.rowHeightsPt,
+          resavedByExcel: true,
+          resaveSavedSha256: numFmtHash,
+          savedSha256: numFmtHash,
+          pngSha256: validHash,
+          capturedAt: '2026-11-06T08:00:00Z',
+          observedCells: strikeObs,
+        }),
+      )
+      return { appearance, pngPath: validPngPath, sidecarPath: side, pngSha256: validHash }
+    })
+    expect(
+      verifyCfCase({ ...strikeExpectation, captures: strikeCaptures }, { rootDir: REPO_ROOT }).kind,
+    ).toBe('verified')
+
+    // T1-A(b): missing trusted observation stays explicitly unverified (no pixel authority).
+    const rawObs = observeCellsFromCapture(decodePngSync(validPng)!, geomNumFmt, strikeExpectation, {
+      observedCellTexts: validTexts,
+    })!
+    const b2Raw = rawObs.find(o => o.ref === 'B2')!
+    expect(b2Raw.decorationSource).toBe('unverified')
+    const rawSide = join(dir, 'r5-strike-untrusted.json')
+    writeFileSync(
+      rawSide,
+      JSON.stringify({
+        sheet: cNumFmt.sheet,
+        range: cNumFmt.range,
+        appearance: 'screen',
+        route: 'copy-picture',
+        scale: 1,
+        pxPerPt: 1,
+        excelVersion: '16.114',
+        geometrySource: 'excel-measured',
+        colWidthsPt: geomNumFmt.colWidthsPt,
+        rowHeightsPt: geomNumFmt.rowHeightsPt,
+        resavedByExcel: true,
+        resaveSavedSha256: numFmtHash,
+        savedSha256: numFmtHash,
+        pngSha256: validHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: rawObs,
+      }),
+    )
+    expect(
+      verifyCfCase(
+        {
+          ...strikeExpectation,
+          captures: strikeExpectation.captures.map(cap =>
+            cap.appearance === 'screen' ? { ...cap, sidecarPath: rawSide } : cap,
+          ),
+        },
+        { rootDir: REPO_ROOT },
+      ),
+    ).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
   })
 })

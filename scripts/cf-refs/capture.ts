@@ -196,8 +196,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
     const clockState = c.clockRequirement ? probeLiveExcelClockState(c, savedAbs, preExisting) : null
     const liveObs = probeLiveExcelCellObservations(c, savedAbs, preExisting)
+    const hasLiveGeom =
+      liveObs?.geometry !== null &&
+      liveObs?.geometry !== undefined &&
+      liveObs.geometry.colWidthsPt.length > 0 &&
+      liveObs.geometry.rowHeightsPt.length > 0
     const activeGeom =
-      liveObs?.geometry && liveObs.geometry.colWidthsPt.length > 0 && parts
+      hasLiveGeom && parts
         ? computeWorksheetRangeGeometry(parts, c.range, {
             colWidthsPt: liveObs.geometry.colWidthsPt,
             rowHeightsPt: liveObs.geometry.rowHeightsPt,
@@ -244,9 +249,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             height: decoded?.height,
             colWidthsPt: activeGeom?.colWidthsPt,
             rowHeightsPt: activeGeom?.rowHeightsPt,
-            ...(liveObs?.geometry && liveObs.geometry.colWidthsPt.length > 0
-              ? { geometrySource: 'excel-measured' }
-              : {}),
+            geometrySource: hasLiveGeom ? 'excel-measured' : 'unverified',
             resavedByExcel: c.resavedByExcel === true,
             resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
             sheet: c.sheet,
@@ -280,19 +283,23 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
     const candidate: CfOracleCase = {
       ...c,
-      status: hasResave ? 'measured' : 'recipe-pending',
+      status: hasResave && hasLiveGeom ? 'measured' : 'recipe-pending',
       captures: updatedCaptures,
       expected: {
         ...c.expected,
         savedSha256,
-        provenance: hasResave ? 'excel-observed' : 'seed-hypothesis',
+        provenance: hasResave && hasLiveGeom ? 'excel-observed' : 'seed-hypothesis',
       },
       ...(!hasResave
         ? {
             reason:
               'Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured',
           }
-        : {}),
+        : !hasLiveGeom
+          ? {
+              reason: 'Excel-measured range geometry required before promotion to measured',
+            }
+          : {}),
     }
     const check = verifyCfCase(candidate, { rootDir: REPO_ROOT })
     if (check.kind === 'verified') {

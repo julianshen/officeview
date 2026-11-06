@@ -898,6 +898,7 @@ export interface ObservedCellSummary {
   formattedText?: string
   underline?: 'none' | 'single' | 'double'
   strikethrough?: boolean
+  decorationSource?: 'excel-display-format' | 'unverified'
 }
 
 export function observeCellsFromCapture(
@@ -1107,6 +1108,8 @@ export function observeCellsFromCapture(
 
     const optText = options?.observedCellTexts?.[cell.ref]
     const optDec = options?.observedCellDecorations?.[cell.ref]
+    const hasTrustedDec =
+      optDec !== undefined && (optDec.underline !== undefined || optDec.strikethrough !== undefined)
 
     out.push({
       ref: cell.ref,
@@ -1129,14 +1132,15 @@ export function observeCellsFromCapture(
       hasUnderlineInk,
       hasStrikethroughInk,
       ...(optText !== undefined ? { formattedText: optText } : {}),
-      ...(optDec?.underline !== undefined
-        ? { underline: optDec.underline }
-        : hasUnderlineInk
-          ? { underline: 'single' }
-          : { underline: 'none' }),
-      ...(optDec?.strikethrough !== undefined
-        ? { strikethrough: optDec.strikethrough }
-        : { strikethrough: hasStrikethroughInk }),
+      ...(hasTrustedDec
+        ? {
+            decorationSource: 'excel-display-format' as const,
+            ...(optDec.underline !== undefined ? { underline: optDec.underline } : {}),
+            ...(optDec.strikethrough !== undefined ? { strikethrough: optDec.strikethrough } : {}),
+          }
+        : {
+            decorationSource: 'unverified' as const,
+          }),
     })
   }
   return out
@@ -1588,6 +1592,19 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           }) ?? rangeGeom
         : rangeGeom
 
+    // T1-A(a,c): unverified geometry never becomes measured fidelity. Fail closed
+    // when Excel did not return per-column/per-row bounds that reconcile.
+    if (sidecar.geometrySource !== 'excel-measured') {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Capture ${cap.pngPath} has geometrySource="${String(sidecar.geometrySource ?? 'missing')}"; Excel-measured range geometry required before promotion to measured (T1-A)`,
+        structuralValid: true,
+      }
+    }
+
     if (Math.abs(decoded.height - activeGeom.expectedHeightPt) > 4) {
       return {
         kind: 'refusal',
@@ -1599,113 +1616,76 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
       }
     }
 
-    if (sidecar.geometrySource === 'excel-measured') {
-      if (!Array.isArray(sidecar.colWidthsPt) || !Array.isArray(sidecar.rowHeightsPt)) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Measured capture ${cap.pngPath} must provide colWidthsPt and rowHeightsPt arrays in sidecar`,
-          structuralValid: true,
-        }
+    if (!Array.isArray(sidecar.colWidthsPt) || !Array.isArray(sidecar.rowHeightsPt)) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Measured capture ${cap.pngPath} must provide colWidthsPt and rowHeightsPt arrays in sidecar`,
+        structuralValid: true,
       }
-      const cols = sidecar.colWidthsPt as number[]
-      const rows = sidecar.rowHeightsPt as number[]
-      if (cols.length !== rangeGeom.colWidthChars.length) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthChars.length}`,
-          structuralValid: true,
-        }
+    }
+    const cols = sidecar.colWidthsPt as number[]
+    const rows = sidecar.rowHeightsPt as number[]
+    if (cols.length !== rangeGeom.colWidthChars.length) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthChars.length}`,
+        structuralValid: true,
       }
-      if (rows.length !== rangeGeom.rowHeightsPt.length) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
-          structuralValid: true,
-        }
+    }
+    if (rows.length !== rangeGeom.rowHeightsPt.length) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
+        structuralValid: true,
       }
-      if (!cols.every(w => typeof w === 'number' && Number.isFinite(w) && w >= 0)) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Sidecar colWidthsPt must contain non-negative numbers`,
-          structuralValid: true,
-        }
+    }
+    if (!cols.every(w => typeof w === 'number' && Number.isFinite(w) && w >= 0)) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Sidecar colWidthsPt must contain non-negative numbers`,
+        structuralValid: true,
       }
-      if (!rows.every(h => typeof h === 'number' && Number.isFinite(h) && h >= 0)) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Sidecar rowHeightsPt must contain non-negative numbers`,
-          structuralValid: true,
-        }
+    }
+    if (!rows.every(h => typeof h === 'number' && Number.isFinite(h) && h >= 0)) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Sidecar rowHeightsPt must contain non-negative numbers`,
+        structuralValid: true,
       }
-      if (Math.abs(decoded.width - activeGeom.expectedWidthPt) > activeGeom.colWidthsPt.length + 2) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match measured range ${c.range} metrics (expected width ${activeGeom.expectedWidthPt}±${activeGeom.colWidthsPt.length + 2}, height ${activeGeom.expectedHeightPt}±4)`,
-          structuralValid: true,
-        }
+    }
+    if (Math.abs(decoded.width - activeGeom.expectedWidthPt) > activeGeom.colWidthsPt.length + 2) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Capture ${cap.pngPath} dimensions ${decoded.width}x${decoded.height} do not match measured range ${c.range} metrics (expected width ${activeGeom.expectedWidthPt}±${activeGeom.colWidthsPt.length + 2}, height ${activeGeom.expectedHeightPt}±4)`,
+        structuralValid: true,
       }
-      if (Math.abs(decoded.height - activeGeom.expectedHeightPt) > 4) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Capture ${cap.pngPath} height ${decoded.height} does not match measured range ${c.range} height ${activeGeom.expectedHeightPt}±4`,
-          structuralValid: true,
-        }
-      }
-    } else {
-      if (Math.abs(decoded.width - activeGeom.expectedWidthPt) > activeGeom.expectedWidthPt * 0.2) {
-        return {
-          kind: 'refusal',
-          id: c.id,
-          status: c.status,
-          code: 'geometry-mismatch',
-          reason: `Capture ${cap.pngPath} width ${decoded.width} differs grossly from range metric ${activeGeom.expectedWidthPt}`,
-          structuralValid: true,
-        }
-      }
-      if (Array.isArray(sidecar.colWidthsPt)) {
-        const cols = sidecar.colWidthsPt as number[]
-        if (cols.length !== rangeGeom.colWidthsPt.length) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'geometry-mismatch',
-            reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthsPt.length}`,
-            structuralValid: true,
-          }
-        }
-        const totalW = cols.reduce((a, b) => a + b, 0)
-        if (Math.abs(totalW - decoded.width) > cols.length + 2) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'geometry-mismatch',
-            reason: `Sidecar colWidthsPt sum (${totalW}pt) does not match PNG width (${decoded.width}px)`,
-            structuralValid: true,
-          }
-        }
+    }
+    if (Math.abs(decoded.height - activeGeom.expectedHeightPt) > 4) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'geometry-mismatch',
+        reason: `Capture ${cap.pngPath} height ${decoded.height} does not match measured range ${c.range} height ${activeGeom.expectedHeightPt}±4`,
+        structuralValid: true,
       }
     }
 
@@ -1896,12 +1876,22 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
         if (exp.underline !== undefined) {
           const sidecarCells = sidecar.observedCells as Array<Record<string, unknown>> | undefined
           const sidecarCell = sidecarCells?.find(sc => String(sc.ref).toUpperCase() === exp.ref.toUpperCase())
-          if (!sidecarCell || sidecarCell.underline === undefined) {
+          if (!sidecarCell || sidecarCell.decorationSource !== 'excel-display-format') {
             return {
               kind: 'refusal',
               id: c.id,
               status: c.status,
-              code: 'cell-expectation-mismatch',
+              code: 'unobserved-expectation',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="${exp.underline}", but sidecar has no trusted excel-display-format observation (decorationSource="${String(sidecarCell?.decorationSource)}")`,
+              structuralValid: true,
+            }
+          }
+          if (sidecarCell.underline === undefined) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'unobserved-expectation',
               reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="${exp.underline}", but sidecar has no observed underline for it`,
               structuralValid: true,
             }
@@ -1916,37 +1906,27 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
               structuralValid: true,
             }
           }
-          if (exp.underline !== 'none' && !obs.hasUnderlineInk) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'cell-expectation-mismatch',
-              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="${exp.underline}", but no underline ink was observed in pixels`,
-              structuralValid: true,
-            }
-          }
-          if (exp.underline === 'none' && obs.hasUnderlineInk) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'cell-expectation-mismatch',
-              reason: `Cell ${exp.ref} (${cap.appearance}) expected underline="none", but underline ink was observed in pixels`,
-              structuralValid: true,
-            }
-          }
         }
 
         if (exp.strikethrough !== undefined) {
           const sidecarCells = sidecar.observedCells as Array<Record<string, unknown>> | undefined
           const sidecarCell = sidecarCells?.find(sc => String(sc.ref).toUpperCase() === exp.ref.toUpperCase())
-          if (!sidecarCell || typeof sidecarCell.strikethrough !== 'boolean') {
+          if (!sidecarCell || sidecarCell.decorationSource !== 'excel-display-format') {
             return {
               kind: 'refusal',
               id: c.id,
               status: c.status,
-              code: 'cell-expectation-mismatch',
+              code: 'unobserved-expectation',
+              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=${exp.strikethrough}, but sidecar has no trusted excel-display-format observation (decorationSource="${String(sidecarCell?.decorationSource)}")`,
+              structuralValid: true,
+            }
+          }
+          if (typeof sidecarCell.strikethrough !== 'boolean') {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'unobserved-expectation',
               reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=${exp.strikethrough}, but sidecar has no observed strikethrough for it`,
               structuralValid: true,
             }
@@ -1958,26 +1938,6 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
               status: c.status,
               code: 'cell-expectation-mismatch',
               reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=${exp.strikethrough}, but sidecar observed ${String(sidecarCell.strikethrough)}`,
-              structuralValid: true,
-            }
-          }
-          if (exp.strikethrough === true && !obs.hasStrikethroughInk) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'cell-expectation-mismatch',
-              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=true, but no strikethrough ink was observed in pixels`,
-              structuralValid: true,
-            }
-          }
-          if (exp.strikethrough === false && obs.hasStrikethroughInk) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'cell-expectation-mismatch',
-              reason: `Cell ${exp.ref} (${cap.appearance}) expected strikethrough=false, but strikethrough ink was observed in pixels`,
               structuralValid: true,
             }
           }
