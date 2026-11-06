@@ -54,6 +54,8 @@ function lazyPagedChunks(): Plugin {
         '/src/components/fileName.ts',
         // The chart engine (DOCX/PPTX/XLSX charts), loaded by xlsx/chartLoader's dynamic import.
         '/src/charts/index.ts',
+        // Dev-server warmup only; the library CF bridge remains a dynamic import.
+        '/src/xlsx/cf/limits.ts',
         // The pivot, table-style and slicer/timeline engines (xlsx/pivotLoader, tableStyleLoader, pagedSource, pagedDrawings, pagedFormatting).
         '/src/xlsx/pivots/index.ts',
         // The pivot controls (client, button layer, menus), InteractiveSheetDoc's dynamic import on a sheet with pivots.

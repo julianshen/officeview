@@ -149,6 +149,8 @@ export type XlsxDrawingAnchorRecord =
 export interface XlsxDrawingAnchors { records: XlsxDrawingAnchorRecord[]; unresolved: number }
 
 export interface XlsxSheet {
+  /** Immutable lazy CF rules; absence adds no cache or evaluator work. */
+  conditionalFormatting?: import('./cf/model').CfSheetRules
   /** Parsed x14 sparkline groups (resident worksheet path). */
   sparklineGroups?: import('./sparklines/model').XlsxSparklineGroup[]
   /** Render-ready sparkline cache, filled once after parse (resident path): row -> col -> resolved sparkline. */
