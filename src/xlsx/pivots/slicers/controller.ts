@@ -5,18 +5,73 @@ export type SlicerApplyResult = { kind: 'committed'; revision: number } | { kind
 export interface SlicerControllerHost {
   apply(model: SlicerModel, action: SlicerAction, signal: AbortSignal): Promise<SlicerApplyResult>
   announce(message: string): void
-  onChange?(model: SlicerModel): void
+  /** The admitted hold is transferred here: the host owns it until the retained copy is replaced, evicted or unmounted. */
+  onChange?(model: SlicerModel, hold?: { release(): void }): void
   /** Reserve an upper bound before copying the committed item state. */
   admit?(bytes: number): { release(): void } | undefined
 }
 const UNVERIFIED = 'This slicer action has not been measured in Excel and is not available.'
+
+/**
+ * One retained charge covers one slicer cache on one sheet (PR #61 review).
+ * Drawings sharing a cache on the same sheet publish together from one
+ * sheet-scoped controller, so they share the admitted hold; drawings sharing
+ * a cache across sheets commit from different controllers with different
+ * admissions, so each sheet group keeps its own charge. Keying by cache
+ * alone would let the second sheet's commit release the first sheet's hold
+ * while its model stays reachable (memory under-counted).
+ */
+export function slicerRetainedGroupKey(cacheKey: string, sheetId: string): string {
+  return `${cacheKey}\u0000${sheetId}`
+}
+
+/**
+ * Retained slicer-model charges (option A, PR #60 review 4486449664).
+ *
+ * One entry per slicer cache per sheet (see `slicerRetainedGroupKey`): the
+ * admitted selection hold is transferred from the sheet-scoped controller
+ * to the retained copy `InteractiveSheetDoc` keeps in `slicerModels` and
+ * its drawing caches.
+ * The charge ends when the last holder drops it: the model is replaced
+ * (a newer commit for the same group), the group evicts it, or the viewer
+ * unmounts. Release is idempotent and never refunds twice: the entry is
+ * deleted when released, so a second release finds nothing (sibling drawings
+ * sharing one cache on one sheet publish the same hold, which dedups by identity).
+ * Failures never throw out of render.
+ */
+export class SlicerRetainedCharges {
+  private readonly charges = new Map<string, { release(): void }>()
+  /** Owns `hold` for `cacheKey` (a `slicerRetainedGroupKey`), releasing the previous hold exactly once. */
+  retain(cacheKey: string, hold?: { release(): void }): void {
+    const current = this.charges.get(cacheKey)
+    if (current === hold) return
+    if (current) {
+      try { current.release() } catch { /* fail closed: never throw out of render */ }
+    }
+    if (hold) this.charges.set(cacheKey, hold)
+    else this.charges.delete(cacheKey)
+  }
+  /** Ends the group's charge exactly once (a no-op when already released). */
+  evict(cacheKey: string): void {
+    const current = this.charges.get(cacheKey)
+    if (!current) return
+    this.charges.delete(cacheKey)
+    try { current.release() } catch { /* fail closed */ }
+  }
+  /** Ends every retained charge (viewer unmount). Each releases exactly once. */
+  clear(): void {
+    for (const key of [...this.charges.keys()]) this.evict(key)
+  }
+  get size(): number { return this.charges.size }
+  /** The groups currently holding a charge (for sheet-removal eviction). */
+  keys(): IterableIterator<string> { return this.charges.keys() }
+}
 
 /** View-only committed slicer selection. It publishes a new model only after the transaction commits. */
 export class SlicerController {
   private readonly models = new Map<string, SlicerModel>()
   private readonly filteredFields = new Map<string, boolean>()
   private readonly listeners = new Set<() => void>()
-  private readonly holds = new Map<string, { release(): void }>()
   private disposed = false
   private pendingOps = 0
   private disposeRequested = false
@@ -40,11 +95,25 @@ export class SlicerController {
   model(name: string): SlicerModel | undefined { return this.models.get(name) }
   multiSelect(_name: string): boolean { return false }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  private publish(model: SlicerModel): void {
-    if (this.disposed) return
+  private publish(model: SlicerModel, hold?: { release(): void }, onTransferred?: () => void): void {
+    if (this.disposed) {
+      // Never published, never transferred: refund the transient reservation.
+      hold?.release()
+      return
+    }
     this.models.set(model.name, model)
     this.reindexField(model)
-    this.host.onChange?.(model)
+    // Option A: the admitted hold is transferred to the retained model's
+    // lifetime. The controller forgets it here so dispose() never refunds a
+    // copy the host still shows; the host releases it exactly once when the
+    // model is replaced, evicted or unmounted (SlicerRetainedCharges). A throw
+    // propagates to the publisher, which refunds only when nothing was
+    // transferred yet (a partial sibling publish never refunds a hold the
+    // host already owns). The transfer is counted immediately after onChange
+    // returns, before listeners run, so a listener throwing on the first
+    // publish never triggers an early refund of a hold the host retained.
+    this.host.onChange?.(model, hold)
+    onTransferred?.()
     for (const listener of this.listeners) listener()
   }
 
@@ -134,12 +203,27 @@ export class SlicerController {
       }
       const current = this.models.get(name)
       if (current !== before || siblings.some(sibling => this.models.get(sibling.name) !== sibling)) { hold?.release(); this.host.announce('The slicer changed meanwhile; try again.'); return false }
-      this.holds.get(name)?.release()
-      if (hold) this.holds.set(name, hold)
-      this.publish({ ...before, selectedItemIds: [...selected], revision: Math.max((before.revision ?? 0) + 1, result.revision), items: before.items.map(item => ({ ...item, selected: selected.has(item.id) })) })
-      for (const sibling of siblings) {
-        this.holds.get(sibling.name)?.release()
-        this.publish({ ...sibling, selectedItemIds: [...selected], revision: Math.max((sibling.revision ?? 0) + 1, result.revision), items: sibling.items.map(item => ({ ...item, selected: selected.has(item.id) })) })
+      // Option A: transfer the admission to the retained copies the host keeps
+      // (InteractiveSheetDoc `slicerModels` + drawing caches). The controller
+      // forgets `hold` here so disposing the sheet-scoped controller never
+      // refunds a copy that is still reachable. The host releases it exactly
+      // once via SlicerRetainedCharges (replace, evict, unmount). A host that
+      // throws out of onChange fails closed: the transient is refunded only
+      // when nothing was transferred yet, so a partial sibling publish never
+      // refunds a hold the host already retains, and the commit reports as
+      // failed without leaking or throwing out of render.
+      // Siblings share one cache hold: the same object is transferred once per
+      // published copy and the host dedups it by identity.
+      let published = 0
+      try {
+        this.publish({ ...before, selectedItemIds: [...selected], revision: Math.max((before.revision ?? 0) + 1, result.revision), items: before.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold, () => { published++ })
+        for (const sibling of siblings) {
+          this.publish({ ...sibling, selectedItemIds: [...selected], revision: Math.max((sibling.revision ?? 0) + 1, result.revision), items: sibling.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold, () => { published++ })
+        }
+      } catch {
+        if (published === 0) hold?.release()
+        this.host.announce('Slicer change failed.')
+        return false
       }
       this.host.announce('Slicer selection applied (view only; the file is unchanged).')
       return true
@@ -155,7 +239,12 @@ export class SlicerController {
     // teardown waits until in-flight operations settle (at most the queued one).
     if (this.pendingOps > 0) { this.disposeRequested = true; return }
     this.disposed = true
-    this.listeners.clear(); this.models.clear(); this.filteredFields.clear(); for (const hold of this.holds.values()) hold.release(); this.holds.clear()
+    // Option A: admitted holds were transferred to the host on publish
+    // (SlicerRetainedCharges), so disposing the sheet-scoped controller
+    // releases nothing: the retained copies keep their charge until the host
+    // replaces, evicts or unmounts them. Only transient (never-published)
+    // state is dropped here.
+    this.listeners.clear(); this.models.clear(); this.filteredFields.clear()
   }
   private finishDisposeIfRequested(): void {
     if (this.disposeRequested && this.pendingOps === 0 && !this.disposed) { this.disposeRequested = false; this.dispose() }
