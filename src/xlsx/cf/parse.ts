@@ -218,6 +218,12 @@ function parseSqrefToken(token: string): ParsedRange | undefined {
   return undefined
 }
 
+/** Retained cost of one parsed range rectangle under the repository payload
+ * model (`measurePayloadBytes`): the object holds four named numbers
+ * (24 B object + 4 x 16 B slots + 4 x 8 B numbers = 120 B) plus one 8 B
+ * array slot. The array header itself is covered by the admission base. */
+const RANGE_RECT_BYTES = 128
+
 function parseSqref(sqref: string | undefined): ParsedRange[] | 'over-cap' | undefined {
   if (sqref === undefined) return undefined
   const text = sqref.trim()
@@ -228,6 +234,9 @@ function parseSqref(sqref: string | undefined): ParsedRange[] | 'over-cap' | und
   let start = 0
   const flush = (end: number): ParsedRange[] | 'over-cap' | undefined => {
     if (end <= start) return out
+    // Tokens longer than any representable range cannot match: refuse without
+    // building unbounded transient slices. XFD1048576:XFD1048576 is 23 chars.
+    if (end - start > 64) return undefined
     const range = parseSqrefToken(text.slice(start, end))
     if (!range) return undefined
     out.push(range)
@@ -1095,10 +1104,15 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     }
     if (sqrefText !== undefined) {
       // Pre-admit a conservative range workspace before constructing any
-      // rectangle: at least 2 chars per token (plus separator), capped at the
-      // per-rule bound plus one entry for the over-cap abort sentinel.
+      // rectangle. Each rectangle costs RANGE_RECT_BYTES under the same
+      // object/slot/value model as retained payload measurement (120 B for
+      // the object with four named numbers plus an 8 B array slot); the 80 B
+      // base covers the array header and scan record, and the raw-text term
+      // covers transient trim/scan copies. The token estimate assumes at
+      // least 2 chars per token plus separator and is capped at the per-rule
+      // bound plus one entry for the over-cap abort sentinel.
       const estCount = Math.min(Math.ceil((sqrefText.trim().length + 1) / 2), CF_LIMITS.rangesPerRule + 1)
-      fin.admit(64 + estCount * 32)
+      fin.admit(80 + estCount * RANGE_RECT_BYTES + sqrefText.length * 2)
     }
     const parsed = parseSqref(sqrefText)
     if (parsed === undefined) {
@@ -1112,7 +1126,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       return undefined
     }
     const ranges = parsed
-    const elementBytes = 64 + ranges.length * 32 + (sqrefText ? sqrefText.length * 2 : 0)
+    const elementBytes = 64 + ranges.length * RANGE_RECT_BYTES + (sqrefText ? sqrefText.length * 2 : 0)
     fin.admit(elementBytes + 256)
     fin.keep(elementBytes)
     if (!fin.reserveMeta(elementBytes)) {
@@ -1249,8 +1263,9 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     if (loneBase && loneExt && loneBase.ranges) {
       const extSqref = loneExt.sqrefText?.trim()
       if (extSqref) {
-        // Pre-admit the paired scope check before building any rectangles.
-        fin.admit(64 + Math.min(Math.ceil((extSqref.length + 1) / 2), CF_LIMITS.rangesPerRule + 1) * 32)
+        // Pre-admit the paired scope check at the full rectangle model before
+        // building any rectangles.
+        fin.admit(80 + Math.min(Math.ceil((extSqref.length + 1) / 2), CF_LIMITS.rangesPerRule + 1) * RANGE_RECT_BYTES + extSqref.length * 2)
         const r = parseSqref(extSqref)
         scopeOk =
           typeof r !== 'string' &&
@@ -1352,7 +1367,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
         return
       }
     }
-    if (!fin.reserveMeta(128 + read.inputs.formulas.reduce((n, f) => n + f.length * 2, 0))) {
+    if (!fin.reserveMeta(read.bound)) {
       fin.failSheet('cf-resource-limit', 'cf-resource-limit', 'sheet CF metadata exceeds the per-sheet cap')
       return
     }
@@ -1423,7 +1438,7 @@ function finalizeCollected(
     const published = diagHandle.entries.map(d => ({ ...d }))
     let diagBytes = 0
     for (const d of published) diagBytes += 192 + d.feature.length * 2 + d.message.length * 2
-    const value: CfSheetRules = fin.sentinel
+    let value: CfSheetRules = fin.sentinel
       ? { rules: [], unresolvedSheet: { reason: fin.sentinel.reason, writes: 'ALL' }, diagnostics: published }
       : { rules: fin.rules, diagnostics: published }
     // Never underprice the transfer: the adopted charge covers the computed
@@ -1435,6 +1450,14 @@ function finalizeCollected(
     if (measured.kind !== 'ready' && !fin.sentinel) throw new Error('CF admission exhausted')
     const computed = fin.retained + diagBytes + fin.metaBytes + 256
     const total = measured.kind === 'ready' ? Math.max(computed, measured.value) : computed
+    if (!fin.sentinel && total > CF_LIMITS.sheetMetadataBytes) {
+      // The counted per-rule bound missed enough record overhead to push the
+      // exact retained total over the per-sheet cap: refuse the whole sheet
+      // rather than publish an oversized model. The adopted charge keeps the
+      // aborted workspace (as on every sentinel path); release frees it all.
+      fin.failSheet('cf-resource-limit', 'cf-resource-limit', 'sheet CF metadata exceeds the per-sheet cap')
+      value = { rules: [], unresolvedSheet: { reason: 'cf-resource-limit', writes: 'ALL' }, diagnostics: published }
+    }
     if (total > fin.charged && !fin.hold.grow(total)) throw new Error('CF admission exhausted')
     fin.charged = Math.max(fin.charged, total)
     const lease = fin.hold.adopt(value, total)

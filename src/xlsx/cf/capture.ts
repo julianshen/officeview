@@ -27,6 +27,16 @@ import type { CfLease, CfSheetRules } from './model'
 const MAX_CAPTURE_NODES = 32768
 const MAX_CAPTURE_DEPTH = 64
 
+/** Shared empty scope: the document root inherits no bindings, and scopes are
+ * never mutated in place (extensions copy first), so one instance is safe. */
+const EMPTY_SCOPE: ReadonlyMap<string, string> = new Map()
+
+/** Local-part length without allocating the sliced string. */
+function localLen(qname: string): number {
+  const colon = qname.indexOf(':')
+  return colon < 0 ? qname.length : qname.length - colon - 1
+}
+
 interface Frame {
   local: string
   uri: string | undefined
@@ -123,27 +133,58 @@ export function createCfStreamEvents(
     open(qname, attrNames, attrValues, count, selfClosing) {
       // Terminal state is inert: post-finish events must neither build nor charge.
       if (finished) return
-      // Count every attribute (including xmlns declarations: their values are
-      // retained in scope maps) and every new namespace binding up front, so
-      // admission precedes any allocation below.
-      let attrBytes = 0
+      // Account for every attribute with plain arithmetic (no allocation), so
+      // admission precedes any construction below. xmlns prefixes and values
+      // are retained in scope maps; ordinary attributes are copied into
+      // captured frames.
+      let frameAttrBytes = 0
+      let bindingsBytes = 0
       let newBindings = 0
       for (let i = 0; i < count; i++) {
         const name = attrNames[i]!
-        attrBytes += localName(name).length + String(attrValues[i]).length
-        if (name === 'xmlns' || name.startsWith('xmlns:')) newBindings++
+        const valueLen = String(attrValues[i]).length
+        if (name === 'xmlns' || name.startsWith('xmlns:')) {
+          newBindings++
+          // Retained prefix slice, retained value string and the map slot.
+          bindingsBytes += ((name === 'xmlns' ? 0 : name.length - 6) + valueLen) * 2 + 64
+        } else {
+          frameAttrBytes += localLen(name) + valueLen
+        }
       }
-      const parentScope = scopes.length > 0 ? scopes[scopes.length - 1]! : new Map<string, string>()
-      // Scope copies retain the parent bindings: charge the copy.
-      const scopeCopyBytes = newBindings > 0 ? parentScope.size * 64 : 0
-      let scope: ReadonlyMap<string, string> = parentScope
+      const parentScope = scopes.length > 0 ? scopes[scopes.length - 1]! : EMPTY_SCOPE
+
+    const extUriOf = (): string | undefined => {
+      if (localName(qname) !== 'ext') return undefined
       for (let i = 0; i < count; i++) {
         const name = attrNames[i]!
-        if (name !== 'xmlns' && !name.startsWith('xmlns:')) continue
-        if (scope === parentScope) scope = new Map(parentScope)
-        ;(scope as Map<string, string>).set(name === 'xmlns' ? '' : name.slice(6), attrValues[i]!)
+        if (name === 'xmlns' || name.startsWith('xmlns:')) continue
+        if (localName(name) === 'uri') return attrValues[i]
       }
+      return undefined
+    }
       const local = localName(qname)
+      // Admit namespace storage BEFORE copying or extending any scope.
+      // Inherited bindings were admitted at their own declaration; this covers
+      // the copy of the inherited map plus every new binding retained below.
+      let scope: ReadonlyMap<string, string> = parentScope
+      if (newBindings > 0) {
+        if (!admit(64 + parentScope.size * 64 + bindingsBytes)) {
+          // Refuse without constructing or retaining new scope state: keep
+          // tracking balanced by reusing the parent scope.
+          overCap = true
+          stack.push({ local, uri: uriOf(qname, parentScope), ...(local === 'ext' ? { extUri: extUriOf() } : {}) })
+          scopes.push(parentScope)
+          if (selfClosing) events.close(qname)
+          return
+        }
+        const fresh = new Map(parentScope)
+        for (let i = 0; i < count; i++) {
+          const name = attrNames[i]!
+          if (name !== 'xmlns' && !name.startsWith('xmlns:')) continue
+          fresh.set(name === 'xmlns' ? '' : name.slice(6), attrValues[i]!)
+        }
+        scope = fresh
+      }
       const uri = uriOf(qname, scope)
       const depth = stack.length
       if (!sheetSeen) {
@@ -183,9 +224,10 @@ export function createCfStreamEvents(
           entries.push({ frame: null, isRoot })
         } else {
           nodeCount++
-          // Admit the frame record, copied attribute strings, retained scope
-          // copy and child-map slots before building any of them.
-          if (!admit(192 + attrBytes * 2 + scopeCopyBytes + 64)) {
+          // Admit the frame record, copied attribute strings and child-map
+          // slots before building any of them. Namespace storage was admitted
+          // at the scope step above, so xmlns declarations are excluded here.
+          if (!admit(192 + frameAttrBytes * 2 + 64)) {
             entries.push({ frame: null, isRoot })
           } else {
             const frameAttrs: Record<string, string> = {}
@@ -200,15 +242,6 @@ export function createCfStreamEvents(
         }
       }
 
-    const extUriOf = (): string | undefined => {
-      if (local !== 'ext') return undefined
-      for (let i = 0; i < count; i++) {
-        const name = attrNames[i]!
-        if (name === 'xmlns' || name.startsWith('xmlns:')) continue
-        if (localName(name) === 'uri') return attrValues[i]
-      }
-      return undefined
-    }
       stack.push({ local, uri, ...(local === 'ext' ? { extUri: extUriOf() } : {}) })
       scopes.push(scope)
       if (selfClosing) events.close(qname)

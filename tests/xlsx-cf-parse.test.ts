@@ -1064,3 +1064,134 @@ describe('CF fix round 2: review-t3-r2 residuals', () => {
     expect(memory.currentBytes).toBe(0)
   })
 })
+
+describe('CF fix round 3: review-t3-r3 findings', () => {
+  const isRect = (x: unknown): x is object =>
+    x !== null && typeof x === 'object' &&
+    typeof (x as Record<string, unknown>).firstRow === 'number' &&
+    typeof (x as Record<string, unknown>).lastCol === 'number'
+
+  it('F1 refuses a 256-range scope on a mid-size account before building any rectangle', () => {
+    // 32,784 B of rectangles under the payload model must never be built on
+    // a 9,000 B account: the full-model workspace bound refuses up front.
+    const sqref = Array.from({ length: 256 }, (_, i) => 'A' + (i + 1)).join(' ')
+    const memory = createCfMemory({ limitBytes: 9000 })
+    const ws = worksheet(
+      `<conditionalFormatting sqref="${sqref}"><cfRule type="expression" priority="1"/></conditionalFormatting>`,
+    )
+    const built = new Set<object>()
+    const push = Array.prototype.push
+    const hooked = function (this: unknown[], ...items: unknown[]): number {
+      for (const x of items) if (isRect(x)) built.add(x)
+      return (push as (...args: unknown[]) => number).apply(this, items)
+    };
+    (Array.prototype as unknown as { push: unknown }).push = hooked
+    try {
+      expect(() => parseCfSheet(ws, stylesFor(DXF_FILL), memory, {})).toThrow('CF admission exhausted')
+    } finally {
+      ;(Array.prototype as unknown as { push: unknown }).push = push
+    }
+    expect(built.size).toBe(0)
+  })
+
+  it('F1 still admits a 256-range scope on a roomy account', () => {
+    const sqref = Array.from({ length: 256 }, (_, i) => 'A' + (i + 1)).join(' ')
+    const memory = createCfMemory({ limitBytes: 200_000 })
+    const ws = worksheet(
+      `<conditionalFormatting sqref="${sqref}"><cfRule type="expression" priority="1"/></conditionalFormatting>`,
+    )
+    const { value, release } = parseCfSheet(ws, stylesFor(DXF_FILL), memory, {})
+    expect(value.rules).toHaveLength(1)
+    expect(value.rules[0]!.ranges).toHaveLength(256)
+    release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F2 admits namespace storage before copying or extending scopes', () => {
+    const memory = createCfMemory({ limitBytes: 1000 })
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const realSet = Map.prototype.set
+    let sets = 0
+    let maxDuringSet = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(Map.prototype as any).set = function (k: unknown, v: unknown) {
+      if (typeof k === 'string' && /^n\d+$/.test(k)) {
+        sets++
+        maxDuringSet = Math.max(maxDuringSet, memory.currentBytes)
+      }
+      return (realSet as (...args: unknown[]) => unknown).apply(this, [k, v])
+    }
+    try {
+      stream.events.open('worksheet', ['xmlns'], [NS], 1, false)
+      const names = ['sqref', ...Array.from({ length: 1000 }, (_, i) => `xmlns:n${i}`)]
+      const values = ['A1', ...Array.from({ length: 1000 }, (_, i) => 'urn:' + i + 'x'.repeat(500))]
+      stream.events.open('conditionalFormatting', names, values, names.length, false)
+      stream.events.open('cfRule', ['type', 'priority'], ['expression', '1'], 2, true)
+      stream.events.close('conditionalFormatting')
+      stream.events.close('worksheet')
+    } finally {
+      ;(Map.prototype as any).set = realSet
+    }
+    // No scope copy or binding may be constructed before it is admitted.
+    expect(sets).toBe(0)
+    expect(maxDuringSet).toBe(0)
+    const lease = stream.finish()
+    expect(lease.value.rules).toHaveLength(0)
+    expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F2 charges namespace bindings inherited from the worksheet ancestor', () => {
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const big = 'urn:example:' + 'x'.repeat(1000)
+    stream.events.open('worksheet', ['xmlns', 'xmlns:w'], [NS, big], 2, false)
+    // The worksheet scope retains a 1,000-character binding: the charge must
+    // already be visible before any captured element is opened.
+    expect(memory.currentBytes).toBeGreaterThanOrEqual(2000)
+    stream.events.open('conditionalFormatting', ['sqref'], ['A1'], 1, false)
+    stream.events.open('cfRule', ['type', 'priority'], ['expression', '1'], 2, true)
+    stream.events.close('conditionalFormatting')
+    stream.events.close('worksheet')
+    const lease = stream.finish()
+    expect(lease.value.rules).toHaveLength(1)
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F3 refuses a sheet whose normalized DXF payload exceeds the per-sheet cap', () => {
+    const n = 600
+    const rules = Array.from(
+      { length: n },
+      (_, i) => `<cfRule type="cellIs" operator="equal" priority="${i + 1}" dxfId="0"><formula>1</formula></cfRule>`,
+    ).join('')
+    const dxf = parseXml(`<dxf><font><name val="${'a'.repeat(4000)}"/></font></dxf>`)
+    const memory = createCfMemory({})
+    const ws = parseXml(`<worksheet xmlns="${NS}"><conditionalFormatting sqref="A1">${rules}</conditionalFormatting></worksheet>`)
+    const lease = parseCfSheet(ws, { colors: {}, dxfNodes: [dxf] }, memory, {})
+    // 600 rules x ~8.6 KB of normalized font payload must never publish.
+    expect(lease.value.rules).toHaveLength(0)
+    expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F3 never publishes a sheet total over the per-sheet cap', () => {
+    // 488 rules sit just under the counted metadata bound but over the cap
+    // once rule records are included: either enforcement layer must refuse.
+    const n = 488
+    const rules = Array.from(
+      { length: n },
+      (_, i) => `<cfRule type="cellIs" operator="equal" priority="${i + 1}" dxfId="0"><formula>1</formula></cfRule>`,
+    ).join('')
+    const dxf = parseXml(`<dxf><font><name val="${'a'.repeat(4000)}"/></font></dxf>`)
+    const memory = createCfMemory({})
+    const ws = parseXml(`<worksheet xmlns="${NS}"><conditionalFormatting sqref="A1">${rules}</conditionalFormatting></worksheet>`)
+    const lease = parseCfSheet(ws, { colors: {}, dxfNodes: [dxf] }, memory, {})
+    expect(lease.value.rules).toHaveLength(0)
+    expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+})
