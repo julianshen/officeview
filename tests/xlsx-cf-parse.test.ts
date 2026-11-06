@@ -772,7 +772,8 @@ describe('CF fix round 1: review-t3-r1 findings', () => {
     const pinnedAnchor = parse(
       `<conditionalFormatting sqref="B2:B9"><cfRule type="containsText" priority="1" text="ab"><formula>NOT(ISERROR(SEARCH("ab",$B$2)))</formula></cfRule></conditionalFormatting>`,
     )
-    expect(pinnedAnchor.value.rules[0]!.definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'ab' })
+    // Pinned references test the anchor cell, not the target cell: unmeasured.
+    expect(pinnedAnchor.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     const multiRange = parse(
       `<conditionalFormatting sqref="B2:B3 D5:D6"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(B2))=0</formula></cfRule></conditionalFormatting>`,
     )
@@ -804,5 +805,262 @@ describe('CF fix round 1: review-t3-r1 findings', () => {
     const streamed = stream.finish()
     expect(streamed.value.rules).toHaveLength(0)
     expect(streamed.value.diagnostics.some(d => d.feature === 'cf-namespace')).toBe(true)
+  })
+
+  it('F9 rejects wrong-namespace ext and extLst containers on both paths', async () => {
+    // A non-worksheet-namespace wrapper anywhere on the extension path
+    // withholds the subtree and records cf-namespace (fail-closed, never silent).
+    const cases = [
+      `<evil:extLst xmlns:evil="urn:evil"><evil:ext uri="${CF_EXT}"><x:conditionalFormattings xmlns:x="${X14}" xmlns:m="${XM}"><x:conditionalFormatting><m:sqref>A1</m:sqref><x:cfRule type="containsBlanks" priority="1"/></x:conditionalFormatting></x:conditionalFormattings></evil:ext></evil:extLst>`,
+      `<extLst><evil:ext xmlns:evil="urn:evil" uri="${CF_EXT}" xmlns:x="${X14}" xmlns:m="${XM}"><x:conditionalFormattings><x:conditionalFormatting><m:sqref>A1</m:sqref><x:cfRule type="containsBlanks" priority="1"/></x:conditionalFormatting></x:conditionalFormattings></evil:ext></extLst>`,
+    ]
+    for (const [index, body] of cases.entries()) {
+      const resident = parse(body)
+      expect(resident.value.rules, `resident case ${index}`).toHaveLength(0)
+      expect(resident.value.diagnostics.some(d => d.feature === 'cf-namespace'), `resident case ${index}`).toBe(true)
+      const memory = createCfMemory({})
+      const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+      const bytes = new TextEncoder().encode(`<worksheet xmlns="${NS}" xmlns:evil="urn:evil" xmlns:x="${X14}" xmlns:m="${XM}">${body}</worksheet>`)
+      async function* source() {
+        yield bytes
+      }
+      await tokenizeBytes(source(), stream.events)
+      const streamed = stream.finish()
+      expect(streamed.value.rules, `streamed case ${index}`).toHaveLength(0)
+      expect(streamed.value.diagnostics.some(d => d.feature === 'cf-namespace'), `streamed case ${index}`).toBe(true)
+      streamed.release()
+    }
+  })
+
+  it('F9 still accepts a mixed document with one evil and one valid extension block', async () => {
+    const good =
+      `<extLst><ext uri="${CF_EXT}"><x:conditionalFormattings xmlns:x="${X14}" xmlns:m="${XM}">` +
+      `<x:conditionalFormatting><m:sqref>A1</m:sqref><x:cfRule type="containsBlanks" priority="5"/></x:conditionalFormatting>` +
+      `</x:conditionalFormattings></ext></extLst>`
+    const evil =
+      `<extLst><ext uri="${CF_EXT}"><evil:conditionalFormattings xmlns:evil="urn:evil" xmlns:x="${X14}" xmlns:m="${XM}">` +
+      `<x:conditionalFormatting><m:sqref>B2</m:sqref><x:cfRule type="containsBlanks" priority="1"/></x:conditionalFormatting>` +
+      `</evil:conditionalFormattings></ext></extLst>`
+    // Resident paths see one worksheet extLst; exercise the streaming path where
+    // two extension blocks can coexist in one stream.
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const bytes = new TextEncoder().encode(
+      `<worksheet xmlns="${NS}" xmlns:evil="urn:evil" xmlns:x="${X14}" xmlns:m="${XM}">${evil}${good}</worksheet>`,
+    )
+    async function* source() {
+      yield bytes
+    }
+    await tokenizeBytes(source(), stream.events)
+    const streamed = stream.finish()
+    expect(streamed.value.rules).toHaveLength(1)
+    expect(streamed.value.rules[0]).toMatchObject({ priority: 5 })
+    expect(streamed.value.diagnostics.some(d => d.feature === 'cf-namespace')).toBe(true)
+    streamed.release()
+  })
+})
+
+describe('CF fix round 2: review-t3-r2 residuals', () => {
+  it('F1 admits range workspace before constructing any rectangle', () => {
+    const sqref = Array.from({ length: 256 }, (_, i) => 'A' + (i + 1)).join(' ')
+    const memory = createCfMemory({ limitBytes: 300 })
+    const ws = worksheet(
+      `<conditionalFormatting sqref="${sqref}"><cfRule type="expression" priority="1"/></conditionalFormatting>`,
+    )
+    let rects = 0
+    const push = Array.prototype.push
+    const hooked = function (this: unknown[], ...items: unknown[]): number {
+      for (const x of items) {
+        if (x !== null && typeof x === 'object' && typeof (x as Record<string, unknown>).firstRow === 'number' && typeof (x as Record<string, unknown>).lastCol === 'number') rects++
+      }
+      return (push as (...args: unknown[]) => number).apply(this, items)
+    };
+    (Array.prototype as unknown as { push: unknown }).push = hooked
+    try {
+      expect(() => parseCfSheet(ws, stylesFor(DXF_FILL), memory, {})).toThrow()
+    } finally {
+      ;(Array.prototype as unknown as { push: unknown }).push = push
+    }
+    // Admission precedes construction: no rectangle may exist when the account refuses.
+    expect(rects).toBe(0)
+  })
+
+  it('F1 charges the range workspace before the first rectangle is built', () => {
+    // Ten ranges succeed on the default account; the pre-admitted workspace
+    // bound must already be charged when the first rectangle is constructed.
+    // (Identities are deduplicated: the finalizer re-walks the same objects.)
+    const sqref = Array.from({ length: 10 }, (_, i) => 'A' + (i + 1)).join(' ')
+    const memory = createCfMemory({})
+    const ws = worksheet(
+      `<conditionalFormatting sqref="${sqref}"><cfRule type="expression" priority="1"/></conditionalFormatting>`,
+    )
+    const built = new Set<object>()
+    let firstRectBytes = -1
+    const push = Array.prototype.push
+    const hooked = function (this: unknown[], ...items: unknown[]): number {
+      for (const x of items) {
+        if (x !== null && typeof x === 'object' && typeof (x as Record<string, unknown>).firstRow === 'number' && typeof (x as Record<string, unknown>).lastCol === 'number') {
+          if (!built.has(x)) {
+            built.add(x)
+            if (firstRectBytes < 0) firstRectBytes = memory.currentBytes
+          }
+        }
+      }
+      return (push as (...args: unknown[]) => number).apply(this, items)
+    };
+    (Array.prototype as unknown as { push: unknown }).push = hooked
+    try {
+      const { value } = parseCfSheet(ws, stylesFor(DXF_FILL), memory, {})
+      expect(value.rules).toHaveLength(1)
+    } finally {
+      ;(Array.prototype as unknown as { push: unknown }).push = push
+    }
+    expect(built.size).toBe(10)
+    // The initial 256-byte reserve alone cannot cover even one rectangle:
+    // the pre-admitted workspace bound must already be charged.
+    expect(firstRectBytes).toBeGreaterThan(256)
+  })
+
+  it('F4 rejects pinned absolute references in canonical formulas', () => {
+    const pinnedFull = parse(
+      `<conditionalFormatting sqref="A1:A2"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM($A$1))=0</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(pinnedFull.value.rules).toHaveLength(1)
+    expect(pinnedFull.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    const pinnedMixed = parse(
+      `<conditionalFormatting sqref="A1:A2"><cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(A$1))=0</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(pinnedMixed.value.rules).toHaveLength(1)
+    expect(pinnedMixed.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+
+  it('F5 ignores reference-looking text needles when checking the anchor', () => {
+    const needle = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="containsText" priority="1" text="Z99"><formula>NOT(ISERROR(SEARCH("Z99",A1)))</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(needle.value.rules).toHaveLength(1)
+    expect(needle.value.rules[0]!.definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'Z99' })
+    const needleBegins = parse(
+      `<conditionalFormatting sqref="B2"><cfRule type="beginsWith" priority="1" text="C3"><formula>LEFT(B2,2)="C3"</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(needleBegins.value.rules).toHaveLength(1)
+    expect(needleBegins.value.rules[0]!.definition).toMatchObject({ kind: 'text', type: 'beginsWith', needle: 'C3' })
+    // A string-only lookalike with a genuinely off-anchor reference still refuses.
+    const offAnchorStringy = parse(
+      `<conditionalFormatting sqref="A1"><cfRule type="containsText" priority="1" text="A1"><formula>NOT(ISERROR(SEARCH("A1",Z99)))</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(offAnchorStringy.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+  })
+
+  it('F2 charges retained namespace bindings during capture', async () => {
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const names = ['sqref', ...Array.from({ length: 1000 }, (_, i) => `xmlns:n${i}`)]
+    const values = ['A1', ...Array.from({ length: 1000 }, (_, i) => 'urn:' + i + 'x'.repeat(500))]
+    const totalNsChars = values.slice(1).reduce((n, s) => n + s.length, 0)
+    stream.events.open('worksheet', ['xmlns'], [NS], 1, false)
+    stream.events.open('conditionalFormatting', names, values, names.length, false)
+    stream.events.open('cfRule', ['type', 'priority'], ['expression', '1'], 2, true)
+    stream.events.close('conditionalFormatting')
+    stream.events.close('worksheet')
+    // Every retained namespace string must be admitted, not just counted.
+    expect(memory.currentBytes).toBeGreaterThanOrEqual(totalNsChars)
+    const lease = stream.finish()
+    expect(lease.value.rules).toHaveLength(1)
+    lease.release()
+  })
+
+  it('F2 withholds under-provisioned namespace capture at finish', async () => {
+    const memory = createCfMemory({ limitBytes: 1000 })
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const names = ['sqref', ...Array.from({ length: 100 }, (_, i) => `xmlns:n${i}`)]
+    const values = ['A1', ...Array.from({ length: 100 }, (_, i) => 'urn:' + i + 'y'.repeat(500))]
+    stream.events.open('worksheet', ['xmlns'], [NS], 1, false)
+    stream.events.open('conditionalFormatting', names, values, names.length, false)
+    stream.events.open('cfRule', ['type', 'priority'], ['expression', '1'], 2, true)
+    stream.events.close('conditionalFormatting')
+    stream.events.close('worksheet')
+    const lease = stream.finish()
+    expect(lease.value.rules).toHaveLength(0)
+    expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F3 drops captured references at finish even while the handle is alive', async () => {
+    const { setFlagsFromString } = await import('node:v8')
+    const { runInNewContext } = await import('node:vm')
+    setFlagsFromString('--expose-gc')
+    const gc = runInNewContext('gc') as () => void
+    const task = () => new Promise<void>(resolve => setTimeout(resolve, 0))
+    let weak: WeakRef<object> | undefined
+    const realSet = Map.prototype.set
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(Map.prototype as any).set = function (k: unknown, v: unknown) {
+      if (k === 'cfRule' && Array.isArray(v) && v[0] !== null && typeof v[0] === 'object') weak = new WeakRef(v[0] as object)
+      return (realSet as (...args: unknown[]) => unknown).apply(this, [k, v])
+    }
+    const memory = createCfMemory({})
+    // The handle stays assigned for the whole test: only finished-capture
+    // teardown may release the tree.
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    try {
+      const bytes = new TextEncoder().encode(
+        `<worksheet xmlns="${NS}"><conditionalFormatting sqref="B2:B3"><cfRule type="expression" priority="1"/></conditionalFormatting></worksheet>`,
+      )
+      async function* source() {
+        yield bytes
+      }
+      await tokenizeBytes(source(), stream.events)
+      const lease = stream.finish()
+      lease.release()
+      expect(weak, 'captured a node to track').toBeDefined()
+      for (let i = 0; i < 8; i++) {
+        await task()
+        gc()
+      }
+      await task()
+      // Nothing reachable from the live handle may keep the captured tree alive.
+      expect(weak?.deref()).toBeUndefined()
+    } finally {
+      ;(Map.prototype as any).set = realSet
+    }
+    expect(stream).toBeDefined()
+  })
+
+  it('F3 ignores events after finish and second finish throws without charging', async () => {
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    const bytes = new TextEncoder().encode(
+      `<worksheet xmlns="${NS}"><conditionalFormatting sqref="A1"><cfRule type="expression" priority="1"/></conditionalFormatting></worksheet>`,
+    )
+    async function* source() {
+      yield bytes
+    }
+    await tokenizeBytes(source(), stream.events)
+    const lease = stream.finish()
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+    // Late events are inert: no throw, no charge, no capture.
+    stream.events.open('worksheet', ['xmlns'], [NS], 1, false)
+    stream.events.open('conditionalFormatting', ['sqref'], ['A1'], 1, true)
+    stream.events.close('worksheet')
+    expect(memory.currentBytes).toBe(0)
+    expect(() => stream.finish()).toThrow('CF capture already finished')
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F3 truncated capture refunds the transient hold on release', async () => {
+    const memory = createCfMemory({})
+    const stream = createCfStreamEvents(stylesFor(DXF_FILL), memory, {})
+    stream.events.open('worksheet', ['xmlns'], [NS], 1, false)
+    stream.events.open('conditionalFormatting', ['sqref'], ['B2:B3'], 1, false)
+    stream.events.open('cfRule', ['type', 'priority'], ['expression', '1'], 2, true)
+    // Stream ends mid-subtree: no closes.
+    const lease = stream.finish()
+    expect(lease.value.rules).toHaveLength(0)
+    expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
   })
 })

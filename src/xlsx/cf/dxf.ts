@@ -38,17 +38,18 @@ const UNDERLINES: ReadonlySet<string> = new Set([
 const BORDER_STYLES: ReadonlySet<string> = new Set([
   'none',
   'thin',
-  'medium',
-  'dashed',
+  'hair',
   'dotted',
+  'dashed',
+  'dashDot',
+  'dashDotDot',
+  'medium',
+  'mediumDashed',
+  'mediumDashDot',
+  'mediumDashDotDot',
+  'slantDashDot',
   'thick',
   'double',
-  'hair',
-  'mediumDashDot',
-  'dashDotDot',
-  'mediumDashDotDot',
-  'dashDot',
-  'slantDashDot',
 ])
 /** Boolean lexical values per ECMA ST_OnOff (case-insensitive core set). */
 const TRUTHY: ReadonlySet<string> = new Set(['1', 'true'])
@@ -190,8 +191,9 @@ function inspectBorder(node: XmlNode, unsupported: string[]): void {
     const side = getChild(node, name)!
     const style = attrs(side).style
     if (!style) continue
-    // Only schema-enumerated border styles are representable; anything else
-    // (including wrong case) is an unhonorable claim.
+    // Only renderer-supported border styles are representable (mirrors
+    // render.ts BORDER_STYLES, including the mediumDashed Microsoft extension);
+    // anything else (including wrong case) is an unhonorable claim.
     if (!BORDER_STYLES.has(style)) {
       unsupported.push(`border ${name} style "${style}" is not a supported border style`)
       continue

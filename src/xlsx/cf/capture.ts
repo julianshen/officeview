@@ -121,7 +121,21 @@ export function createCfStreamEvents(
 
   const events: XmlEvents = {
     open(qname, attrNames, attrValues, count, selfClosing) {
+      // Terminal state is inert: post-finish events must neither build nor charge.
+      if (finished) return
+      // Count every attribute (including xmlns declarations: their values are
+      // retained in scope maps) and every new namespace binding up front, so
+      // admission precedes any allocation below.
+      let attrBytes = 0
+      let newBindings = 0
+      for (let i = 0; i < count; i++) {
+        const name = attrNames[i]!
+        attrBytes += localName(name).length + String(attrValues[i]).length
+        if (name === 'xmlns' || name.startsWith('xmlns:')) newBindings++
+      }
       const parentScope = scopes.length > 0 ? scopes[scopes.length - 1]! : new Map<string, string>()
+      // Scope copies retain the parent bindings: charge the copy.
+      const scopeCopyBytes = newBindings > 0 ? parentScope.size * 64 : 0
       let scope: ReadonlyMap<string, string> = parentScope
       for (let i = 0; i < count; i++) {
         const name = attrNames[i]!
@@ -169,13 +183,9 @@ export function createCfStreamEvents(
           entries.push({ frame: null, isRoot })
         } else {
           nodeCount++
-          let attrBytes = 0
-          for (let i = 0; i < count; i++) {
-            const name = attrNames[i]!
-            if (name === 'xmlns' || name.startsWith('xmlns:')) continue
-            attrBytes += localName(name).length + String(attrValues[i]).length
-          }
-          if (!admit(192 + attrBytes * 2)) {
+          // Admit the frame record, copied attribute strings, retained scope
+          // copy and child-map slots before building any of them.
+          if (!admit(192 + attrBytes * 2 + scopeCopyBytes + 64)) {
             entries.push({ frame: null, isRoot })
           } else {
             const frameAttrs: Record<string, string> = {}
@@ -205,32 +215,42 @@ export function createCfStreamEvents(
     },
 
     close(_qname) {
+      // Terminal state is inert: post-finish events must not build or charge.
+      if (finished) return
       stack.pop()
       scopes.pop()
       if (rootKind === undefined || entries.length === 0) return
       const entry = entries.pop()!
       if (entry.frame !== null && !overCap) {
-        const node = finishFrame(entry.frame)
-        // Nearest enclosing real frame, if any.
-        let parent: Frame | undefined
-        for (let i = entries.length - 1; i >= 0; i--) {
-          if (entries[i]!.frame !== null) {
-            parent = entries[i]!.frame!
-            break
+        // Admit the assembled node (object graph, child lists and wrapped
+        // text nodes) before building it from the admitted frame.
+        let childItems = 0
+        for (const list of entry.frame.children.values()) childItems += list.length
+        if (!admit(256 + childItems * 64 + entry.frame.texts.length * 16)) {
+          // Withhold everything at finish; the partial node is dropped.
+        } else {
+          const node = finishFrame(entry.frame)
+          // Nearest enclosing real frame, if any.
+          let parent: Frame | undefined
+          for (let i = entries.length - 1; i >= 0; i--) {
+            if (entries[i]!.frame !== null) {
+              parent = entries[i]!.frame!
+              break
+            }
           }
-        }
-        if (parent) {
-          const list = parent.children.get(entry.frame.local) ?? []
-          list.push(node)
-          parent.children.set(entry.frame.local, list)
-          const uris = parent.childUris.get(entry.frame.local) ?? []
-          uris.push(entry.frame.uri)
-          parent.childUris.set(entry.frame.local, uris)
-        } else if (entry.isRoot) {
-          if (rootKind === 'base') {
-            base.push(node)
-          } else {
-            for (const inner of getChildren(node, 'conditionalFormatting')) x14blocks.push(inner)
+          if (parent) {
+            const list = parent.children.get(entry.frame.local) ?? []
+            list.push(node)
+            parent.children.set(entry.frame.local, list)
+            const uris = parent.childUris.get(entry.frame.local) ?? []
+            uris.push(entry.frame.uri)
+            parent.childUris.set(entry.frame.local, uris)
+          } else if (entry.isRoot) {
+            if (rootKind === 'base') {
+              base.push(node)
+            } else {
+              for (const inner of getChildren(node, 'conditionalFormatting')) x14blocks.push(inner)
+            }
           }
         }
       }
@@ -238,14 +258,16 @@ export function createCfStreamEvents(
     },
 
     text(text, _more) {
+      // Terminal state is inert: late text must not build or charge.
+      if (finished) return
       void _more
       for (let i = entries.length - 1; i >= 0; i--) {
         const frame = entries[i]!.frame
         if (frame !== null) {
           if (frame.textLen + text.length > CF_LIMITS.textUnits) {
             overCap = true
-          } else if (!admit(text.length * 2)) {
-            // Admission failed: withhold everything at finish.
+          } else if (!admit(text.length * 2 + 64)) {
+            // Admission failed (including the per-chunk slot): withhold everything at finish.
           } else {
             frame.texts.push(text)
             frame.textLen += text.length
@@ -272,13 +294,31 @@ export function createCfStreamEvents(
     finished = true
     try {
       if (entries.length > 0 || overCap || rootKind !== undefined) {
-        // Truncated stream or structural overflow: withhold everything.
+        // Truncated stream or structural overflow: withhold everything. The
+        // transient capture hold bought the frames we are now discarding, so
+        // drop it *before* finalizing: the account may be exhausted, and the
+        // small fail-closed skip still needs room to be admitted.
+        releaseHold()
+        base.length = 0
+        x14blocks.length = 0
+        entries.length = 0
+        scopes.length = 0
+        stack.length = 0
         return finalizeCfSubtrees({ base: [], x14: [], sheetNs, truncated: true, skipped: [...skipped] }, styles, memory, meta)
       }
       return finalizeCfSubtrees({ base, x14: x14blocks, sheetNs, skipped: [...skipped] }, styles, memory, meta)
     } finally {
-      // The finalizer admits its own normalized copies; drop the transient hold.
+      // The finalizer admits its own normalized copies; drop the transient
+      // hold and every captured reference so nothing stays alive past finish.
       releaseHold()
+      base.length = 0
+      x14blocks.length = 0
+      entries.length = 0
+      scopes.length = 0
+      stack.length = 0
+      skipped.clear()
+      sheetNs = undefined
+      nodeCount = 0
     }
   }
 

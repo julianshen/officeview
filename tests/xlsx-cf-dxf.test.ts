@@ -226,3 +226,37 @@ describe('CF strict dxf review-t3-r1 findings', () => {
     expect(maxTheme.properties['font.color']).toBe('theme:11:-1')
   })
 })
+
+describe('CF fix round 2: review-t3-r2 residuals', () => {
+  it('F6 accepts every renderer-supported border style and rejects the rest', () => {
+    // Mirrors src/xlsx/render.ts BORDER_STYLES plus the explicit none clear.
+    const supported = [
+      'none',
+      'thin',
+      'hair',
+      'dotted',
+      'dashed',
+      'dashDot',
+      'dashDotDot',
+      'medium',
+      'mediumDashed',
+      'mediumDashDot',
+      'mediumDashDotDot',
+      'slantDashDot',
+      'thick',
+      'double',
+    ]
+    for (const style of supported) {
+      const r = parseCfDxf(dxfNode(`<border><left style="${style}"/></border>`), colors)
+      expect(r.unsupported, style).toEqual([])
+      expect(r.properties['border.left.style'], style).toBe(style)
+      expect(r.writes.has('border.left'), style).toBe(true)
+    }
+    for (const bad of ['bogus', 'THIN', 'MediumDashed', 'medium-dashDot']) {
+      const r = parseCfDxf(dxfNode(`<border><left style="${bad}"/></border>`), colors)
+      expect(r.unsupported.length, JSON.stringify(bad)).toBeGreaterThan(0)
+      expect(r.writes.size).toBe(0)
+      expect(Object.keys(r.properties)).toHaveLength(0)
+    }
+  })
+})

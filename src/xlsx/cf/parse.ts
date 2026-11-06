@@ -281,12 +281,13 @@ function parseLiteral(text: string): CfLiteral | undefined {
 
 const REF_PATTERN = String.raw`\$?[A-Za-z]{1,3}\$?\d+`
 
-/** Cell references in a whitespace-normalized formula, excluding function calls. */
-function extractCellRefs(formulaNoSpace: string): string[] {
+/** Cell references in a whitespace-normalized, string-stripped formula, excluding function calls.
+ * Absolute markers are preserved: a pinned reference never equals the anchor. */
+function extractCellRefs(formulaNoSpaceNoStrings: string): string[] {
   const out: string[] = []
   const re = /\$?[A-Za-z]{1,3}\$?\d+(?!\()/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(formulaNoSpace)) !== null) out.push(m[0].toUpperCase().replace(/\$/g, ''))
+  while ((m = re.exec(formulaNoSpaceNoStrings)) !== null) out.push(m[0].toUpperCase())
   return out
 }
 
@@ -307,16 +308,47 @@ function anchorOf(range: ParsedRange): string {
 
 /**
  * Measured anchor relationship: a canonical formula must reference the
- * rule's anchor cell (top-left of a single-range sqref). Multi-range
- * anchoring is unmeasured, so any present formula there stays unresolved.
+ * rule's anchor cell (top-left of a single-range sqref). String literals are
+ * stripped first so reference-looking needle text never counts as a cell
+ * reference. Multi-range anchoring is unmeasured, so any present formula
+ * there stays unresolved.
  */
 function refsMatchAnchor(normalizedFormulas: readonly string[], anchor: string | undefined): boolean {
   if (anchor === undefined) return false
   if (normalizedFormulas.length === 0) return true
   return normalizedFormulas.every(f => {
-    const refs = extractCellRefs(f)
+    const refs = extractCellRefs(stripStringLiterals(f))
     return refs.length > 0 && refs.every(r => r === anchor)
   })
+}
+
+/** Remove double-quoted string literals (with "" escapes) so needle text
+ *  is never mistaken for a cell reference. Unterminated tails are dropped. */
+function stripStringLiterals(text: string): string {
+  let out = ''
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch !== '"') {
+      out += ch
+      i++
+      continue
+    }
+    out += '""'
+    i++
+    while (i < text.length) {
+      if (text[i] === '"') {
+        if (text[i + 1] === '"') {
+          i += 2
+          continue
+        }
+        i++
+        break
+      }
+      i++
+    }
+  }
+  return out
 }
 
 /** Remove whitespace outside string literals (whitespace inside needles is significant). */
@@ -1061,6 +1093,13 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       fin.failSheet('cf-invalid-rule', 'cf-sqref', 'conditionalFormatting sqref text is unrepresentable')
       return undefined
     }
+    if (sqrefText !== undefined) {
+      // Pre-admit a conservative range workspace before constructing any
+      // rectangle: at least 2 chars per token (plus separator), capped at the
+      // per-rule bound plus one entry for the over-cap abort sentinel.
+      const estCount = Math.min(Math.ceil((sqrefText.trim().length + 1) / 2), CF_LIMITS.rangesPerRule + 1)
+      fin.admit(64 + estCount * 32)
+    }
     const parsed = parseSqref(sqrefText)
     if (parsed === undefined) {
       fin.failSheet('cf-invalid-rule', 'cf-sqref', `conditionalFormatting sqref "${String(sqrefText)}" has no usable scope`)
@@ -1107,6 +1146,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     const ranges = admitElement(attrs(element).sqref, ruleNodes.length)
     if (ranges === undefined) continue
     for (const ruleNode of ruleNodes) {
+      // Admit the pending entry before constructing it.
+      fin.admit(128)
       pending.push({ kind: 'base', node: ruleNode, element, ranges, sqrefText: attrs(element).sqref, docOrder: order++, pairId: undefined, pairRaw: undefined })
     }
   }
@@ -1133,6 +1174,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       continue
     }
     for (const ruleNode of ruleNodes) {
+      // Admit the pending entry before constructing it.
+      fin.admit(128)
       x14Bodies.push({ element, node: ruleNode, sqrefText, docOrder: order++ })
     }
   }
@@ -1142,6 +1185,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
   const basesById = new Map<string, PendingRule[]>()
   const extsById = new Map<string, PendingRule[]>()
   for (const p of pending) {
+    // Admit iteration workspace (transient id lists, map entries) up front.
+    fin.admit(64)
     const ids: string[] = []
     for (const extList of kids(p.node, 'extLst', sheetNs)) {
       for (const ext of kids(extList, 'ext', sheetNs)) {
@@ -1170,6 +1215,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     }
   }
   for (const x of x14Bodies) {
+    // Admit the pending entry and pairing index slot before constructing them.
+    fin.admit(192)
     const a = attrs(x.node)
     const norm = normPairId(a['id'])
     const p: PendingRule = { kind: 'x14', node: x.node, element: x.element, ranges: undefined, sqrefText: x.sqrefText, docOrder: x.docOrder, pairId: norm, pairRaw: a['id'] }
@@ -1189,6 +1236,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     a.firstRow === b.firstRow && a.lastRow === b.lastRow && a.firstCol === b.firstCol && a.lastCol === b.lastCol
   const allIds = new Set([...basesById.keys(), ...extsById.keys()])
   for (const id of allIds) {
+    // Admit pairing workspace (transient lookups, merged/invalid sets) upfront.
+    fin.admit(256)
     const bases = basesById.get(id) ?? []
     const exts = extsById.get(id) ?? []
     const loneBase = bases.length === 1 ? bases[0]! : undefined
@@ -1200,6 +1249,8 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     if (loneBase && loneExt && loneBase.ranges) {
       const extSqref = loneExt.sqrefText?.trim()
       if (extSqref) {
+        // Pre-admit the paired scope check before building any rectangles.
+        fin.admit(64 + Math.min(Math.ceil((extSqref.length + 1) / 2), CF_LIMITS.rangesPerRule + 1) * 32)
         const r = parseSqref(extSqref)
         scopeOk =
           typeof r !== 'string' &&
@@ -1367,6 +1418,8 @@ function finalizeCollected(
     if (fin.diagHandle.refused) throw new Error('CF admission exhausted')
     // Publish exactly the admitted, deduplicated, capped collection: copies of
     // the handle entries, so disposing the handle cannot clear the outcome.
+    // Admit the wrapper objects up front; the shared strings were admitted on add.
+    fin.admit(diagHandle.entries.length * 256)
     const published = diagHandle.entries.map(d => ({ ...d }))
     let diagBytes = 0
     for (const d of published) diagBytes += 192 + d.feature.length * 2 + d.message.length * 2
@@ -1375,10 +1428,13 @@ function finalizeCollected(
       : { rules: fin.rules, diagnostics: published }
     // Never underprice the transfer: the adopted charge covers the computed
     // model and at least the repository's measured payload for the same value.
+    // Skip outcomes have a fixed tiny shape already covered by `computed`: when
+    // the account cannot even fund the measure scratch, fall back to it rather
+    // than refusing a fully-admitted fail-closed outcome.
     const measured = measureCfPayload(value, memory)
-    if (measured.kind !== 'ready') throw new Error('CF admission exhausted')
+    if (measured.kind !== 'ready' && !fin.sentinel) throw new Error('CF admission exhausted')
     const computed = fin.retained + diagBytes + fin.metaBytes + 256
-    const total = Math.max(computed, measured.value)
+    const total = measured.kind === 'ready' ? Math.max(computed, measured.value) : computed
     if (total > fin.charged && !fin.hold.grow(total)) throw new Error('CF admission exhausted')
     fin.charged = Math.max(fin.charged, total)
     const lease = fin.hold.adopt(value, total)
