@@ -258,7 +258,10 @@ function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new M
       continue
     }
     const nk = k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
-    const childAware: NamespaceTracking = namespaceAware === 'subtree' || namespaceAware === 'choices' ? namespaceAware : namespaceAware === 'root' && nk === 'extLst' ? 'subtree' : false
+    // Worksheet subtrees needing namespace-URI checks keep retention: the
+    // sparkline/slicer extLst (existing) and conditionalFormatting, whose
+    // x14:id extension children pair base data bars by URI, not prefix.
+    const childAware: NamespaceTracking = namespaceAware === 'subtree' || namespaceAware === 'choices' ? namespaceAware : namespaceAware === 'root' && (nk === 'extLst' || nk === 'conditionalFormatting') ? 'subtree' : false
     const child = normalize(v, local, k, childAware)
     const colon = k.indexOf(':')
     const childNs = local.get(colon >= 0 ? k.slice(0, colon) : '')
