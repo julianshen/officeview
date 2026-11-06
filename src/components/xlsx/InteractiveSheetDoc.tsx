@@ -362,6 +362,78 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const slicerModels = useRef(new Map<string, PivotUi.SlicerModel>()).current
   const slicerSheetIds = useRef(new Map<string, string>()).current
   const slicerDrawingCache = useRef(new Map<string, { generation: number; base: readonly XlsxDrawing[]; drawings: XlsxDrawing[] }>()).current
+  // Option A (PR #60 review 4486449664): one retained charge per slicer cache
+  // (`cacheName ?? name`). The sheet-scoped controller transfers its admitted
+  // hold here on commit; disposing the controller releases nothing. The charge
+  // ends when the last holder drops it: the model is replaced (retain
+  // releases the previous hold exactly once), the cache evicts it, or the
+  // viewer unmounts (clear). Release is idempotent and never refunds twice
+  // (retainOverflow-style `released` flag plus owners counts for siblings
+  // sharing one cache hold); a retaining failure never throws out of render.
+  const slicerRetained = useRef(new Map<string, { hold: { release(): void }; owners: number; released: boolean }>()).current
+  const retainSlicerCharge = (model: PivotUi.SlicerModel, hold?: { release(): void }): void => {
+    const cacheKey = model.cacheName ?? model.name
+    const current = slicerRetained.get(cacheKey)
+    if (current && current.hold === hold) {
+      current.owners++
+      return
+    }
+    if (current && !current.released) {
+      current.released = true
+      try { current.hold.release() } catch { /* fail closed */ }
+    }
+    if (!hold) {
+      slicerRetained.delete(cacheKey)
+      return
+    }
+    slicerRetained.set(cacheKey, { hold, owners: 1, released: false })
+  }
+  const evictSlicerCharge = (cacheKey: string): void => {
+    const current = slicerRetained.get(cacheKey)
+    if (!current || current.released) {
+      slicerRetained.delete(cacheKey)
+      return
+    }
+    current.released = true
+    slicerRetained.delete(cacheKey)
+    try { current.hold.release() } catch { /* fail closed */ }
+  }
+  useEffect(() => () => {
+    for (const entry of slicerRetained.values()) {
+      if (!entry.released) {
+        entry.released = true
+        try { entry.hold.release() } catch { /* fail closed */ }
+      }
+    }
+    slicerRetained.clear()
+  }, [slicerRetained])
+  // A removed sheet no longer needs its retained copies or drawing overrides:
+  // evicting here keeps the slicer-model pool bounded across document edits.
+  useEffect(() => {
+    const live = new Set(sheetIds)
+    for (const [name, sheetId] of [...slicerSheetIds]) {
+      if (!live.has(sheetId)) {
+        slicerSheetIds.delete(name)
+        slicerModels.delete(name)
+      }
+    }
+    for (const sheetId of [...slicerDrawingCache.keys()]) if (!live.has(sheetId)) slicerDrawingCache.delete(sheetId)
+    for (const [name, sheetId] of [...timelineSheetIds]) {
+      if (!live.has(sheetId)) {
+        timelineSheetIds.delete(name)
+        timelineModels.delete(name)
+      }
+    }
+    for (const sheetId of [...timelineDrawingCache.keys()]) if (!live.has(sheetId)) timelineDrawingCache.delete(sheetId)
+    if (slicerModels.size) {
+      const liveCaches = new Set<string>()
+      for (const model of slicerModels.values()) liveCaches.add(model.cacheName ?? model.name)
+      for (const cacheKey of [...slicerRetained.keys()]) if (!liveCaches.has(cacheKey)) evictSlicerCharge(cacheKey)
+    } else if (slicerRetained.size) {
+      for (const cacheKey of [...slicerRetained.keys()]) evictSlicerCharge(cacheKey)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetIds])
   const timelineModels = useRef(new Map<string, PivotUi.TimelineModel>()).current
   const timelineSheetIds = useRef(new Map<string, string>()).current
   const localDrawingGens = useRef(new Map<string, number>()).current
@@ -1784,8 +1856,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
     const controller = new pivotUi.SlicerController(activeSlicerDrawings.map(item => item.model), {
       announce: message => pivotHost.current.announce(message),
-      onChange: model => {
+      onChange: (model, hold) => {
         slicerModels.set(model.name, model)
+        // Option A: take over the transferred admission. Replacing a model
+        // releases the previous cache hold exactly once; a failure never
+        // throws out of render (the notice path already announced).
+        if (hold) {
+          try { retainSlicerCharge(model, hold) }
+          catch { try { hold.release() } catch { /* fail closed */ } }
+        }
         const sheetId = slicerSheetIds.get(model.name)
         if (sheetId !== undefined) localDrawingGens.set(sheetId, (localDrawingGens.get(sheetId) ?? 0) + 1)
       },
