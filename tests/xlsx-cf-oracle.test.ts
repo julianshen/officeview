@@ -17,6 +17,8 @@ import {
 } from '../scripts/cf-refs/cases'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
 import {
+  type ComputeGeometryOptions,
+  type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
   isCapabilityVerified,
@@ -96,9 +98,14 @@ function makeCapturePng(positiveHighlight: boolean): Uint8Array {
 }
 
 /** Renders a synthetic capture matching every `expected.cells` entry of a `CfOracleCase` for testing. */
-function makeCaseMatchingPng(c: CfOracleCase, savedBytes: Uint8Array, paintMatchedFills: boolean): Uint8Array {
+function makeCaseMatchingPng(
+  c: CfOracleCase,
+  savedBytes: Uint8Array,
+  paintMatchedFills: boolean,
+  geomOptions?: ComputeGeometryOptions,
+): Uint8Array {
   const parts = readZipPartsSync(savedBytes)!
-  const geom = computeWorksheetRangeGeometry(parts, c.range)!
+  const geom = computeWorksheetRangeGeometry(parts, c.range, geomOptions)!
   const width = geom.expectedWidthPt
   const height = geom.expectedHeightPt
   const canvas = createCanvas(width, height)
@@ -209,6 +216,24 @@ function makeCaseMatchingPng(c: CfOracleCase, savedBytes: Uint8Array, paintMatch
           ctx.fillStyle = '#000000'
           ctx.font = '11px sans-serif'
           ctx.fillText(ctrlText, cx0 + 4, cy0 + 13)
+          const ctrlW = ctx.measureText(ctrlText).width
+          const cUnderline = (cell as any).controlUnderline
+          if (cUnderline === 'single' || cUnderline === 'double') {
+            ctx.strokeStyle = '#000000'
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(cx0 + 4, cy0 + 15)
+            ctx.lineTo(cx0 + 4 + ctrlW, cy0 + 15)
+            ctx.stroke()
+          }
+          if ((cell as any).controlStrikethrough === true) {
+            ctx.strokeStyle = '#000000'
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(cx0 + 4, cy0 + 10)
+            ctx.lineTo(cx0 + 4 + ctrlW, cy0 + 10)
+            ctx.stroke()
+          }
         }
       }
     }
@@ -1428,7 +1453,8 @@ describe('CF oracle verifier', () => {
         savedSha256: numFmtHash,
         pngSha256: validNumFmtHash,
         capturedAt: '2026-11-06T08:00:00Z',
-        colWidthsPt: [100, 100, 100, 100, 100, 100, 100], // Mismatched widths
+        colWidthsPt: [100, 100, 100, 100, 100, 100, 100], // Mismatched widths (sum 700 !== 420)
+        rowHeightsPt: geomNumFmt.rowHeightsPt,
       }),
     )
     const badGeomCase: CfOracleCase = {
@@ -1440,6 +1466,308 @@ describe('CF oracle verifier', () => {
     expect(verifyCfCase(badGeomCase, { rootDir: REPO_ROOT })).toMatchObject({
       kind: 'refusal',
       code: 'geometry-mismatch',
+    })
+
+    // 8. Real producer measured geometry baseline with author recorded 522pt example:
+    // Stored width 14 = 84pt, narrow width 3 = 18pt; cols = [84, 84, 84, 84, 84, 18, 84], sum = 522pt
+    const measuredCols522 = [84, 84, 84, 84, 84, 18, 84]
+    const measured522Png = makeCaseMatchingPng(cNumFmt, numFmtBytes, true, {
+      colWidthsPt: measuredCols522,
+    })
+    const measured522Hash = sha256(measured522Png)
+    const measured522PngPath = join(dir, 'measured-522.png')
+    writeFileSync(measured522PngPath, measured522Png)
+
+    const measured522Geom = computeWorksheetRangeGeometry(numFmtParts, cNumFmt.range, {
+      colWidthsPt: measuredCols522,
+    })!
+    expect(measured522Geom.expectedWidthPt).toBe(522)
+
+    const measured522ObsCells = observeCellsFromCapture(
+      decodePngSync(measured522Png)!,
+      measured522Geom,
+      cNumFmt,
+      {
+        observedCellTexts: validTexts,
+        observedCellDecorations: validDecs,
+      },
+    )!
+
+    const measured522Case: CfOracleCase = {
+      ...validNumFmtCase,
+      captures: validNumFmtCase.captures.map(cap => {
+        const sidePath = join(dir, `measured-522.${cap.appearance}.json`)
+        writeFileSync(
+          sidePath,
+          JSON.stringify({
+            sheet: cNumFmt.sheet,
+            range: cNumFmt.range,
+            appearance: cap.appearance,
+            route: 'copy-picture',
+            scale: 1,
+            pxPerPt: 1,
+            excelVersion: '16.114',
+            geometrySource: 'excel-measured',
+            resavedByExcel: true,
+            resaveSavedSha256: numFmtHash,
+            savedSha256: numFmtHash,
+            pngSha256: measured522Hash,
+            capturedAt: '2026-11-06T08:00:00Z',
+            width: 522,
+            height: measured522Geom.expectedHeightPt,
+            colWidthsPt: measuredCols522,
+            rowHeightsPt: measured522Geom.rowHeightsPt,
+            observedCells: measured522ObsCells,
+          }),
+        )
+        return {
+          appearance: cap.appearance,
+          pngPath: measured522PngPath,
+          sidecarPath: sidePath,
+          pngSha256: measured522Hash,
+        }
+      }),
+    }
+    const measured522Res = verifyCfCase(measured522Case, { rootDir: REPO_ROOT })
+    expect(measured522Res).toMatchObject({
+      kind: 'verified',
+      id: 'stage1-numfmt-accessibility',
+      status: 'measured',
+    })
+
+    // 8b. Mismatched column count in excel-measured sidecar is refused
+    const badColCountSidePath = join(dir, 'measured-bad-col-count.json')
+    writeFileSync(
+      badColCountSidePath,
+      JSON.stringify({
+        sheet: cNumFmt.sheet,
+        range: cNumFmt.range,
+        appearance: 'screen',
+        route: 'copy-picture',
+        scale: 1,
+        pxPerPt: 1,
+        excelVersion: '16.114',
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: numFmtHash,
+        savedSha256: numFmtHash,
+        pngSha256: measured522Hash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        width: 522,
+        height: measured522Geom.expectedHeightPt,
+        colWidthsPt: [84, 84, 84, 84, 84, 18], // 6 columns instead of 7
+        rowHeightsPt: measured522Geom.rowHeightsPt,
+        observedCells: measured522ObsCells,
+      }),
+    )
+    expect(
+      verifyCfCase(
+        {
+          ...measured522Case,
+          captures: measured522Case.captures.map(cap =>
+            cap.appearance === 'screen' ? { ...cap, sidecarPath: badColCountSidePath } : cap,
+          ),
+        },
+        { rootDir: REPO_ROOT },
+      ),
+    ).toMatchObject({
+      kind: 'refusal',
+      code: 'geometry-mismatch',
+    })
+
+    // 9. Valid decorated baseline: cell B2 has single underline and strikethrough drawn and observed
+    const decoratedCaseDef: CfOracleCase = {
+      ...validNumFmtCase,
+      expected: {
+        ...validNumFmtCase.expected,
+        provenance: 'excel-observed',
+        cells: validNumFmtCase.expected.cells.map(x =>
+          x.ref === 'B2' ? { ...x, underline: 'single' as const, strikethrough: true } : x,
+        ),
+      },
+    }
+    const decPng = makeCaseMatchingPng(decoratedCaseDef, numFmtBytes, true)
+    const decPngHash = sha256(decPng)
+    const decPngPath = join(dir, 'numfmt-decorated.png')
+    writeFileSync(decPngPath, decPng)
+
+    const decObsCells = observeCellsFromCapture(decodePngSync(decPng)!, geomNumFmt, decoratedCaseDef, {
+      observedCellTexts: validTexts,
+      observedCellDecorations: {
+        ...validDecs,
+        B2: { underline: 'single', strikethrough: true },
+      },
+    })!
+    const b2Obs = decObsCells.find(o => o.ref === 'B2')!
+    expect(b2Obs.hasUnderlineInk).toBe(true)
+    expect(b2Obs.hasStrikethroughInk).toBe(true)
+    expect(b2Obs.underline).toBe('single')
+    expect(b2Obs.strikethrough).toBe(true)
+
+    const validDecoratedCase: CfOracleCase = {
+      ...validNumFmtCase,
+      expected: decoratedCaseDef.expected,
+      captures: validNumFmtCase.captures.map(cap => {
+        const sidePath = join(dir, `numfmt-decorated.${cap.appearance}.json`)
+        writeFileSync(
+          sidePath,
+          JSON.stringify({
+            sheet: cNumFmt.sheet,
+            range: cNumFmt.range,
+            appearance: cap.appearance,
+            route: 'copy-picture',
+            scale: 1,
+            pxPerPt: 1,
+            excelVersion: '16.114',
+            geometrySource: 'excel-measured',
+            colWidthsPt: geomNumFmt.colWidthsPt,
+            rowHeightsPt: geomNumFmt.rowHeightsPt,
+            resavedByExcel: true,
+            resaveSavedSha256: numFmtHash,
+            savedSha256: numFmtHash,
+            pngSha256: decPngHash,
+            capturedAt: '2026-11-06T08:00:00Z',
+            observedCells: decObsCells,
+          }),
+        )
+        return {
+          appearance: cap.appearance,
+          pngPath: decPngPath,
+          sidecarPath: sidePath,
+          pngSha256: decPngHash,
+        }
+      }),
+    }
+    const decRes = verifyCfCase(validDecoratedCase, { rootDir: REPO_ROOT })
+    expect(decRes).toMatchObject({
+      kind: 'verified',
+      id: 'stage1-numfmt-accessibility',
+      status: 'measured',
+    })
+
+    // 10. Valid undecorated baseline with dense glyph strings (reviewer r4-ink.ts repro strings)
+    // Ensures arbitrary glyph density across 111, HHH, EEE, 000, 888, ___, ABC, LLL never triggers false decoration
+    for (const testStr of ['111', 'HHH', 'EEE', '000', '888', '___', 'ABC', 'LLL']) {
+      const denseCanvas = createCanvas(160, 22)
+      const denseCtx = denseCanvas.getContext('2d')
+      denseCtx.fillStyle = '#ffffff'
+      denseCtx.fillRect(0, 0, 160, 22)
+      denseCtx.fillStyle = '#000000'
+      denseCtx.font = '11px Arial'
+      denseCtx.fillText(testStr, 4, 15)
+      denseCtx.fillText(testStr, 84, 15)
+      const densePng = decodePngSync(new Uint8Array(denseCanvas.toBuffer('image/png')))!
+      const denseGeom: WorksheetRangeGeometry = {
+        minCol: 0,
+        maxCol: 1,
+        minRow: 0,
+        maxRow: 0,
+        colWidthsPt: [80, 80],
+        rowHeightsPt: [22],
+        colWidthChars: [10, 10],
+        expectedWidthPt: 160,
+        expectedHeightPt: 22,
+      }
+      const denseCaseDef = {
+        expected: {
+          cells: [{ ref: 'A1', controlRef: 'B1', matched: true, underline: 'none' as const, strikethrough: false }],
+        },
+      } as unknown as CfOracleCase
+
+      const denseObs = observeCellsFromCapture(densePng, denseGeom, denseCaseDef, {
+        observedCellTexts: { A1: testStr, B1: testStr },
+        observedCellDecorations: { A1: { underline: 'none', strikethrough: false } },
+      })![0]
+      expect(denseObs.hasUnderlineInk).toBe(false)
+      expect(denseObs.hasStrikethroughInk).toBe(false)
+    }
+
+    // 11. Valid cleared baseline: cell B2 in stage1-dxf-layering explicitly clears base bold/underline/strike
+    const cDxf = structuredClone(manifest.cases.find(x => x.id === 'stage1-dxf-layering')!)
+    const dxfBytes = new Uint8Array(readFileSync(join(REPO_ROOT, cDxf.saved)))
+    const dxfHash = sha256(dxfBytes)
+    cDxf.status = 'measured'
+    cDxf.expected.provenance = 'excel-observed'
+    cDxf.resavedByExcel = true
+    cDxf.resaveReceipt = {
+      openedRepairFree: true,
+      resavedAt: '2026-11-06T07:00:00Z',
+      excelVersion: '16.114',
+      inputSha256: cDxf.expected.inputSha256,
+      savedSha256: dxfHash,
+    }
+    // Cell B2 has underline="none", strikethrough=false. Control B8 has base formatting with underline="single", strikethrough=true
+    const dxfCellsWithControlDecs = cDxf.expected.cells.map(x =>
+      x.ref === 'B2'
+        ? {
+            ...x,
+            controlUnderline: 'single' as const,
+            controlStrikethrough: true,
+          }
+        : x,
+    )
+    const dxfCaseWithControlDecs: CfOracleCase = {
+      ...cDxf,
+      expected: { ...cDxf.expected, cells: dxfCellsWithControlDecs },
+    }
+    const dxfPng = makeCaseMatchingPng(dxfCaseWithControlDecs, dxfBytes, true)
+    const dxfPngHash = sha256(dxfPng)
+    const dxfPngPath = join(dir, 'dxf-layering-cleared.png')
+    writeFileSync(dxfPngPath, dxfPng)
+
+    const dxfGeom = computeWorksheetRangeGeometry(readZipPartsSync(dxfBytes)!, cDxf.range)!
+    const dxfObsCells = observeCellsFromCapture(
+      decodePngSync(dxfPng)!,
+      dxfGeom,
+      cDxf,
+      {
+        observedCellDecorations: {
+          B2: { underline: 'none', strikethrough: false },
+        },
+      },
+    )!
+    const b2DxfObs = dxfObsCells.find(o => o.ref === 'B2')!
+    expect(b2DxfObs.hasUnderlineInk).toBe(false)
+    expect(b2DxfObs.hasStrikethroughInk).toBe(false)
+
+    const clearedCase: CfOracleCase = {
+      ...cDxf,
+      captures: (cDxf.requiredAppearances ?? ['screen']).map(appearance => {
+        const sidePath = join(dir, `dxf-layering-cleared.${appearance}.json`)
+        writeFileSync(
+          sidePath,
+          JSON.stringify({
+            sheet: cDxf.sheet,
+            range: cDxf.range,
+            appearance,
+            route: 'copy-picture',
+            scale: 1,
+            pxPerPt: 1,
+            excelVersion: '16.114',
+            geometrySource: 'excel-measured',
+            colWidthsPt: dxfGeom.colWidthsPt,
+            rowHeightsPt: dxfGeom.rowHeightsPt,
+            resavedByExcel: true,
+            resaveSavedSha256: dxfHash,
+            savedSha256: dxfHash,
+            pngSha256: dxfPngHash,
+            capturedAt: '2026-11-06T08:00:00Z',
+            observedCells: dxfObsCells,
+          }),
+        )
+        return {
+          appearance,
+          pngPath: dxfPngPath,
+          sidecarPath: sidePath,
+          pngSha256: dxfPngHash,
+        }
+      }),
+    }
+    const clearedRes = verifyCfCase(clearedCase, { rootDir: REPO_ROOT })
+    expect(clearedRes).toMatchObject({
+      kind: 'verified',
+      id: 'stage1-dxf-layering',
+      status: 'measured',
     })
   })
 })

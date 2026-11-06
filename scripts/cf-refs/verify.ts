@@ -964,39 +964,87 @@ export function observeCellsFromCapture(
     const inkWeight = inkPixelCount / interiorArea
     inkSamples.sort((a, b) => b.d - a.d)
 
+    const cix0 = Math.min(png.width - 1, ctrlBox.x0 + 2)
+    const ciy0 = Math.min(png.height - 1, ctrlBox.y0 + 2)
+    const cix1 = Math.max(cix0 + 1, ctrlBox.x1 - 2)
+    const ciy1 = Math.max(ciy0 + 1, ctrlBox.y1 - 2)
+    const ctrlInteriorArea = Math.max(1, (cix1 - cix0) * (ciy1 - ciy0))
+    let controlInkPixelCount = 0
+    let cMinX = png.width
+    let cMaxX = 0
+    let cMinY = png.height
+    let cMaxY = 0
+    for (let cy = ciy0; cy < ciy1; cy++) {
+      for (let cx = cix0; cx < cix1; cx++) {
+        const idx = (cy * png.width + cx) * 4
+        const pr = png.data[idx]
+        const pg = png.data[idx + 1]
+        const pb = png.data[idx + 2]
+        if (rgbMaxDelta([pr, pg, pb], controlBgRgb) >= 28) {
+          controlInkPixelCount++
+          if (cx < cMinX) cMinX = cx
+          if (cx > cMaxX) cMaxX = cx
+          if (cy < cMinY) cMinY = cy
+          if (cy > cMaxY) cMaxY = cy
+        }
+      }
+    }
+    const controlInkWeight = controlInkPixelCount / ctrlInteriorArea
+
     const spanW = Math.max(0, glyphMaxX - glyphMinX + 1)
+    const cSpanW = Math.max(0, cMaxX - cMinX + 1)
     let hasStrikethroughInk = false
     let hasUnderlineInk = false
 
-    if (spanW >= 8 && glyphMaxY > glyphMinY + 4) {
-      // Strikethrough check: look for a continuous ink line through the middle rows of the glyph
+    if (spanW >= 6 && cSpanW >= 6 && glyphMaxY > glyphMinY + 4 && cMaxY > cMinY + 4) {
+      // 1. Strikethrough check: compare mid rows between cell and control
       const midY = glyphMinY + Math.round((glyphMaxY - glyphMinY) * 0.45)
-      for (let y = Math.max(glyphMinY + 2, midY - 1); y <= Math.min(glyphMaxY - 2, midY + 1); y++) {
-        let spanInk = 0
-        for (let x = glyphMinX; x <= glyphMaxX; x++) {
-          const idx = (y * png.width + x) * 4
-          if (rgbMaxDelta([png.data[idx], png.data[idx + 1], png.data[idx + 2]], bgRgb) >= 28) {
-            spanInk++
+      const cMidY = cMinY + Math.round((cMaxY - cMinY) * 0.45)
+      for (let dy = -1; dy <= 1; dy++) {
+        const y = midY + dy
+        const cy = cMidY + dy
+        if (y < glyphMinY + 2 || y > glyphMaxY - 2 || cy < cMinY + 2 || cy > cMaxY - 2) continue
+        let boxInk = 0
+        let extraBoxInk = 0
+        for (let dx = 0; dx < spanW; dx++) {
+          const bx = glyphMinX + dx
+          const bIdx = (y * png.width + bx) * 4
+          const bIsInk = rgbMaxDelta([png.data[bIdx], png.data[bIdx + 1], png.data[bIdx + 2]], bgRgb) >= 28
+          if (bIsInk) boxInk++
+          const cx = cMinX + dx
+          let cIsInk = false
+          if (cx <= cMaxX) {
+            const cIdx = (cy * png.width + cx) * 4
+            cIsInk = rgbMaxDelta([png.data[cIdx], png.data[cIdx + 1], png.data[cIdx + 2]], controlBgRgb) >= 28
           }
+          if (bIsInk && !cIsInk) extraBoxInk++
         }
-        if (spanInk >= spanW * 0.75) {
+        if (boxInk >= spanW * 0.7 && extraBoxInk >= Math.max(2, Math.round(spanW * 0.2))) {
           hasStrikethroughInk = true
-          break
         }
       }
 
-      // Underline check: look for a continuous horizontal ink line at or below the baseline (within 3px of glyphMaxY)
-      for (let y = Math.max(glyphMinY, glyphMaxY - 1); y <= Math.min(iy1 - 1, glyphMaxY + 3); y++) {
-        let spanInk = 0
-        for (let x = glyphMinX; x <= glyphMaxX; x++) {
-          const idx = (y * png.width + x) * 4
-          if (rgbMaxDelta([png.data[idx], png.data[idx + 1], png.data[idx + 2]], bgRgb) >= 28) {
-            spanInk++
+      // 2. Underline check: compare baseline rows between cell and control
+      for (let y = glyphMaxY; y <= Math.min(iy1 - 1, glyphMaxY + 3); y++) {
+        const cy = cMaxY + (y - glyphMaxY)
+        if (cy >= ciy1) continue
+        let boxInk = 0
+        let extraBoxInk = 0
+        for (let dx = 0; dx < spanW; dx++) {
+          const bx = glyphMinX + dx
+          const bIdx = (y * png.width + bx) * 4
+          const bIsInk = rgbMaxDelta([png.data[bIdx], png.data[bIdx + 1], png.data[bIdx + 2]], bgRgb) >= 28
+          if (bIsInk) boxInk++
+          const cx = cMinX + dx
+          let cIsInk = false
+          if (cx <= cMaxX && cy <= ciy1 - 1) {
+            const cIdx = (cy * png.width + cx) * 4
+            cIsInk = rgbMaxDelta([png.data[cIdx], png.data[cIdx + 1], png.data[cIdx + 2]], controlBgRgb) >= 28
           }
+          if (bIsInk && !cIsInk) extraBoxInk++
         }
-        if (spanInk >= spanW * 0.75) {
+        if (boxInk >= spanW * 0.7 && extraBoxInk >= Math.max(2, Math.round(spanW * 0.2))) {
           hasUnderlineInk = true
-          break
         }
       }
     }
@@ -1056,25 +1104,6 @@ export function observeCellsFromCapture(
         if (dCtrl > borderBottomVsControlDelta) borderBottomVsControlDelta = dCtrl
       }
     }
-
-    const cix0 = Math.min(png.width - 1, ctrlBox.x0 + 2)
-    const ciy0 = Math.min(png.height - 1, ctrlBox.y0 + 2)
-    const cix1 = Math.max(cix0 + 1, ctrlBox.x1 - 2)
-    const ciy1 = Math.max(ciy0 + 1, ctrlBox.y1 - 2)
-    const ctrlInteriorArea = Math.max(1, (cix1 - cix0) * (ciy1 - ciy0))
-    let controlInkPixelCount = 0
-    for (let y = ciy0; y < ciy1; y++) {
-      for (let x = cix0; x < cix1; x++) {
-        const idx = (y * png.width + x) * 4
-        const pr = png.data[idx]
-        const pg = png.data[idx + 1]
-        const pb = png.data[idx + 2]
-        if (rgbMaxDelta([pr, pg, pb], controlBgRgb) >= 28) {
-          controlInkPixelCount++
-        }
-      }
-    }
-    const controlInkWeight = controlInkPixelCount / ctrlInteriorArea
 
     const optText = options?.observedCellTexts?.[cell.ref]
     const optDec = options?.observedCellDecorations?.[cell.ref]
@@ -1571,6 +1600,58 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
 
     if (sidecar.geometrySource === 'excel-measured') {
+      if (!Array.isArray(sidecar.colWidthsPt) || !Array.isArray(sidecar.rowHeightsPt)) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Measured capture ${cap.pngPath} must provide colWidthsPt and rowHeightsPt arrays in sidecar`,
+          structuralValid: true,
+        }
+      }
+      const cols = sidecar.colWidthsPt as number[]
+      const rows = sidecar.rowHeightsPt as number[]
+      if (cols.length !== rangeGeom.colWidthChars.length) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthChars.length}`,
+          structuralValid: true,
+        }
+      }
+      if (rows.length !== rangeGeom.rowHeightsPt.length) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
+          structuralValid: true,
+        }
+      }
+      if (!cols.every(w => typeof w === 'number' && Number.isFinite(w) && w >= 0)) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Sidecar colWidthsPt must contain non-negative numbers`,
+          structuralValid: true,
+        }
+      }
+      if (!rows.every(h => typeof h === 'number' && Number.isFinite(h) && h >= 0)) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Sidecar rowHeightsPt must contain non-negative numbers`,
+          structuralValid: true,
+        }
+      }
       if (Math.abs(decoded.width - activeGeom.expectedWidthPt) > activeGeom.colWidthsPt.length + 2) {
         return {
           kind: 'refusal',
@@ -1581,55 +1662,14 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           structuralValid: true,
         }
       }
-
-      if (Array.isArray(sidecar.colWidthsPt)) {
-        const cols = sidecar.colWidthsPt as number[]
-        if (cols.length !== rangeGeom.colWidthsPt.length) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'geometry-mismatch',
-            reason: `Sidecar colWidthsPt length ${cols.length} does not match range columns ${rangeGeom.colWidthsPt.length}`,
-            structuralValid: true,
-          }
-        }
-        for (let ci = 0; ci < cols.length; ci++) {
-          if (Math.abs(cols[ci] - rangeGeom.colWidthsPt[ci]) > 1) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'geometry-mismatch',
-              reason: `Sidecar column ${ci} width ${cols[ci]}pt does not match measured metric ${rangeGeom.colWidthsPt[ci]}pt (allowed ±1pt)`,
-              structuralValid: true,
-            }
-          }
-        }
-      }
-      if (Array.isArray(sidecar.rowHeightsPt)) {
-        const rows = sidecar.rowHeightsPt as number[]
-        if (rows.length !== rangeGeom.rowHeightsPt.length) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'geometry-mismatch',
-            reason: `Sidecar rowHeightsPt length ${rows.length} does not match range rows ${rangeGeom.rowHeightsPt.length}`,
-            structuralValid: true,
-          }
-        }
-        for (let ri = 0; ri < rows.length; ri++) {
-          if (Math.abs(rows[ri] - rangeGeom.rowHeightsPt[ri]) > 1) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'geometry-mismatch',
-              reason: `Sidecar row ${ri} height ${rows[ri]}pt does not match worksheet height ${rangeGeom.rowHeightsPt[ri]}pt (allowed ±1pt)`,
-              structuralValid: true,
-            }
-          }
+      if (Math.abs(decoded.height - activeGeom.expectedHeightPt) > 4) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'geometry-mismatch',
+          reason: `Capture ${cap.pngPath} height ${decoded.height} does not match measured range ${c.range} height ${activeGeom.expectedHeightPt}±4`,
+          structuralValid: true,
         }
       }
     } else {

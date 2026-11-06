@@ -118,18 +118,40 @@ export function probeLiveExcelCellObservations(
         const geomScriptLines = [
           `set wb to workbook "${q(name)}"`,
           `set ws to worksheet "${q(c.sheet)}" of wb`,
-          `tell range "${q(c.range)}" of ws to set totalW to its width`,
-          `tell range "${q(c.range)}" of ws to set totalH to its height`,
-          `return (totalW as string) & ":::" & (totalH as string)`,
+          `set r to range "${q(c.range)}" of ws`,
+          `set totalW to width of r`,
+          `set totalH to height of r`,
+          `set AppleScript's text item delimiters to ","`,
+          `set colWidths to {}`,
+          `repeat with colVar in (get columns of r)`,
+          `  set end of colWidths to (get width of colVar)`,
+          `end repeat`,
+          `set rowHeights to {}`,
+          `repeat with rowVar in (get rows of r)`,
+          `  set end of rowHeights to (get height of rowVar)`,
+          `end repeat`,
+          `return (totalW as string) & ":::" & (totalH as string) & ":::" & (colWidths as string) & ":::" & (rowHeights as string)`,
         ]
-        const geomOut = runScript(geomScriptLines, 20_000)
+        const geomOut = runScript(geomScriptLines, 30_000)
         const gParts = geomOut.split(':::')
-        if (gParts.length === 2) {
-          geometry = {
-            widthPt: Number(gParts[0]),
-            heightPt: Number(gParts[1]),
-            colWidthsPt: [],
-            rowHeightsPt: [],
+        if (gParts.length === 4) {
+          const totalW = Number(gParts[0])
+          const totalH = Number(gParts[1])
+          const colWidthsPt = gParts[2].split(',').map(s => Number(s.trim()))
+          const rowHeightsPt = gParts[3].split(',').map(s => Number(s.trim()))
+          if (
+            Number.isFinite(totalW) &&
+            Number.isFinite(totalH) &&
+            colWidthsPt.length > 0 &&
+            colWidthsPt.every(Number.isFinite) &&
+            rowHeightsPt.length > 0 &&
+            rowHeightsPt.every(Number.isFinite)
+          ) {
+            const sumW = colWidthsPt.reduce((a, b) => a + b, 0)
+            const sumH = rowHeightsPt.reduce((a, b) => a + b, 0)
+            if (Math.abs(sumW - totalW) <= 1 && Math.abs(sumH - totalH) <= 1) {
+              geometry = { widthPt: totalW, heightPt: totalH, colWidthsPt, rowHeightsPt }
+            }
           }
         }
       } catch {
@@ -175,10 +197,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const clockState = c.clockRequirement ? probeLiveExcelClockState(c, savedAbs, preExisting) : null
     const liveObs = probeLiveExcelCellObservations(c, savedAbs, preExisting)
     const activeGeom =
-      liveObs?.geometry && parts
+      liveObs?.geometry && liveObs.geometry.colWidthsPt.length > 0 && parts
         ? computeWorksheetRangeGeometry(parts, c.range, {
-            colWidthsPt: liveObs.geometry.colWidthsPt.length > 0 ? liveObs.geometry.colWidthsPt : geom?.colWidthsPt,
-            rowHeightsPt: liveObs.geometry.rowHeightsPt.length > 0 ? liveObs.geometry.rowHeightsPt : geom?.rowHeightsPt,
+            colWidthsPt: liveObs.geometry.colWidthsPt,
+            rowHeightsPt: liveObs.geometry.rowHeightsPt,
           }) ?? geom
         : geom
 
@@ -222,7 +244,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             height: decoded?.height,
             colWidthsPt: activeGeom?.colWidthsPt,
             rowHeightsPt: activeGeom?.rowHeightsPt,
-            ...(liveObs?.geometry ? { geometrySource: 'excel-measured' } : {}),
+            ...(liveObs?.geometry && liveObs.geometry.colWidthsPt.length > 0
+              ? { geometrySource: 'excel-measured' }
+              : {}),
             resavedByExcel: c.resavedByExcel === true,
             resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
             sheet: c.sheet,
