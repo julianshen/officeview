@@ -5,6 +5,7 @@ import { tokenizeBytes } from '../src/core/xml-stream'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { createCfMemory } from '../src/xlsx/cf/limits'
+import { CF_LIMITS } from '../src/xlsx/cf/limits'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
 import { attachCfSheetRules, parseCfSheet, type CfParseMeta, type CfStylesSource } from '../src/xlsx/cf/parse'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
@@ -1191,6 +1192,51 @@ describe('CF fix round 3: review-t3-r3 findings', () => {
     const lease = parseCfSheet(ws, { colors: {}, dxfNodes: [dxf] }, memory, {})
     expect(lease.value.rules).toHaveLength(0)
     expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+})
+
+describe('CF fix round 4: review-t3-r4 findings', () => {
+  const dxfRules = (n: number): string =>
+    Array.from(
+      { length: n },
+      (_, i) => `<cfRule type="cellIs" operator="equal" priority="${i + 1}" dxfId="0"><formula>1</formula></cfRule>`,
+    ).join('')
+  const bigFontDxf = (): XmlNode =>
+    parseXml(`<dxf><font><name val="${'a'.repeat(4000)}"/></font></dxf>`)
+
+  it('F1 publishes a below-cap sheet against the exact retained model', () => {
+    // 300 rules normalize to 2,608,432 B: under the 4 MiB sheet cap, so the
+    // sheet must publish — the cap compares one retained model, not two
+    // stacked accounting reservations.
+    const memory = createCfMemory({})
+    const ws = parseXml(
+      `<worksheet xmlns="${NS}"><conditionalFormatting sqref="A1">${dxfRules(300)}</conditionalFormatting></worksheet>`,
+    )
+    const lease = parseCfSheet(ws, { colors: {}, dxfNodes: [bigFontDxf()] }, memory, {})
+    expect(lease.value.unresolvedSheet).toBeUndefined()
+    expect(lease.value.rules).toHaveLength(300)
+    expect(lease.bytes).toBeLessThanOrEqual(CF_LIMITS.sheetMetadataBytes)
+    expect(lease.bytes).toBeGreaterThanOrEqual(measurePayloadBytes(lease.value) ?? Number.POSITIVE_INFINITY)
+    lease.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F1+F2 late refusal carries its diagnostic in a small sentinel', () => {
+    // 488 rules normalize past the cap, so refusal is correct — but the
+    // sentinel must carry its own cf-resource-limit record (the resident
+    // integration copies diagnostics to the sheet) and must not retain the
+    // discarded multi-megabyte model.
+    const memory = createCfMemory({})
+    const ws = parseXml(
+      `<worksheet xmlns="${NS}"><conditionalFormatting sqref="A1">${dxfRules(488)}</conditionalFormatting></worksheet>`,
+    )
+    const lease = parseCfSheet(ws, { colors: {}, dxfNodes: [bigFontDxf()] }, memory, {})
+    expect(lease.value.rules).toHaveLength(0)
+    expect(lease.value.unresolvedSheet).toMatchObject({ writes: 'ALL', reason: 'cf-resource-limit' })
+    expect(lease.value.diagnostics.some(d => d.feature === 'cf-resource-limit')).toBe(true)
+    expect(lease.bytes).toBeLessThanOrEqual(CF_LIMITS.sheetMetadataBytes)
     lease.release()
     expect(memory.currentBytes).toBe(0)
   })

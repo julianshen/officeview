@@ -557,7 +557,6 @@ function boundedTextLength(node: XmlNode | undefined, budget: number): number | 
 class SheetFinalizer {
   charged = 0
   retained = 0
-  metaBytes = 0
   rules: CfRule[] = []
   sentinel: { reason: string } | undefined
   aborted = false
@@ -600,7 +599,6 @@ class SheetFinalizer {
 
   reserveMeta(bytes: number): boolean {
     if (this.caps.reserveMetadata(bytes).kind !== 'ready') return false
-    this.metaBytes += bytes
     return true
   }
 }
@@ -1448,19 +1446,38 @@ function finalizeCollected(
     // than refusing a fully-admitted fail-closed outcome.
     const measured = measureCfPayload(value, memory)
     if (measured.kind !== 'ready' && !fin.sentinel) throw new Error('CF admission exhausted')
-    const computed = fin.retained + diagBytes + fin.metaBytes + 256
+    // The retained-model counter prices the same normalized payload as the
+    // sheet-cap reservation exactly once: construction peaks were admitted
+    // during the build, and only the retained result below is adopted.
+    const computed = fin.retained + diagBytes + 256
     const total = measured.kind === 'ready' ? Math.max(computed, measured.value) : computed
-    if (!fin.sentinel && total > CF_LIMITS.sheetMetadataBytes) {
+    // Adopt exactly the published result's footprint: a sentinel never retains
+    // the discarded model's aborted workspace after it is no longer held.
+    let adoptBytes = total
+    if (fin.sentinel) {
+      adoptBytes = Math.max(diagBytes + 256, measured.kind === 'ready' ? measured.value : 0)
+    } else if (total > CF_LIMITS.sheetMetadataBytes) {
       // The counted per-rule bound missed enough record overhead to push the
       // exact retained total over the per-sheet cap: refuse the whole sheet
-      // rather than publish an oversized model. The adopted charge keeps the
-      // aborted workspace (as on every sentinel path); release frees it all.
+      // rather than publish an oversized model.
       fin.failSheet('cf-resource-limit', 'cf-resource-limit', 'sheet CF metadata exceeds the per-sheet cap')
-      value = { rules: [], unresolvedSheet: { reason: 'cf-resource-limit', writes: 'ALL' }, diagnostics: published }
+      if (fin.diagHandle.refused) throw new Error('CF admission exhausted')
+      // Admit room for the one late record (192 + 64 feature + 1024 message +
+      // slack; messages are sliced to 512 chars) before rebuilding.
+      fin.admit(1408)
+      // Rebuild the bounded published diagnostics AFTER the late refusal so the
+      // outcome carries its own record; the resident integration copies these
+      // to the sheet, so a lost record would silently drop the warning.
+      const republished = diagHandle.entries.map(d => ({ ...d }))
+      let reBytes = 0
+      for (const d of republished) reBytes += 192 + d.feature.length * 2 + d.message.length * 2
+      value = { rules: [], unresolvedSheet: { reason: 'cf-resource-limit', writes: 'ALL' }, diagnostics: republished }
+      const skipMeasured = measureCfPayload(value, memory)
+      adoptBytes = Math.max(reBytes + 256, skipMeasured.kind === 'ready' ? skipMeasured.value : 0)
     }
-    if (total > fin.charged && !fin.hold.grow(total)) throw new Error('CF admission exhausted')
-    fin.charged = Math.max(fin.charged, total)
-    const lease = fin.hold.adopt(value, total)
+    if (adoptBytes > fin.charged && !fin.hold.grow(adoptBytes)) throw new Error('CF admission exhausted')
+    fin.charged = Math.max(fin.charged, adoptBytes)
+    const lease = fin.hold.adopt(value, adoptBytes)
     // The single adopted lease now owns everything: release the auxiliary holds.
     try {
       caps.dispose()
