@@ -81,7 +81,7 @@ export class SlicerController {
   model(name: string): SlicerModel | undefined { return this.models.get(name) }
   multiSelect(_name: string): boolean { return false }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  private publish(model: SlicerModel, hold?: { release(): void }): void {
+  private publish(model: SlicerModel, hold?: { release(): void }, onTransferred?: () => void): void {
     if (this.disposed) {
       // Never published, never transferred: refund the transient reservation.
       hold?.release()
@@ -95,8 +95,11 @@ export class SlicerController {
     // model is replaced, evicted or unmounted (SlicerRetainedCharges). A throw
     // propagates to the publisher, which refunds only when nothing was
     // transferred yet (a partial sibling publish never refunds a hold the
-    // host already owns).
+    // host already owns). The transfer is counted immediately after onChange
+    // returns, before listeners run, so a listener throwing on the first
+    // publish never triggers an early refund of a hold the host retained.
     this.host.onChange?.(model, hold)
+    onTransferred?.()
     for (const listener of this.listeners) listener()
   }
 
@@ -199,11 +202,9 @@ export class SlicerController {
       // published copy and the host dedups it by identity.
       let published = 0
       try {
-        this.publish({ ...before, selectedItemIds: [...selected], revision: Math.max((before.revision ?? 0) + 1, result.revision), items: before.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold)
-        published++
+        this.publish({ ...before, selectedItemIds: [...selected], revision: Math.max((before.revision ?? 0) + 1, result.revision), items: before.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold, () => { published++ })
         for (const sibling of siblings) {
-          this.publish({ ...sibling, selectedItemIds: [...selected], revision: Math.max((sibling.revision ?? 0) + 1, result.revision), items: sibling.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold)
-          published++
+          this.publish({ ...sibling, selectedItemIds: [...selected], revision: Math.max((sibling.revision ?? 0) + 1, result.revision), items: sibling.items.map(item => ({ ...item, selected: selected.has(item.id) })) }, hold, () => { published++ })
         }
       } catch {
         if (published === 0) hold?.release()

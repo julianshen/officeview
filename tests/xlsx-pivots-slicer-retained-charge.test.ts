@@ -146,6 +146,43 @@ describe('slicer retained memory charge (option A)', () => {
     expect(pool()).toBe(0)
   })
 
+  it('a listener throwing on the first publish never refunds a hold the host already retained', async () => {
+    const ledger = ledgerWithNoGC()
+    const retained = new SlicerRetainedCharges()
+    const accounted = () => ledger.snapshot().byPool.controls
+    const admit = (bytes: number) => {
+      if (ledger.bytes + bytes > MAIN_THREAD_BUDGETS.D) return undefined
+      const owner = `slicer-selection:listener-throw:${Math.random()}`
+      ledger.set('controls', owner, bytes)
+      let held = true
+      return { release: () => { if (!held) return; held = false; ledger.release('controls', owner) } }
+    }
+    const announce = vi.fn()
+    const controller = new SlicerController([model('Product')], {
+      apply: async () => ({ kind: 'committed' as const, revision: 1 }),
+      announce,
+      admit,
+      onChange: (m: SlicerModel, hold?: { release(): void }) => {
+        // The host retains the hold before any listener runs.
+        retained.retain(m.cacheName ?? m.name, hold)
+      },
+    })
+    // A subscriber throwing on the first publish must not trigger an early
+    // refund: the hold was already transferred when onChange returned.
+    controller.subscribe(() => { throw new Error('subscriber failed') })
+    const result = await controller.applySlicer('Product', [0], new AbortController().signal)
+    expect(result).toBe(false)
+    expect(announce).toHaveBeenCalledWith('Slicer change failed.')
+    // The retained copy stays charged.
+    expect(retained.size).toBe(1)
+    expect(accounted()).toBeGreaterThan(0)
+    const charged = accounted()
+    retained.clear()
+    expect(accounted()).toBe(0)
+    expect(charged).toBeGreaterThan(0)
+    controller.dispose()
+  })
+
   it('releasing twice does not refund twice', () => {
     const ledger = ledgerWithNoGC()
     const owner = 'slicer-selection:idempotent'
