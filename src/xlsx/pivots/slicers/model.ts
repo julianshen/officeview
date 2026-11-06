@@ -28,10 +28,20 @@ export interface SlicerAppearance {
   fontFamily: string
 }
 
-export interface SlicerItem { label: string; selected: boolean; noData: boolean }
+export interface SlicerItem { id: number; label: string; selected: boolean; noData: boolean }
 
 export interface SlicerModel {
   name: string
+  /** Workbook-wide slicer-cache operation name (distinct from the drawing's control name). */
+  cacheName?: string
+  /** Resolved workbook pivot cache id for worker-side interaction validation. */
+  cacheId?: number
+  /** Cache field index and every cache item identity, including saved items hidden by showMissing=0. */
+  sourceFieldIndex?: number
+  allItemIds?: number[]
+  selectedItemIds?: number[]
+  /** Monotonic committed selection revision (0 is the saved model). */
+  revision?: number
   caption?: string
   showCaption: boolean
   columnCount: number
@@ -49,6 +59,7 @@ export interface SlicerModel {
 }
 
 export type TimelineLevel = 'years' | 'quarters' | 'months' | 'days'
+export type TimelineLabelLocale = 'en-US' | 'zh-TW'
 
 export interface TimelineAppearance {
   border: string
@@ -75,6 +86,15 @@ export interface TimelineAppearance {
 
 export interface TimelineModel {
   name: string
+  /** Locale of generated labels, inferred only from a supported linked pivot name. */
+  labelLocale?: TimelineLabelLocale
+  /** Resolved workbook pivot cache id and linked pivots for worker-side interaction validation. */
+  cacheId?: number
+  drives?: { pivotTable?: string }[]
+  /** Monotonic committed view-only control revision (0 is the saved model). */
+  revision?: number
+  /** The date filter installed by this live timeline selection, used to clear only its own filter. */
+  filterId?: number
   caption?: string
   style: string
   level: TimelineLevel

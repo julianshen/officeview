@@ -12,6 +12,15 @@ in git history.
 
 ### Added
 
+- **Pivot slicer and timeline controls (Stage 5, view only).** Single-target slicer
+  selection/clear and timeline range, level and clear actions update resident or
+  worker-backed pivots without editing the file. Timeline labels use measured
+  English/Traditional Chinese caption conventions; unknown locales retain fallback.
+  Unmeasured modifier/multi-select gestures, table slicers, multi-target UI controls,
+  cross-filter ordering, timeline dragging and scrolling remain unavailable.
+  Selection admission now precedes item copies, hidden-item comparison is linear,
+  and linked staging retains construction memory until cancelled producers drain.
+
 - **Excel table and pivot table styles, slicers and timelines (view-only).**
   - Excel tables now draw in their table styles: the 60 built-ins and custom styles, with the header, totals,
     first/last column and stripe flags. Cell formats layer over the style as in Excel, and as in Excel there are no

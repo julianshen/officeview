@@ -84,6 +84,7 @@ export interface PivotSession {
   /** The cache the session computes from: the saved one, or the one a refresh rebuilt (its definitions index it). */
   readonly cache: PivotCacheDefinition
   apply(delta: PivotDelta, options?: { admitCandidateBytes?: (extraBytes: number) => PivotMemoryHold | undefined; admitLayoutBytes?: (extraBytes: number) => PivotCandidateHold | undefined }): EngineResult<PivotApplyResult>   // pure: does not change the session
+  canCommit(result: PivotApplyResult): boolean
   commit(result: PivotApplyResult): boolean                   // false when result.revision !== revision + 1
   /** Back to the saved state, as the next revision; refused `pivot-overlap` when that layout would now cover another
    * pivot's or the sheet's cells (a refreshed pivot's saved view is its refreshed layout, which may be larger). */
@@ -386,6 +387,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
       issued.add(result)
       return { ok: true, value: result }
     },
+    canCommit(result) { return !released && issued.has(result) && result.revision === state.revision + 1 },
     commit(result) {
       if (released || !issued.has(result) || result.revision !== state.revision + 1) return false
       const previous = ownership.get(state), next = ownership.get(result)

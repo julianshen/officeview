@@ -973,3 +973,95 @@ Tested using `s4-filtered-row-base` as the start state (`Region` on Rows with hi
 - **Variance and standard deviation with totals.** Computing `var`, `varp`, `stdDev`, or `stdDevp` on pivots with subtotals or grand totals is refused as `pivot-values-unsupported` (S2-AA); only total-less pivots (`rowGrandTotals="0" colGrandTotals="0"`) are supported.
 - **Unmeasured or contradictory caption locales.** Default caption generation refuses with `pivot-caption-locale` when saved data fields contradict the pivot name's locale or when the locale is unmeasured, requiring an explicit custom name.
 - **Memory admission and quota refusal.** Staging candidate transitions that materialize inline fields into shared items, add virtual grouping fields, or allocate overlay buffers requires pre-allocation admission against available worker/session grants. If the required bytes exceed the grant, the change is refused typed (`pivot-memory-limit`) and candidate holds are refunded cleanly without leaking resident or worker memory.
+
+## Stage 5 interaction oracle and measurements (Task 39, fix round 3)
+
+The Stage 5 case definitions distinguish saved XML state from UI actions. Excel for Mac 16.114 opened, refreshed, and saved the R2 input. Its saved output is retained at `tests/fixtures/xlsx-pivots/controls/s5-slicer-manual-filter-vs-slicer.xlsx`; the run is recorded in `s5-build-run3.log`. R4 remains pending. The owner recipes in `xlsx-pivots-recipes-stage5.md` are procedures, not completed measurements.
+
+### Saved-state cases using XML followed by Excel refresh/save
+
+- **Slicer selection (`s5-slicer-click-one`):** The builder changes the Product slicer cache to Apples-only, opens and refreshes in Excel, then checks the saved cache and complete pivot cells. This establishes selected-state serialization and recomputation, not the mouse-click behavior.
+- **Slicer clear (`s5-slicer-clear`):** The builder writes the all-selected cache state; Excel refresh/save must restore the full pivot.
+- **Manual pivot filter with slicer (`s5-slicer-manual-filter-vs-slicer`, R2):** The prepared input hides Cherries (Product item x=2) in the `axisCol` field while the slicer selects x=0,1,2. Excel 16.114 refresh/save removes that manual hidden flag from x=2, retains the slicer selection, and writes `h="1"` on the no-data/missing x=3 item instead. The saved pivot still displays Cherries and has total 150. This measures Excel's reconciliation of this XML combination; it does not establish a UI gesture or a general AND/intersection rule. The source has no blank Product record.
+- **Timeline selection and level (`s5-timeline-click-month`, `s5-timeline-level-preserves-range`):** XML expresses the selected dates/level; Excel refresh/save must preserve the expected timeline and pivot state. This does not establish click or drag gestures.
+- **Timeline clear (`s5-timeline-clear`):** Excel 16.114 refresh/save saved `filterType="unknown"`, removed the selection element, and restored the full pivot map.
+- **Table Slicer (`s5-table-slicer`, R4):** This is an owner recipe, not an XML build. A hand-written table-slicer package prompted Excel 16.114 to offer repair, so the synthetic cache was removed from the automated builder. Follow R4 in `xlsx-pivots-recipes-stage5.md` to create the Table1 and Region slicer through Excel, add a Product=Apples AutoFilter, then save and reopen. The expected visible rows are 2 and 6; this remains unmeasured until that workbook and observation are recorded.
+
+### Owner-recorded UI cases (not yet measured here)
+
+- **Slicer click semantics and Multi-Select:** `s5-slicer-click-selected`, `s5-slicer-modifier-add-remove`, and `s5-slicer-multiselect-toggle` are R1 recipes. Record direct clicks and each intermediate selection; no keyboard shortcut or XML equivalent is claimed.
+- **Cross-filter/no-data order:** `s5-slicer-crossfilter-order` is R7. The old fixture edited the Product cache while claiming a Region filter; it is not evidence and is excluded. Add/connect a real Region slicer, select East, and record both cache states and the full pivot output.
+- **Timeline drags and scroll:** `s5-timeline-drag-forward-reverse` (R6) and `s5-timeline-scroll` (R5) require UI actions and saved observations. A serialized date range or scroll-position attribute alone is insufficient.
+- **Report Connections:** `s5-linked-two-pivots` (R3) requires three distinct layouts and full before/after maps for both linked pivots and the unlinked pivot. The recipe is pending owner observation.
+
+Do not cite these pending cases as Excel measurements until the saved artifacts and owner records exist.
+
+## Stage 5 results (Task 43, 2026-11-06)
+
+This is the verification subset assigned to Codex: performance/memory audit, fixes,
+changelog and evidence reporting. It is **not** a completion claim for every Task 43
+browser interaction or an independent approval of the author's own fixes.
+
+### Supported and refused paths
+
+Supported single-target controls update view-only pivot results through the resident
+client or the worker's staged/committed protocol. Mounted tests exercise selection,
+clear, timeline range/level, control-only sheets and committed canvas state. The
+worker validates saved control linkage and receiver grants before publication.
+
+The UI refuses controls with multiple targets (including same-layout targets); the
+lower-level worker protocol supports a bounded atomic target set. Its per-target
+pivot computation can scan records separately. The shared-index unit test is not
+proof of a shared records scan in the mounted application. Table slicers remain
+refused; they are not advertised as FilterEngine-supported here. The owner recipes
+above remain procedures rather than completed Office measurements.
+
+### Audit results
+
+- A 10,000-item hidden-index comparison fell from **50,005,000** source reads to
+  **10,000**, using a Set rather than repeated linear searches.
+- A denied 10,000-item selection now performs **zero item-id reads** before refusal.
+  Its candidate reservation covers transient vectors/sets and the retained model;
+  at 10,000 visible/all identities the conservative model charge is **2,560,256 B**.
+- Worker composite overlays validate rectangle-vector/index cost against the
+  pre-reserved grant before copying any elements; a 512 B grant refuses the
+  10,000-rectangle probe with zero rectangle reads and rolls back staging charges.
+- Generic linked transactions keep their construction charge until ignoring
+  providers drain; committing an incomplete target set returns stale. This helper
+  currently has no production instantiation, so those regressions are API safety
+  evidence, not a claim about real viewer cancellation measurements.
+- Four-target primitive stress: 20 alternating cancellation/commit-close cycles,
+  80 constructions, peak 400 model bytes, zero bytes after each cycle.
+- The existing shared-index helper test visits 100,000 records once across eight
+  leases (1,500,000 model bytes until last release). A 100-year daily timeline in
+  a 600px box constructs fewer than 100 visible periods, not all 36,525 days.
+
+These are deterministic work/byte-model checks, not a measured native-heap peak.
+See `task-43-audit.md` and `task-43-report.md` in the task evidence directory for
+commands, results and limits. Browser smoke covers saved-paint/collapse parity;
+it does not establish the full Stage 5 keyboard, drag, cross-sheet reset, or CLS
+matrix. Actual Safari, VoiceOver and physical-device validation are not implied.
+
+### Binding Stage 5 rulings
+
+- **S5-A:** independent reviews alternate Codex and agy; implementation and self-audit
+  do not substitute for the different-family review.
+- **S5-B:** generated timeline strings follow measured workbook-language evidence.
+  Current recognition uses saved default pivot-caption forms for en-US/zh-TW;
+  custom, unknown or mixed forms refuse model generation and keep the saved drawing
+  fallback. This is not general workbook-language detection.
+- **S5-C:** R1/R3/R4/R5/R6/R7 are not run for PR 5. Multi-select toggle,
+  already-selected/modifier clicks, different-layout linked pivots, table slicers,
+  timeline scroll/drag and cross-filter ordering remain refused or unverified.
+  The one owner-observed Multi-Select-on deselect-from-All transition is isolated in
+  a helper; it does not authorize enabling the unmeasured toggle or later gestures.
+
+### Task 43 gate receipts
+
+On the Task 43 candidate based on `416e5426`: TypeScript passed; the required
+pivot/viewer/formula suites passed **230 files / 6,319 tests** (59 skipped, 1 todo).
+The eager graph and paged-worker checks passed at **35,977 B gzip** (limit 38,720 B).
+Chromium and Playwright WebKit pivot smoke passed **10 tests**. The Stage 2
+one-million-record benchmark passed at **138.68 ms median-of-medians** over three
+runs against 200 ms, on a shared machine. The final full Vitest run passed **599 files / 12,127 tests** (61 skipped, 1 todo).
+The task report records the lock-sidecar regression and remaining coverage limits.

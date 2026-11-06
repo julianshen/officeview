@@ -6,6 +6,10 @@ import { ENGINE_CASES, engineSeedStandIn, xmlDiffSummary, type PivotParts } from
 import {
   INTERACTION_CASES, INTERACTION_PROBES, SEED_BUILDS, SEED_FILES, resolveDelta, startOf, startShapeOf, type InteractionCase, type PivotDelta,
 } from '../scripts/xlsx-refs/interaction-cases'
+import {
+  CONTROL_INTERACTION_CASES, CONTROL_SEED_HEADERS, CONTROL_SEED_ROWS,
+  type ControlInteractionCase, type ControlOracleOp,
+} from '../scripts/xlsx-refs/control-interaction-cases'
 import { classify } from '../scripts/xlsx-refs/classify-stage2'
 import { interactionDryRun, verifyInteraction, verifyXmlRecomputation } from '../scripts/xlsx-refs/build-engine'
 
@@ -433,3 +437,94 @@ describe('verifyInteraction recomputation and strengthened markers', () => {
     }
   })
 })
+
+const CONTROL_KINDS = new Set([
+  'slicerCreate', 'slicerSelect', 'slicerClick', 'slicerMultiSelect', 'slicerClear',
+  'pivotManualFilter', 'tableAutoFilter', 'timelineSelect', 'timelineDrag', 'timelineScroll', 'timelineLevel', 'timelineClear',
+  'tableSlicerSelect',
+])
+
+const CONTROL_KIND_CHECKS: Record<ControlOracleOp['kind'], (op: Record<string, unknown>) => boolean> = {
+  slicerCreate: op => typeof op.name === 'string' && typeof op.fieldName === 'string' && typeof op.target === 'string',
+  slicerSelect: op => typeof op.name === 'string' && (op.itemIds === 'all' || (Array.isArray(op.itemIds) && (op.itemIds as unknown[]).every(Number.isInteger))),
+  slicerClick: op => typeof op.name === 'string' && Number.isInteger(op.itemId) && (op.modifier === undefined || typeof op.modifier === 'boolean'),
+  slicerMultiSelect: op => typeof op.name === 'string' && typeof op.enabled === 'boolean',
+  slicerClear: op => typeof op.name === 'string',
+  pivotManualFilter: op => typeof op.fieldName === 'string' && Array.isArray(op.hiddenItemIds) && op.hiddenItemIds.every(Number.isInteger),
+  tableAutoFilter: op => typeof op.tableName === 'string' && typeof op.fieldName === 'string' && Array.isArray(op.values) && op.values.every(value => typeof value === 'string'),
+  timelineSelect: op => typeof op.name === 'string' && typeof op.startDate === 'string' && typeof op.endDate === 'string',
+  timelineDrag: op => typeof op.name === 'string' && typeof op.startDate === 'string' && typeof op.endDate === 'string',
+  timelineScroll: op => typeof op.name === 'string' && typeof op.firstVisiblePeriod === 'string',
+  timelineLevel: op => typeof op.name === 'string' && ['years', 'quarters', 'months', 'days'].includes(String(op.level)),
+  timelineClear: op => typeof op.name === 'string',
+  tableSlicerSelect: op => typeof op.name === 'string' && (op.itemIds === 'all' || (Array.isArray(op.itemIds) && (op.itemIds as unknown[]).every(Number.isInteger))),
+}
+
+describe('Stage 5 control interaction cases (control-interaction-cases.ts)', () => {
+  const CONTROLS_DIR = join(PIVOTS, 'controls')
+  const CONTROLS_MANIFEST = join(CONTROLS_DIR, 'manifest.json')
+
+  it('defines the exact Stage 5 data seed (5 rows, Date/Region/Product/Sales)', () => {
+    expect(CONTROL_SEED_HEADERS).toEqual(['Date', 'Region', 'Product', 'Sales'])
+    expect(CONTROL_SEED_ROWS).toEqual([
+      ['2023-12-31', 'East', 'Apples', 10],
+      ['2024-01-01', 'East', 'Bananas', 20],
+      ['2024-02-15', 'West', 'Apples', 30],
+      ['2024-03-31', 'West', 'Cherries', 40],
+      ['2024-04-01', 'South', 'Apples', 50],
+    ])
+  })
+
+  it('defines all 14 Stage 5 cases with exact names', () => {
+    const EXPECTED_CASES = [
+      's5-slicer-click-one',
+      's5-slicer-click-selected',
+      's5-slicer-modifier-add-remove',
+      's5-slicer-multiselect-toggle',
+      's5-slicer-clear',
+      's5-slicer-crossfilter-order',
+      's5-slicer-manual-filter-vs-slicer',
+      's5-timeline-click-month',
+      's5-timeline-drag-forward-reverse',
+      's5-timeline-level-preserves-range',
+      's5-timeline-clear',
+      's5-timeline-scroll',
+      's5-linked-two-pivots',
+      's5-linked-slicer-and-timeline',
+      's5-table-slicer',
+    ]
+    expect(CONTROL_INTERACTION_CASES.length).toBe(15)
+    expect(CONTROL_INTERACTION_CASES.map(c => c.case)).toEqual(EXPECTED_CASES)
+  })
+
+  it('validates each control interaction case against the schema', () => {
+    for (const c of CONTROL_INTERACTION_CASES) {
+      expect(typeof c.case).toBe('string')
+      expect(typeof c.file).toBe('string')
+      expect(typeof c.base).toBe('string')
+      expect(c.target).toBeDefined()
+      expect(typeof c.target.controlName).toBe('string')
+      expect(['xml', 'applescript', 'recipe']).toContain(c.route)
+      expect(['built', 'recipe', 'unverified']).toContain(c.status)
+      expect(c.expected).toBeDefined()
+
+      const actions = Array.isArray(c.action) ? c.action : [c.action]
+      expect(actions.length).toBeGreaterThan(0)
+      for (const op of actions) {
+        const typedOp = op as ControlOracleOp
+        expect(CONTROL_KINDS.has(typedOp.kind), `unknown op kind ${typedOp.kind}`).toBe(true)
+        const check = CONTROL_KIND_CHECKS[typedOp.kind]
+        expect(check(op as unknown as Record<string, unknown>), `invalid action shape: ${JSON.stringify(op)}`).toBe(true)
+      }
+    }
+  })
+
+  it('validates controls manifest matches cases when present', () => {
+    if (!existsSync(CONTROLS_MANIFEST)) return
+    const raw = JSON.parse(readFileSync(CONTROLS_MANIFEST, 'utf8')) as ControlInteractionCase[]
+    expect(Array.isArray(raw)).toBe(true)
+    expect(raw.length).toBe(15)
+    expect(raw.map(c => c.case)).toEqual(CONTROL_INTERACTION_CASES.map(c => c.case))
+  })
+})
+

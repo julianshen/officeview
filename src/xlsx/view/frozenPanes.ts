@@ -72,6 +72,32 @@ export function paneRegions(frozen: FrozenExtent | undefined, origin: PanePoint,
   return regions.filter(region => region.clip.width > 0 && region.clip.height > 0)
 }
 
+export interface PaneClip { x0: number; y0: number; x1: number; y1: number }
+/** Viewport clip rectangles keyed by pane region, for hit testing: a target
+ * belongs to the region containing its logical point. Strip edges extend to
+ * the viewport bounds, so only the strips' edges cut a target, as the canvas
+ * clips the body under the pinned strips. */
+export function paneRegionClips(frozen: FrozenExtent | undefined, origin: PanePoint, zoom: number, viewport: { width: number; height: number }): Map<PaneRegion['kind'], PaneClip> {
+  return new Map(paneRegions(frozen, origin, zoom, viewport).map(region => {
+    const { x, y, width, height } = region.clip
+    return [region.kind, { x0: x <= 0 ? -Infinity : x, y0: y <= 0 ? -Infinity : y, x1: x + width >= viewport.width ? Infinity : x + width, y1: y + height >= viewport.height ? Infinity : y + height }]
+  }))
+}
+/** The pane region containing a logical point (frozen rows/columns use the strip). */
+export function paneRegionKind(frozen: FrozenExtent | undefined, x: number, y: number): PaneRegion['kind'] {
+  const rowPinned = Boolean(frozen && y < frozen.top), colPinned = Boolean(frozen && x < frozen.left)
+  return rowPinned ? (colPinned ? 'corner' : 'top') : (colPinned ? 'left' : 'body')
+}
+/** Intersect a viewport box with its pane region; undefined when wholly hidden. */
+export function clipBoxToPaneRegion(clips: ReadonlyMap<PaneRegion['kind'], PaneClip>, kind: PaneRegion['kind'], box: { x: number; y: number; width: number; height: number }): { x: number; y: number; width: number; height: number } | undefined {
+  const clip = clips.get(kind)
+  if (!clip) return undefined
+  const x0 = Math.max(box.x, clip.x0), y0 = Math.max(box.y, clip.y0)
+  const x1 = Math.min(box.x + box.width, clip.x1), y1 = Math.min(box.y + box.height, clip.y1)
+  if (x1 <= x0 || y1 <= y0) return undefined
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
+}
+
 /** Scroll-into-view on one axis with a pinned extent: a cell inside the frozen
  * strip never scrolls; any other cell must clear the strip. Returns the new origin. */
 export function ensureAxisVisible(origin: number, start: number, length: number, spanCss: number, pinned: number): number {

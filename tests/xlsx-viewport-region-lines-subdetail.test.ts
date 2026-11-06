@@ -160,7 +160,9 @@ describe('region class keys', () => {
     const { ensureTableStyleEngine } = await import('../src/xlsx/tableStyleLoader')
     const dir = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
     let checked = 0, keyed = 0
-    for (const name of readdirSync(dir).filter(file => file.endsWith('.xlsx'))) {
+    // Excel owner-lock sidecars use .xlsx too, but are 165-byte metadata, not workbooks.
+    // Leave an owner's open Excel files untouched and enumerate only actual fixtures.
+    for (const name of readdirSync(dir).filter(file => file.endsWith('.xlsx') && !file.startsWith('~$'))) {
       const doc = await parseXlsx(await OfficePackage.load(readFileSync(dir + name)))
       await ensureTableStyleEngine(doc.sheets)
       for (const sheet of doc.sheets) {

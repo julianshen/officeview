@@ -34,6 +34,7 @@ import { createIntervalSet } from './visibility'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import {
   failedPage, failure, lowerBound, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets,
+  type WorkerControlLink,
 } from '../../worker/viewerSession'
 import { addRecord, answerOverview, emptyAggregate, type OverviewCellSource } from '../storage/overviewIndex'
 import { cellDisplayText } from '../render'
@@ -58,6 +59,16 @@ function collectObjectPivotCharts(sheetId: string, drawings: readonly XlsxDrawin
     // Only pivot charts (R2-4): the others are never linked, and would be held and charged with the assets.
     if (node.content?.kind === 'xlsxChart' && node.content.chart.pivot) out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
     if (node.children) collectObjectPivotCharts(sheetId, node.children, out)
+  }
+}
+function collectObjectControlLinks(drawings: readonly XlsxDrawing[] | undefined, out: WorkerControlLink[]): void {
+  for (const node of drawings ?? []) {
+    const content = node.content
+    if (content?.kind === 'slicer') out.push({ name: content.slicer.cacheName ?? content.slicer.name, kind: 'slicer', cacheId: content.slicer.cacheId,
+      pivotTables: content.slicer.drives.map(drive => drive.pivotTable ?? '') })
+    else if (content?.kind === 'timeline') out.push({ name: content.timeline.name, kind: 'timeline', cacheId: content.timeline.cacheId,
+      pivotTables: (content.timeline.drives ?? []).map(drive => drive.pivotTable ?? '') })
+    if (node.children) collectObjectControlLinks(node.children, out)
   }
 }
 /** A request's decode stopped at a checkpoint (cancelled or a stale owner). */
@@ -1014,8 +1025,12 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       const { sheetCellReader } = await import('../pivots/engine/faithful')
       const cells = new Set<number>()
       const linkedCharts: Array<{ sheetId: string; partPath: string; treePath: string; chart: import('../../charts/model').ChartModel }> = []
-      doc.sheets.forEach((candidate, index) => collectObjectPivotCharts(String(candidate.sheetId ?? index + 1), candidate.drawings, linkedCharts))
-      let metadataBytes = 512 + estimatePayloadBytes(linkedCharts)
+      const controlLinks: WorkerControlLink[] = []
+      doc.sheets.forEach((candidate, index) => {
+        collectObjectPivotCharts(String(candidate.sheetId ?? index + 1), candidate.drawings, linkedCharts)
+        collectObjectControlLinks(candidate.drawings, controlLinks)
+      })
+      let metadataBytes = 512 + estimatePayloadBytes({ linkedCharts, controlLinks })
       if (memory && !memory.set(metadataBytes)) return undefined
       for (const row of sheet.rows) for (const cell of row.cells) {
         if (cell.value !== null || cell.formula !== undefined) {
@@ -1030,7 +1045,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       metadataBytes += structure.bytes
       if (memory && !memory.set(metadataBytes)) return undefined
       return {
-        tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes, linkedCharts,
+        tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes, linkedCharts, controlLinks,
         pivots: doc.sheets.flatMap(candidate => (candidate.pivotTables ?? []).map(table => ({ sheet: candidate.name, name: String(table.name ?? '') }))),
         metadataBytes, runtimeKey: runtime,
         cache: def => runtime.cache(def),
