@@ -398,10 +398,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     for (const sheetId of [...timelineDrawingCache.keys()]) if (!live.has(sheetId)) timelineDrawingCache.delete(sheetId)
     if (slicerModels.size) {
-      const liveCaches = new Set<string>()
-      for (const model of slicerModels.values()) liveCaches.add(model.cacheName ?? model.name)
       const retained = slicerRetainedRef.current
-      if (retained) for (const cacheKey of [...retained.keys()]) if (!liveCaches.has(cacheKey)) retained.evict(cacheKey)
+      if (retained && pivotUi) {
+        const liveGroups = new Set<string>()
+        for (const [name, model] of slicerModels) {
+          const sheetId = slicerSheetIds.get(name)
+          if (sheetId === undefined) continue
+          liveGroups.add(pivotUi.slicerRetainedGroupKey(model.cacheName ?? model.name, sheetId))
+        }
+        for (const groupKey of [...retained.keys()]) if (!liveGroups.has(groupKey)) retained.evict(groupKey)
+      }
     } else {
       slicerRetainedRef.current?.clear()
     }
@@ -1821,22 +1827,30 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     if (previous && previous.sheetId === activeSheetId && previous.doc === doc && previous.pivotController === pivotController && previous.pivotUi === pivotUi) {
       previous.controller.register(activeSlicerDrawings.map(item => item.model))
+      for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
       setSlicerController(previous.controller)
       return
     }
     previous?.controller.dispose()
     for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
+    // The sheet this controller's admissions cover. Retained charges are
+    // keyed per cache per sheet (PR #61 review): same-cache drawings on
+    // another sheet commit from another controller with its own admission,
+    // so replacing this sheet's group must never release that sheet's hold.
+    const controllerSheetId = activeSheetId
     const controller = new pivotUi.SlicerController(activeSlicerDrawings.map(item => item.model), {
       announce: message => pivotHost.current.announce(message),
       onChange: (model, hold) => {
         slicerModels.set(model.name, model)
         // Option A: take over the transferred admission. Replacing a model
-        // releases the previous cache hold exactly once; a failure never
+        // releases the previous group hold exactly once; a failure never
         // throws out of render (the notice path already announced).
         if (hold) {
           try {
             const retained = slicerRetainedRef.current ??= new pivotUi.SlicerRetainedCharges()
-            retained.retain(model.cacheName ?? model.name, hold)
+            const cacheKey = model.cacheName ?? model.name
+            const sheetId = slicerSheetIds.get(model.name) ?? controllerSheetId
+            retained.retain(pivotUi.slicerRetainedGroupKey(cacheKey, sheetId), hold)
           } catch { try { hold.release() } catch { /* fail closed */ } }
         }
         const sheetId = slicerSheetIds.get(model.name)

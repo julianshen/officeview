@@ -13,21 +13,35 @@ export interface SlicerControllerHost {
 const UNVERIFIED = 'This slicer action has not been measured in Excel and is not available.'
 
 /**
+ * One retained charge covers one slicer cache on one sheet (PR #61 review).
+ * Drawings sharing a cache on the same sheet publish together from one
+ * sheet-scoped controller, so they share the admitted hold; drawings sharing
+ * a cache across sheets commit from different controllers with different
+ * admissions, so each sheet group keeps its own charge. Keying by cache
+ * alone would let the second sheet's commit release the first sheet's hold
+ * while its model stays reachable (memory under-counted).
+ */
+export function slicerRetainedGroupKey(cacheKey: string, sheetId: string): string {
+  return `${cacheKey}\u0000${sheetId}`
+}
+
+/**
  * Retained slicer-model charges (option A, PR #60 review 4486449664).
  *
- * One entry per slicer cache (`cacheName ?? name`): the admitted selection
- * hold is transferred from the sheet-scoped controller to the retained copy
- * `InteractiveSheetDoc` keeps in `slicerModels` and its drawing caches.
+ * One entry per slicer cache per sheet (see `slicerRetainedGroupKey`): the
+ * admitted selection hold is transferred from the sheet-scoped controller
+ * to the retained copy `InteractiveSheetDoc` keeps in `slicerModels` and
+ * its drawing caches.
  * The charge ends when the last holder drops it: the model is replaced
- * (a newer commit for the same cache), the cache evicts it, or the viewer
+ * (a newer commit for the same group), the group evicts it, or the viewer
  * unmounts. Release is idempotent and never refunds twice: the entry is
  * deleted when released, so a second release finds nothing (sibling drawings
- * sharing one cache publish the same hold, which dedups by identity).
+ * sharing one cache on one sheet publish the same hold, which dedups by identity).
  * Failures never throw out of render.
  */
 export class SlicerRetainedCharges {
   private readonly charges = new Map<string, { release(): void }>()
-  /** Owns `hold` for `cacheKey`, releasing the previous hold exactly once. */
+  /** Owns `hold` for `cacheKey` (a `slicerRetainedGroupKey`), releasing the previous hold exactly once. */
   retain(cacheKey: string, hold?: { release(): void }): void {
     const current = this.charges.get(cacheKey)
     if (current === hold) return
@@ -37,7 +51,7 @@ export class SlicerRetainedCharges {
     if (hold) this.charges.set(cacheKey, hold)
     else this.charges.delete(cacheKey)
   }
-  /** Ends the cache's charge exactly once (a no-op when already released). */
+  /** Ends the group's charge exactly once (a no-op when already released). */
   evict(cacheKey: string): void {
     const current = this.charges.get(cacheKey)
     if (!current) return
@@ -49,7 +63,7 @@ export class SlicerRetainedCharges {
     for (const key of [...this.charges.keys()]) this.evict(key)
   }
   get size(): number { return this.charges.size }
-  /** The caches currently holding a charge (for sheet-removal eviction). */
+  /** The groups currently holding a charge (for sheet-removal eviction). */
   keys(): IterableIterator<string> { return this.charges.keys() }
 }
 

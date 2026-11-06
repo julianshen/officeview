@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SlicerController, SlicerRetainedCharges } from '../src/xlsx/pivots/slicers/controller'
+import { SlicerController, SlicerRetainedCharges, slicerRetainedGroupKey } from '../src/xlsx/pivots/slicers/controller'
 import type { SlicerModel } from '../src/xlsx/pivots/slicers/model'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
@@ -181,6 +181,39 @@ describe('slicer retained memory charge (option A)', () => {
     expect(accounted()).toBe(0)
     expect(charged).toBeGreaterThan(0)
     controller.dispose()
+  })
+
+  it('same-cache copies on different sheets keep separate retained charges', () => {
+    // Drawings on sheets A and B share one slicer cache but live in different
+    // sheet-scoped controllers. Keying retained charges by cache alone lets
+    // B's commit release A's hold while A's model stays reachable (under-count).
+    expect(slicerRetainedGroupKey('Product', 'sheetA')).not.toBe(slicerRetainedGroupKey('Product', 'sheetB'))
+    // Siblings on the same sheet share one charge.
+    expect(slicerRetainedGroupKey('Product', 'sheetA')).toBe(slicerRetainedGroupKey('Product', 'sheetA'))
+    const ledger = ledgerWithNoGC()
+    const retained = new SlicerRetainedCharges()
+    const accounted = () => ledger.snapshot().byPool.controls
+    const admit = (tag: string, bytes: number) => {
+      if (ledger.bytes + bytes > MAIN_THREAD_BUDGETS.D) return undefined
+      const owner = `slicer-selection:group:${tag}:${Math.random()}`
+      ledger.set('controls', owner, bytes)
+      let held = true
+      return { release: () => { if (!held) return; held = false; ledger.release('controls', owner) } }
+    }
+    const bytesA = retainedBytes(model('Product A'))
+    const bytesB = retainedBytes(model('Product B'))
+    const holdA = admit('a', bytesA)!
+    const holdB = admit('b', bytesB)!
+    retained.retain(slicerRetainedGroupKey('Product', 'sheetA'), holdA)
+    retained.retain(slicerRetainedGroupKey('Product', 'sheetB'), holdB)
+    // Both sheet copies stay reachable, so both charges stay accounted.
+    expect(retained.size).toBe(2)
+    expect(accounted()).toBe(bytesA + bytesB)
+    retained.evict(slicerRetainedGroupKey('Product', 'sheetA'))
+    expect(retained.size).toBe(1)
+    expect(accounted()).toBe(bytesB)
+    retained.clear()
+    expect(accounted()).toBe(0)
   })
 
   it('releasing twice does not refund twice', () => {
