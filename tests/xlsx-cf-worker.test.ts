@@ -93,6 +93,13 @@ function versionedSrc(cells: { row: number; col: number; value: CfLiteral }[], r
 const stamped = (rules: CfSheetRules, gen = 1, extra: Partial<CfStamp> = {}): CfStamp =>
   stamp(gen, { ...extra, cfGen: cfRulesVersion(rules) })
 
+/** Expected retained bytes of one ready cache entry under single-charge
+ * accounting: admitted scope/stamp metadata plus the walked states (with
+ * framing and diagnostics, without shared definitions). Mirrors the
+ * production split instead of hardcoding sizes. */
+const entryBytesFor = (sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp, result: CfReadResult): number =>
+  entryMetaBytes(sheetId, rects, stamp) + measurePayloadBytes({ ...result, definitions: [] }, () => true)!
+
 describe('CF reply estimator', () => {
   it('measures a synthetic 2048 B payload exactly', () => {
     const def = { id: 'd0', version: 1, properties: { a: 'x' }, writes: ['a'] }
@@ -596,9 +603,10 @@ describe('CF remote cache (viewerRemoteCf)', () => {
     expect(a.state.state).toBe('ready')
     expect(b.state.state).toBe('ready')
     expect(a.state.result).toBe(b.state.result)
-    expect(host.releasedReplies).toHaveLength(0)
+    // The reply charge settles at publish; dropping releases the components.
+    expect(host.releasedReplies).toHaveLength(1)
     a.release()
-    expect(host.releasedReplies).toHaveLength(0)
+    expect(host.releasedReplies).toHaveLength(1)
     b.release()
     cache.invalidate(SHEET)
     await flush()
@@ -627,13 +635,13 @@ describe('CF remote cache (viewerRemoteCf)', () => {
       await flush()
       expect(next.state.state).toBe('ready')
       expect(next.state.result).not.toBe(held.state.result)
-      // Old version stays charged while its consumer holds it...
-      expect(host.releasedReplies).toHaveLength(0)
+      // Each reply settles at its own publish; drops release components.
+      expect(host.releasedReplies).toHaveLength(2)
       held.release()
       // ...then releases exactly once after the last release + invalidation.
       cache.invalidate(SHEET)
       await flush()
-      expect(host.releasedReplies).toHaveLength(1)
+      expect(host.releasedReplies).toHaveLength(2)
       next.release()
       cache.invalidate(SHEET)
       await flush()
@@ -655,12 +663,12 @@ describe('CF remote cache (viewerRemoteCf)', () => {
     expect(host.requests).toHaveLength(2)
     // Both versions charged while both are held.
     expect(cache.retainedBytes).toBeGreaterThan(0)
-    expect(host.releasedReplies).toHaveLength(0)
+    expect(host.releasedReplies).toHaveLength(2)
     old.release()
     cache.invalidate(SHEET)
     await flush()
-    // Old entry detached on replacement; released exactly once now.
-    expect(host.releasedReplies).toHaveLength(1)
+    // Old entry detached on replacement; components released, no new settle.
+    expect(host.releasedReplies).toHaveLength(2)
     fresh.release()
     cache.invalidate(SHEET)
     await flush()
@@ -671,33 +679,43 @@ describe('CF remote cache (viewerRemoteCf)', () => {
 
   it('evicts the eldest entry exactly once at the budget edge', async () => {
     const host = testHost()
-    const cache = new RemoteCfCache(host, 2000)
+    // Single-charge budget: one entry (metadata + walked states) plus the
+    // shared definitions, with too little headroom for a second entry. The
+    // shared array is counted once no matter how many scopes use it.
+    const probe = wireResult()
+    const oneEntry = entryBytesFor(SHEET, [rect(0, 0)], cfStamp(1), probe)
+    const defsBytes = measurePayloadBytes(probe.definitions, () => true)!
+    const cache = new RemoteCfCache(host, oneEntry + defsBytes + 100)
     const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
     await flush()
     expect(a.state.state).toBe('ready')
-    expect(cache.retainedBytes).toBe(1024 + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1)))
+    expect(cache.retainedBytes).toBe(oneEntry + defsBytes)
     a.release()
     // Released but still cached: a second consumer reuses it without a request.
     const a2 = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
     await flush()
     expect(host.requests).toHaveLength(1)
     expect(a2.state.state).toBe('ready')
+    const sharedDefs = a2.state.result!.definitions
     a2.release()
-    // A new scope evicts the eldest unreferenced entry, releasing once.
+    // A new scope evicts the eldest unreferenced entry; the shared
+    // definitions survive the eviction (new consumer of the same version).
     const b = cache.acquire(SHEET, [rect(10, 10)], cfStamp(1))
     await flush()
     expect(b.state.state).toBe('ready')
-    expect(host.releasedReplies).toHaveLength(1)
-    expect(cache.retainedBytes).toBe(1024 + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1)))
+    expect(b.state.result!.definitions).toBe(sharedDefs)
+    expect(cache.retainedBytes).toBe(oneEntry + defsBytes)
+    expect(host.releasedReplies).toHaveLength(2)
     // While everything is pinned, a new scope fails closed instead of
     // evicting live data or exceeding the budget (its reply still released).
     const c = cache.acquire(SHEET, [rect(20, 20)], cfStamp(1))
     await flush()
     expect(c.state.state).toBe('failed')
     expect(c.state.diagnostics[0]!.feature).toBe('cf-cache-budget')
-    // The withheld entry stays failed with its admitted metadata counted.
-    expect(cache.retainedBytes).toBe(1024 + 2 * entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1)))
-    expect(host.releasedReplies).toHaveLength(2)
+    // The withheld entry keeps its admitted metadata; the shared version
+    // stays charged exactly once for the live entry.
+    expect(cache.retainedBytes).toBe(oneEntry + defsBytes + entryMetaBytes(SHEET, [rect(20, 20)], cfStamp(1)))
+    expect(host.releasedReplies).toHaveLength(3)
     b.release()
     c.release()
     cache.close()
@@ -1213,20 +1231,24 @@ describe('CF fix round 1 (review-t7-r1)', () => {
     const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
     await flush()
     expect(held.state.state).toBe('ready')
-    // Reply bytes plus the admitted entry metadata (key, scope, stamp).
-    const one = 1024 + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1))
-    expect(cache.retainedBytes).toBe(one)
+    // Single charge: entry metadata plus the walked states; the shared
+    // definitions live once in the registry, not per entry.
+    const probe = wireResult()
+    const one = entryBytesFor(SHEET, [rect(0, 0)], cfStamp(1), probe)
+    const defs = measurePayloadBytes(probe.definitions, () => true)!
+    expect(cache.retainedBytes).toBe(one + defs)
     const fresh = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { cfGen: 2 }))
     await flush()
     expect(fresh.state.state).toBe('ready')
-    // Both versions charged while both are held (old detached but pinned).
-    expect(cache.retainedBytes).toBe(2 * one)
-    expect(host.releasedReplies).toHaveLength(0)
+    // Both versions charged while both are held; the shared version counted once.
+    expect(fresh.state.result!.definitions).toBe(held.state.result!.definitions)
+    expect(cache.retainedBytes).toBe(2 * one + defs)
+    expect(host.releasedReplies).toHaveLength(2)
     held.release()
     cache.invalidate(SHEET)
     await flush()
-    expect(host.releasedReplies).toHaveLength(1)
-    expect(cache.retainedBytes).toBe(one)
+    expect(cache.retainedBytes).toBe(one + defs)
+    expect(host.releasedReplies).toHaveLength(2)
     fresh.release()
     cache.invalidate(SHEET)
     await flush()
@@ -1238,8 +1260,12 @@ describe('CF fix round 1 (review-t7-r1)', () => {
   it('F6: the pinned entry cap refuses closed instead of growing without bound', async () => {
     // Every entry pinned by a live consumer counts toward the cap: once 64
     // entries are live, a new scope fails closed without sending a request.
+    // The shared definitions are counted once no matter how many scopes use them.
     const host = readyHost()
-    const cache = new RemoteCfCache(host, 64 * (1024 + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1))) + (1 << 20))
+    const probe = wireResult()
+    const one = entryBytesFor(SHEET, [rect(0, 0)], cfStamp(1), probe)
+    const defs = measurePayloadBytes(probe.definitions, () => true)!
+    const cache = new RemoteCfCache(host, 64 * one + defs + (1 << 20))
     const held: { release(): void }[] = []
     for (let i = 0; i < 64; i++) {
       const h = cache.acquire(SHEET, [rect(i, i)], cfStamp(1))
@@ -1247,7 +1273,10 @@ describe('CF fix round 1 (review-t7-r1)', () => {
     }
     await flush()
     await flush()
-    expect(host.releasedReplies).toHaveLength(0)
+    // One settle per publish; drops release components without re-settling.
+    expect(host.releasedReplies).toHaveLength(64)
+    expect(cache.retainedBytes).toBe(64 * one + defs)
+    expect(cache.sharedDefinitionVersions).toBe(1)
     const extra = cache.acquire(SHEET, [rect(1000, 1000)], cfStamp(1))
     await flush()
     expect(extra.state.state).toBe('failed')
@@ -1258,6 +1287,7 @@ describe('CF fix round 1 (review-t7-r1)', () => {
     await flush()
     expect(host.releasedReplies).toHaveLength(64)
     expect(cache.retainedBytes).toBe(0)
+    expect(cache.sharedDefinitionVersions).toBe(0)
     cache.close()
   })
 
@@ -1269,8 +1299,9 @@ describe('CF fix round 1 (review-t7-r1)', () => {
     expect(held.state.state).toBe('ready')
     cache.close()
     // The held preparation stays charged across close; no new reads start.
+    // (The reply settled at publish; the retained states keep their charge.)
     expect(cache.retainedBytes).toBeGreaterThan(0)
-    expect(host.releasedReplies).toHaveLength(0)
+    expect(host.releasedReplies).toHaveLength(1)
     // New consumers after close get nothing and start no requests.
     const after = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
     expect(after.state.state).toBe('waiting')
@@ -1281,23 +1312,28 @@ describe('CF fix round 1 (review-t7-r1)', () => {
   })
 
   it('F6: version replacement under a byte cap fails closed with pinned charged', async () => {
-    // A tight budget that fits one preparation but not two: replacing the
-    // version withholds the new one while the pinned old one stays charged.
+    // A tight budget that fits one preparation plus the shared definitions
+    // but not a second states payload: replacing the version withholds the
+    // new one while the pinned old one stays charged (shared defs once).
     const host = readyHost()
-    const one = 1024 + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1))
-    const cache = new RemoteCfCache(host, one + 512)
+    const probe = wireResult()
+    const statesBytes = measurePayloadBytes({ ...probe, definitions: [] }, () => true)!
+    const meta = entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1))
+    const defsBytes = measurePayloadBytes(probe.definitions, () => true)!
+    const one = meta + statesBytes
+    const cache = new RemoteCfCache(host, one + defsBytes + meta + 10)
     const old = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
     await flush()
     expect(old.state.state).toBe('ready')
+    expect(cache.retainedBytes).toBe(one + defsBytes)
     const next = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { cfGen: 2 }))
     await flush()
     expect(next.state.state).toBe('failed')
     expect(next.state.diagnostics[0]).toMatchObject({ feature: 'cf-cache-budget' })
-    // The withheld new reply released at once; the pinned old version is
-    // still charged and releasable exactly once.
-    expect(host.releasedReplies).toHaveLength(1)
-    // The withheld entry stays failed with its admitted metadata counted.
-    expect(cache.retainedBytes).toBe(one + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1, { cfGen: 2 })))
+    // The withheld reply released at once; the shared version stays charged
+    // exactly once for the pinned old entry, plus the new entry's metadata.
+    expect(host.releasedReplies).toHaveLength(2)
+    expect(cache.retainedBytes).toBe(one + defsBytes + meta)
     old.release()
     next.release()
     cache.invalidate(SHEET)
@@ -2084,13 +2120,15 @@ describe('CF fix round 3 (review-t7-r3)', () => {
     expect(a.state.result!.definitions).toBe(b.state.result!.definitions)
     expect(Object.isFrozen(a.state.result!.definitions)).toBe(true)
     expect(cache.sharedDefinitionVersions).toBe(1)
+    // Each publish settles its reply at once; drops only release components.
+    expect(host.releasedReplies).toHaveLength(2)
     // Drop the first scope: the shared array survives for the second.
     a.release()
     cache.invalidate(SHEET, [rect(0, 0)])
     await flush()
     expect(cache.sharedDefinitionVersions).toBe(1)
     expect(cache.get(SHEET, [rect(5, 5)], cfStamp(1)).state).toBe('ready')
-    expect(host.releasedReplies).toHaveLength(1)
+    expect(host.releasedReplies).toHaveLength(2)
     // Drop the last scope: the version releases and everything settles.
     b.release()
     cache.invalidate(SHEET)
@@ -2355,8 +2393,7 @@ describe('CF fix round 4 (review-t7-r4)', () => {
     cache.close()
   })
 
-  it('R4-3: sharing admits walk scratch transiently and the registry durably', async () => {
-    // A full main ledger still serves ready entries: the walk scratch is
+  it('R4-3: sharing admits walk scratch transiently and the registry durably', async () => {    // A full main ledger still serves ready entries: the walk scratch is
     // admitted transiently (released with the walk) while the version
     // charge is retained durably; full release settles everything.
     const ledger = new Map<string | object, number>()
@@ -2413,6 +2450,218 @@ describe('CF fix round 4 (review-t7-r4)', () => {
     expect(ledger.size).toBe(0)
     expect(current).toBe(0)
     expect(cache.sharedDefinitionVersions).toBe(0)
+  })
+})
+
+describe('CF fix round 5 (review-t7-r5)', () => {
+  const identity = (sheetId = SHEET, valueGen = 1): CacheIdentity => ({ docId: 'doc', sheetId, valueGen, fontGen: 0, viewGen: 0 })
+  const cfStamp = (gen = 1, extra: Partial<CfReadStamp> = {}): CfReadStamp => ({
+    owner: 'owner', sheetId: SHEET, workbookValueGen: gen, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1, ...extra,
+  })
+  const wireResult = (over: Partial<CfReadResult> = {}): CfReadResult => ({
+    sheetId: SHEET, stamp: cfStamp(1), kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid' } }],
+    definitions: [{ id: 'rule-0', version: 7, properties: { 'fill.pattern': 'solid' }, writes: ['fill'] }],
+    definitionsVersion: 7, diagnostics: [], ...over,
+  })
+  const cfReply = (result: CfReadResult, bytes: number, requestId = 'r1', owner: CacheIdentity = identity()): WorkerReply<'read'> => ({
+    commandKind: 'read', requestId, owner, diagnostics: [], replyBytes: bytes, kind: 'complete',
+    result: { kind: 'read', result: { op: 'conditionalFormatting', result } },
+  } as WorkerReply<'read'>)
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  /** Cache host with a ledger-backed main-ledger admission, mirroring the
+   * production wiring (layout pool, per-owner release). */
+  function grantHost(budgetBytes = 1 << 20) {
+    const granted = new Map<string, number>()
+    const ledger = new Map<string | object, number>()
+    const releasedReplies: WorkerReply<'read'>[] = []
+    let n = 0
+    return {
+      granted, ledger, releasedReplies,
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: (requestId: string) => { granted.set(requestId, budgetBytes); ledger.set(`grant:${requestId}`, budgetBytes); return budgetBytes },
+      releaseGrant: (requestId: string) => { granted.delete(requestId); ledger.delete(`grant:${requestId}`) },
+      request: async (command: CommandOf<'read'>) => {
+        const q = command.query as { rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
+        const result = wireResult({ stamp: { ...q.stamp } })
+        const reply = cfReply(result, 1024, command.requestId, command.owner as CacheIdentity)
+        granted.delete(command.requestId)
+        ledger.delete(`grant:${command.requestId}`)
+        ledger.set(reply, 1024)
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { releasedReplies.push(reply); ledger.delete(reply) },
+      admitEntry: (key: string, bytes: number) => { ledger.set(`entry:${key}`, bytes); return () => { ledger.delete(`entry:${key}`) } },
+      changed: () => {},
+    }
+  }
+  it('R5-1: a failed outgoing adoption publishes no share entry', async () => {
+    // Commit ordering: the table entry is created only after the outgoing
+    // adopt succeeds. Refusing exactly the outgoing adoption withholds the
+    // result with nothing retained and no share entry — while an unconditional
+    // commit would have leaked a charged entry on this failed request.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'solid' }, ['fill'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
+    const backing = createCfMemory({})
+    let adoptedResult = 0
+    const refusing = {
+      get currentBytes() { return backing.currentBytes },
+      get constructionBytes() { return backing.constructionBytes },
+      get retainedBytes() { return backing.retainedBytes },
+      get peakBytes() { return backing.peakBytes },
+      get closed() { return backing.closed },
+      close() { backing.close() },
+      reserve: (bytes: number) => {
+        const hold = backing.reserve(bytes)
+        if (hold.kind !== 'reserved') return hold
+        const wrapped = {
+          kind: 'reserved' as const,
+          get bytes() { return hold.bytes },
+          grow: (next: number) => hold.grow(next),
+          adopt: (<T>(value: T, retainedBytes?: number) => {
+            if (value !== null && typeof value === 'object' && 'states' in value && 'definitions' in value) {
+              adoptedResult++
+              throw new Error('outgoing adoption refused')
+            }
+            return hold.adopt(value, retainedBytes)
+          }) as import('../src/xlsx/cf/limits').CfReservation['adopt'],
+          release: () => hold.release(),
+        }
+        return wrapped
+      },
+    } as unknown as import('../src/xlsx/cf/limits').CfMemory
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), rules, refusing, { budget: frozenBudget })
+    expect(adoptedResult).toBe(1)
+    expect(out.kind).toBe('unresolved')
+    expect(out).toMatchObject({ reason: 'cf-resource-limit' })
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+    expect(backing.currentBytes).toBe(0)
+    releaseSharedCfDefinitions(rules)
+  })
+
+  it('R5-1: a tight budget withholds cleanly and retries stay clean', async () => {
+    // An account far below the working set withholds before any share can
+    // exist — repeatedly, with nothing retained and no table entry.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.fg': 'FF00FF00' }, ['fill'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(1) }], { stamp: st })
+    const memory = createCfMemory({ limitBytes: 8000 })
+    for (let i = 0; i < 3; i++) {
+      const out = await prepareCfRemote(cfRequest([rect(0, 0)], st, 100000), SHEET, mkSource(), rules, memory, { budget: frozenBudget })
+      expect(out.kind).toBe('unresolved')
+      expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+      expect(memory.currentBytes).toBe(0)
+    }
+    releaseSharedCfDefinitions(rules)
+  })
+
+  it('R5-1: a failed handoff rolls back its newly committed share', async () => {
+    // Refusal after the shared lease is reserved: when the outgoing handoff
+    // throws, the adopted lease unwinds and exactly the entry this call
+    // committed is released — no newly retained cache owner on a failed
+    // request, and a rechecked winner is never touched.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'solid' }, ['fill'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
+    const memory = createCfMemory({})
+    await expect(prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), rules, memory, {
+      budget: frozenBudget,
+      retainOutgoing: () => { throw new Error('drain failed') },
+    })).rejects.toThrow('drain failed')
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+    expect(memory.currentBytes).toBe(0)
+    releaseSharedCfDefinitions(rules)
+  })
+
+  it('R5-note: shared definitions are charged once across viewport consumers', async () => {
+    // Single-charge accounting: two scopes with the same definitions version
+    // hold one registry charge plus one states charge each — the second scope
+    // adds no new definitions charge. Dropping both scopes settles everything.
+    const host = grantHost()
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const probe = wireResult()
+    const statesBytes = measurePayloadBytes({ ...probe, definitions: [] }, () => true)!
+    const meta = entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1))
+    const defsBytes = measurePayloadBytes(probe.definitions, () => true)!
+    const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    const b = cache.acquire(SHEET, [rect(5, 5)], cfStamp(1))
+    await flush()
+    await flush()
+    expect(a.state.state).toBe('ready')
+    expect(b.state.state).toBe('ready')
+    expect(a.state.result!.definitions).toBe(b.state.result!.definitions)
+    // Two states charges, one shared definitions charge, two metadata charges.
+    expect(cache.retainedBytes).toBe(2 * (meta + statesBytes) + defsBytes)
+    expect(cache.sharedDefinitionVersions).toBe(1)
+    a.release()
+    cache.invalidate(SHEET, [rect(0, 0)])
+    await flush()
+    expect(cache.sharedDefinitionVersions).toBe(1)
+    expect(cache.retainedBytes).toBe(meta + statesBytes + defsBytes)
+    b.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(cache.sharedDefinitionVersions).toBe(0)
+    expect(cache.retainedBytes).toBe(0)
+    expect(host.ledger.size).toBe(0)
+    cache.close()
+  })
+
+  it('R5-note: unmeasurable components fall back to the full reply charge', async () => {
+    // If the split walk cannot be admitted, the entry keeps the transport's
+    // full reply charge instead of publishing partially owned state: still
+    // fail-closed, never double-counted.
+    const granted = new Map<string, number>()
+    const ledger = new Map<string | object, number>()
+    const releasedReplies: WorkerReply<'read'>[] = []
+    const requests: CommandOf<'read'>[] = []
+    let n = 0
+    const host = {
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: (requestId: string) => { granted.set(requestId, 1 << 20); return 1 << 20 },
+      releaseGrant: (requestId: string) => { granted.delete(requestId) },
+      request: async (command: CommandOf<'read'>) => {
+        requests.push(command)
+        const q = command.query as { stamp: CfReadStamp }
+        const result = wireResult({ stamp: { ...q.stamp } })
+        const reply = cfReply(result, 1024, command.requestId, command.owner as CacheIdentity)
+        ledger.set(reply, 1024)
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { releasedReplies.push(reply); ledger.delete(reply) },
+      // Refuse every walk scratch chunk: the split measurement cannot run.
+      admitEntry: (key: string, bytes: number) => {
+        if (key.startsWith('cf-walk-')) return null
+        ledger.set(`entry:${key}`, bytes)
+        return () => { ledger.delete(`entry:${key}`) }
+      },
+      changed: () => {},
+    }
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    await flush()
+    // Ready with the full reply charge: no sharing, no split.
+    expect(held.state.state).toBe('ready')
+    expect(held.state.result!.definitions).not.toBeUndefined()
+    expect(cache.sharedDefinitionVersions).toBe(0)
+    expect(cache.retainedBytes).toBe(1024 + entryMetaBytes(SHEET, [rect(0, 0)], cfStamp(1)))
+    held.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(cache.retainedBytes).toBe(0)
+    expect(ledger.size).toBe(0)
+    cache.close()
   })
 })
 

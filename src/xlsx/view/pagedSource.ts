@@ -2078,25 +2078,17 @@ export async function prepareCfRemote(
     const omitted = fullWithEnvelope > grantBytes ? [] : diagnostics
     // Publish the share only after all admission succeeds — never on a
     // refusal or withhold path, and only with its own charged lease (no
-    // unowned table entries). The commit rechecks the table first: a
-    // concurrent preparation may have committed while this one built, and
-    // recheck plus commit run synchronously with no await between, so the
-    // second publisher reuses the winner instead of overwriting (and
+    // unowned table entries). The recheck below runs before any commit and
+    // the commit runs only after the outgoing adopt: a concurrent
+    // preparation may have committed while this one built, and
+    // recheck-plus-commit plus adopt are synchronous with no await between,
+    // so the second publisher reuses the winner instead of overwriting (and
     // leaking) its lease. Skipping the commit on pressure is fail-soft —
     // sharing is an optimization; the adopted result stays fully owned.
     // Winner and local build have identical content, so the walked sizes
     // checked above hold for either array.
     const live = peekSharedCfDefinitions(rules, version)
-    let published = definitions
-    if (live !== undefined) {
-      published = live
-    } else {
-      const owned = limitsModule.admitSharedCopy(memory, definitions)
-      if (owned !== undefined) {
-        commitSharedCfDefinitions(rules, version, owned.value, owned)
-        published = owned.value
-      }
-    }
+    const published = live ?? definitions
     const result: CfReadResult = {
       sheetId, stamp: liveStamp, kind: 'ready', states, definitions: published,
       definitionsVersion: version, diagnostics: omitted,
@@ -2117,12 +2109,28 @@ export async function prepareCfRemote(
     }
     // Adopting moves construction to retained; the finally below becomes a
     // no-op for the working hold while the outgoing lease stays live.
+    // The table commit lands only now that the outgoing admission succeeded;
+    // a failed commit simply skips sharing and returns the adopted result.
+    let committedHere = false
+    if (live === undefined) {
+      const owned = limitsModule.admitSharedCopy(memory, published)
+      if (owned !== undefined) {
+        commitSharedCfDefinitions(rules, version, owned.value, owned)
+        committedHere = true
+      }
+    }
     if (options?.retainOutgoing) {
       const release = () => { try { adopted.release() } catch { /* release-only path */ } }
       try {
         options.retainOutgoing(release)
       } catch (error) {
         try { adopted.release() } catch { /* release-only path */ }
+        // A failed handoff must not leave a newly retained cache owner
+        // behind: roll back exactly the entry this call committed (a
+        // rechecked winner belongs to someone else and stays).
+        if (committedHere) {
+          try { releaseSharedCfDefinitions(rules) } catch { /* release-only path */ }
+        }
         throw error
       }
     } else {

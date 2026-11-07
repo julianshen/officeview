@@ -65,9 +65,14 @@ interface Entry {
   refs: number
   detached: boolean
   dropped: boolean
-  /** Admitted metadata bytes (key, scope, stamp, shell); the ledger release. */
+  /** Admitted metadata bytes (key, scope, stamp, shell); the ledger release
+   * sits beside them. */
   meta: number
   releaseEntry?: () => void
+  /** Admitted per-entry states charge (framing, states and diagnostics, but
+   * not shared definitions): released with the entry. Absent on the legacy
+   * path, where the full reply charge is kept instead. */
+  releaseStates?: () => void
   /** Adopted version whose shared definitions this entry reads; the registry
    * holds the array while any entry references it. */
   sharedVersion?: number
@@ -150,7 +155,7 @@ export class RemoteCfCache {
    * admission per version (bounded by live versions); per-entry reply
    * charges stay conservative on top, so no accounting path under-counts.
    * Dropping the last referencing entry releases the version. */
-  private readonly sharedDefs = new Map<number, { definitions: readonly CfSharedDefinition[]; refs: number; release: () => void }>()
+  private readonly sharedDefs = new Map<number, { definitions: readonly CfSharedDefinition[]; refs: number; bytes: number; release: () => void }>()
   private closed = false
   private notifyScheduled = false
   private readonly pendingNotifies = new Map<string, { rects: SourceRect[]; reason: 'updated' | 'evicted' | 'status' }>()
@@ -250,7 +255,11 @@ export class RemoteCfCache {
   }
 
   get retainedEntries(): number { return [...this.entries.values()].filter(e => e.state === 'ready').length + [...this.pinned].filter(e => e.state === 'ready').length }
-  get retainedBytes(): number { return [...this.entries.values()].reduce((n, e) => n + e.bytes, 0) + [...this.pinned].reduce((n, e) => n + e.bytes, 0) }
+  get retainedBytes(): number {
+    let total = [...this.entries.values()].reduce((n, e) => n + e.bytes, 0) + [...this.pinned].reduce((n, e) => n + e.bytes, 0)
+    for (const shared of this.sharedDefs.values()) total += shared.bytes
+    return total
+  }
   /** Test seam: live version-keyed shared definition entries. */
   get sharedDefinitionVersions(): number { return this.sharedDefs.size }
 
@@ -343,53 +352,58 @@ export class RemoteCfCache {
     return Object.freeze([...definitions])
   }
 
-  /** Shares the reply's definitions by version: returns the shared array
-   * (adopting it on first use with a ledger admission), or undefined to
-   * keep the entry's own array when sharing is unavailable. The traversal
-   * workspace is admitted incrementally on the main ledger as it grows
-   * (released with the walk), and the retained registry ownership is
-   * admitted before publication — the walk never runs on an unadmitted
-   * account, even though the reply's own charge already covers the payload.
-   * Version-keyed skips are fail-soft: the entry keeps its own array. */
+  /** Admitted walk of one payload subgraph: each traversal chunk is admitted
+   * on the main ledger before it grows and released with the walk, so the
+   * walk never runs on unadmitted workspace. Returns undefined when the walk
+   * cannot be admitted or exceeds its cap. */
   private walkSeq = 0
-  private shareDefinitions(version: number, definitions: readonly CfSharedDefinition[], replyBytes: number): readonly CfSharedDefinition[] | undefined {
+  private measuredWalk(value: unknown, cap: number, label: string): number | undefined {
+    let admitted = 0
+    const releases: Array<() => void> = []
+    try {
+      return measurePayloadBytes(value, extra => {
+        const next = admitted + extra
+        if (next > cap) return false
+        const hold = this.host.admitEntry(`${label}:${this.walkSeq++}:${admitted}`, extra)
+        if (!hold) return false
+        releases.push(hold)
+        admitted = next
+        return true
+      }) ?? undefined
+    } finally {
+      for (const release of releases.splice(0)) {
+        try { release() } catch { /* release-only path */ }
+      }
+    }
+  }
+
+  /** Component sizes of a ready payload for single-charge publication: the
+   * states (plus framing and diagnostics) charged per entry, and the
+   * definitions charged once per version in the registry. Walks are capped
+   * at the reply they arrived in (floored at the walker's first chunk so
+   * small shared payloads still share). */
+  private measuredSplit(result: CfReadResult, replyBytes: number): { statesBytes: number; defsBytes: number } | undefined {
+    const cap = Math.max(replyBytes, MEASURE_FIRST_CHUNK_ENTRIES * MEASURE_ENTRY_BYTES)
+    const statesBytes = this.measuredWalk({ ...result, definitions: [] }, cap, 'cf-walk-states')
+    if (statesBytes === undefined) return undefined
+    const defsBytes = this.measuredWalk(result.definitions, cap, 'cf-defs-walk')
+    if (defsBytes === undefined) return undefined
+    return { statesBytes, defsBytes }
+  }
+
+  /** Shares the reply's definitions by version: returns the shared array
+   * (adopting it on first use with a ledger admission), or undefined when
+   * sharing is unavailable. Callers unshare on any later failure. */
+  private shareDefinitions(version: number, definitions: readonly CfSharedDefinition[], defsBytes: number): readonly CfSharedDefinition[] | undefined {
     const existing = this.sharedDefs.get(version)
     if (existing) {
       existing.refs++
       return existing.definitions
     }
-    // Total walk workspace stays within the reply the definitions arrived
-    // in, with at least the walker's first chunk admitted: the definitions
-    // are a sub-graph of a measured reply.
-    const cap = Math.max(replyBytes, MEASURE_FIRST_CHUNK_ENTRIES * MEASURE_ENTRY_BYTES)
-    const walkId = this.walkSeq++
-    const releases: Array<() => void> = []
-    let admitted = 0
-    const releaseWalk = () => {
-      for (const release of releases.splice(0)) {
-        try { release() } catch { /* release-only path */ }
-      }
-    }
-    const walked = (() => {
-      try {
-        return measurePayloadBytes(definitions, extra => {
-          const next = admitted + extra
-          if (next > cap) return false
-          const hold = this.host.admitEntry(`cf-defs-walk:${version}:${walkId}:${admitted}`, extra)
-          if (!hold) return false
-          releases.push(hold)
-          admitted = next
-          return true
-        })
-      } finally {
-        releaseWalk()
-      }
-    })()
-    if (walked === undefined) return undefined
-    const release = this.host.admitEntry(`cf-defs:${version}`, walked)
+    const release = this.host.admitEntry(`cf-defs:${version}`, defsBytes)
     if (!release) return undefined
     const shared = RemoteCfCache.freezeShared(definitions)
-    this.sharedDefs.set(version, { definitions: shared, refs: 1, release })
+    this.sharedDefs.set(version, { definitions: shared, refs: 1, bytes: defsBytes, release })
     return shared
   }
 
@@ -413,6 +427,10 @@ export class RemoteCfCache {
     entry.dropped = true
     this.pinned.delete(entry)
     this.unshare(entry)
+    if (entry.releaseStates) {
+      try { entry.releaseStates() } catch { /* release-only path */ }
+      entry.releaseStates = undefined
+    }
     entry.seq++
     entry.controller?.abort()
     entry.controller = undefined
@@ -431,6 +449,10 @@ export class RemoteCfCache {
     entry.controller?.abort()
     entry.controller = undefined
     this.unshare(entry)
+    if (entry.releaseStates) {
+      try { entry.releaseStates() } catch { /* release-only path */ }
+      entry.releaseStates = undefined
+    }
     if (entry.releaseReply) {
       const release = entry.releaseReply
       entry.releaseReply = undefined
@@ -643,29 +665,71 @@ export class RemoteCfCache {
         this.deferChanged(sheetId, entry.rects, 'status')
         return
       }
-      // Ready entries carry their reply plus the admitted entry metadata;
-      // makeRoom evicts against that same total.
+      // Single-charge publication: independent states charged per entry,
+      // shared definitions charged once per version in the registry — never
+      // a full-reply charge on top of a shared charge. Component sizes are
+      // measured with admitted walk scratch (released right after); the
+      // registry and states charges are admitted before publication. If any
+      // part cannot be measured or admitted, the entry keeps its full reply
+      // charge instead (legacy fallback that is still fail-closed, never
+      // double-counted).
       const replyBytes = out.replyBytes ?? 0
-      const bytes = replyBytes + entry.meta
-      if (!Number.isSafeInteger(bytes) || !this.makeRoom(entry, bytes)) {
-        releaseOnce()
-        entry.state = 'failed'
-        entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting data exceeds the main-thread cache budget.' }]
-        entry.gen++
-        this.deferChanged(sheetId, entry.rects, 'status')
-        return
+      const split = this.measuredSplit(result, replyBytes)
+      let shared: readonly CfSharedDefinition[] | undefined
+      if (split !== undefined) {
+        shared = this.shareDefinitions(result.definitionsVersion, result.definitions, split.defsBytes)
+        if (shared !== undefined) entry.sharedVersion = result.definitionsVersion
       }
-      entry.reply = out
-      entry.releaseReply = releaseOnce
-      // Version-keyed shared ownership: consumers with the same definitions
-      // version read one frozen array (leased once across viewports) while
-      // their states stay independent per entry. The entry keeps its own
-      // reply charge on top, so sharing never under-counts.
-      if (entry.sharedVersion !== undefined) this.unshare(entry)
-      const shared = this.shareDefinitions(result.definitionsVersion, result.definitions, out.replyBytes ?? 0)
-      entry.result = shared === undefined ? result : { ...result, definitions: shared }
-      if (shared !== undefined) entry.sharedVersion = result.definitionsVersion
-      entry.bytes = bytes
+      let releaseStates: (() => void) | undefined
+      if (shared !== undefined && split !== undefined) {
+        const admitted = this.host.admitEntry(`cf-states:${requestId}`, split.statesBytes)
+        if (admitted === null) {
+          this.unshare(entry)
+          shared = undefined
+        } else {
+          releaseStates = admitted
+        }
+      }
+      if (shared === undefined || releaseStates === undefined || split === undefined) {
+        // Legacy fallback: keep the transport's full reply charge.
+        entry.sharedVersion = undefined
+        const bytes = replyBytes + entry.meta
+        if (!Number.isSafeInteger(bytes) || !this.makeRoom(entry, bytes)) {
+          releaseOnce()
+          entry.state = 'failed'
+          entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting data exceeds the main-thread cache budget.' }]
+          entry.gen++
+          this.deferChanged(sheetId, entry.rects, 'status')
+          return
+        }
+        entry.reply = out
+        entry.releaseReply = releaseOnce
+        entry.result = result
+        entry.bytes = bytes
+    } else {
+      // Split ownership: settle the reply now that its components carry
+      // the charge, then publish with per-entry states plus the shared
+      // version. makeRoom sees the registry charge (admitted above) and
+      // judges the entry on its own new total.
+      const statesBytes = split.statesBytes
+      const needed = entry.meta + statesBytes
+      if (!Number.isSafeInteger(needed) || !this.makeRoom(entry, needed)) {
+          this.unshare(entry)
+          try { releaseStates() } catch { /* release-only path */ }
+          releaseOnce()
+          entry.state = 'failed'
+          entry.diagnostics = [{ kind: 'resource-limit', feature: 'cf-cache-budget', message: 'Conditional formatting data exceeds the main-thread cache budget.' }]
+          entry.gen++
+          this.deferChanged(sheetId, entry.rects, 'status')
+          return
+        }
+        this.host.release(out)
+        entry.reply = undefined
+        entry.releaseReply = undefined
+        entry.releaseStates = releaseStates
+        entry.result = { ...result, definitions: shared }
+        entry.bytes = needed
+      }
       entry.diagnostics = [...result.diagnostics]
       entry.pendingSheetIds = undefined
       entry.state = 'ready'
