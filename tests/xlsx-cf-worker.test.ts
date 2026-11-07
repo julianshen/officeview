@@ -1998,7 +1998,8 @@ describe('CF fix round 3 (review-t7-r3)', () => {
     }
   })
 
-  it('R3-2: the session walk is admitted on the shared account', async () => {    // The outgoing measure's traversal workspace must be admitted on the
+  it('R3-2: the session walk is admitted on the shared account', async () => {
+    // The outgoing measure's traversal workspace must be admitted on the
     // shared account, not merely capped: the walk reserves and grows there,
     // and a full pool refuses the walk itself instead of allocating
     // visited-set/stack storage first and failing only at the charge.
@@ -2157,6 +2158,261 @@ describe('CF fix round 3 (review-t7-r3)', () => {
     await flush()
     cache.close()
     expect(ledger.size).toBe(0)
+  })
+})
+
+describe('CF fix round 4 (review-t7-r4)', () => {
+  const identity = (sheetId = SHEET, valueGen = 1): CacheIdentity => ({ docId: 'doc', sheetId, valueGen, fontGen: 0, viewGen: 0 })
+  const cfStamp = (gen = 1, extra: Partial<CfReadStamp> = {}): CfReadStamp => ({
+    owner: 'owner', sheetId: SHEET, workbookValueGen: gen, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1, ...extra,
+  })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  const cfReply = (result: CfReadResult, bytes: number, requestId = 'r1', owner: CacheIdentity = identity()): WorkerReply<'read'> => ({
+    commandKind: 'read', requestId, owner, diagnostics: [], replyBytes: bytes, kind: 'complete',
+    result: { kind: 'read', result: { op: 'conditionalFormatting', result } },
+  } as WorkerReply<'read'>)
+
+  it('R4-1: a refused definition reservation publishes no share entry', async () => {
+    // Probe pattern: refuse exactly the definition-sized reservation on a
+    // real account. The preparation still completes (the outgoing lease
+    // owns the result), but no share entry is published and nothing stays
+    // charged after the outgoing lease drains.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const dxf = { 'numFmt.code': 'Y'.repeat(9000) }
+    // Learn the exact shared-definitions size with a dry run: without an
+    // outbox the only retained charge afterwards is the table lease.
+    const probeRules: CfSheetRules = { diagnostics: [], rules: [rule(0, dxf, ['numFmt'])] }
+    const probeSt = stamped(probeRules)
+    const probeMem = createCfMemory({})
+    const probe = await prepareCfRemote(cfRequest([rect(0, 0)], probeSt, 8 * 1024 * 1024), SHEET,
+      fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: probeSt }), probeRules, probeMem, { budget: frozenBudget })
+    expect(probe.kind).toBe('ready')
+    const defsBytes = probeMem.currentBytes
+    expect(defsBytes).toBeGreaterThan(0)
+    releaseSharedCfDefinitions(probeRules)
+    expect(probeMem.currentBytes).toBe(0)
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { ...dxf }, ['numFmt'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
+    const memory = createCfMemory({})
+    let refusals = 0
+    const refusing = {
+      get currentBytes() { return memory.currentBytes },
+      get constructionBytes() { return memory.constructionBytes },
+      get retainedBytes() { return memory.retainedBytes },
+      get peakBytes() { return memory.peakBytes },
+      get closed() { return memory.closed },
+      close() { memory.close() },
+      reserve: (bytes: number) => {
+        if (bytes === defsBytes) { refusals++; return { kind: 'unresolved' as const, reason: 'cf-budget-exceeded' } }
+        return memory.reserve(bytes)
+      },
+    } as unknown as import('../src/xlsx/cf/limits').CfMemory
+    const releases: Array<() => void> = []
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), rules, refusing,
+      { budget: frozenBudget, retainOutgoing: release => { releases.push(release) } })
+    expect(out.kind).toBe('ready')
+    expect(releases).toHaveLength(1)
+    // Exactly the definition reservation was refused — nothing else is
+    // admitted at exactly that size on this account.
+    expect(refusals).toBe(1)
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+    releases[0]!()
+    expect(memory.currentBytes).toBe(0)
+    releaseSharedCfDefinitions(rules)
+  })
+
+  it('R4-1: shared admission fails closed at each stage without holding', async () => {
+    // Unit coverage for the three independent failure paths of the shared
+    // copy admission: refused reservation, unmeasurable walk, failed adopt.
+    const { admitSharedCopy, createCfMemory } = await import('../src/xlsx/cf/limits')
+    const value = { id: 'r', properties: { 'fill.pattern': 'solid' }, writes: ['fill'] }
+    // Success path admits and releases cleanly.
+    const roomy = createCfMemory({})
+    const lease = admitSharedCopy(roomy, value)
+    expect(lease).toBeDefined()
+    expect(roomy.currentBytes).toBeGreaterThan(0)
+    lease!.release()
+    expect(roomy.currentBytes).toBe(0)
+    // Refused reservation admits nothing.
+    const denied = createCfMemory({ limitBytes: 0 })
+    expect(admitSharedCopy(denied, value)).toBeUndefined()
+    expect(denied.currentBytes).toBe(0)
+    expect(denied.peakBytes).toBe(0)
+    // Unmeasurable walk (workspace cannot grow) admits nothing.
+    const noGrow = {
+      get currentBytes() { return 0 }, get constructionBytes() { return 0 }, get retainedBytes() { return 0 },
+      get peakBytes() { return 0 }, get closed() { return false }, close() {},
+      reserve: () => ({ kind: 'reserved' as const, bytes: 0, grow: () => false, adopt: (): never => { throw new Error('unreachable') }, release: () => {} }),
+    } as unknown as import('../src/xlsx/cf/limits').CfMemory
+    expect(admitSharedCopy(noGrow, value)).toBeUndefined()
+    // Failed adoption releases the reservation it admitted.
+    let releasedHold = false
+    const noAdopt = {
+      get currentBytes() { return 0 }, get constructionBytes() { return 0 }, get retainedBytes() { return 0 },
+      get peakBytes() { return 0 }, get closed() { return false }, close() {},
+      reserve: () => ({
+        kind: 'reserved' as const, bytes: 0, grow: () => true,
+        adopt: (): never => { throw new Error('adoption refused') },
+        release: () => { releasedHold = true },
+      }),
+    } as unknown as import('../src/xlsx/cf/limits').CfMemory
+    expect(admitSharedCopy(noAdopt, value)).toBeUndefined()
+    expect(releasedHold).toBe(true)
+  })
+
+  it('R4-2: concurrent cold publications share one owner and leak nothing', async () => {
+    // Two preparations racing past the same table miss must not overwrite
+    // each other's definition lease: the recheck publishes once, the second
+    // reuses the winner, and releasing the share settles everything.
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'solid' }, ['fill'])] }
+    const st = stamped(rules)
+    const memory = createCfMemory({})
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    let starts = 0
+    let unlock!: () => void
+    const gate = new Promise<void>(resolve => { unlock = resolve })
+    const base = fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
+    const src = {
+      ...base,
+      pages: (async function* (...args: [string, readonly never[], import('../src/xlsx/cf/limits').CfWorkBudget, AbortSignal]) {
+        starts++
+        await gate
+        yield* base.pages(...args)
+      }) as CfValueSource['pages'],
+    }
+    const ends: Array<() => void> = []
+    const call = () => prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, src, rules, memory,
+      { budget: frozenBudget, retainOutgoing: release => { ends.push(release) } })
+    const p1 = call()
+    const p2 = call()
+    while (starts < 2) await new Promise(r => setTimeout(r, 1))
+    unlock()
+    const [a, b] = await Promise.all([p1, p2])
+    expect(a.kind).toBe('ready')
+    expect(b.kind).toBe('ready')
+    if (a.kind !== 'ready' || b.kind !== 'ready') throw new Error('expected ready')
+    // One shared entry for both racers (the second reused the winner via the
+    // atomic recheck instead of committing its own lease).
+    expect(a.definitions).toBe(b.definitions)
+    expect(sharedCfDefinitionStats(rules)).toMatchObject({ hits: 1 })
+    for (const end of ends) end()
+    // Exactly one definition lease survives the drains.
+    expect(memory.currentBytes).toBeGreaterThan(0)
+    releaseSharedCfDefinitions(rules)
+    expect(memory.currentBytes).toBe(0)
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+  })
+
+  it('R4-3: the receiver walk is admitted before it traverses', async () => {
+    // Admission precedes traversal: with the walk-scratch reservation
+    // refused, the traced value is never read, yet the entry still
+    // completes ready with its own definitions (fail-soft sharing).
+    const events: string[] = []
+    const props: Record<string, unknown> = {}
+    Object.defineProperty(props, 'fill.fg', {
+      enumerable: true, configurable: true,
+      get() { events.push('walk read'); return 'green' },
+    })
+    let n = 0
+    const host = {
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: () => 1 << 20,
+      releaseGrant: () => {},
+      request: async (command: CommandOf<'read'>) => {
+        const q = command.query as { stamp: CfReadStamp }
+        const result: CfReadResult = {
+          sheetId: SHEET, stamp: { ...q.stamp }, kind: 'ready',
+          states: [{ row: 0, col: 0, properties: {} }],
+          definitions: [{ id: 'r', version: 99, properties: props as Record<string, string | number | boolean | null>, writes: ['fill'] }],
+          definitionsVersion: 99, diagnostics: [],
+        }
+        const reply = cfReply(result, 2048, command.requestId, command.owner as CacheIdentity)
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: () => {},
+      admitEntry: (key: string) => {
+        if (key.startsWith('cf-defs-walk:')) { events.push('walk scratch refused'); return null }
+        return () => {}
+      },
+      changed: () => {},
+    }
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    await flush()
+    expect(held.state.state).toBe('ready')
+    // No traversal happened: the admission refusal came first.
+    expect(events).toEqual(['walk scratch refused'])
+    expect(cache.sharedDefinitionVersions).toBe(0)
+    held.release()
+    cache.invalidate(SHEET)
+    await flush()
+    cache.close()
+  })
+
+  it('R4-3: sharing admits walk scratch transiently and the registry durably', async () => {
+    // A full main ledger still serves ready entries: the walk scratch is
+    // admitted transiently (released with the walk) while the version
+    // charge is retained durably; full release settles everything.
+    const ledger = new Map<string | object, number>()
+    let current = 0
+    let walkAdmitted = 0
+    const cap = 1 << 20
+    let n = 0
+    const props: Record<string, unknown> = {}
+    for (let i = 0; i < 64; i++) props[`k${i}`] = `v${i}`
+    const host = {
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: () => 1 << 20,
+      releaseGrant: () => {},
+      request: async (command: CommandOf<'read'>) => {
+        const q = command.query as { rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
+        const result: CfReadResult = {
+          sheetId: SHEET, stamp: { ...q.stamp }, kind: 'ready',
+          states: [{ row: 0, col: 0, properties: {} }],
+          definitions: [{ id: 'r', version: 77, properties: props as Record<string, string | number | boolean | null>, writes: ['fill'] }],
+          definitionsVersion: 77, diagnostics: [],
+        }
+        const reply = cfReply(result, 65536, command.requestId, command.owner as CacheIdentity)
+        ledger.set(reply, 65536)
+        current += 65536
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { ledger.delete(reply); current -= 65536 },
+      admitEntry: (key: string, bytes: number) => {
+        if (current + bytes > cap) return null
+        if (key.startsWith('cf-defs-walk:')) walkAdmitted += bytes
+        ledger.set(key, bytes)
+        current += bytes
+        return () => { ledger.delete(key); current -= bytes }
+      },
+      changed: () => {},
+    }
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    await flush()
+    expect(held.state.state).toBe('ready')
+    expect(cache.sharedDefinitionVersions).toBe(1)
+    // The walk scratch was admitted (then released with the walk) while the
+    // version charge stayed retained — not the other way around.
+    expect(walkAdmitted).toBeGreaterThan(0)
+    expect([...ledger.keys()].some(k => typeof k === 'string' && k.startsWith('cf-defs:77'))).toBe(true)
+    expect([...ledger.keys()].some(k => typeof k === 'string' && k.startsWith('cf-defs-walk:'))).toBe(false)
+    held.release()
+    cache.invalidate(SHEET)
+    await flush()
+    cache.close()
+    expect(ledger.size).toBe(0)
+    expect(current).toBe(0)
+    expect(cache.sharedDefinitionVersions).toBe(0)
   })
 })
 

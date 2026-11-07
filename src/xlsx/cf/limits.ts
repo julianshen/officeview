@@ -150,6 +150,24 @@ export function measureBoundedPayload(value: unknown, capBytes: number): number 
   return bytes ?? undefined
 }
 
+/** Admitted retained copy of an already-built value: measures with the
+ * traversal workspace admitted, reserves the exact walked size, and adopts.
+ * Each stage fails closed independently — unmeasurable walks, refused
+ * reservations and failed adoptions all return undefined with nothing held
+ * — so callers only publish shared ownership when the owning lease exists. */
+export function admitSharedCopy<T>(memory: CfMemory, value: T): CfLease<T> | undefined {
+  const walked = measureCfWalkedBytes(value, memory)
+  if (walked === undefined) return undefined
+  const hold = memory.reserve(walked)
+  if (hold.kind !== 'reserved') return undefined
+  try {
+    return hold.adopt(value, walked)
+  } catch {
+    try { hold.release() } catch { /* release-only path */ }
+    return undefined
+  }
+}
+
 export function createCfDiagnostics(memory: CfMemory = createCfMemory({ limitBytes: CF_LIMITS.sheetMetadataBytes })) {
   const entries: CfDiagnostic[] = []
   let hold: CfReservation | undefined, refused = false, disposed = false

@@ -345,22 +345,46 @@ export class RemoteCfCache {
 
   /** Shares the reply's definitions by version: returns the shared array
    * (adopting it on first use with a ledger admission), or undefined to
-   * keep the entry's own array when sharing is unavailable. */
+   * keep the entry's own array when sharing is unavailable. The traversal
+   * workspace is admitted incrementally on the main ledger as it grows
+   * (released with the walk), and the retained registry ownership is
+   * admitted before publication — the walk never runs on an unadmitted
+   * account, even though the reply's own charge already covers the payload.
+   * Version-keyed skips are fail-soft: the entry keeps its own array. */
+  private walkSeq = 0
   private shareDefinitions(version: number, definitions: readonly CfSharedDefinition[], replyBytes: number): readonly CfSharedDefinition[] | undefined {
     const existing = this.sharedDefs.get(version)
     if (existing) {
       existing.refs++
       return existing.definitions
     }
-    // Bound the walk by the reply the definitions arrived in: they cannot
-    // exceed it. The walker's first chunk is admitted even for tiny replies;
-    // the ledger charge that follows is the exact walked size.
+    // Total walk workspace stays within the reply the definitions arrived
+    // in, with at least the walker's first chunk admitted: the definitions
+    // are a sub-graph of a measured reply.
     const cap = Math.max(replyBytes, MEASURE_FIRST_CHUNK_ENTRIES * MEASURE_ENTRY_BYTES)
-    let workspace = 0
-    const walked = measurePayloadBytes(definitions, extra => {
-      workspace += extra
-      return workspace <= cap
-    })
+    const walkId = this.walkSeq++
+    const releases: Array<() => void> = []
+    let admitted = 0
+    const releaseWalk = () => {
+      for (const release of releases.splice(0)) {
+        try { release() } catch { /* release-only path */ }
+      }
+    }
+    const walked = (() => {
+      try {
+        return measurePayloadBytes(definitions, extra => {
+          const next = admitted + extra
+          if (next > cap) return false
+          const hold = this.host.admitEntry(`cf-defs-walk:${version}:${walkId}:${admitted}`, extra)
+          if (!hold) return false
+          releases.push(hold)
+          admitted = next
+          return true
+        })
+      } finally {
+        releaseWalk()
+      }
+    })()
     if (walked === undefined) return undefined
     const release = this.host.admitEntry(`cf-defs:${version}`, walked)
     if (!release) return undefined

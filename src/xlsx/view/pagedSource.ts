@@ -1643,15 +1643,22 @@ function cfMetadataBound(rules: CfSheetRules | undefined, rectCount: number): nu
  * populate the table — and the adapter releases an entry when its rules are
  * replaced or the store is released. WeakMap keys bound lifetime to the live
  * rules objects; explicit release ends the charge deterministically. */
-const sharedCfDefinitions = new WeakMap<object, { version: number; definitions: readonly CfSharedDefinition[]; hits: number; lease?: CfLease<readonly CfSharedDefinition[]> }>()
+const sharedCfDefinitions = new WeakMap<object, { version: number; definitions: readonly CfSharedDefinition[]; hits: number; lease: CfLease<readonly CfSharedDefinition[]> }>()
 function lookupSharedCfDefinitions(rules: CfSheetRules, version: number): readonly CfSharedDefinition[] | undefined {
   const cached = sharedCfDefinitions.get(rules)
   if (!cached || cached.version !== version) return undefined
   cached.hits++
   return cached.definitions
 }
-function commitSharedCfDefinitions(rules: CfSheetRules, version: number, definitions: readonly CfSharedDefinition[], lease: CfLease<readonly CfSharedDefinition[]> | undefined): void {
-  sharedCfDefinitions.set(rules, { version, definitions, hits: 1, ...(lease === undefined ? {} : { lease }) })
+/** Authoritative recheck without counting a use: publication decides on this
+ * value, and lookup/commit run synchronously back-to-back (no await
+ * between), so concurrent preparations cannot interleave a lost overwrite. */
+function peekSharedCfDefinitions(rules: CfSheetRules, version: number): readonly CfSharedDefinition[] | undefined {
+  const cached = sharedCfDefinitions.get(rules)
+  return cached && cached.version === version ? cached.definitions : undefined
+}
+function commitSharedCfDefinitions(rules: CfSheetRules, version: number, definitions: readonly CfSharedDefinition[], lease: CfLease<readonly CfSharedDefinition[]>): void {
+  sharedCfDefinitions.set(rules, { version, definitions, hits: 1, lease })
 }
 /** Drops the shared-definition entry for replaced or released rules, ending
  * its charge; live result leases keep governing the result bytes until
@@ -1903,11 +1910,10 @@ export async function prepareCfRemote(
   // distinct viewport scopes with unchanged rules reuse the same definitions
   // instead of rebuilding (and recharging) them per scope. Previously
   // returned arrays stay intact for pinned readers after replacement. The
-  // entry is committed only on a successful preparation below.
+  // fast path below may go stale under concurrency; publication rechecks the
+  // table and only the winner commits (see the success path).
   let definitions: readonly CfSharedDefinition[] | undefined = lookupSharedCfDefinitions(rules, version)
-  let builtFresh = false
   if (!definitions) {
-    builtFresh = true
     const built: CfSharedDefinition[] = rules.rules.map((rule, index) => {
       const writes = [...rule.writes]
       const properties: Record<string, string | number | boolean | null> = {}
@@ -2070,8 +2076,29 @@ export async function prepareCfRemote(
       return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
     }
     const omitted = fullWithEnvelope > grantBytes ? [] : diagnostics
+    // Publish the share only after all admission succeeds — never on a
+    // refusal or withhold path, and only with its own charged lease (no
+    // unowned table entries). The commit rechecks the table first: a
+    // concurrent preparation may have committed while this one built, and
+    // recheck plus commit run synchronously with no await between, so the
+    // second publisher reuses the winner instead of overwriting (and
+    // leaking) its lease. Skipping the commit on pressure is fail-soft —
+    // sharing is an optimization; the adopted result stays fully owned.
+    // Winner and local build have identical content, so the walked sizes
+    // checked above hold for either array.
+    const live = peekSharedCfDefinitions(rules, version)
+    let published = definitions
+    if (live !== undefined) {
+      published = live
+    } else {
+      const owned = limitsModule.admitSharedCopy(memory, definitions)
+      if (owned !== undefined) {
+        commitSharedCfDefinitions(rules, version, owned.value, owned)
+        published = owned.value
+      }
+    }
     const result: CfReadResult = {
-      sheetId, stamp: liveStamp, kind: 'ready', states, definitions,
+      sheetId, stamp: liveStamp, kind: 'ready', states, definitions: published,
       definitionsVersion: version, diagnostics: omitted,
     }
     // Transfer live outgoing ownership: adopt the wire result on the shared
@@ -2087,26 +2114,6 @@ export async function prepareCfRemote(
       adopted = working.adopt(result, wireBytes + envelopeBytes)
     } catch {
       return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory.'), requiredBytes: undefined }
-    }
-    // Publish only after all admission succeeds: the shared-definition entry
-    // is committed here — with its own charged lease on the shared account —
-    // never on a refusal or withhold path above. Lookups already counted
-    // their hit; only fresh builds commit. If the definition charge cannot
-    // be admitted the table stays empty (sharing skipped, result unaffected).
-    if (builtFresh) {
-      const defsBytes = limitsModule.measureCfWalkedBytes(definitions, memory)
-      let defsLease: CfLease<readonly CfSharedDefinition[]> | undefined
-      if (defsBytes !== undefined) {
-        const defsHold = memory.reserve(defsBytes)
-        if (defsHold.kind === 'reserved') {
-          try {
-            defsLease = defsHold.adopt(definitions, defsBytes)
-          } catch {
-            try { defsHold.release() } catch { /* release-only path */ }
-          }
-        }
-      }
-      commitSharedCfDefinitions(rules, version, definitions, defsLease)
     }
     // Adopting moves construction to retained; the finally below becomes a
     // no-op for the working hold while the outgoing lease stays live.
