@@ -4,7 +4,7 @@ Status: **draft 4 (reviews: codex r1–r3, claude r1)** — draft 2 folded codex
 claude r1 (first disposition table); draft 3 folded codex r2 (second table);
 draft 4 folds codex r3 (third table). Owner decided §18 items 1, 3, 4 and 9 on
 2026-11-07, and revised item 4 the same day: presentation mode is supported for
-server-streamed decks, without animation (§12a). Docs-only stage continues.
+server-streamed decks with animation and speaker notes for the presenter (§12a). Docs-only stage continues.
 Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no source edits.
 
 Notation: **"to verify in Stage 0"** marks a claim this spec could not prove while writing
@@ -28,7 +28,7 @@ and the corrected anchor used.
 10. Behaviour detail: open, failure, resume, expiry
 11. Search, copy and semantic services become server calls
 12. XLSX in stream mode
-12a. Presentation mode for streamed decks
+12a. Presentation mode for streamed decks (animation, notes)
 13. Forensic watermark
 14. Performance, memory and limits
 15. Accessibility
@@ -144,10 +144,6 @@ stages may not silently pick them.
 - Rewriting the client's local renderer; local mode stays exactly what it is today.
 - Publishing, multi-tenant account management, dashboards. The server is an embedded
   component for a host application, not a product.
-- *Animated* slideshow playback in stream mode (§18 item 4, owner-decided
-  2026-11-07): no build animations, transitions, Morph or media playback for server
-  rendering for now. **Presentation mode itself is a goal**: `present()` works for
-  server-streamed decks with static slides (§12a).
 - Client-side content inspection as a boundary: the boundary is enforced **server-side
   before anything leaves** (§6.4, §7.7); the client is not trusted with it.
 
@@ -378,7 +374,7 @@ Manifest JSON (normative; fields marked `[call]` are first-pass defaults):
     expiresSec,                                         // [call] 900
     resume: 'session'                                   // single scope, §9.3
   },
-  can: { search, copy, print, textA11y, present },      // ANDed with protection header; present: §12a
+  can: { search, copy, print, textA11y, present, notes, links }, // ANDed with protection header; present/notes/links: §12a
   policy: { contentPolicyId, viewerMarkId,
             semantic: 'visible-only' | 'off' },       // §6.4 chart-text rule; cache-key input
   recorder: { commands: 'ovsd-1', textMode: 'outlines'|'text',
@@ -464,7 +460,7 @@ wire tests (§16.2):
 | Hidden / `veryHidden` XLSX sheets (`state` attribute, unread by `src/xlsx/parse.ts:290–300`) | painted as extra pages (`getPaintables` maps every sheet, `paint.ts:427–429`) | **not streamed** as units and excluded from the unit list, sheet navigation and all text services; restricted case: a deployment option may stream hidden sheets for a restricted class of viewer (owner choice, default off) |
 | `w:vanish` runs (unread by the DOCX parser today) | painted (no handling exists) | excluded from painting, text index, copy and a11y. **A deliberate deviation from local mode**, diagnosed with a per-document notice; a Stage 1 test asserts absence everywhere (§16.2) |
 | PPTX hidden slides (`show="0"`) | painted as units | not streamed as units |
-| Speaker notes / comments / bookmarks panels | notes unread by the static pipeline; comments unread | never streamed; a stream-mode presentation's Presenter View shows no notes (§12a, §18 item 4a) |
+| Speaker notes / comments / bookmarks panels | notes unread by the static pipeline; comments unread | comments never streamed; speaker notes streamed only as marked images to a viewer the host marks as presenter, in Presenter View only (§12a.5) |
 | Hidden rows / columns | painted collapsed (today's own geometry) | axis sizing intervals only (the client sees collapsed gaps); **row/column *numbering* alone while a hidden row has zero extent still reveals the presence of hidden bands — accepted limitation, stated in §20 and §12** |
 | Chart text (`chartDescription`, `src/charts/describe.ts:40–62`) | emits model categories, per-series values (first 12 or min..max) — **model data, not paint** | stream-mode chart descriptions are **visible-projection only**: names/labels/categories that are painted; no value ranges. Server-declared via `policy.semantic: 'visible-only'` (§6.2) |
 | PTX/DOCX comments, tracked-changes remnants | not parsed | never streamed |
@@ -781,7 +777,7 @@ server/
   src/
     http.ts             /open endpoint, Accept negotiation, typed 406 (§6.1)
     ws.ts               /session upgrade, op routing, backpressure, per-op authZ
-    authorize.ts        deployment hook authorize(req) → {viewerId?, policy} (§13.4)
+    authorize.ts        deployment hook authorize(req) → {viewerId?, role?, policy} (§13.4; role 'presenter' → §12a.5)
     tokens.ts           HS256 claims schema (§6.2), key loading, renewal
     audit.ts            sessionId → {viewerId?, ip, startedAt, keyGen, revoked?}
                         (attribution mapping; retention separate from §9.3)
@@ -1045,54 +1041,169 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
     and filter: a secret planted in a hidden row, a hidden column, a hidden sheet
     and a formula must not appear in any reply, filter value list or tile.
 
-## 12a. Presentation mode for streamed decks (owner decision 2026-11-07)
+## 12a. Presentation mode for streamed decks (owner decisions 2026-11-07)
 
 `present()` on the `OfficeDoc` / `OfficeFile` handle works for a server-streamed
-PPTX the same way it does for a local one — same `OfficeViewerHandle`,
-`PresentOptions` and `SlideShowSession` API (`src/components/present.ts`). What
-differs is that every slide is a static, server-painted unit and nothing animates.
+PPTX the same way it does for a local one: same `OfficeViewerHandle`,
+`PresentOptions` and `SlideShowSession` API (`src/components/present.ts`), with
+**animations, transitions and speaker notes** (owner decisions, §18 items 4 and 4a).
+The file still never reaches the client: the server does the slide planning and
+drawing, and the client only plays back bitmaps on a timeline.
 
-- **Capability.** The manifest declares `can.present` (§6.2). Without it,
-  `present()` rejects with `SlideShowError('not-presentable')`. The server decides;
-  the client never infers it from the file type.
-- **No animation.** No build animations, no transitions, no Morph, no media
-  playback. Each slide is shown in its **final built state** (every build step
-  applied), and moving between slides is a cut. `buildIndex` is always `0`, and
-  `next()` / `previous()` move a whole slide. Video and audio show their poster
-  frame (a drawn bitmap, §7.5), never media bytes.
-- **Slide list.** The session pages through the manifest's unit list, which the §6.4
-  policy has already filtered: hidden slides (`show="0"`) are not in it. So
-  `slideIndex` and `goTo()` count streamed slides only. This deliberately differs from
-  local mode, where hidden slides keep their index, because keeping their index
-  would reveal that hidden slides exist and how many there are.
-- **Resolution.** Slides render at the audience screen's size times its DPR, rounded
-  to the §8.3 scale bucket, which is part of the §9.3 cache key like any other
-  request. A resize or screen change re-requests at the new bucket; the client shows
-  the current bitmap scaled until the new one arrives.
-- **Prefetch.** On start, and after each move, the client asks for the current
-  slide plus the next 2 and the previous 1 [call]. These count against the normal
-  unit rate limit (§14); a presentation is not a bulk-export path. Jumping with
-  `goTo()` fetches the target first.
-- **Gesture and fullscreen.** The start sequence stays synchronous inside the user
-  gesture, as in local mode: fullscreen (or the in-window surface) opens first, and
-  the first slide streams in after. Until it arrives the surface shows a blank
-  slide-sized frame, not a spinner over other content.
-- **Presenter View.** Supported with the current slide, the next slide, the slide
-  counter and the timer. **No speaker notes**, because notes are never streamed
-  (§6.4). Whether a deployment may stream notes to an authenticated presenter is
-  owner decision §18 item 4a.
-- **Watermarks.** Every presented slide carries the per-viewer visible mark and the
-  forensic mark, exactly as a paged slide does (§9.4, §13). Presenting does not
-  turn either off, including on the audience screen.
-- **Session lifetime.** A presentation uses the open stream session; token renewal,
-  revocation and expiry follow §10. On revocation the show exits and `ended`
-  resolves; it never falls back to local rendering.
+### 12a.1 The split: where the local engine already divides
+
+The local engine already separates *what to draw* from *how to move it*:
+
+- the planner splits each slide into layers (`PlanLayer`, `src/slideshow/render/plan.ts:17–29`),
+  per shape, per part (`fill` / `line` / `text`) and per paragraph, word or letter
+  for text builds (`src/slideshow/render/text-split.ts`, `scene.ts:37–45`);
+- each layer is drawn into a bitmap (`rasterLayer`, `src/slideshow/render/raster.ts:41`;
+  `LayerBitmap`, `src/slideshow/types.ts:396–401`);
+- the scheduler and behaviours (`src/slideshow/engine/scheduler.ts`, `behaviours.ts`)
+  move, fade, scale, rotate, recolour and mask those bitmaps through the
+  WebGL2 / Canvas2D compositor (`src/slideshow/render/webgl2.ts`, `canvas2d.ts`,
+  `masks.ts`, `transitions2d.ts`).
+
+Stream mode cuts at that line:
+
+| Runs on the server | Sent to the client | Runs on the client |
+|---|---|---|
+| parse, content policy (§6.4), planner, layer raster, Morph matching (`src/slideshow/morph/match.ts`), visibility projection (§12a.3), watermarks | per slide: a **show plan** (OVSP, below) and the layer bitmaps it names | scheduler, behaviours, easing, masks, transitions, compositor, input, Presenter View |
+
+**To verify in Stage 0:** which client-side engine modules still read `PptxSlide`,
+`PptxShape` or the package handle (`src/slideshow/player/session.ts:228–232`
+reopens the package today). Each such read must become a field of the show plan
+or move to the server. The engine refactor is the main Stage 3c cost.
+
+### 12a.2 The show plan (`OVSP`)
+
+One per slide, versioned with the OVSD format version (§7.2), sent over the open
+session's WebSocket:
+
+- **Layers:** id, bounds in slide coordinates, scale bucket, z-order, and the asset
+  id of its bitmap (a drawn bitmap per §7.5; never shapes, text or media bytes).
+- **Timeline:** the parsed animation tree the scheduler already consumes
+  (`CTn`, `BehaviourNode` and friends in `src/slideshow/types.ts:30–182`), with
+  every target rewritten from a shape reference to a layer id. Triggers (on click,
+  after previous, with previous, on shape click) keep their meaning; a shape-click
+  trigger carries a hit region, not the shape.
+- **Transition:** kind, direction, duration and sound reference; the client builds
+  it from the outgoing and incoming slides' composed bitmaps.
+- **Morph:** the server runs the match and sends matched layer pairs with start
+  and end geometry; the client interpolates. Text Morph by word or character uses
+  per-item layers from the server's text split.
+- **Links and action buttons:** jumps inside the deck are kept (target = streamed
+  slide index). External URLs are sent only if the manifest has `can.links`
+  (default off), so a link can't carry data the page doesn't show.
+- **Refused behaviours:** `cmd` behaviours (OLE verbs and similar) are dropped
+  with a diagnostic; the rest of the slide still plays.
+
+### 12a.3 No hidden content in layers (the P-rule for animation)
+
+A single final image hides everything covered; separate layers don't. A layer can
+hold content that is never on screen at any point in the show: a shape under an
+opaque shape that never moves, or the part of a picture that stays cropped by
+another layer. So the server applies a **timeline visibility projection** before
+sending any layer:
+
+1. For every build step, and at sampled times inside each motion, compute what
+   part of each layer is visible on the composed slide.
+2. A layer that is never visible is **not sent**.
+3. A layer that is partly visible is **masked to the union of its visible
+   regions** over the whole timeline, then re-rastered and re-encoded.
+4. When visibility can't be proven (for example, a motion path that the sampler
+   can't bound, or a blend whose result depends on content below), that step
+   falls back to **server-composed keyframes**: the client cuts or cross-fades
+   between server-drawn final images for that step, with a `step-composited`
+   diagnostic.
+
+Stage 0 measures how often step 4 is hit on the corpus and how much it costs.
+The §16.2 wire audit extends to show plans: a secret placed under an opaque
+never-moving shape, in a cropped-away region and on a hidden slide must not
+appear in any layer bitmap.
+
+### 12a.4 Watermarks during a show
+
+- The **visible mark** is baked into every layer bitmap and the background at the
+  layer's rest position, and also drawn as a top overlay by the client. A modified
+  client can skip the overlay, but every layer it shows still carries the baked
+  mark. (Moving layers carry their part of the mark with them; that is accepted.)
+- The **forensic mark** is the image-domain mark (§18 item 7a) embedded in each
+  layer bitmap and keyframe, because layers have no glyph coordinates for text
+  displacement.
+- Both apply on the audience screen and in Presenter View.
+
+### 12a.5 Speaker notes (owner decision §18 item 4a)
+
+- **Who gets notes.** Only a viewer the host marks as the presenter: the host's
+  `authorize` callback (§9.1) returns `role: 'presenter'`, and only then does the
+  manifest carry `can.notes`. Audience viewers and ordinary readers never get
+  notes. The server enforces `can.notes` on every request, as with every `can.*` flag.
+- **Where they show.** Presenter View only, never the audience surface. The local
+  engine already keeps the two surfaces apart (`src/slideshow/presenter/`).
+- **What is sent.** Notes for each slide are server-drawn images, with both marks,
+  like any other unit. Notes text for screen readers and the presenter's own
+  search comes through the a11y service (§15) on those images, for that viewer
+  only. Comments are still never sent.
+- **Policy.** Notes go through the §6.4 content policy like slide text (so hidden
+  text in notes is dropped) and every notes delivery is recorded in the audit
+  table (§13) with the viewer id.
+- **Limit.** Once a presenter can read the notes they can retype them; the marks
+  trace screenshots, not retyping. Stated in §20.
+
+### 12a.6 Media
+
+Video and audio are part of a show but the original media bytes are an embedded
+original (§7.5, Never list). So:
+
+- **Default:** media show their poster frame, a drawn bitmap.
+- **Stage 3d (optional, own gate):** the server transcodes each clip to a fresh
+  stream at a capped resolution with the visible mark burned in and metadata
+  stripped, and plays it through the existing media lease
+  (`src/slideshow/media/lease.ts`). Transcoding is a new server dependency
+  (to verify in Stage 0: ffmpeg licence and Bun process model).
+
+### 12a.7 Other behaviour
+
+- **Capability.** The manifest declares `can.present` (§6.2); without it `present()`
+  rejects with `SlideShowError('not-presentable')`.
+- **Slide list.** The session pages through the policy-filtered unit list: hidden
+  slides (`show="0"`) are not in it, and `slideIndex` / `goTo()` count streamed
+  slides only. This differs from local mode on purpose, so the count of hidden
+  slides isn't revealed.
+- **Resolution.** Layers render at the audience screen's size × DPR, rounded to the
+  §8.3 scale bucket, which is in the §9.3 cache key. A screen change re-requests at
+  the new bucket and shows the current bitmaps scaled meanwhile. Scale and zoom
+  behaviours that enlarge a layer above its bucket request a larger bitmap for
+  that layer, capped at `maxUnitPx`.
+- **Prefetch.** The client loads the show plan and layers for the current slide,
+  the next 2 and the previous 1 [call], under the normal unit rate limit (§14);
+  a show is not a bulk-export path. `goTo()` fetches the target first. A slide
+  whose layers haven't arrived shows its composed final image and starts animating
+  when the layers land.
+- **Gesture and fullscreen.** Same synchronous start as local mode: the surface
+  opens inside the gesture and content streams after.
+- **Session lifetime.** Token renewal, revocation and expiry follow §10. On
+  revocation the show exits and `ended` resolves; it never falls back to local
+  rendering.
 - **Errors.** Same `SlideShowErrorCode` set. A slide that fails to stream shows a
-  plain error frame and keeps the session alive; `next()` still works.
-- **Acceptance (Stage 3b).** Playwright: present a streamed deck, go forward, back
-  and `goTo()`; hidden slides never appear and the counter excludes them; no PPTX
-  bytes, notes or media bytes cross the wire during the show (§16.2 wire audit);
-  every slide image carries both marks; revocation mid-show exits cleanly.
+  plain error frame and the session stays alive.
+
+### 12a.8 Acceptance
+
+- **3b (static show + notes):** Playwright: present a streamed deck, forward, back,
+  `goTo()`; hidden slides never appear and the counter excludes them; Presenter
+  View shows notes only for a `presenter` viewer and never on the audience surface;
+  a non-presenter viewer gets no notes from any request; no PPTX, notes text
+  outside the a11y service or media bytes cross the wire; both marks on every slide
+  and notes image; revocation mid-show exits cleanly.
+- **3c (animation):** the corpus's animated decks play through the stream with
+  pixel-diff against local playback at fixed timeline samples within the §7.4
+  tolerance for the chosen mode; the §12a.3 wire audit is green; the
+  `step-composited` fallback rate is recorded; build steps, transitions and Morph
+  pairs match local mode's step count and order.
+- **3d (media, optional):** transcoded playback carries the burned-in mark; no
+  original media bytes on the wire.
 
 ## 13. Forensic watermark — capacity, retention and collusion (round-2 rewrite)
 
@@ -1375,8 +1486,9 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 | **2: governance + forensics** | tokens/sessions, rate limits (§14 table), resume/revocation/TTL, cache tiers, §13 with decoys + detection tool; the M-rule mark-embedding pipeline for protected command output (§9.4) | rate-limit numbers asserted in tests; §13.6 gates measured and recorded (single-page recovery on carrier-rich pages ≥ 95 %; JPEG q70 ≥ 80 %; whole-search false-attribution bound ≤ 10⁻⁶ verified by simulation over the declared audit-table size, plus unmarked-page abstain tests); audit-table retention + revocation + key-rotation tests; per-class (sparse/none-page) fallback gates per §18 item 7; protected `culled-commands` may ship only after its M-rule tests are green (until then `final-raster` is the only protected projection shipped) |
 | **3: server text services** | search/copy/a11y WS ops through overlays; visible-band copy and visible-projection chart text; per-viewer mark default on | local feature parity measured by the §11 service vs local query on the same corpus; zero local index building for remote docs; §6.4 policy tests (secrets absent from every service) |
 | **4: XLSX stream mode** | 4a static + sheet tiles; 4b selection/freeze/sheet-nav parity; 4c server-side sort/filter (§12, §18 item 3) | hidden/veryHidden/vanish/token/bytes **never cross the wire** (wire audits); tile p95 render ≤ 120 ms pool-side at §14 budgets on a 500-row × 100-col sheet; selection parity passes against local mode; 4c: sort/filter results match local mode's row order on the corpus, filter value lists exclude policy-hidden values, and the §12 sort/filter wire audit is green |
-| **3b: stream presentation mode** | `present()` for streamed decks: static slides, no animation, Presenter View without notes (§12a) | the §12a acceptance list passes |
-| **5: optional extensions** | stream slideshow animation — builds, transitions, Morph, media (§18 item 4: deferred by the owner) | only if the owner reopens it |
+| **3b: stream presentation, static + notes** | `present()` for streamed decks with final-state slides; Presenter View with notes for the presenter role (§12a.5) | §12a.8 3b list |
+| **3c: stream presentation, animation** | engine split (§12a.1), OVSP show plans, timeline visibility projection (§12a.3), builds/transitions/Morph | §12a.8 3c list |
+| **3d: stream presentation, media (optional)** | transcoded, mark-burned media (§12a.6) | §12a.8 3d list |
 
 ## 18. Open decisions for the owner (round-2 refresh)
 
@@ -1393,16 +1505,14 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 3. **XLSX interactivity depth — decided 2026-11-07: include server-side sort/filter.**
    It ships as Stage 4c under the §12 rules (per-session view state, display-text
    filter lists, no cell data in replies, own rate-limit class, wire audit).
-4. **Slideshow in stream mode — decided 2026-11-07: presentation mode is supported,
-   without animation.** `present()` works for streamed decks with static
-   final-state slides and cuts between them (§12a, Stage 3b). Animation (builds,
-   transitions, Morph, media) is out for now: the local engine drives its own clock
-   and needs the local package handle, so a server variant would be new surface; it
-   stays in Stage 5 until the owner reopens it.
-   - **4a. Speaker notes in Presenter View** [open]: default is no notes, because
-     notes are never streamed (§6.4). The alternative is a per-deployment option to
-     stream notes text, as a separate capability, only to a viewer the host marks as
-     the presenter.
+4. **Slideshow in stream mode — decided 2026-11-07: full presentation mode,
+   including animation.** `present()` works for streamed decks with builds,
+   transitions and Morph, played on the client from server-drawn layers and a show
+   plan (§12a, Stages 3b–3c). Media playback is optional Stage 3d (transcoded,
+   never original bytes).
+   - **4a. Speaker notes — decided 2026-11-07: sent to the presenter.** Only to a
+     viewer the host marks `role: 'presenter'`, only in Presenter View, as marked
+     images, recorded in the audit table (§12a.5).
 5. **How documents are marked stream-required** [call]: by path, by content kind,
    by digest rule — one concrete config surface; my call: **path-glob + sha-by-list**
    (a document rarely changes identity within a release workflow).
@@ -1505,6 +1615,13 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
   the carrier budget; otherwise the honest fallback is the image-domain mark or,
   if the owner refuses that (§18 item 7), an explicit "this document is not
   traceable" notice. Better to tell the deployer than to pretend.
+- **Presentations send layers, not one picture.** During an animated show the
+  client holds separate layer bitmaps; a modified client can save them one by one.
+  The §12a.3 projection keeps never-visible content out of them and each carries
+  both marks, so a layer reveals nothing the audience doesn't see at some point,
+  but it is easier to lift a clean picture of one shape than from a flat page.
+- **Speaker notes can be retyped.** A presenter who can read the notes can copy
+  them by hand; marks trace screenshots of notes, not retyping (§12a.5).
 - **Local mode is untouched by this design**: nothing is gated by stream code, and
   stream-only code is lazy so the eager graph cannot move it (§8.1's measurements
   make that a gate rather than a hope).
