@@ -353,8 +353,11 @@ export interface StreamSource {
 - **Default protection per session (round-5 rule):** every stream session carries
   the protected rules by default — the P-rule projection (§7.7), the §6.4 content
   policy and both marks. The developer's server-side `authorize` hook may relax a
-  session's **projection** or **content policy** (§7.7), never the marks and never
-  from the client; any relaxation is written into the audit table (§13.4).
+  session's **projection**, **content policy** or **watermarks** (§7.7, §9.4) —
+  the visible mark and the forensic mark switch independently (owner decision
+  2026-11-08) — never from the client; any relaxation is written into the audit
+  table (§13.4). A session with both marks off is untraceable: the detection tool
+  cannot attribute a capture from it, and the audit row says so (§20).
 - There is **no HTTP endpoint and no media-type negotiation** in stream mode: the
   round-1–4 `Accept`/406 machinery existed only for manifest-over-HTTP, which this
   decision removes (the round-2 "keep local loads a simple request" concern is
@@ -830,8 +833,8 @@ server/
                         package has no HTTP document route (§6.1) — a `/open`
                         does not exist; only server-internal WS handshakes.
     authorize.ts        deployment hook authorize(req) → {viewerId?, role?, policy,
-                        relax?} — relax sets a session's projection/content-policy
-                        only (marks are never relaxable, §6.1); role 'presenter'
+                        relax?} — relax sets a session's projection, content
+                        policy, visibleMark and forensicMark (§6.1); role 'presenter'
                         → §12a.5
     tokens.ts           HS256 claims schema (§6.2), key loading, WS-level renewal
     audit.ts            sessionId → {viewerId?, ip, startedAt, keyGen, revoked?}
@@ -1601,8 +1604,9 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
    per viewer (§9.4). A deployment that wants a fixed `CONFIDENTIAL`-only mark is an
    owner decision with a stated trade — per-viewer identity moves entirely to the
    audit-aligned forensic grid, and for carrier-less documents the promise degrades
-   per item 7 — and the audit table remains the attribution record; overriding the
-   default and stripping the forensic mark together is not a supported configuration.
+   per item 7 — and the audit table remains the attribution record. Turning both
+   marks off for a session is allowed (owner decision 2026-11-08, §6.1); that
+   session is then untraceable and its audit row records it.
 9. **A11y service default — decided 2026-11-07: on.** `can.textA11y` is on by
    default and any deployment turning it off ships the §15 notice.
 
@@ -1702,6 +1706,10 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
   The §12a.3 projection keeps never-visible content out of them and each carries
   both marks, so a layer reveals nothing the audience doesn't see at some point,
   but it is easier to lift a clean picture of one shape than from a flat page.
+- **Watermarks are a per-session choice.** The developer's server can turn the
+  visible mark, the forensic mark or both off for a session (§6.1). A capture from a
+  session without the forensic mark cannot be traced to a viewer; the audit table
+  records that the session was unmarked, so the gap is known, not silent.
 - **Speaker notes can be retyped.** A presenter who can read the notes can copy
   them by hand; marks trace screenshots of notes, not retyping (§12a.5).
 - **Local mode is untouched by this design**: nothing is gated by stream code, and
@@ -1801,8 +1809,10 @@ and round-3 findings are retired on their own terms:
 - **Rewritten:** the P-rule (§7.7) applies to **every stream session by default**
   (adopting the round-5 proposal, §6.1: final-raster projection, content policy
   and both marks; the developer's server-side `authorize` hook may relax
-  projection and content policy per session, never the marks, never from the
-  client, and every relaxation is recorded in the audit table); §19/§20 state the
+  projection and content policy per session, never from the client, and every
+  relaxation is recorded in the audit table. Round 5 kept marks non-relaxable;
+  the owner overrode that on 2026-11-08 — marks are switchable per session too,
+  §6.1); §19/§20 state the
   deployment boundary plainly — the library cannot stop a developer who also
   exposes the file elsewhere.
 - **Verified, not assumed** (round-5 item 6): the branch lives at the `OfficeFile`
