@@ -316,9 +316,11 @@ describe('red-fill-only alert has bounded zh-TW text and no added tab stop', () 
     const unavailable = describeCfUnavailable('zh-TW')
     expect(unavailable?.text).toBe('無法使用條件式格式設定')
 
-    const { budget } = trackingBudget()
+    const { budget, net } = trackingBudget()
     const scope = await scopeFor(sheet, budget)
     expect(scope).toBeDefined()
+    // The unresolved state itself is admitted: bytes exceed the bare workspace.
+    expect(scope!.bytes).toBeGreaterThan(2048)
     const cell = sheet.rows[0]!.cells[0]!
     // Withheld to base formatting, never a guessed or neighboring result.
     expect(cellDisplayText(sheet, { value: cell.value, style: scope!.effectiveStyle(0, 0, cell.style) })).toBe('1.3')
@@ -330,6 +332,7 @@ describe('red-fill-only alert has bounded zh-TW text and no added tab stop', () 
     expect(name).not.toContain('cf-unsupported-rule')
     expect(name).not.toContain('0.00')
     scope!.dispose()
+    expect(net()).toBe(0)
   })
 })
 

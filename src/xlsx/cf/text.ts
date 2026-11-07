@@ -262,6 +262,11 @@ export async function prepareCfTextScope(
               if (outcome.kind === 'no-match') continue
               if (outcome.kind === 'unresolved') {
                 if (outcome.reason === 'cf-outside-preparation') continue
+                // Admit the retained copy before constructing it, like wins.
+                const occupied = measureCfCellBytes({ properties: {}, unresolvedWrites: undefined, unresolvedReason: outcome.reason })
+                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); return fail() }
+                admit(occupied)
+                bytes += occupied
                 states.set(row * 16384 + col, { properties: {}, writes: undefined, reason: outcome.reason })
                 continue
               }
@@ -357,15 +362,18 @@ export async function prepareCfWireScope(
     for (const chunk of chunks) {
       const { result, release } = await read(chunk)
       try {
-        if (!result || result.kind === 'pending') return fail()
+        // Absence is deterministic and needs no consistency tracking. Every
+        // other non-ready outcome (including pending imports) is a refusal:
+        // recording it keeps scan and materialization in agreement.
+        if (!result) throw refused('CF wire preparation produced no result')
+        if (first && !result.states.length && result.kind === 'ready' && result.definitionsVersion === versionCfRules('[]')) {
+          try { options.onEmpty?.() } finally { /* observer-only */ }
+          return fail()
+        }
         if (result.kind !== 'ready') throw refused(`CF wire preparation is ${result.kind}`)
         if (first) {
           first = false
           gen = result.stamp.cfGen
-          if (!result.states.length && result.definitionsVersion === versionCfRules('[]')) {
-            try { options.onEmpty?.() } finally { /* observer-only */ }
-            return fail()
-          }
         } else if (result.stamp.cfGen !== gen) {
           // Rules changed mid-preparation: never publish a mixed generation.
           throw refused('CF wire preparation crossed a definition generation')

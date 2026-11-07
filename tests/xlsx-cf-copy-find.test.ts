@@ -191,21 +191,49 @@ describe('resident copy/find follow the CF number format outside the viewport', 
     const single = await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], signal: new AbortController().signal, locale: 'en-US', budget })
     expect(single).toBeDefined()
     single!.dispose()
+    expect(net()).toBe(0)
     const found = new WorkbookFind(
       { owner, sheets: residentSheets('cf-limited', source, owner) },
       { text: '1.25', caseSensitive: false },
       { textOf, prepareScope: prepare, formatBudget: budget },
     )
-    expect(await drain(found)).toEqual([])
-    const base = new WorkbookFind(
-      { owner, sheets: residentSheets('cf-limited', source, owner) },
-      { text: '1.3', caseSensitive: false },
-      { textOf, prepareScope: prepare, formatBudget: budget },
-    )
-    // Base matches survive materialization; no FindError('stale', ...) escapes.
-    const hits = await drain(base)
-    expect(hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual([[0, 0, '1.3'], [10000, 0, '1.3']])
+    try {
+      expect(await drain(found)).toEqual([])
+      const base = new WorkbookFind(
+        { owner, sheets: residentSheets('cf-limited', source, owner) },
+        { text: '1.3', caseSensitive: false },
+        { textOf, prepareScope: prepare, formatBudget: budget },
+      )
+      try {
+        // Base matches survive materialization; no FindError('stale', ...) escapes.
+        const hits = await drain(base)
+        expect(hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual([[0, 0, '1.3'], [10000, 0, '1.3']])
+        // Each refused scan admits its exact-cover rects (two per search here);
+        // closing both sessions returns the aggregate to baseline.
+        expect(net()).toBe(4 * 64)
+      } finally {
+        base.close()
+      }
+    } finally {
+      found.close()
+    }
     expect(net()).toBe(0)
+  })
+
+  it('zero headroom refuses the search instead of growing an uncharged history', async () => {
+    const refusing = trackingBudget(true)
+    const doc = cfDoc(10_000)
+    const source = createObjectWorkbookSource(doc, 'cf-zero')
+    const owner = initialWorkbookOwner('cf-zero', source.sheets)
+    const sheet = doc.sheets[0]! as unknown as XlsxSheet
+    const denied = new WorkbookFind(
+      { owner, sheets: residentSheets('cf-zero', source, owner) },
+      { text: '1.25', caseSensitive: false },
+      { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet, refusing.budget), formatBudget: refusing.budget },
+    )
+    await expect(drain(denied)).rejects.toMatchObject({ name: 'FindError', code: 'resource-limit' })
+    expect(refusing.net()).toBe(0)
+    denied.close()
   })
 
   it('copies CF-formatted text in near and far selections', async () => {

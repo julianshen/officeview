@@ -57,6 +57,10 @@ export const FIND_PAGE_HITS = 200
 export const FIND_SCAN_LIMIT = 4096
 /** Hits waiting for emission (held band + ready queue), 12 bytes each: 3 MiB. */
 export const FIND_HIT_BUFFER_BUDGET = 262_144
+/** Admitted bytes per refused source rect (the sheet id is retained by reference). */
+export const REFUSED_RECT_BYTES = 64
+/** Refused rects retained per search before the search itself is refused. */
+export const MAX_REFUSED_RECTS = 4096
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 
 /** resource-limit: the bounded hit buffer would be exceeded (§11.4 bounded storage). */
@@ -389,6 +393,11 @@ export class WorkbookFind {
     this.ready.clear()
     this.held = new Float64Array(0)
     this.heldCount = 0
+    this.refusedRects.length = 0
+    if (this.refusedBytes > 0 && this.options.formatBudget) {
+      try { this.options.formatBudget.release(this.refusedBytes) } catch { /* release-only path */ }
+      this.refusedBytes = 0
+    }
     this.account()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.wake?.()
@@ -519,13 +528,25 @@ export class WorkbookFind {
 
   /** Source rects whose preparation was refused: hit materialization must use
    * base text there too, or a withheld scan format becomes a false stale hit.
-   * Bounded; exceeding it refuses the operation rather than disagreeing. */
+   * Each rect is admitted in the caller's format budget when one is supplied
+   * (refusal fails the search rather than growing uncharged); the count is
+   * always capped. Released on close. */
   private readonly refusedRects: { sheetId: string; rect: SourceRect }[] = []
+  private refusedBytes = 0
   private rememberRefused(sheetId: string, rects: readonly SourceRect[]): void {
     for (const rect of rects) {
-      if (this.refusedRects.length >= 4096) throw new FindError('resource-limit', 'Find refused too many source batches; narrow the search or retry when memory pressure drops', true)
+      if (this.refusedRects.length >= MAX_REFUSED_RECTS) throw new FindError('resource-limit', 'Find refused too many source batches; narrow the search or retry when memory pressure drops', true)
+      if (this.options.formatBudget) {
+        try {
+          this.options.formatBudget.reserve(REFUSED_RECT_BYTES)
+        } catch {
+          throw new FindError('resource-limit', 'Find cannot retain refused source batches; narrow the search or retry when memory pressure drops', true)
+        }
+        this.refusedBytes += REFUSED_RECT_BYTES
+      }
       this.refusedRects.push({ sheetId, rect })
     }
+    this.account()
   }
   private isRefused(sheetId: string, row: number, col: number): boolean {
     for (const entry of this.refusedRects) {
@@ -567,7 +588,7 @@ export class WorkbookFind {
 
   private account(): void {
     this.stats.bufferedHits = this.heldCount + this.ready.size
-    this.stats.bufferedBytes = 8 * this.heldCount + 12 * this.ready.size
+    this.stats.bufferedBytes = 8 * this.heldCount + 12 * this.ready.size + REFUSED_RECT_BYTES * this.refusedRects.length
   }
 
   /** A band/row group is complete: order its keys cooperatively (sorted 4,096-key

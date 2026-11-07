@@ -1038,7 +1038,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Visible source cells for the display text scope: what the grid actually
   // presents (plus the active cell), in source coordinates. Exact cover, never
   // a dense hull; over-count inputs skip preparation here (the batch engines
-  // still cover their own scopes). Resident only (see the helper note).
+  // still cover their own scopes).
   const cfTextRects = ((): SourceRect[] | undefined => {
     if (!entry || !scroll || !activeSheetId) return undefined
     // Presence gate before any admission: resident sheets carry their parsed

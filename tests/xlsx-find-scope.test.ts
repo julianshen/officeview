@@ -5,7 +5,7 @@
  * held for it must return to baseline.
  */
 import { describe, expect, it } from 'vitest'
-import { WorkbookFind } from '../src/xlsx/view/find'
+import { WorkbookFind, FindError } from '../src/xlsx/view/find'
 import type { AuthoritativeCell } from '../src/xlsx/view/contracts'
 import type { EffectiveFormatScope, FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import { drain, findInputOf, workbookOf } from './helpers/xlsx-find'
@@ -87,9 +87,39 @@ describe('late scope disposal on cancellation', () => {
       },
       currentOwner: () => current,
     })
-    await expect(session.nextPage()).rejects.toMatchObject({ name: 'FindError', code: 'stale' })
-    expect(seen).toHaveLength(1)
-    expect(seen[0]!.disposed()).toBe(1)
+    try {
+      await expect(session.nextPage()).rejects.toMatchObject({ name: 'FindError', code: 'stale' })
+      expect(seen).toHaveLength(1)
+      expect(seen[0]!.disposed()).toBe(1)
+      // The refused batch is admitted until the session closes.
+      expect(net()).toBe(64)
+    } finally {
+      session.close()
+    }
+    expect(net()).toBe(0)
+  })
+})
+
+describe('refused history accounting', () => {
+  it('admits refused rects across pages and releases them on close', async () => {
+    const { budget, net } = trackingBudget()
+    const cells = Array.from({ length: 5000 }, (_, row) => ({ row, col: 0, value: row }))
+    const { input } = findInputOf(workbookOf([{ sheetId: 'A', cells }]))
+    const session = new WorkbookFind(input, { text: 'zzz-no-match', caseSensitive: false }, {
+      formatBudget: budget,
+      textOf: () => 'x',
+      prepareScope: () => Promise.reject(new FindError('resource-limit', 'pressured')),
+    })
+    try {
+      // Two scan pages refuse; nothing matches, so no materialization runs:
+      // the refused index (two exact-cover rects) is admitted, not free.
+      const hits = await drain(session)
+      expect(hits).toEqual([])
+      expect(net()).toBe(2 * 64)
+      expect(session.stats.bufferedBytes).toBe(2 * 64)
+    } finally {
+      session.close()
+    }
     expect(net()).toBe(0)
   })
 })
