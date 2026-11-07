@@ -11,7 +11,7 @@ import type { XlsxCell } from '../src/xlsx/types'
 import { createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { parseCfSheet } from '../src/xlsx/cf/parse'
 import { createResidentCfSource, type CfRangeStatistics } from '../src/xlsx/cf/statistics'
-import { evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
+import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
 
 const SHEET = 'sheet1'
 const stamp = (gen = 1): CfStamp => ({
@@ -19,7 +19,9 @@ const stamp = (gen = 1): CfStamp => ({
 })
 const rect = (firstRow: number, lastRow: number, firstCol = 0, lastCol = 0): SourceRect => ({ firstRow, lastRow, firstCol, lastCol })
 const frozenBudget = (): CfWorkBudget => createCfWorkBudget({ now: () => 0 })
-const denyGate: CfEvidenceGate = { allows: () => false }
+// The production gate (backed by the reviewed evidence allowlist, currently
+// empty) must deny every measurement-dependent variant below.
+const denyGate: CfEvidenceGate = cfRuntimeEvidence
 const allowGate: CfEvidenceGate = { allows: () => true }
 
 const num = (value: number): CfLiteral => ({ kind: 'number', value })
@@ -106,15 +108,9 @@ describe('CF predicate evaluation', () => {
       // H: between 1..3. H2 (-1) false, H4 (1) true.
       [cellIs('between', [num(1), num(3)]), num(-1), 'no-match'],
       [cellIs('between', [num(1), num(3)]), num(1), 'ready'],
-      // I: between reversed 3..1 normalises to [1,3]. I2 (-1) false, I4 (1) true.
-      [cellIs('between', [num(3), num(1)]), num(-1), 'no-match'],
-      [cellIs('between', [num(3), num(1)]), num(1), 'ready'],
       // J: notBetween 1..3. J2 (-1) true, J4 (1) false.
       [cellIs('notBetween', [num(1), num(3)]), num(-1), 'ready'],
       [cellIs('notBetween', [num(1), num(3)]), num(1), 'no-match'],
-      // K: notBetween reversed 3..1. K2 (-1) true, K4 (1) false.
-      [cellIs('notBetween', [num(3), num(1)]), num(-1), 'ready'],
-      [cellIs('notBetween', [num(3), num(1)]), num(1), 'no-match'],
       // C: notEqual 100. C2 (-1) true, C6 (100) false.
       [cellIs('notEqual', [num(100)]), num(-1), 'ready'],
       [cellIs('notEqual', [num(100)]), num(100), 'no-match'],
@@ -135,6 +131,22 @@ describe('CF predicate evaluation', () => {
       expect(outcome.kind, JSON.stringify({ def: r.definition, value })).toBe(expected)
       if (expected === 'ready') expect(outcome).toMatchObject({ value: true })
     }
+  })
+
+  it('reversed between operands are gated on operand-normalization evidence', () => {
+    // Manifest I2/I4/K2/K4 assume [min,max] normalisation, which is unmeasured:
+    // the production gate withholds, the allow gate reproduces the coordinates.
+    const at = { row: 0, col: 0 }
+    const betweenRev = cellIs('between', [num(3), num(1)])
+    const notBetweenRev = cellIs('notBetween', [num(3), num(1)])
+    for (const r of [betweenRev, notBetweenRev]) {
+      expect(evaluatePredicate(r, at, num(-1), undefined, denyGate).kind).toBe('unresolved')
+      expect(evaluatePredicate(r, at, num(1), undefined, denyGate).kind).toBe('unresolved')
+    }
+    expect(evaluatePredicate(betweenRev, at, num(-1), undefined, allowGate)).toMatchObject({ kind: 'no-match' })
+    expect(evaluatePredicate(betweenRev, at, num(1), undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(notBetweenRev, at, num(-1), undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(notBetweenRev, at, num(1), undefined, allowGate)).toMatchObject({ kind: 'no-match' })
   })
 
   it('cellIs missing combinations stay unresolved instead of guessing', () => {
@@ -212,11 +224,29 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(rn, { row: 1, col: 1 }, num(0), undefined, denyGate)).toMatchObject({ kind: 'ready', value: true })
   })
 
+  it('case-insensitive text matching is gated on its evidence variant', () => {
+    // Manifest B3/C4-adjacent behaviour needs case folding, which is unmeasured:
+    // exact matches stay decided, fold-only matches withhold without evidence.
+    const at = { row: 0, col: 0 }
+    const contains = rule({ kind: 'text', type: 'containsText', needle: 'ab' })
+    expect(evaluatePredicate(contains, at, str('AbC'), undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    const begins = rule({ kind: 'text', type: 'beginsWith', needle: 'ab' })
+    expect(evaluatePredicate(begins, at, str('AbC'), undefined, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(begins, at, str('AbC'), undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    const ends = rule({ kind: 'text', type: 'endsWith', needle: 'BC' })
+    expect(evaluatePredicate(ends, at, str('abc'), undefined, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(ends, at, str('abc'), undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    const notContains = rule({ kind: 'text', type: 'notContainsText', needle: 'ab' })
+    expect(evaluatePredicate(notContains, at, str('AbC'), undefined, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(notContains, at, str('AbC'), undefined, allowGate)).toMatchObject({ kind: 'no-match' })
+  })
+
   it('text predicates match manifest stage1-text-predicates coordinates', () => {
     const at = { row: 0, col: 0 }
     const contains = rule({ kind: 'text', type: 'containsText', needle: 'ab' })
     expect(evaluatePredicate(contains, at, str('abc'), undefined, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    expect(evaluatePredicate(contains, at, str('AbC'), undefined, denyGate)).toMatchObject({ kind: 'ready', value: true })
+    // B3 ("AbC") needs case-insensitive matching: gated below, unresolved here.
+    expect(evaluatePredicate(contains, at, str('AbC'), undefined, denyGate).kind).toBe('unresolved')
     expect(evaluatePredicate(contains, at, str('ábc'), undefined, denyGate)).toMatchObject({ kind: 'no-match' })
     const notContains = rule({ kind: 'text', type: 'notContainsText', needle: 'ab' })
     expect(evaluatePredicate(notContains, at, str('abc'), undefined, denyGate)).toMatchObject({ kind: 'no-match' })
@@ -282,7 +312,7 @@ describe('CF predicate evaluation', () => {
     const sorted = [1, 2, 2, 3, 9]
     const stats: CfRangeStatistics = {
       scopeKey: 't', numericCount: 5, sum: 17, mean: 3.4, min: 1, max: 9, stddevPop: undefined,
-      sortedAsc: Float64Array.from(sorted), frequencies: new Map(), spanCells: 9, storedCells: 9,
+      sortedAsc: Float64Array.from(sorted), frequencies: new Map(), declaredCells: 9, spanCells: 9, storedCells: 9,
     }
     const at = { row: 0, col: 0 }
     const top2 = rule({ kind: 'top10', rank: 2, bottom: false, percent: false })
@@ -309,11 +339,12 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(rule(noRank), at, num(9), stats, denyGate).kind).toBe('unresolved')
   })
 
-  it('aboveAverage follows the manifest mean with population stddev', () => {
-    // Manifest stage1-above-average-stddev: {0,2,4}, mean 2.
+  it('aboveAverage follows the manifest mean without stddev', () => {
+    // Manifest stage1-above-average-stddev: {0,2,4}, mean 2. Plain
+    // comparisons are settled; stddev selection is gated separately below.
     const stats: CfRangeStatistics = {
       scopeKey: 't', numericCount: 3, sum: 6, mean: 2, min: 0, max: 4, stddevPop: Math.sqrt(8 / 3),
-      sortedAsc: Float64Array.from([0, 2, 4]), frequencies: new Map(), spanCells: 3, storedCells: 3,
+      sortedAsc: Float64Array.from([0, 2, 4]), frequencies: new Map(), declaredCells: 3, spanCells: 3, storedCells: 3,
     }
     const at = { row: 0, col: 0 }
     const above = rule({ kind: 'aboveAverage', above: true, equal: false })
@@ -327,39 +358,94 @@ describe('CF predicate evaluation', () => {
     const eqBelow = rule({ kind: 'aboveAverage', above: false, equal: true })
     expect(evaluatePredicate(eqBelow, at, num(2), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
     expect(evaluatePredicate(eqBelow, at, num(4), stats, denyGate)).toMatchObject({ kind: 'no-match' })
-    // F5: 11 > 5.25 + population stddev over {0,0,10,11}.
+    // stdDev with equalAverage is normatively invalid (ungated: schema rule, not measurement).
+    const invalid = rule({ kind: 'aboveAverage', above: true, equal: true, stdDev: 1 })
+    expect(evaluatePredicate(invalid, at, num(11), stats, denyGate)).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+  })
+
+  it('population-stddev selection is gated on its evidence variant', () => {
+    // Manifest F5/G2/H9/I12 assume population stddev (5.2619 over {0,0,10,11}):
+    // withheld without evidence, reproduced with the allow gate.
+    const at = { row: 0, col: 0 }
     const pop: CfRangeStatistics = {
       scopeKey: 'p', numericCount: 4, sum: 21, mean: 5.25, min: 0, max: 11, stddevPop: 5.2619,
-      sortedAsc: Float64Array.from([0, 0, 10, 11]), frequencies: new Map(), spanCells: 4, storedCells: 4,
+      sortedAsc: Float64Array.from([0, 0, 10, 11]), frequencies: new Map(), declaredCells: 4, spanCells: 4, storedCells: 4,
     }
     const std1 = rule({ kind: 'aboveAverage', above: true, equal: false, stdDev: 1 })
-    expect(evaluatePredicate(std1, at, num(11), pop, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    expect(evaluatePredicate(std1, at, num(0), pop, denyGate)).toMatchObject({ kind: 'no-match' })
-    // stdDev with equalAverage is normatively invalid.
-    const invalid = rule({ kind: 'aboveAverage', above: true, equal: true, stdDev: 1 })
-    expect(evaluatePredicate(invalid, at, num(11), pop, denyGate)).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
-    // Multi-rectangle scopes have no measured statistics semantics.
-    const multi = rule({ kind: 'aboveAverage', above: true, equal: false }, [rect(0, 1), rect(0, 1, 2, 2)])
-    expect(evaluatePredicate(multi, at, num(4), stats, denyGate)).toMatchObject({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+    expect(evaluatePredicate(std1, at, num(11), pop, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(std1, at, num(0), pop, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(std1, at, num(11), pop, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(std1, at, num(0), pop, allowGate)).toMatchObject({ kind: 'no-match' })
+    const std1below = rule({ kind: 'aboveAverage', above: false, equal: false, stdDev: 1 })
+    // Manifest G2: -2 is below one population stddev over {-2,2,10,11} (σ=5.4486).
+    const popBelow: CfRangeStatistics = {
+      scopeKey: 'pb', numericCount: 4, sum: 21, mean: 5.25, min: -2, max: 11, stddevPop: 5.4486,
+      sortedAsc: Float64Array.from([-2, 2, 10, 11]), frequencies: new Map(), declaredCells: 4, spanCells: 4, storedCells: 4,
+    }
+    expect(evaluatePredicate(std1below, at, num(-2), popBelow, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(std1below, at, num(-2), popBelow, allowGate)).toMatchObject({ kind: 'ready', value: true })
   })
 
   it('duplicateValues and uniqueValues follow the manifest sets', () => {
-    // Manifest stage1-duplicate-scope singles: 1/1 duplicate; A/a case-insensitive; á unique.
+    // Manifest stage1-duplicate-scope singles: numeric 1/1 duplicate.
+    // Text equivalence is gated below; blanks and errors never match.
     const freq = new Map<string, number>([['n:1', 2], ['s:a', 2], ['s:á', 1]])
     const stats: CfRangeStatistics = {
       scopeKey: 't', numericCount: 3, sum: 3, mean: 1, min: 1, max: 1, stddevPop: 0,
-      sortedAsc: Float64Array.from([1, 1, 1]), frequencies: freq, spanCells: 9, storedCells: 9,
+      sortedAsc: Float64Array.from([1, 1, 1]), frequencies: freq, declaredCells: 9, spanCells: 9, storedCells: 9,
     }
     const at = { row: 0, col: 0 }
     const dup = rule({ kind: 'predicate', type: 'duplicateValues' })
     expect(evaluatePredicate(dup, at, num(1), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    expect(evaluatePredicate(dup, at, str('A'), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    expect(evaluatePredicate(dup, at, str('á'), stats, denyGate)).toMatchObject({ kind: 'no-match' })
     expect(evaluatePredicate(dup, at, blank, stats, denyGate)).toMatchObject({ kind: 'no-match' })
     const uniq = rule({ kind: 'predicate', type: 'uniqueValues' })
     expect(evaluatePredicate(uniq, at, num(1), stats, denyGate)).toMatchObject({ kind: 'no-match' })
-    expect(evaluatePredicate(uniq, at, str('á'), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    // Manifest union: identical scopes on disjoint rects share nothing extra; tested in statistics.
+  })
+
+  it('duplicate text equivalence is gated on its evidence variant', () => {
+    // Manifest B5/B6 ("A"/"a" duplicate case-insensitively) and C7 ("á" unique)
+    // need text equivalence, which is unmeasured: withheld without evidence.
+    const freq = new Map<string, number>([['s:a', 2], ['s:á', 1]])
+    const stats: CfRangeStatistics = {
+      scopeKey: 't', numericCount: 0, sum: 0, mean: undefined, min: undefined, max: undefined,
+      stddevPop: undefined, sortedAsc: Float64Array.from([]), frequencies: freq, declaredCells: 3, spanCells: 3, storedCells: 3,
+    }
+    const at = { row: 0, col: 0 }
+    const dup = rule({ kind: 'predicate', type: 'duplicateValues' })
+    const uniq = rule({ kind: 'predicate', type: 'uniqueValues' })
+    for (const value of [str('A'), str('a'), str('á')] as CfLiteral[]) {
+      expect(evaluatePredicate(dup, at, value, stats, denyGate).kind).toBe('unresolved')
+      expect(evaluatePredicate(uniq, at, value, stats, denyGate).kind).toBe('unresolved')
+    }
+    expect(evaluatePredicate(dup, at, str('A'), stats, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(dup, at, str('a'), stats, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(dup, at, str('á'), stats, allowGate)).toMatchObject({ kind: 'no-match' })
+    expect(evaluatePredicate(uniq, at, num(1), stats, allowGate)).toMatchObject({ kind: 'no-match' })
+    expect(evaluatePredicate(uniq, at, str('á'), stats, allowGate)).toMatchObject({ kind: 'ready', value: true })
+  })
+
+  it('multi-rectangle union scope is gated on its evidence variant', () => {
+    // Manifest D3/F2 (disjoint union) and H3/I3 (overlap without double-count)
+    // require union semantics, which are unmeasured: withheld without evidence.
+    const freq = new Map<string, number>([['n:20', 2], ['n:77', 1], ['n:88', 2]])
+    const stats: CfRangeStatistics = {
+      scopeKey: 'u', numericCount: 5, sum: 0, mean: 0, min: 0, max: 0, stddevPop: 0,
+      sortedAsc: Float64Array.from([]), frequencies: freq, declaredCells: 6, spanCells: 6, storedCells: 5,
+    }
+    const scope = [rect(0, 1), rect(0, 1, 2, 2)]
+    const at = { row: 0, col: 0 }
+    const dup = rule({ kind: 'predicate', type: 'duplicateValues' }, scope)
+    const uniq = rule({ kind: 'predicate', type: 'uniqueValues' }, scope)
+    expect(evaluatePredicate(dup, at, num(20), stats, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(uniq, at, num(77), stats, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(dup, at, num(20), stats, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(dup, at, num(77), stats, allowGate)).toMatchObject({ kind: 'no-match' })
+    expect(evaluatePredicate(uniq, at, num(77), stats, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    // top10/aboveAverage on multi-rectangle scopes stay unresolved: no manifest rows.
+    const top = rule({ kind: 'top10', rank: 2, bottom: false, percent: false }, scope)
+    expect(evaluatePredicate(top, at, num(20), stats, allowGate).kind).toBe('unresolved')
+    const avg = rule({ kind: 'aboveAverage', above: true, equal: false }, scope)
+    expect(evaluatePredicate(avg, at, num(20), stats, allowGate).kind).toBe('unresolved')
   })
 
   it('unresolved definitions propagate their reason and missing stats refuse', () => {

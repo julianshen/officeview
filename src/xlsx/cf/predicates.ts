@@ -73,11 +73,17 @@ function evaluateCellIs(
   operator: CfOperator,
   operands: readonly CfLiteral[],
   value: CfLiteral,
+  evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
   // Numeric cells against numeric operands: the settled comparison matrix.
   if (value.kind === 'number') {
     if (operator === 'between' || operator === 'notBetween') {
       if (operands.length !== 2) return unmeasured('cf-unsupported-rule')
+      // Reversed operands normalise to [min,max] only with evidence.
+      if (operands[0]!.kind !== 'number' || operands[1]!.kind !== 'number') return unmeasured()
+      if (operands[0]!.value > operands[1]!.value && !evidence.allows('stage1-cellis-literals', 'reversed-operand-normalization')) {
+        return unmeasured()
+      }
       const decided = compareNumbers(operator, value.value, operands)
       return decided === undefined ? unmeasured() : decided ? { kind: 'ready', value: true } : { kind: 'no-match' }
     }
@@ -129,6 +135,7 @@ function evaluateText(
   type: 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith',
   needle: string,
   value: CfLiteral,
+  evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
   if (needle.length === 0) return unmeasured()
   // notContainsText on numeric cells and blanks is explicitly unmeasured.
@@ -137,16 +144,34 @@ function evaluateText(
   if (value.kind === 'string') haystack = value.value
   else if (value.kind === 'number') haystack = String(value.value)
   else return unmeasured()
+  // Exact matches are decided regardless of case policy; fold-only matches
+  // require the measured case-insensitive semantics.
   const foldedHay = foldCase(haystack)
   const foldedNeedle = foldCase(needle)
-  let matched: boolean
-  switch (type) {
-    case 'containsText': matched = foldedHay.includes(foldedNeedle); break
-    case 'notContainsText': matched = !foldedHay.includes(foldedNeedle); break
-    case 'beginsWith': matched = foldedHay.startsWith(foldedNeedle); break
-    case 'endsWith': matched = foldedHay.endsWith(foldedNeedle); break
+  const exact = (() => {
+    switch (type) {
+      case 'containsText': return haystack.includes(needle)
+      case 'notContainsText': return haystack.includes(needle)
+      case 'beginsWith': return haystack.startsWith(needle)
+      case 'endsWith': return haystack.endsWith(needle)
+    }
+  })()
+  const folded = (() => {
+    switch (type) {
+      case 'containsText': return foldedHay.includes(foldedNeedle)
+      case 'notContainsText': return foldedHay.includes(foldedNeedle)
+      case 'beginsWith': return foldedHay.startsWith(foldedNeedle)
+      case 'endsWith': return foldedHay.endsWith(foldedNeedle)
+    }
+  })()
+  // Exact hits and exact misses are decided regardless of case policy; only
+  // fold-only hits need the measured case-insensitive semantics.
+  if (exact) return type === 'notContainsText' ? { kind: 'no-match' } : { kind: 'ready', value: true }
+  if (folded) {
+    if (!evidence.allows('stage1-text-predicates', 'case-insensitive-matching')) return unmeasured()
+    return type === 'notContainsText' ? { kind: 'no-match' } : { kind: 'ready', value: true }
   }
-  return matched ? { kind: 'ready', value: true } : { kind: 'no-match' }
+  return type === 'notContainsText' ? { kind: 'ready', value: true } : { kind: 'no-match' }
 }
 
 const BLANKS_EVIDENCE_ID = 'stage1-blanks-errors'
@@ -226,10 +251,12 @@ function evaluateAboveAverage(
   stdDev: number | undefined,
   value: CfLiteral,
   stats: CfRangeStatistics | undefined,
+  evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
   if (stdDev !== undefined && equal) return { kind: 'unresolved', reason: 'cf-invalid-rule' }
-  if (stdDev !== undefined && !(stdDev === 1 || stdDev === 2 || stdDev === 3)) {
-    return unmeasured('cf-unmeasured-capability')
+  // Population-vs-sample is unmeasured: any stddev use needs evidence.
+  if (stdDev !== undefined && !evidence.allows('stage1-above-average-stddev', 'stddev-population')) {
+    return unmeasured()
   }
   if (value.kind !== 'number') return { kind: 'no-match' }
   const settled = needStats(stats)
@@ -253,9 +280,14 @@ function evaluateDuplicates(
   unique: boolean,
   value: CfLiteral,
   stats: CfRangeStatistics | undefined,
+  evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
   // Blank and error cells are never flagged, per the staged hypothesis.
   if (value.kind === 'blank' || value.kind === 'error') return { kind: 'no-match' }
+  // Text equivalence (case folding) is unmeasured: withhold text cells without evidence.
+  if (value.kind === 'string' && !evidence.allows('stage1-duplicate-scope', 'text-case-equivalence')) {
+    return unmeasured()
+  }
   const settled = needStats(stats)
   if (settled.kind !== 'ready') return settled
   const key = cfValueKey(value)
@@ -283,9 +315,9 @@ export function evaluatePredicate(
   if (definition.kind === 'unresolved') return { kind: 'unresolved', reason: definition.reason }
   switch (definition.kind) {
     case 'cellIs':
-      return evaluateCellIs(definition.operator, definition.operands, value)
+      return evaluateCellIs(definition.operator, definition.operands, value, evidence)
     case 'text':
-      return evaluateText(definition.type, definition.needle, value)
+      return evaluateText(definition.type, definition.needle, value, evidence)
     case 'predicate':
       switch (definition.type) {
         case 'containsBlanks':
@@ -297,21 +329,28 @@ export function evaluatePredicate(
         case 'notContainsErrors':
           return evaluateErrors(definition.type, value)
         case 'duplicateValues':
-          return evaluateDuplicates(false, value, stats)
-        case 'uniqueValues':
-          return evaluateDuplicates(true, value, stats)
+        case 'uniqueValues': {
+          // Union scope semantics are unmeasured: multi-rectangle duplicate
+          // and unique evaluation needs evidence; single rectangles are exact.
+          if (rule.ranges.length !== 1 && !evidence.allows('stage1-duplicate-scope', 'multi-rectangle-union')) {
+            return unmeasured()
+          }
+          return evaluateDuplicates(definition.type === 'uniqueValues', value, stats, evidence)
+        }
       }
       break
     case 'timePeriod':
       // The clock that decides today is unmeasured: no wall-clock reads.
       return unmeasured()
     case 'top10': {
+      // No manifest rows pin multi-rectangle ranking: always withheld.
       if (rule.ranges.length !== 1) return unmeasured()
       return evaluateTop(definition.rank, definition.bottom, definition.percent, value, stats)
     }
     case 'aboveAverage': {
+      // No manifest rows pin multi-rectangle averaging: always withheld.
       if (rule.ranges.length !== 1) return unmeasured()
-      return evaluateAboveAverage(definition.above, definition.equal, definition.stdDev, value, stats)
+      return evaluateAboveAverage(definition.above, definition.equal, definition.stdDev, value, stats, evidence)
     }
   }
   return unmeasured()
