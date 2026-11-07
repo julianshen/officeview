@@ -132,11 +132,13 @@ stages may not silently pick them.
    surface, including the `server/` package itself, is the developer's deployment
    boundary (§6.1, §20).
 4. **Watermarks (§9.4, §13).**
-   - **Visible:** per-viewer by default (identity text), deployable as a fixed
-     deployment-wide mark, painted into the raster server-side.
-   - **Forensic:** a per-session tracking pattern invisible at reading size — recorded
-     text positions shift by a sub-pixel amount (§13.3) — encoding a session token with
-     error correction, recoverable from a single screenshot page by the §13.6 tool.
+   - **Visible:** fixed text by default, or the viewer's name/email/id/time, or off —
+     chosen per session by the developer's server (§18 item 8), painted into the
+     raster server-side.
+   - **Forensic:** a per-session keyed pixel pattern invisible at reading size, on
+     every page (§18 item 7), plus sub-pixel text shifts on text-rich command units
+     (§13.3) — encoding a session token with error correction, recoverable from a
+     single screenshot page by the §13.6 tool. Switchable per session (§6.1).
 5. **Search, copy and semantic text by server calls** over the visible projection
    (§11), constrained by the same content policy as the pixels (§6.4).
 6. **XLSX stream tiles** (§12): interactive spreadsheet mode renders server-painted
@@ -590,7 +592,13 @@ whole pipeline always names its scale.
   the in-flight unit retries once on a fresh worker and falls back to tile (§7.6)
   if it fails again.
 
-### 7.4 Text mode (round-2 rewrite; default [call] selected by the Stage 0 matrix)
+### 7.4 Text mode (round-2 rewrite; **owner decided 2026-11-08: (b) `textMode:'text'`**)
+
+**Decision (§18 item 2):** command projections use (b), plain text plus
+server-pinned fonts checked by the face handshake below; a unit whose faces the
+client lacks is sent as a raster unit. (a) outlines is not built, so no
+shaping/outlining dependency is added. The text below keeps both options as the
+record of the choice.
 
 Draft 1 claimed glyph outlines "with zero new dependencies" arrive for free; both
 reviews reject that. The recorder sees strings plus a CSS font string, not glyph ids;
@@ -924,8 +932,11 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
 
 ### 9.4 Visible watermark (round-2 fix; owner's per-viewer read)
 
-- **Default: per-viewer.** The audit table's viewer identity (§9.3) — or a
-  session-derived label when the deployment has none — is rendered in the page
+- **Default: fixed text, per-session setting (owner decision 2026-11-08, §18
+  item 8).** The developer's `authorize` hook picks the mark per session: fixed
+  text (default), the viewer's name/email/id/time, or off. Viewer identity text
+  comes from the audit table's viewer identity (§9.3) — or a session-derived label
+  when the deployment has none. Either form is rendered in the page
   raster server-side, in the same machinery as the existing mark
   (`paintWatermark`, `src/core/watermark.ts` painter + defaults at `:48–57`,
   header parser `:164`) with merge-style precedence merged server-side
@@ -963,9 +974,8 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
   frame. Nothing before step (3) may have baked pixels where the forensic mutation
   needs coordinates, and nothing after step (3) may exist as removable mark
   commands.
-- A **fixed-text override** (e.g. `CONFIDENTIAL`) is an owner decision with a
-  stated trade: it removes per-viewer *visible* identity, so it requires the §18
-  item 8 approval, and the audit table stays the attribution record.
+- **Fixed text is the default** (§18 item 8): per-viewer identity is then carried
+  only by the forensic mark (§13), and the audit table stays the attribution record.
 - A fixed mark lets one cache entry serve every session; per-viewer marks key the
   cache on `viewerMarkId` (§9.3). The **session-mutated frames live only in the
   §9.3 session edit tier** — the canonical tier holds the pre-mutation record and
@@ -1570,10 +1580,11 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
    choose: pixel parity vs browser canvas, Bun compatibility, font registration scope
    and licence (to verify in Stage 0). If a gate fails, Stage 0 reports it back to the
    owner instead of switching backends silently.
-2. **Shaping/outlining dependency** — if §7.4's (a) is picked (my expected default
-   after Stage 0), name the lib (HarfBuzz-wasm vs fontkit-class) [call]; rejected
-   alternative: staying dependency-free and guessing outlines — recorded as a
-   round-2 rejection.
+2. **Text mode — decided 2026-11-08: plain text plus fonts (§7.4 (b)).** Glyph runs
+   travel as strings plus advances and replay with server-pinned faces confirmed by
+   the `requiredFaces` handshake; any unit needing a face the client lacks is sent
+   as a raster unit. No shaping/outlining dependency is added. This applies only
+   to command projections; the default `final-raster` projection sends pixels.
 3. **XLSX interactivity depth — decided 2026-11-07: include server-side sort/filter.**
    It ships as Stage 4c under the §12 rules (per-session view state, display-text
    filter lists, no cell data in replies, own rate-limit class, wire audit).
@@ -1590,23 +1601,39 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
    item 1; round-5 note, §21). No per-document configuration remains: a stream
    source opens a protected session by default, and the developer's `authorize`
    hook may relax it per session (§6.1, §7.7).
-6. **Print in stream mode**: pool re-renders print units through the recorder
-   (costs capacity) or declares `no-print`; **my call: allow by manifest flag in
-   Stage 3**, print-to-PDF from a stream is a real user need and cannot be faked
-   client-side from raster tiles alone.
-7. **Forensic fallback for carrier-less documents** (§13.2): (a) ship the image-domain
-   invisible mark (low-amplitude pixel-domain pattern baked into the raster) — my
-   expected default, and **the default for `final-raster`-projected units, which have
-   no glyph coordinates for text displacement** (round-3 note); or (b) explicitly
-   refuse/defer the forensic promise with an owner-agreed notice (the honest
-   alternative). Stage 0's carrier measurement decides between them.
-8. **Visible-mark override to fixed text** (round-3 fix): the default marks each page
-   per viewer (§9.4). A deployment that wants a fixed `CONFIDENTIAL`-only mark is an
-   owner decision with a stated trade — per-viewer identity moves entirely to the
-   audit-aligned forensic grid, and for carrier-less documents the promise degrades
-   per item 7 — and the audit table remains the attribution record. Turning both
-   marks off for a session is allowed (owner decision 2026-11-08, §6.1); that
-   session is then untraceable and its audit row records it.
+6. **Print — decided 2026-11-08: a per-session setting.** The developer's
+   server-side `authorize` hook sets `can.print` for each session (default on);
+   the client can't turn it on. When on, the pool re-renders print units at print
+   resolution through the normal pipeline, with the session's marks, and the
+   browser prints those images. Print requests count against their own rate-limit
+   class (§14) and each print job is recorded in the audit table. Ships in Stage 3.
+7. **Forensic mark form — decided 2026-11-08: (a) the image-domain mark, on every
+   page.** The keyed, low-amplitude pixel pattern (§13.2) is the primary forensic
+   mark for every unit, layer, keyframe, notes image and print page, not only a
+   fallback for pages with little text. Text displacement stays as a **second,
+   independent layer** on text-rich units sent as commands, because geometric
+   shifts survive print-and-photograph better than fine pixel patterns.
+   - **Form of the pattern.** A spread-spectrum pattern: the session codeword
+     (§13.2) with error correction, spread by a key-derived pseudo-random sequence
+     over the whole page, mostly in mid frequencies of the luminance channel.
+     Detection correlates against candidate session keys (§13.6).
+   - **Rejected alternative: a hidden QR code revealed by image processing.** The
+     library is open source, so the reveal method is public: anyone can find and
+     remove the code with the same processing. A QR code also sits in one region
+     (one crop removes it) and its sharp modules are what JPEG and resizing
+     destroy first. The keyed spread pattern carries the same payload with no
+     public reveal and no single region to crop.
+   - **Stage 0/2 gates.** The pattern is invisible at normal viewing (measured
+     ΔE00 bound [call]); survives JPEG q70, 50 % downscale and 25 % crop at the
+     §13.6 recovery rates; and the §13.6 false-attribution bound holds.
+8. **Visible-mark text — decided 2026-11-08: a per-session setting, fixed text by
+   default.** The developer's `authorize` hook chooses the visible mark per session:
+   `{ kind: 'fixed', text }` (the default, e.g. `CONFIDENTIAL`), `{ kind: 'viewer',
+   fields: ('name' | 'email' | 'viewerId' | 'time')[] }` to show the viewer's
+   identity, or off. Per-viewer identity is always carried by the forensic mark
+   (item 7), so a fixed visible mark loses no traceability. Turning both marks off
+   for a session is allowed (§6.1); that session is untraceable and its audit row
+   records it.
 9. **A11y service default — decided 2026-11-07: on.** `can.textA11y` is on by
    default and any deployment turning it off ships the §15 notice.
 
@@ -1706,6 +1733,9 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
   The §12a.3 projection keeps never-visible content out of them and each carries
   both marks, so a layer reveals nothing the audience doesn't see at some point,
   but it is easier to lift a clean picture of one shape than from a flat page.
+- **A fixed visible mark doesn't name the viewer.** With the default fixed text, a
+  photo of the screen names no one on sight; tracing relies on the forensic mark
+  surviving the capture (§13.6 rates).
 - **Watermarks are a per-session choice.** The developer's server can turn the
   visible mark, the forensic mark or both off for a session (§6.1). A capture from a
   session without the forensic mark cannot be traced to a viewer; the audit table
