@@ -1,3 +1,4 @@
+import { CF_PAINT_BATCH_CELLS } from '../cfLoader'
 import type { AllocationContext, AllocationReservation } from '../view/allocationAccount'
 import { measurePayloadBytes } from '../view/payloadBytes'
 import type { CfDiagnostic, CfLease, CfOutcome } from './model'
@@ -6,7 +7,7 @@ export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, ranges
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,
   statisticsBytes: 8 * 1024 ** 2, scratchBytes: 8 * 1024 ** 2, workUnits: 1_000_000,
-  activeMs: 50, checkpointUnits: 128, sliceMs: 4, preparedCells: 5000,
+  activeMs: 50, checkpointUnits: 128, sliceMs: 4, preparedCells: CF_PAINT_BATCH_CELLS,
   matchingRules: 4096, descriptorUnits: 128, diagnostics: 64 })
 export interface CfRefusal { readonly kind: 'unresolved'; readonly reason: string }
 const refuse = (reason = 'cf-budget-exceeded'): CfRefusal => ({ kind: 'unresolved', reason })

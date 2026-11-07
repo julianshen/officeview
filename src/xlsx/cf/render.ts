@@ -11,7 +11,7 @@ import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
-import { cfExplicitBounds } from '../cfLoader'
+import { cfExplicitBounds, cfNeedsViewport } from '../cfLoader'
 import { STATIC_SHEET_BUDGET } from '../render'
 import { hostTask } from '../view/scheduler'
 
@@ -114,23 +114,55 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   let units = 0
   const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
   try {
-    if (options.viewport && rules.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))) {
-      const visible: SourceRect[] = [], { metrics, boxes } = options.viewport
+    const scoped = Boolean(options.viewport && cfNeedsViewport(sheet))
+    if (options.viewport && scoped) {
+      const { metrics, boxes } = options.viewport
+      // Union column intervals immediately, so duplicate rules/panes never
+      // multiply retained row records. Every new row/interval is admitted first.
+      const rowsBySource = new Map<number, Array<[number, number]>>()
       for (const box of boxes) {
         const rows = metrics.rows.visibleBetween(box.y, box.y + box.height), cols = metrics.cols.visibleBetween(box.x, box.x + box.width)
-
         for (const rr of rows.runs) for (let r = rr.start; r <= rr.end; r++) for (const cc of cols.runs) {
-          const source = metrics.order.displayToSource(r)
+          const sourceRow = metrics.order.displayToSource(r)
           for (const rule of rules.rules) for (const range of rule.ranges) {
             await work()
-            if (source < range.firstRow || source > range.lastRow) continue
-            const firstCol = Math.max(cc.start, range.firstCol), lastCol = Math.min(cc.end, range.lastCol)
-            if (firstCol > lastCol) continue
-            if (visible.length >= CF_LIMITS.rangesPerSheet) throw new Error('CF viewport ranges')
-            if (!hold.grow(hold.bytes + 512)) throw new Error('CF viewport framing')
-            visible.push({ firstRow: source, lastRow: source, firstCol, lastCol })
+            if (sourceRow < range.firstRow || sourceRow > range.lastRow) continue
+            let from = Math.max(cc.start, range.firstCol), to = Math.min(cc.end, range.lastCol)
+            if (from > to) continue
+            let intervals = rowsBySource.get(sourceRow)
+            if (!intervals) {
+              if (rowsBySource.size >= CF_LIMITS.rangesPerSheet || !hold.grow(hold.bytes + 512)) throw new Error('CF viewport framing')
+              rowsBySource.set(sourceRow, intervals = [])
+            }
+            let first = 0
+            while (first < intervals.length && intervals[first][1] < from - 1) { await work(); first++ }
+            let end = first
+            while (end < intervals.length && intervals[end][0] <= to + 1) {
+              await work(); from = Math.min(from, intervals[end][0]); to = Math.max(to, intervals[end][1]); end++
+            }
+            if (end === first && !hold.grow(hold.bytes + 256)) throw new Error('CF viewport interval')
+            intervals.splice(first, end - first, [from, to])
           }
         }
+      }
+      // Sort in source order (including filtered/reordered rows), then extend
+      // identical intervals on adjacent rows rather than rescanning row slabs.
+      type Slab = { -readonly [K in keyof SourceRect]: SourceRect[K] }
+      const visible: Slab[] = [], sourceRows = [...rowsBySource.keys()].sort((a,b)=>a-b)
+      let previous = new Map<number, Slab>(), previousRow = -2
+      for (const row of sourceRows) {
+        const current = new Map<number, Slab>()
+        for (const [from,to] of rowsBySource.get(row)!) {
+          await work()
+          const prior = previousRow === row - 1 ? previous.get(from) : undefined
+          if (prior && prior.lastCol === to) { prior.lastRow = row; current.set(from, prior) }
+          else {
+            if (visible.length >= CF_LIMITS.rangesPerSheet || !hold.grow(hold.bytes + 512)) throw new Error('CF viewport slabs')
+            const rect = {firstRow:row,lastRow:row,firstCol:from,lastCol:to}
+            visible.push(rect); current.set(from,rect)
+          }
+        }
+        previous = current; previousRow = row
       }
       requested = visible
     }
@@ -165,18 +197,20 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const states = new Map<number, CfCellState>()
     // Split the union into disjoint row slabs and merged column intervals. No
     // full-sheet cell set, and overlapping rules never multiply cell admission.
-    const edges = [...new Set(rects.flatMap(r => [r.firstRow, r.lastRow + 1]))].sort((a, b) => a - b)
+    const edges = scoped ? [] : [...new Set(rects.flatMap(r => [r.firstRow, r.lastRow + 1]))].sort((a, b) => a - b)
     const maxCells = Math.max(1, Math.min(256, Math.floor((1024 * 1024 - rules.rules.length * 640 - 2208) / (512 + propertyBytes))))
     const paintCells = options.viewport || options.request ? Math.min(CF_LIMITS.preparedCells, rects.reduce((n, r) => n + (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1), 0)) : 256
     if (!hold.grow(hold.bytes + paintCells * 2048)) throw new Error('CF paint workspace')
     let heldBytes = hold.bytes
-    for (let e = 0; e + 1 < edges.length; e++) {
+    for (let e = 0; e < (scoped ? rects.length : edges.length - 1); e++) {
+      const firstRow = scoped ? rects[e].firstRow : edges[e], endRow = scoped ? rects[e].lastRow + 1 : edges[e + 1]
       const intervals: Array<[number, number]> = []
-      for (const r of rects) { await work(); if (r.firstRow <= edges[e]! && r.lastRow >= edges[e]!) intervals.push([r.firstCol, r.lastCol]) }
+      if (scoped) intervals.push([rects[e].firstCol, rects[e].lastCol])
+      else for (const r of rects) { await work(); if (r.firstRow <= firstRow && r.lastRow >= firstRow) intervals.push([r.firstCol, r.lastCol]) }
       intervals.sort((a, b) => a[0] - b[0])
       const merged: Array<[number, number]> = []
       for (const [a, b] of intervals) { const last = merged.at(-1); if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b); else merged.push([a, b]) }
-      for (let row = edges[e]!; row < edges[e + 1]!; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
+      for (let row = firstRow; row < endRow; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
         await work()
         const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
         const service = createCfService(rules, memory, { evidence, budget: () => budget, statistics })

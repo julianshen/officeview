@@ -79,3 +79,15 @@ export function ensureConditionalFormatting(sheets: readonly Pick<XlsxSheet, 'co
   if (!sheets.some(sheet => sheet.conditionalFormatting !== undefined)) return Promise.resolve(undefined)
   return renderPending ??= import('./cf/render').catch(error => { renderPending = undefined; throw error })
 }
+
+/** Shared paint-batch boundary; metadata-only so the viewer need not load CF. */
+export const CF_PAINT_BATCH_CELLS = 5000
+export function cfNeedsViewport(sheet: Pick<XlsxSheet, 'conditionalFormatting'>): boolean {
+  let span = 0
+  for (const rule of sheet.conditionalFormatting?.rules ?? []) for (const r of rule.ranges) {
+    if (r.lastRow === 1048575 || r.lastCol === 16383) return true
+    span += (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1)
+    if (span > CF_PAINT_BATCH_CELLS) return true
+  }
+  return false
+}

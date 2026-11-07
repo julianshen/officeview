@@ -919,7 +919,6 @@ export function renderSheet(
       if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
     }
   }
-  for (const layout of blankLayouts()) paintCellLayout(ctx, layout, extent, 'content')
   for (const layout of laidOut) {
     const border = paintCellLayout(ctx, layout, extent, 'content')
     if (border) paintBorders.push(border)
@@ -965,8 +964,8 @@ export function renderSheet(
   ctx.stroke()
   if (region) paintCoveredLines(ctx, region.covered)
   // Explicit formatting wins over both gridlines and neighboring cell fills.
-  for (const layout of blankLayouts()) paintCellLayout(ctx, layout, extent, 'content')?.()
   for (const paint of paintBorders) paint()
+  for (const layout of blankLayouts()) paintCellLayout(ctx, layout, extent, 'content')?.()
   // Page mode and export draw the pivot buttons Excel prints (§7.10).
   if (sheet.pivotRegions?.length || sheet.pivotTables?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
   paintSheetDrawings(sheet, sheet.drawings ?? [], ctx, prepared)

@@ -65,3 +65,27 @@ it('open-axis CF covers the tile ring and blocks cache publication during a scop
     expect(latest?.layer.styleAt(60,1,undefined)?.fillColor).toBe('FF00FF00')
   } finally {release();ui.unmount()}
 })
+it('releases a scoped CF lease while the next sheet assets are still pending', FIRST_PAINT_TEST, async () => {
+  const { fireEvent } = await import('@testing-library/react')
+  const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')
+  const module = await import('../src/xlsx/cf/render')
+  const first: XlsxSheet = { name:'First',sheetId:'1',rows:[{index:999,cells:[{row:999,col:20,ref:'U1000',value:1,styleIndex:0}]}],cols:[],merges:[],mergeRanges:[],conditionalFormatting:{diagnostics:[],rules:[{id:0,priority:1,documentOrder:0,stopIfTrue:false,ranges:[{firstRow:0,lastRow:1048575,firstCol:1,lastCol:1}],writes:new Set(['fill']),dxf:{'fill.bg':'FF00FF00'},definition:{kind:'predicate',type:'containsBlanks',dialect:'base',formulas:[]}}]}}
+  // Both sheets are scoped: an undefined second scope key must not accidentally
+  // clear the lease and conceal the missing sheet-switch cleanup.
+  const second: XlsxSheet = {...first,name:'Second',sheetId:'2'}
+  let release!:()=>void;const gate=new Promise<void>(r=>release=r)
+  const load=vi.fn(async(doc:Parameters<typeof prepareSheetAssets>[0],options:Parameters<typeof prepareSheetAssets>[1])=>{if(options?.sheetIndex===1)await gate;return prepareSheetAssets(doc,options)})
+  const real=module.prepareCfPaint;let disposed: import('vitest').Mock<() => void>|undefined
+  const prepare=vi.spyOn(module,'prepareCfPaint').mockImplementation(async(...args)=>{const b=await real(...args);if(b && prepare.mock.calls.length===2){disposed=vi.fn(b.dispose);return {...b,dispose:disposed}}return b})
+  const ui=render(<InteractiveSheetDoc doc={{sheets:[first,second]}} assetLoader={load}/>);
+  try {
+    await waitFor(()=>expect(prepare).toHaveBeenCalledTimes(1),FIRST_PAINT_WAIT)
+    await act(async()=>{await new Promise(r=>setTimeout(r,100));const scroller=ui.getByTestId('officeview-sheet-scroller');scroller.scrollTop=600;fireEvent.scroll(scroller)})
+    await waitFor(()=>expect(disposed).toBeDefined(),FIRST_PAINT_WAIT)
+    await act(async()=>{await new Promise(r=>setTimeout(r,100))})
+    expect(disposed).not.toHaveBeenCalled()
+    act(()=>fireEvent.change(ui.getByRole('combobox',{name:'Worksheet'}),{target:{value:'2'}}))
+    await waitFor(()=>expect(load.mock.calls.some(([,o])=>o?.sheetIndex===1)).toBe(true),FIRST_PAINT_WAIT)
+    await waitFor(()=>expect(disposed).toHaveBeenCalledTimes(1),FIRST_PAINT_WAIT)
+  } finally {release();ui.unmount()}
+})

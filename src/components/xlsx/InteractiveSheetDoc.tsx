@@ -103,7 +103,7 @@ import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/fr
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { ensureConditionalFormatting } from '../../xlsx/cfLoader'
+import { ensureConditionalFormatting, cfNeedsViewport } from '../../xlsx/cfLoader'
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
@@ -920,7 +920,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // No CF sheet: only the optional-field check. CF blank coverage follows the
   // actual projected panes; the existing asset-swap path invalidates their tiles.
-  const scopedCf = entry?.sheet.conditionalFormatting?.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))
+  const scopedCf = entry?.sheet.conditionalFormatting ? cfNeedsViewport(entry.sheet) : false
   const cfViewport = scopedCf && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
     const range = tileRangeFor({origin:box,viewport:{width:box.width*scroll.zoom,height:box.height*scroll.zoom},zoom:scroll.zoom,dpr,extent:{width:entry.metrics.cols.totalCss(),height:entry.metrics.rows.totalCss()}},TILE_PREFETCH_RING)
     const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
@@ -933,7 +933,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(()=>()=>heldViewportCf.current?.dispose(),[])
   useEffect(()=>{
     if(!cfViewportKey || assets?.cfViewportKey===cfViewportKey) { setViewportCf(null); return }
-    if(!cfViewport || !entry || !assets || assets.sheetId!==activeSheetId) return
+    if(!cfViewport || !entry || !assets || assets.sheetId!==activeSheetId) { setViewportCf(null); return }
     let cancelled=false
     const sheet=entry.sheet
     void ensureConditionalFormatting([sheet]).then(async cf=>{
