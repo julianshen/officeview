@@ -118,6 +118,38 @@ export function measureCfPayload(value: unknown, memory: CfMemory): CfOutcome<nu
   } finally { hold.release() }
 }
 
+/** Walked byte size with the traversal workspace admitted on the given
+ * account (grown incrementally, capped at scratchBytes): returns undefined
+ * instead of measuring when the account cannot admit the walk. */
+export function measureCfWalkedBytes(value: unknown, memory: CfMemory, capBytes = CF_LIMITS.scratchBytes): number | undefined {
+  const hold = memory.reserve(0)
+  if (hold.kind !== 'reserved') return undefined
+  let workspace = 0
+  try {
+    const bytes = measurePayloadBytes(value, extra => {
+      const next = workspace + extra
+      if (next > capBytes || !hold.grow(next)) return false
+      workspace = next
+      return true
+    })
+    return bytes ?? undefined
+  } finally {
+    try { hold.release() } catch { /* release-only path */ }
+  }
+}
+
+/** Walked byte size with only a hard traversal cap and no account (for
+ * callers whose admission lives elsewhere, e.g. the session outgoing
+ * measure covered by its pool charge): undefined on overflow or cap breach. */
+export function measureBoundedPayload(value: unknown, capBytes: number): number | undefined {
+  let workspace = 0
+  const bytes = measurePayloadBytes(value, extra => {
+    workspace += extra
+    return workspace <= capBytes
+  })
+  return bytes ?? undefined
+}
+
 export function createCfDiagnostics(memory: CfMemory = createCfMemory({ limitBytes: CF_LIMITS.sheetMetadataBytes })) {
   const entries: CfDiagnostic[] = []
   let hold: CfReservation | undefined, refused = false, disposed = false

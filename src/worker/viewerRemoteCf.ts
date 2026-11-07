@@ -35,6 +35,11 @@ export interface CfReadHost {
   nextRequestId(): string
   /** End the ledger charge of a reply the cache no longer references. */
   release(reply: WorkerReply<'read'>): void
+  /** Admit one cache entry's metadata (key string, scope/rect copies, stamp
+   * copy, entry shell) on the main ledger before the cache allocates it;
+   * null refuses and the entry is not created. The returned release ends
+   * that charge with the entry. */
+  admitEntry(key: string, bytes: number): (() => void) | null
   changed(sheetId: string, rects: readonly SourceRect[], reason?: 'updated' | 'evicted' | 'status'): void
 }
 
@@ -58,6 +63,11 @@ interface Entry {
   refs: number
   detached: boolean
   dropped: boolean
+  /** Admitted metadata bytes (key, scope, stamp, shell); the ledger release. */
+  meta: number
+  releaseEntry?: () => void
+  /** A version adoption already consumed one bounded retry on this entry. */
+  adopted: boolean
   bytes: number
   reply?: WorkerReply<'read'>
   releaseReply?: () => void
@@ -85,6 +95,16 @@ function entryKey(sheetId: string, rects: readonly SourceRect[], stamp: CfReadSt
   return `${sheetId}|${rectsKey(rects)}|${stamp.owner}|${stamp.workbookValueGen}|${stamp.cfGen}|${stamp.viewGen}|${stamp.structureGen}|${stamp.clockGen}`
 }
 
+/** Admitted bytes of one cache entry's metadata, computed from input sizes
+ * before the cache allocates anything: the key string, the scope/rect
+ * copies, the stamp copy and the entry shell. Waiting and failed entries
+ * carry exactly this; ready entries add their reply bytes. */
+export function entryMetaBytes(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp): number {
+  // Shell plus the key string, one copy per scope rect (four numbers plus
+  // object slots) and the stamp copy (identities plus generation numbers).
+  return CF_CACHE_ENTRY_OVERHEAD_BYTES + (sheetId.length + stamp.owner.length) * 2 + rects.length * 128 + 256
+}
+
 function unionRects(rects: readonly SourceRect[]): SourceRect[] {
   if (rects.length <= MAX_NOTIFY_RECTS) return [...rects]
   let r0 = Number.MAX_SAFE_INTEGER, r1 = 0, c0 = Number.MAX_SAFE_INTEGER, c1 = 0
@@ -104,6 +124,8 @@ export class RemoteCfCache {
   private closed = false
   private notifyScheduled = false
   private readonly pendingNotifies = new Map<string, { rects: SourceRect[]; reason: 'updated' | 'evicted' | 'status' }>()
+  /** Monotonic entry admission owner: rekeys keep the original owner. */
+  private entrySeq = 0
   constructor(private readonly host: CfReadHost, readonly budgetBytes: number = Number.MAX_SAFE_INTEGER) {}
 
   get(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp): PagedCfState {
@@ -201,45 +223,70 @@ export class RemoteCfCache {
   get retainedBytes(): number { return [...this.entries.values()].reduce((n, e) => n + e.bytes, 0) + [...this.pinned].reduce((n, e) => n + e.bytes, 0) }
 
   private entryFor(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp): Entry | undefined {
+    // Admit variable metadata on the main ledger before allocating the key
+    // string, the scope/rect copies or the entry shell. Waiting and failed
+    // entries keep exactly this charge until the entry drops. The admission
+    // owner is entry-scoped (not key-scoped), so rekeys keep it.
+    const meta = entryMetaBytes(sheetId, rects, stamp)
+    const releaseEntry = this.host.admitEntry(`cf-entry:${this.entrySeq++}`, meta)
+    if (!releaseEntry) return undefined
     const key = entryKey(sheetId, rects, stamp)
-    let entry = this.entries.get(key)
-    if (!entry) {
-      // A new generation replaces same-scope entries: unreferenced ones drop
-      // now (releasing once); referenced ones detach into the pinned set and
-      // release on last use. This is what keeps an old pinned definition
-      // charged while the new preparation builds beside it.
-      for (const [otherKey, other] of [...this.entries]) {
-        if (other.sheetId !== sheetId || !sameScope(other.rects, rects)) continue
-        this.entries.delete(otherKey)
-        other.detached = true
-        other.gen++
-        this.deferChanged(sheetId, other.rects, 'updated')
-        if (other.refs <= 0) {
-          if (!other.dropped) this.drop(other)
-        } else {
-          this.pinned.add(other)
-        }
-      }
-      // Enforce the entry cap before creating: evict unreferenced entries
-      // first; if everything is pinned, refuse the new entry rather than
-      // growing without bound.
-      while (this.entries.size + this.pinned.size >= MAX_ENTRIES) {
-        const oldest = [...this.entries.values()].find(e => e.refs <= 0);
-        if (!oldest) return undefined
-        this.entries.delete(oldest.key)
-        oldest.detached = true
-        this.deferChanged(oldest.sheetId, oldest.rects, 'evicted')
-        if (!oldest.dropped) this.drop(oldest)
-      }
-      this.entries.set(key, entry = {
-        key, sheetId, rects: rects.map(r => ({ ...r })), stamp: { ...stamp },
-        state: 'waiting', gen: 0, seq: 0, refs: 0, detached: false, dropped: false, bytes: 0, diagnostics: [],
-      })
-    } else {
+    const existing = this.entries.get(key)
+    if (existing) {
+      // A lookup hit allocates nothing new: end the spare admission at once.
+      try { releaseEntry() } catch { /* release-only path */ }
       this.entries.delete(key)
-      this.entries.set(key, entry)
+      this.entries.set(key, existing)
+      return existing
     }
+    // A new generation replaces same-scope entries: unreferenced ones drop
+    // now (releasing once); referenced ones detach into the pinned set and
+    // release on last use. This is what keeps an old pinned definition
+    // charged while the new preparation builds beside it.
+    for (const [otherKey, other] of [...this.entries]) {
+      if (other.sheetId !== sheetId || !sameScope(other.rects, rects)) continue
+      this.entries.delete(otherKey)
+      other.detached = true
+      other.gen++
+      this.deferChanged(sheetId, other.rects, 'updated')
+      if (other.refs <= 0) {
+        if (!other.dropped) this.drop(other)
+      } else {
+        this.pinned.add(other)
+      }
+    }
+    // Enforce the entry cap before creating: evict unreferenced entries
+    // first; if everything is pinned, refuse the new entry rather than
+    // growing without bound.
+    while (this.entries.size + this.pinned.size >= MAX_ENTRIES) {
+      const oldest = [...this.entries.values()].find(e => e.refs <= 0);
+      if (!oldest) {
+        try { releaseEntry() } catch { /* release-only path */ }
+        return undefined
+      }
+      this.entries.delete(oldest.key)
+      oldest.detached = true
+      this.deferChanged(oldest.sheetId, oldest.rects, 'evicted')
+      if (!oldest.dropped) this.drop(oldest)
+    }
+    const entry: Entry = {
+      key, sheetId, rects: rects.map(r => ({ ...r })), stamp: { ...stamp },
+      state: 'waiting', gen: 0, seq: 0, refs: 0, detached: false, dropped: false,
+      meta, releaseEntry, adopted: false, bytes: meta, diagnostics: [],
+    }
+    this.entries.set(key, entry)
     return entry
+  }
+
+  /** Moves a live entry to a newly adopted stamp (cold-start or first
+   * discovery): the old key is forgotten and the new key installed. At most
+   * one entry exists per key, so a clash overwrites — unreachable in current
+   * flows, where adoption only runs on live loading entries. */
+  private rekey(entry: Entry, stamp: CfReadStamp): void {
+    this.entries.delete(entry.key)
+    entry.stamp = { ...stamp }
+    entry.key = entryKey(entry.sheetId, entry.rects, entry.stamp)
+    this.entries.set(entry.key, entry)
   }
 
   private drop(entry: Entry): void {
@@ -249,6 +296,10 @@ export class RemoteCfCache {
     entry.seq++
     entry.controller?.abort()
     entry.controller = undefined
+    if (entry.releaseEntry) {
+      try { entry.releaseEntry() } catch { /* release-only path */ }
+      entry.releaseEntry = undefined
+    }
     entry.releaseReply?.()
     entry.releaseReply = undefined
     entry.reply = undefined
@@ -273,7 +324,9 @@ export class RemoteCfCache {
     entry.pendingSheetIds = undefined
     entry.owner = undefined
     entry.state = 'waiting'
-    entry.bytes = 0
+    entry.adopted = false
+    // The entry (and its ledger-admitted metadata) is reused, not dropped.
+    entry.bytes = entry.meta
   }
 
   private deferChanged(sheetId: string, rects: readonly SourceRect[], reason: 'updated' | 'evicted' | 'status'): void {
@@ -310,18 +363,7 @@ export class RemoteCfCache {
     if (this.host.loadState(sheetId).completeness !== 'complete') return
     const owner = this.host.identity(sheetId)
     if (entry.owner && !sameOwner(entry.owner, owner)) {
-      entry.seq++
-      entry.controller?.abort()
-      entry.controller = undefined
-      entry.releaseReply?.()
-      entry.releaseReply = undefined
-      entry.reply = undefined
-      entry.result = undefined
-      entry.diagnostics = []
-      entry.pendingSheetIds = undefined
-      entry.owner = undefined
-      entry.state = 'waiting'
-      entry.bytes = 0
+      this.reset(entry)
       entry.gen++
     }
     const requestId = this.host.nextRequestId()
@@ -398,15 +440,55 @@ export class RemoteCfCache {
         this.deferChanged(sheetId, entry.rects, 'status')
         return
       }
+      // Bounded version adoption: a cold request (cfGen 0, "unknown, adopt
+      // live") publishes the live reply under the adopted stamp; a first
+      // stale-version reply rekeys and reloads once so a provider that raced
+      // ahead still completes. Anything else mismatched fails closed, naming
+      // the discovered version so the caller can re-request with it. Every
+      // other stamp field and the transport owner must already match —
+      // adoption never crosses owners, sheets or value generations.
+      const want = entry.stamp
+      const got = result.stamp
+      const sameIdentity = !!got && Number.isSafeInteger(got.cfGen) && got.cfGen !== 0
+        && got.owner === want.owner && got.sheetId === want.sheetId
+        && got.workbookValueGen === want.workbookValueGen && got.viewGen === want.viewGen
+        && got.structureGen === want.structureGen && got.clockGen === want.clockGen
+        && sameOwner(out.owner as CacheIdentity, owner)
+      if (sameIdentity && got.cfGen !== want.cfGen) {
+        if (want.cfGen === 0 || !entry.adopted) {
+          entry.adopted = true
+          this.rekey(entry, { ...got })
+          entry.gen++
+          if (want.cfGen !== 0) {
+            // Stale known version: the live reply belongs to the adopted
+            // stamp, not this request — reload once under the new key.
+            releaseOnce()
+            entry.controller = undefined
+            entry.state = 'waiting'
+            entry.owner = undefined
+            entry.pendingSheetIds = undefined
+            this.deferChanged(sheetId, entry.rects, 'status')
+            void this.load(entry)
+            return
+          }
+          // Cold start: fall through and publish the live reply below.
+        } else {
+          releaseOnce()
+          entry.state = 'failed'
+          entry.diagnostics = [{ kind: 'unsupported', feature: 'cf-stale-generation', message: `Conditional formatting reply carried cfGen ${got.cfGen}; re-request with the live generations.` }]
+          entry.gen++
+          this.deferChanged(sheetId, entry.rects, 'status')
+          return
+        }
+      }
       // Full-stamp validation: the reply must match the requested identity on
       // every field, or it is dropped without publishing — never paint stale.
       // A mismatch means the caller is behind; it must re-request with live
       // generations (failing closed here breaks retry loops on stale stamps).
-      const want = entry.stamp
-      const got = result.stamp
-      const stampMismatch = !got || got.owner !== want.owner || got.sheetId !== want.sheetId
-        || got.workbookValueGen !== want.workbookValueGen || got.cfGen !== want.cfGen
-        || got.viewGen !== want.viewGen || got.structureGen !== want.structureGen || got.clockGen !== want.clockGen
+      const live = entry.stamp
+      const stampMismatch = !got || got.cfGen === 0 || got.owner !== live.owner || got.sheetId !== live.sheetId
+        || got.workbookValueGen !== live.workbookValueGen || got.cfGen !== live.cfGen
+        || got.viewGen !== live.viewGen || got.structureGen !== live.structureGen || got.clockGen !== live.clockGen
       if (stampMismatch || !sameOwner(out.owner as CacheIdentity, owner)) {
         releaseOnce()
         entry.state = 'failed'
@@ -440,7 +522,10 @@ export class RemoteCfCache {
         this.deferChanged(sheetId, entry.rects, 'status')
         return
       }
-      const bytes = (out.replyBytes ?? 0) + CF_CACHE_ENTRY_OVERHEAD_BYTES
+      // Ready entries carry their reply plus the admitted entry metadata;
+      // makeRoom evicts against that same total.
+      const replyBytes = out.replyBytes ?? 0
+      const bytes = replyBytes + entry.meta
       if (!Number.isSafeInteger(bytes) || !this.makeRoom(entry, bytes)) {
         releaseOnce()
         entry.state = 'failed'
@@ -468,8 +553,10 @@ export class RemoteCfCache {
   }
 
   private makeRoom(current: Entry, needed: number): boolean {
+    // The current entry's own admitted metadata is already counted in
+    // retainedBytes: room is judged on everyone else plus the new total.
     for (const [id, other] of this.entries) {
-      if (this.retainedBytes + needed <= this.budgetBytes) break
+      if (this.retainedBytes - current.bytes + needed <= this.budgetBytes) break
       if (other === current || other.state !== 'ready' || other.refs > 0) continue
       this.entries.delete(id)
       other.detached = true
@@ -477,7 +564,7 @@ export class RemoteCfCache {
       this.deferChanged(other.sheetId, other.rects, 'evicted')
       if (!other.dropped) this.drop(other)
     }
-    return this.retainedBytes + needed <= this.budgetBytes
+    return this.retainedBytes - current.bytes + needed <= this.budgetBytes
   }
 }
 

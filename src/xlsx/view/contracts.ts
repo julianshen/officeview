@@ -305,11 +305,15 @@ export interface SourceStore {
   readConditionalFormatting?(request: CfReadRequest, memory?: CfMemory, options?: CfReadOptions): Promise<CfReadResult>
 }
 /** Read options for a CF preparation: the shared budget lives in the called
- * memory account; callers cancel through the abort signal. */
+ * memory account; callers cancel through the abort signal. `retainOutgoing`,
+ * when supplied, receives the release of the live outgoing lease the
+ * provider adopts on the shared account: the caller holds it through post
+ * and releases after drain instead of the provider refunding at return. */
 export interface CfReadOptions {
   readonly signal?: AbortSignal
   readonly budget?: () => CfWorkBudget
   readonly envelopeBytes?: number
+  readonly retainOutgoing?: (release: () => void) => void
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }

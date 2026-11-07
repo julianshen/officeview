@@ -352,6 +352,13 @@ export class RemoteWorkbook implements WorkbookSource {
       request: (command, signal) => this.request(command, signal),
       nextRequestId: () => this.nextRequestId(),
       release: reply => this.mainLedger.settle(reply),
+      admitEntry: (key, bytes) => {
+        const owner = `cf-entry:${key}`
+        if (!Number.isSafeInteger(bytes) || bytes <= 0 || this.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.profile]) return null
+        this.mainLedger.set('layout', owner, bytes)
+        let held = true
+        return () => { if (held) { held = false; this.mainLedger.release('layout', owner) } }
+      },
       changed: (sheetId, rects, reason = 'updated') => {
         if (reason === 'evicted') { this.notify(); return }
         // Merge topology stays independent of CF paint readiness: queue the

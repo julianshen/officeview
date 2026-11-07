@@ -3,7 +3,7 @@ import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import type { XlsxFrozenPane } from '../xlsx/frozenPane'
 import type { XlsxCellStyle } from '../xlsx/types'
 import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
-import type { AllocationContext } from '../xlsx/view/allocationAccount'
+import type { AllocationContext, AllocationReservation } from '../xlsx/view/allocationAccount'
 /**
  * Resident document session (spec §§4.1, 6.3, 10.1–10.2; plan S4.1).
  *
@@ -70,7 +70,6 @@ import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRo
 import { filterValueDomain, scanValueDomain, type ValueDomainScan, type ValueStatus } from '../xlsx/view/values'
 import { awaitQueryDeadline, interruptibleStore, retainUntilDrained } from './viewerAbort'
 import type { CfMemory } from '../xlsx/cf/limits'
-import { measurePayloadBytes } from '../xlsx/view/payloadBytes'
 import { WorkbookFind, FindError, FIND_HIT_BUFFER_BUDGET, type FindPage, type FindSheetInput } from '../xlsx/view/find'
 import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
 import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
@@ -118,6 +117,53 @@ function sameWorkbookOwner(a: WorkbookOwner, b: WorkbookOwner): boolean {
 }
 export const failure = (code: SourceFailure['code'], message: string, retryable = false): SourceFailure =>
   Object.freeze({ code, retryable, message })
+/** Adapts the session MemoryPool as the CF document account. CfMemory only
+ * exercises reserve/trySet/release (plus headroom and closed probes), which
+ * map onto one pool charge each: absolute set semantics on both sides, so a
+ * failed trySet leaves the charge untouched and the shared pool — not an
+ * isolated ledger — admits or refuses. adopt/owns never run against this
+ * context (CfMemory retains through its own leases); the stubs document that
+ * boundary rather than pretending to support it. */
+function poolCfContext(pool: MemoryPool): AllocationContext {
+  return {
+    limitBytes: pool.limitBytes,
+    get closed() { return pool.stats().closed },
+    reserve(): AllocationReservation {
+      const share = pool.charge()
+      let bytes = 0, ended = false
+      return {
+        owner: 'cf-session-pool',
+        get bytes() { return bytes },
+        trySet: (next: number): boolean => {
+          if (ended) return false
+          if (!share.set(next)) return false
+          bytes = next
+          return true
+        },
+        charge: (extra: number): void => {
+          if (!ended && extra > 0) {
+            const next = bytes + extra
+            if (share.set(next)) bytes = next
+          }
+        },
+        release: (count?: number): void => {
+          if (ended) return
+          if (count === undefined || count >= bytes) {
+            ended = true
+            share.release()
+          } else if (count > 0) {
+            const next = bytes - count
+            if (share.set(next)) bytes = next
+          }
+        },
+        adopt: (): void => { /* CfMemory never adopts into the context account. */ },
+      }
+    },
+    canReserve: (bytes: number): boolean =>
+      Number.isSafeInteger(bytes) && bytes >= 0 && pool.stats().totalBytes + bytes <= pool.limitBytes,
+    owns: (): boolean => false,
+  }
+}
 /** §4.1 column page ordering violation; the session never stages such lanes. */
 const UNORDERED_PAGE = failure('page-error', 'Column pages must cover requested rows in ascending, contiguous order')
 /** S13.2: a store that cannot serve drawing content says so (a visible
@@ -1816,7 +1862,13 @@ export class DocumentSession {
   private async cfAccount(): Promise<CfMemory> {
     if (!this.cfMemory) {
       const { createCfMemory } = await import('../xlsx/cf/limits')
-      this.cfMemory ??= createCfMemory(this.options.allocation ? { context: this.options.allocation } : {})
+      // Ordinary worker sessions own this.memory and supply no main-control
+      // allocation: adapt CF reservations to the real session pool, so a
+      // full worker pool refuses CF construction instead of isolating it on
+      // an independent ledger. Only CfMemory's reserve/trySet/release (plus
+      // headroom/closed probes) run against this context.
+      const context = this.options.allocation ?? poolCfContext(this.memory)
+      this.cfMemory ??= createCfMemory({ context })
     }
     return this.cfMemory
   }
@@ -3206,15 +3258,26 @@ export class DocumentSession {
         break
       }
       case 'conditionalFormatting': {
-        // The provider builds under the session-scoped CF account (shared by
-        // every preparation of this document, wired to the document
-        // allocation when present), and the session retains outgoing
-        // ownership of the measured payload through posting: the charge is
-        // held across the await and handed off until the kernel drains it,
-        // exactly like the drawing/sparkline paths.
+        // The provider builds under the session-scoped CF account: the
+        // ordinary worker pool when no main-control allocation is present
+        // (shared by every preparation of this document), the document
+        // allocation otherwise. A ready provider transfers a live outgoing
+        // lease on that account; the session holds it through posting and
+        // releases after drain, so the live result is never uncharged
+        // between return and post. Without a lease (fallback or refusal
+        // payloads) the session charge admits the measured payload instead.
         const charge = this.charge()
         let raw: Promise<unknown> | undefined, drained = false
-        const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
+        const outgoings: Array<() => void> = []
+        let outgoingsReleased = false
+        const releaseOutgoings = () => {
+          if (outgoingsReleased) return
+          outgoingsReleased = true
+          for (const release of outgoings.splice(0)) {
+            try { release() } catch { /* release-only path */ }
+          }
+        }
+        const handOff = () => { if (retain) retain(() => { charge.release(); releaseOutgoings() }); else { charge.release(); releaseOutgoings() } }
         try {
           if (!Number.isSafeInteger(query.grantBytes) || query.grantBytes <= 0) {
             result = {
@@ -3231,7 +3294,7 @@ export class DocumentSession {
             const work = store.readConditionalFormatting?.(
               { rects: query.rects, stamp: query.stamp, grantBytes: query.grantBytes },
               await this.cfAccount(),
-              { signal, envelopeBytes: replyEnvelopeBytes },
+              { signal, envelopeBytes: replyEnvelopeBytes, retainOutgoing: release => { outgoings.push(release) } },
             ) ?? Promise.resolve({
               sheetId: owner.sheetId,
               stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
@@ -3242,8 +3305,13 @@ export class DocumentSession {
             raw = work
             void work.then(() => { drained = true }, () => { drained = true })
             const payload = await work
-            const outgoing = measurePayloadBytes(payload, () => true)
-            if (outgoing === undefined || !charge.set(outgoing)) {
+            // Bounded walk (no unbounded traversal scratch); the pool charge
+            // is skipped when a provider lease already owns the bytes, so the
+            // same payload is never admitted twice.
+            const { measureBoundedPayload, CF_LIMITS } = await import('../xlsx/cf/limits')
+            const outgoing = measureBoundedPayload(payload, CF_LIMITS.scratchBytes)
+            if (outgoing === undefined || (outgoings.length === 0 && !charge.set(outgoing))) {
+              releaseOutgoings()
               result = {
                 op: 'conditionalFormatting',
                 result: {
