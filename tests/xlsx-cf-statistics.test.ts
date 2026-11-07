@@ -12,6 +12,7 @@ import type {
 } from '../src/xlsx/cf/model'
 import type { XlsxCell } from '../src/xlsx/types'
 import { createCfMemory, createCfWorkBudget, CF_LIMITS, type CfWorkBudget } from '../src/xlsx/cf/limits'
+import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { parseCfSheet } from '../src/xlsx/cf/parse'
 import {
   cfValueKey,
@@ -823,6 +824,365 @@ describe('CF statistics preparation', () => {
     expect(overlap!.value.value.spanCells).toBe(16)
     expect(overlap!.value.value.storedCells).toBe(16)
     overlap!.value.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('statistics over the session cap withhold with peak at most the cap', async () => {
+    // Round-2 finding 1: one scope of 5,000 identical 1,000-character strings
+    // must withhold (not publish with a 10 MiB peak over the 8 MiB cap).
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const src = {
+      bounds: (_id: string) => rect(0, 4999),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield {
+          value: {
+            rows: Uint32Array.from({ length: 5000 }, (_, i) => i),
+            cols: new Uint16Array(5000),
+            values: Array.from({ length: 5000 }, () => ({ kind: 'string', value: 'a'.repeat(1000) }) as const),
+          },
+          bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+        }
+      },
+    }
+    const [out] = await stats.prepareStatistics([[rect(0, 4999)]], stamp(1), src, frozenBudget())
+    expect(out!).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(memory.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+    // The session cap binds the peak: never mind the small retained map,
+    // the admitted workspace must stay within the dedicated cap.
+    expect(memory.peakBytes).toBeLessThanOrEqual(8 * 1024 ** 2)
+  })
+
+  it('numeric growth admits the replacement peak while old buffers are live', async () => {
+    // Round-2 finding 2: with 1,025 identical numbers, growth builds two
+    // 5,120-element arrays while both old 1,024-element arrays are still
+    // referenced across the awaited copies. Every construction must observe
+    // admitted charge covering all live numeric buffers.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const Seen = globalThis.Float64Array
+    let constructed = 0
+    const events: Array<{ live: number; charge: number }> = []
+    class Instrumented extends Seen {
+      constructor(n?: number) {
+        super(n as number)
+        if (typeof n === 'number') {
+          constructed += this.byteLength
+          events.push({ live: constructed, charge: memory.currentBytes })
+        }
+      }
+    }
+    ;(globalThis as unknown as { Float64Array: unknown }).Float64Array = Instrumented
+    try {
+      const src = {
+        bounds: (_id: string) => rect(0, 1024),
+        stamp: (_id: string) => stamp(1),
+        pages: async function* (_id: string) {
+          yield {
+            value: {
+              rows: Uint32Array.from({ length: 1025 }, (_, i) => i),
+              cols: new Uint16Array(1025),
+              values: Array.from({ length: 1025 }, () => ({ kind: 'number', value: 1 }) as const),
+            },
+            bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+          }
+        },
+      }
+      const [out] = await stats.prepareStatistics([[rect(0, 1024)]], stamp(1), src, frozenBudget())
+      expect(out!.kind).toBe('ready')
+      if (out!.kind === 'ready') out!.value.release()
+    } finally {
+      ;(globalThis as unknown as { Float64Array: unknown }).Float64Array = Seen
+    }
+    expect(events.length).toBeGreaterThanOrEqual(4)
+    for (const e of events) expect(e.charge).toBeGreaterThanOrEqual(e.live)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('overlap dedup entries are admitted per distinct cell', async () => {
+    // Round-2 finding 2: the overlap-dedup Set grows without admission.
+    // 1,000 distinct numbers need ~16 KiB workspace + ~128 KiB frequency
+    // keys. The overlapping twin adds ~64 KiB of Set entries, so a 180 KiB
+    // shared account fits the single rect but withholds the overlap.
+    const cells = Array.from({ length: 1000 }, (_, i) => cell(i, 0, i))
+    const singleMemory = createCfMemory({ limitBytes: 180 * 1024 })
+    const singleInner = createResidentCfSource(cells.map(c => ({ ...c })), SHEET, stamp(1), singleMemory)
+    const singleSource = {
+      bounds: (id: string) => singleInner.bounds(id),
+      stamp: (_id: string) => stamp(1),
+      pages: singleInner.pages.bind(singleInner),
+    }
+    const statsSingle = createCfStatistics(singleMemory)
+    const [readyOut] = await statsSingle.prepareStatistics([[rect(0, 999)]], stamp(1), singleSource, frozenBudget())
+    expect(readyOut!.kind).toBe('ready')
+    if (readyOut!.kind === 'ready') readyOut!.value.release()
+    expect(singleMemory.currentBytes).toBe(0)
+    // Same cells under two identical rects: the dedup Set charges force a
+    // withhold instead of an overrun on the same tight account.
+    const tight = createCfMemory({ limitBytes: 180 * 1024 })
+    const inner = createResidentCfSource(cells.map(c => ({ ...c })), SHEET, stamp(1), tight)
+    const wrapped = {
+      bounds: (id: string) => inner.bounds(id),
+      stamp: (_id: string) => stamp(1),
+      pages: inner.pages.bind(inner),
+    }
+    const stats = createCfStatistics(tight)
+    const [refused] = await stats.prepareStatistics([[rect(0, 999), rect(0, 999)]], stamp(1), wrapped, frozenBudget())
+    expect(refused!).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(tight.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+  })
+
+  it('resident pages admit the full modeled payload before building', async () => {
+    // Round-2 finding 3: a normal 64-number page was admitted at 1,152 B
+    // while the payload model reports 6,872 B. The charge must cover the
+    // measured page, for numeric, boolean and string pages alike.
+    const check = async (cells: XlsxCell[]): Promise<void> => {
+      const memory = createCfMemory({})
+      const source = createResidentCfSource(cells, SHEET, stamp(1), memory)
+      for await (const page of source.pages(SHEET, [rect(0, cells.length - 1)], frozenBudget(), new AbortController().signal)) {
+        const model = measurePayloadBytes(page.value)
+        expect(typeof model).toBe('number')
+        // Admitted charge covers the modeled retained payload (plus bounded staging).
+        expect(page.bytes).toBeGreaterThanOrEqual(model!)
+        expect(page.bytes - model!).toBeLessThan(1024)
+        page.release()
+      }
+      expect(memory.currentBytes).toBe(0)
+    }
+    await check(Array.from({ length: 64 }, (_, i) => cell(i, 0, 1)))
+    await check(Array.from({ length: 64 }, (_, i) => cell(i, 0, i % 2 === 0)))
+    await check(Array.from({ length: 64 }, (_, i) => cell(i, 0, `k${i}-` + 'x'.repeat(20))))
+  })
+
+  it('aborting between adoption and publication releases the candidate', async () => {
+    // Round-2 finding 4: abort the sole caller right after hold.adopt and
+    // no consumer or cleanup may keep the adopted charge.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const controller = new AbortController()
+    const reserve = memory.reserve.bind(memory)
+    memory.reserve = ((bytes: number) => {
+      const hold = reserve(bytes)
+      if (hold.kind === 'reserved') {
+        const adopt = hold.adopt.bind(hold)
+        hold.adopt = ((value: unknown, retained?: number) => {
+          const lease = adopt(value as never, retained)
+          if ((value as { sortedAsc?: unknown }).sortedAsc !== undefined) controller.abort()
+          return lease
+        }) as typeof hold.adopt
+      }
+      return hold
+    }) as typeof memory.reserve
+    const src = {
+      bounds: (_id: string) => rect(0, 0),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield {
+          value: { rows: new Uint32Array([0]), cols: new Uint16Array([0]), values: [{ kind: 'number', value: 1 } as const] },
+          bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+        }
+      },
+    }
+    await expect(
+      stats.prepareStatistics([[rect(0, 0)]], stamp(1), src, frozenBudget(), { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'cancelled' })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(memory.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+    stats.dispose()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('an aborting waiter does not disturb the shared job for others', async () => {
+    // The shared build continues for a live waiter after one waiter aborts;
+    // the aborted call unwinds while the other still resolves ready.
+    const cells = [cell(0, 0, 5), cell(1, 0, 6), cell(2, 0, 7)]
+    const { memory, source } = arraySource(cells)
+    const stats = createCfStatistics(memory)
+    const firstController = new AbortController()
+    const a = stats.prepareStatistics([[rect(0, 2)]], stamp(1), source, frozenBudget(), { signal: firstController.signal })
+    const b = stats.prepareStatistics([[rect(0, 2)]], stamp(1), source, frozenBudget())
+    firstController.abort()
+    await expect(a).rejects.toMatchObject({ code: 'cancelled' })
+    const [ready] = await b
+    expect(ready!.kind).toBe('ready')
+    if (ready!.kind === 'ready') ready!.value.release()
+    expect(memory.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+  })
+
+  it('a generation change during post-scan work withholds at publication', async () => {
+    // Round-2 finding 5: the source flips gen 1 -> 2 after the pre-sort
+    // stamp check (queued microtask); the final publication gate must see it.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    let current = stamp(1)
+    let armed = false
+    const src = {
+      bounds: (_id: string) => rect(0, 999),
+      stamp: (_id: string) => {
+        if (armed) queueMicrotask(() => { current = stamp(2) })
+        return current
+      },
+      pages: async function* (_id: string) {
+        yield {
+          value: {
+            rows: Uint32Array.from({ length: 1000 }, (_, i) => i),
+            cols: new Uint16Array(1000),
+            values: Array.from({ length: 1000 }, (_, i) => ({ kind: 'number', value: i }) as const),
+          },
+          bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+        }
+        armed = true
+      },
+    }
+    const [out] = await stats.prepareStatistics([[rect(0, 999)]], stamp(1), src, frozenBudget())
+    expect(out!).toMatchObject({ kind: 'unresolved', reason: 'cf-stale-generation' })
+    expect(current.workbookValueGen).toBe(2)
+    expect(memory.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+  })
+
+  it('warm cache hits do not rescan bounds', async () => {
+    // Round-2 finding 6: a cache hit must not rescan the sheet (3,001 row
+    // reads on a 1,000-cell source); bounds are memoized per generation.
+    let reads = 0
+    const cells: XlsxCell[] = Array.from({ length: 1000 }, (_, i) => ({
+      get row() { reads++; return i },
+      col: 0, ref: `A${i + 1}`, value: 1, styleIndex: 0,
+    } as XlsxCell))
+    const counter = makeCounter()
+    const { memory, source } = arraySource(cells, counter)
+    const stats = createCfStatistics(memory)
+    const [first] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), source, frozenBudget())
+    expect(first!.kind).toBe('ready')
+    const boundsCalls = counter.bounds
+    reads = 0
+    const [hit] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), source, frozenBudget())
+    expect(hit!.kind).toBe('ready')
+    if (first!.kind === 'ready') first!.value.release()
+    if (hit!.kind === 'ready') hit!.value.release()
+    expect(counter.bounds).toBe(boundsCalls)
+    expect(reads).toBe(0)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('rejected cells spend shared budget in the resident adapter', async () => {
+    // Round-2 finding 6: a query excluding all stored cells must still
+    // charge the examination work instead of completing with zero units.
+    let reads = 0
+    const cells: XlsxCell[] = Array.from({ length: 10000 }, (_, i) => ({
+      get row() { reads++; return i < 5000 ? 0 : 10000 },
+      col: i % 5000, ref: 'A1', value: 1, styleIndex: 0,
+    } as unknown as XlsxCell))
+    const budget = frozenBudget()
+    const source = createResidentCfSource(cells, SHEET, stamp(1), createCfMemory({}))
+    let yielded = 0
+    for await (const page of source.pages(SHEET, [{ firstRow: 1, lastRow: 9999, firstCol: 0, lastCol: 4999 }], budget, new AbortController().signal)) {
+      yielded++
+      page.release()
+    }
+    expect(yielded).toBe(0)
+    expect(budget.units).toBe(10000)
+    // Filtering must examine each cell (short-circuit comparisons read row
+    // at most twice), but every examination is charged exactly once.
+    expect(reads).toBeLessThanOrEqual(20000)
+  })
+
+  it('tiny preparations flush their budget remainder', async () => {
+    // Round-2 finding 6: a one-number preparation must count its tail
+    // instead of completing with zero statistics units.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const budget = frozenBudget()
+    const src = {
+      bounds: (_id: string) => rect(0, 0),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield {
+          value: { rows: new Uint32Array([0]), cols: new Uint16Array([0]), values: [{ kind: 'number', value: 1 } as const] },
+          bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+        }
+      },
+    }
+    const [out] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), src, budget)
+    expect(out!.kind).toBe('ready')
+    if (out!.kind === 'ready') out!.value.release()
+    expect(budget.units).toBeGreaterThan(0)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('union traversal across many rectangles is budgeted', async () => {
+    // Round-2 finding 6: coordinate work per scope must count. Same single
+    // cell under 65 identical rects must cost clearly more than under one.
+    // A bare source (no adapter spends) isolates build-level accounting:
+    // pre-fix the gap is only the 64 extra cell visits; the counted union
+    // adds ~132 more (65 edges + slabs, times declared and span).
+    const bare = () => ({
+      bounds: (_id: string) => rect(0, 0),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield {
+          value: { rows: new Uint32Array([0]), cols: new Uint16Array([0]), values: [{ kind: 'number', value: 1 } as const] },
+          bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+        }
+      },
+    })
+    const oneBudget = frozenBudget()
+    {
+      const memory = createCfMemory({})
+      const stats = createCfStatistics(memory)
+      const [out] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), bare(), oneBudget)
+      expect(out!.kind).toBe('ready')
+      if (out!.kind === 'ready') out!.value.release()
+      expect(memory.currentBytes).toBe(0)
+    }
+    const manyBudget = frozenBudget()
+    {
+      const memory = createCfMemory({})
+      const stats = createCfStatistics(memory)
+      const scopes = [Array.from({ length: 65 }, () => rect(0, 0))]
+      const [out] = await stats.prepareStatistics(scopes, stamp(1), bare(), manyBudget)
+      expect(out!.kind).toBe('ready')
+      if (out!.kind === 'ready') {
+        expect(out!.value.value.declaredCells).toBe(1)
+        out!.value.release()
+      }
+      expect(memory.currentBytes).toBe(0)
+    }
+    // Union + dedup work over 65 rects dwarfs the single-rect baseline.
+    expect(manyBudget.units - oneBudget.units).toBeGreaterThanOrEqual(128)
+  })
+
+  it('union of more than 64 identical ranges is exact', async () => {
+    // Round-2 finding 7: sixty-five identical A1 ranges must report the
+    // true one-cell union instead of the naive sum (65).
+    const { memory, source } = arraySource([cell(0, 0, 1)])
+    const stats = createCfStatistics(memory)
+    const scopes = [Array.from({ length: 65 }, () => rect(0, 0))]
+    const [out] = await stats.prepareStatistics(scopes, stamp(1), source, frozenBudget())
+    expect(out!.kind).toBe('ready')
+    if (out!.kind !== 'ready') throw new Error('expected ready statistics')
+    expect(out!.value.value.declaredCells).toBe(1)
+    expect(out!.value.value.spanCells).toBe(1)
+    expect(out!.value.value.storedCells).toBe(1)
+    out!.value.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('overlapping explicit blanks deduplicate in stored counts', async () => {
+    // Round-2 finding 7: explicit blanks bypassed the overlap set and were
+    // counted once per overlapping rect.
+    const { memory, source } = arraySource([cell(0, 0, null)])
+    const stats = createCfStatistics(memory)
+    const [out] = await stats.prepareStatistics([[rect(0, 0), rect(0, 0)]], stamp(1), source, frozenBudget())
+    expect(out!.kind).toBe('ready')
+    if (out!.kind !== 'ready') throw new Error('expected ready statistics')
+    expect(out!.value.value.storedCells).toBe(1)
+    out!.value.release()
     expect(memory.currentBytes).toBe(0)
   })
 })

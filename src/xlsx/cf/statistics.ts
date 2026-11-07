@@ -110,10 +110,6 @@ function hiddenKey(policy: 'include' | 'exclude', hiddenRows: readonly SourceRec
   return `${policy}@${scopeKey(hiddenRows)}`
 }
 
-function rectsOverlap(a: SourceRect, b: SourceRect): boolean {
-  return a.firstRow <= b.lastRow && b.firstRow <= a.lastRow && a.firstCol <= b.lastCol && b.firstCol <= a.lastCol
-}
-
 function clampRect(rect: SourceRect, bounds: SourceRect): SourceRect | undefined {
   const firstRow = Math.max(rect.firstRow, bounds.firstRow)
   const lastRow = Math.min(rect.lastRow, bounds.lastRow)
@@ -127,41 +123,55 @@ function rectArea(rect: SourceRect): number {
   return (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1)
 }
 
-/** Exact union area via coordinate compression (rect counts here are small). */
-function unionArea(rects: readonly SourceRect[]): number {
-  if (rects.length === 0) return 0
-  if (rects.length === 1) return rectArea(rects[0]!)
-  if (rects.length > 64) {
-    let total = 0
-    for (const r of rects) total += rectArea(r)
-    return total
-  }
-  const xs = new Set<number>()
-  const ys = new Set<number>()
-  for (const r of rects) {
-    xs.add(r.firstCol)
-    xs.add(r.lastCol + 1)
-    ys.add(r.firstRow)
-    ys.add(r.lastRow + 1)
-  }
-  const xList = [...xs].sort((a, b) => a - b)
-  const yList = [...ys].sort((a, b) => a - b)
-  let total = 0
-  for (let xi = 0; xi < xList.length - 1; xi++) {
-    for (let yi = 0; yi < yList.length - 1; yi++) {
-      const x0 = xList[xi]!
-      const y0 = yList[yi]!
-      let covered = false
-      for (const r of rects) {
-        if (r.firstCol <= x0 && x0 <= r.lastCol && r.firstRow <= y0 && y0 <= r.lastRow) {
-          covered = true
-          break
-        }
-      }
-      if (covered) total += (xList[xi + 1]! - x0) * (yList[yi + 1]! - y0)
+/** Exact union area via sweep-line: exact for any rectangle count, with no
+ * naive-sum fallback. Cooperative: spends per rectangle and slab so large
+ * scopes stay interruptible and budgeted, and admits sweep workspace first.
+ * Returns undefined when admission or the shared budget refuses. */
+async function unionAreaCounted(
+  rects: readonly SourceRect[],
+  spend: SpendState,
+  memory: CfMemory,
+): Promise<number | undefined> {
+  const cleaned = rects.filter(r => r.firstRow <= r.lastRow && r.firstCol <= r.lastCol)
+  if (cleaned.length === 0) return 0
+  if (cleaned.length === 1) return rectArea(cleaned[0]!)
+  const hold = memory.reserve(cleaned.length * 64 + 256)
+  if (hold.kind === 'unresolved') return undefined
+  try {
+    const xs = new Set<number>()
+    for (const r of cleaned) {
+      if (!(await spendUnits(spend, 1))) return undefined
+      xs.add(r.firstCol)
+      xs.add(r.lastCol + 1)
     }
+    const xList = [...xs].sort((a, b) => a - b)
+    let total = 0
+    const iv: Array<[number, number]> = []
+    for (let xi = 0; xi < xList.length - 1; xi++) {
+      if (!(await spendUnits(spend, 1))) return undefined
+      const x0 = xList[xi]!
+      const x1 = xList[xi + 1]!
+      iv.length = 0
+      for (const r of cleaned) {
+        if (r.firstCol <= x0 && r.lastCol + 1 >= x1) iv.push([r.firstRow, r.lastRow + 1])
+      }
+      if (iv.length === 0) continue
+      iv.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+      let cs = iv[0]![0]
+      let ce = iv[0]![1]
+      for (let j = 1; j < iv.length; j++) {
+        const s = iv[j]![0]
+        const e = iv[j]![1]
+        if (s <= ce) { if (e > ce) ce = e }
+        else { total += (x1 - x0) * (ce - cs); cs = s; ce = e }
+      }
+      total += (x1 - x0) * (ce - cs)
+    }
+    if (!(await flushSpend(spend))) return undefined
+    return total
+  } finally {
+    try { hold.release() } catch { /* release-only path */ }
   }
-  return total
 }
 
 function inRects(row: number, col: number, rects: readonly SourceRect[]): boolean {
@@ -219,7 +229,21 @@ async function spendUnits(state: SpendState, units: number): Promise<boolean> {
 
 async function flushSpend(state: SpendState): Promise<boolean> {
   if (state.pending === 0) return true
-  return spendUnits(state, 0)
+  // Force-spend the remainder instead of dropping tails below the batch
+  // threshold; tiny preparations must still count their work.
+  const units = state.pending
+  state.pending = 0
+  const spent = state.budget.spend(units)
+  if (spent === 'refused') {
+    if (state.signal.aborted) throw cancelled()
+    return false
+  }
+  if (spent === 'yield') {
+    await hostTask()
+    if (state.signal.aborted) throw cancelled()
+    state.budget.resume()
+  }
+  return true
 }
 
 /** Copy with bounded work slices so large copies stay interruptible. */
@@ -285,6 +309,10 @@ interface CacheEntry {
 
 interface Waiter {
   done: boolean
+  signal: AbortSignal
+  onAbort: () => void
+  resolve: (o: CfOutcome<CfLease<CfRangeStatistics>>) => void
+  reject: (e: unknown) => void
 }
 
 interface InflightJob {
@@ -304,14 +332,18 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
   const cache = new Map<string, CacheEntry>()
   const inflight = new Map<string, InflightJob>()
   const workspaces = new Map<object, number>()
+  // Populated-bounds memo per sheet generation: bounds() rescans the whole
+  // sheet, so warm cache hits must not touch it at all, and concurrent
+  // misses in one generation share a single scan.
+  const boundsMemo = new Map<string, SourceRect | undefined>()
   let retainedHeld = 0
 
-  const withinCap = (additional: number, exclude?: object): number => {
+  const withinCap = (additional: number): number => {
     let total = retainedHeld + additional
-    for (const [hold, bytes] of workspaces) if (hold !== exclude) total += bytes
+    for (const [, bytes] of workspaces) total += bytes
     return total
   }
-  const checkCap = (additional: number, exclude?: object): boolean => withinCap(additional, exclude) <= sessionCap
+  const checkCap = (additional: number): boolean => withinCap(additional) <= sessionCap
 
   function trackRelease(bytes: number): void {
     retainedHeld -= bytes
@@ -329,6 +361,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
 
   function dispose(): void {
     cache.clear()
+    boundsMemo.clear()
   }
 
   function dropEntry(key: string, entry: CacheEntry): void {
@@ -392,7 +425,9 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     workspaces.set(hold, initial)
     let adoptedLease: CfLease<CfRangeStatistics> | undefined
     const growHold = (delta: number): boolean => {
-      if (!checkCap(delta, hold)) return false
+      // The session cap binds the full new total: every tracked workspace
+      // hold (including this one) plus retained plus the increment.
+      if (!checkCap(delta)) return false
       if (!hold.grow(hold.bytes + delta)) return false
       workspaces.set(hold, hold.bytes)
       return true
@@ -417,7 +452,11 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         let next = values.length
         while (next < needed) next += NUMERIC_GROW_CHUNK
         const delta = (next - values.length) * 8 * 2
-        if (!growHold(delta)) return false
+        // Admit the replacement peak: both old arrays stay referenced
+        // across the awaited copies, so the hold must cover old + new.
+        // The slack persists in the hold (conservative) and is freed when
+        // the workspace is adopted or released.
+        if (!growHold(delta + values.byteLength + scratch.byteLength)) return false
         const grown = new Float64Array(next)
         const grownScratch = new Float64Array(next)
         if (!(await copyInto(grown, 0, values.subarray(0, numericCount), numericCount, spend))) return false
@@ -441,9 +480,15 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               }
               if (hidden === 'exclude' && inRects(row, col, hiddenRows)) continue
               const value = items[i]!
-              if (needsDedup && value.kind !== 'blank') {
+              // Overlap dedup covers every stored kind including explicit
+              // blanks, so overlapping rects count each position once.
+              // Each new id grows the dedup set and is admitted first.
+              if (needsDedup) {
                 const id = row * 16384 + col
                 if (seen!.has(id)) continue
+                if (!growHold(64)) {
+                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                }
                 seen!.add(id)
               }
               // Distinct, non-excluded stored cells (blanks included).
@@ -601,7 +646,6 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     const signal = options.signal ?? new AbortController().signal
     const hidden = options.hidden ?? 'include'
     const hiddenRows = options.hiddenRows ?? []
-    const bounds = source.bounds(stamp.sheetId)
     const out: Array<CfOutcome<CfLease<CfRangeStatistics>>> = []
     const checkLive = (requested: CfStamp): boolean => {
       try {
@@ -609,6 +653,85 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       } catch {
         return false
       }
+    }
+    const getBounds = (sheetId: string, generation: number): SourceRect | undefined => {
+      const memoKey = `${sheetId}|${generation}`
+      if (!boundsMemo.has(memoKey)) boundsMemo.set(memoKey, source.bounds(sheetId))
+      return boundsMemo.get(memoKey)
+    }
+    const staleOutcome = (): CfOutcome<CfLease<CfRangeStatistics>> => ({
+      kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId],
+    })
+    const releaseUnpublished = (candidate: CfLease<CfRangeStatistics>, bytes: number): void => {
+      try { candidate.release() } catch { /* release-only path */ }
+      trackRelease(bytes)
+    }
+    const settleWaiter = (w: Waiter, outcome: CfOutcome<CfLease<CfRangeStatistics>>): void => {
+      if (w.done) return
+      w.done = true
+      w.signal.removeEventListener('abort', w.onAbort)
+      w.resolve(outcome)
+    }
+    // Central job settlement: the job owns the adopted candidate until a
+    // live waiter takes it. Exactly one of: shared entry created and handed
+    // out, candidate released unclaimed, or error propagated to waiters.
+    const settleJob = async (key: string, job: InflightJob, built: BuiltOutcome): Promise<void> => {
+      if (built.kind === 'ready') {
+        // Final liveness gate: re-read the source generation after a host
+        // yield, so a change queued by the pre-sort stamp read lands first.
+        // A stale candidate is released, never published, for every waiter.
+        let first: CfStamp | undefined
+        let second: CfStamp | undefined
+        try { first = source.stamp(stamp.sheetId) } catch { first = undefined }
+        await hostTask()
+        try { second = source.stamp(stamp.sheetId) } catch { second = undefined }
+        if (inflight.get(key) === job) inflight.delete(key)
+        const live = [...job.waiters]
+        job.waiters.clear()
+        if (first === undefined || second === undefined || !stampsMatch(first, stamp) || !stampsMatch(second, stamp)) {
+          releaseUnpublished(built.value.candidate, built.value.bytes)
+          for (const w of live) settleWaiter(w, staleOutcome())
+          return
+        }
+        const active = live.filter(w => !w.done)
+        if (active.length === 0) {
+          // No live waiter can take the adopted result: release it instead
+          // of caching an unowned charge.
+          releaseUnpublished(built.value.candidate, built.value.bytes)
+          return
+        }
+        let entry = cache.get(key)
+        if (entry === undefined) {
+          entry = { stats: built.value.stats, bytes: built.value.bytes, lease: built.value.candidate, refs: 0 }
+          cache.set(key, entry)
+          if (cache.size > maxEntries) evict()
+        } else {
+          // Same key completed twice (inflight dedupe should prevent this):
+          // prefer the cached entry and release the duplicate candidate.
+          releaseUnpublished(built.value.candidate, built.value.bytes)
+        }
+        for (const w of active) {
+          if (w.done) continue
+          w.done = true
+          w.signal.removeEventListener('abort', w.onAbort)
+          w.resolve(makeOutcome(key, entry))
+        }
+        return
+      }
+      if (inflight.get(key) === job) inflight.delete(key)
+      const live = [...job.waiters]
+      job.waiters.clear()
+      for (const w of live) settleWaiter(w, built)
+    }
+    const failJob = (key: string, job: InflightJob, error: unknown): void => {
+      if (inflight.get(key) === job) inflight.delete(key)
+      for (const w of [...job.waiters]) {
+        if (w.done) continue
+        w.done = true
+        w.signal.removeEventListener('abort', w.onAbort)
+        w.reject(isCancel(error) || w.signal.aborted ? cancelled() : error)
+      }
+      job.waiters.clear()
     }
     for (const scope of ruleScopes) {
       if (signal.aborted) {
@@ -638,16 +761,36 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         const controller = new AbortController()
         const waiters = new Set<Waiter>()
         const jobPromise: Promise<BuiltOutcome> = (async (): Promise<BuiltOutcome> => {
+          // Bounds are resolved lazily and memoized per sheet generation so
+          // warm hits never rescan the sheet; misses share one scan.
+          const bounds = getBounds(stamp.sheetId, stamp.workbookValueGen)
           if (bounds === undefined) {
             return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
           }
+          const uspend: SpendState = { pending: 0, signal: controller.signal, budget }
           const clamped: SourceRect[] = []
+          let clampedSum = 0
           for (const r of scope) {
+            if (!(await spendUnits(uspend, 1))) {
+              return { kind: 'unresolved', reason: 'cf-resource-limit' }
+            }
             const c = clampRect(r, bounds)
-            if (c !== undefined) clamped.push(c)
+            if (c !== undefined) { clamped.push(c); clampedSum += rectArea(c) }
           }
-          const declared = unionArea(scope)
-          const span = unionArea(clamped)
+          if (!(await flushSpend(uspend))) {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
+          const declared = await unionAreaCounted(scope, uspend, memory)
+          if (declared === undefined) {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
+          const span = await unionAreaCounted(clamped, uspend, memory)
+          if (span === undefined) {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
+          if (!(await flushSpend(uspend))) {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
           if (clamped.length === 0 || span === 0) {
             const empty: CfRangeStatistics = {
               scopeKey: key, numericCount: 0, sum: 0, mean: undefined, min: undefined, max: undefined,
@@ -665,12 +808,8 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
             retainedHeld += 256
             return { kind: 'ready', value: { stats: empty, bytes: 256, candidate } }
           }
-          let needsDedup = false
-          for (let a = 0; a < clamped.length && !needsDedup; a++) {
-            for (let b = a + 1; b < clamped.length; b++) {
-              if (rectsOverlap(clamped[a]!, clamped[b]!)) { needsDedup = true; break }
-            }
-          }
+          // Overlap exists exactly when the union is smaller than the sum.
+          const needsDedup = span < clampedSum
           try {
             return await build(clamped, span, declared, needsDedup, stamp, source, budget, controller.signal, hidden, hiddenRows, key)
           } catch (error) {
@@ -684,14 +823,21 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         }
         job = { waiters, controller, build: jobPromise, abort }
         inflight.set(key, job)
-        void jobPromise.then(
-          () => { if (inflight.get(key) === job) inflight.delete(key) },
-          () => { if (inflight.get(key) === job) inflight.delete(key) },
+        void job.build.then(
+          async (built) => { await settleJob(key, job!, built) },
+          (error: unknown) => { failJob(key, job!, error) },
         )
       }
       // Join the shared build; an abort here detaches only this waiter.
+      // The job owns the adopted candidate; settlement hands a shared entry
+      // to live waiters or releases the candidate when none remain.
       const outcome: CfOutcome<CfLease<CfRangeStatistics>> = await new Promise<CfOutcome<CfLease<CfRangeStatistics>>>((resolve, reject) => {
-        const waiter: Waiter = { done: false }
+        const waiter: Waiter = {
+          done: false, signal,
+          onAbort: () => {},
+          resolve: (o) => resolve(o),
+          reject: (e) => reject(e),
+        }
         const onAbort = (): void => {
           if (waiter.done) return
           waiter.done = true
@@ -700,40 +846,13 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
           if (job!.waiters.size === 0) job!.abort()
           reject(cancelled())
         }
+        waiter.onAbort = onAbort
         if (signal.aborted) {
           onAbort()
           return
         }
-        waiter.done = false
         job!.waiters.add(waiter)
         signal.addEventListener('abort', onAbort, { once: true })
-        job!.build.then(
-          (built) => {
-            signal.removeEventListener('abort', onAbort)
-            if (waiter.done) return
-            waiter.done = true
-            job!.waiters.delete(waiter)
-            if (built.kind !== 'ready') {
-              resolve(built)
-              return
-            }
-            let entry = cache.get(key)
-            if (entry === undefined) {
-              entry = { stats: built.value.stats, bytes: built.value.bytes, lease: built.value.candidate, refs: 0 }
-              cache.set(key, entry)
-              if (cache.size > maxEntries) evict()
-            }
-            resolve(makeOutcome(key, entry))
-          },
-          (error: unknown) => {
-            signal.removeEventListener('abort', onAbort)
-            if (waiter.done) return
-            waiter.done = true
-            job!.waiters.delete(waiter)
-            if (job!.waiters.size === 0) job!.abort()
-            reject(isCancel(error) || signal.aborted ? cancelled() : error)
-          },
-        )
       }).catch((error: unknown) => {
         // Unwind this call's unreturned leases, then propagate.
         for (const o of out) if (o.kind === 'ready') o.value.release()
@@ -785,13 +904,20 @@ export function createResidentCfSource(
             if (signal.aborted) throw cancelled()
             throw new PackageError('resource-limit', 'CF resident page exceeded the shared work budget')
           }
-          // Admit staging workspace plus the typed page before building either.
-          // The 640 base covers the ref staging array and array headers.
-          let bytes = 640 + chunk.length * 8
+          // Admit the full input-derived page bound before building it:
+          // the wrapper and array headers, typed-array backing buffers,
+          // values slots, and every per-cell CfLiteral object with its
+          // kind and value payloads, matching measurePayloadBytes of the
+          // adopted page from below. The 640 base covers the ref staging
+          // array and array headers.
+          let bytes = 640 + 24 + 3 * 16 + 16 + chunk.length * (8 + 4 + 2)
           for (const cell of chunk) {
             const v = cell.value
-            if (typeof v === 'string') bytes += 16 + v.length * 2
-            else if (cell.valueIsError) bytes += 16 + String(v).length * 2
+            if (v === null) bytes += 24 + 16 + (16 + 5 * 2)
+            else if (typeof v === 'number') bytes += 24 + 2 * 16 + (16 + 6 * 2) + 8
+            else if (typeof v === 'boolean') bytes += 24 + 2 * 16 + (16 + 7 * 2) + 8
+            else if (cell.valueIsError) bytes += 24 + 2 * 16 + (16 + 5 * 2) + (16 + String(v).length * 2)
+            else bytes += 24 + 2 * 16 + (16 + 6 * 2) + (16 + v.length * 2)
           }
           const hold = memory.reserve(bytes)
           if (hold.kind === 'unresolved') {
@@ -821,9 +947,8 @@ export function createResidentCfSource(
         }
         for (const cell of cells) {
           if (signal.aborted) throw cancelled()
-          if (cell.row < rect.firstRow || cell.row > rect.lastRow || cell.col < rect.firstCol || cell.col > rect.lastCol) {
-            continue
-          }
+          // Spend for every examined cell, including nonmatching ones that
+          // are filtered out below: examination itself is shared work.
           const spent = budget.spend(1)
           if (spent === 'refused') {
             if (signal.aborted) throw cancelled()
@@ -833,6 +958,9 @@ export function createResidentCfSource(
             await hostTask()
             if (signal.aborted) throw cancelled()
             budget.resume()
+          }
+          if (cell.row < rect.firstRow || cell.row > rect.lastRow || cell.col < rect.firstCol || cell.col > rect.lastCol) {
+            continue
           }
           chunk.push(cell)
           if (chunk.length >= 64) yield* flush()
