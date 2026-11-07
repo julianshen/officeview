@@ -2,7 +2,8 @@
 
 Status: **draft 4 (reviews: codex r1–r3, claude r1)** — draft 2 folded codex r1 and
 claude r1 (first disposition table); draft 3 folded codex r2 (second table);
-draft 4 folds codex r3 (third table). Docs-only stage continues.
+draft 4 folds codex r3 (third table). Owner decided §18 items 1, 3, 4 and 9 on
+2026-11-07. Docs-only stage continues.
 Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no source edits.
 
 Notation: **"to verify in Stage 0"** marks a claim this spec could not prove while writing
@@ -141,8 +142,9 @@ stages may not silently pick them.
 - Rewriting the client's local renderer; local mode stays exactly what it is today.
 - Publishing, multi-tenant account management, dashboards. The server is an embedded
   component for a host application, not a product.
-- Animated slideshow playback in stream mode (§18 item 4; this spec refuses `present()`
-  for remote documents in the first stages).
+- Animated slideshow playback in stream mode (§18 item 4, **owner-decided 2026-11-07**:
+  no animation for server rendering for now; `present()` is refused for remote
+  documents, and slides page as static units like any other page).
 - Client-side content inspection as a boundary: the boundary is enforced **server-side
   before anything leaves** (§6.4, §7.7); the client is not trusted with it.
 
@@ -1012,10 +1014,33 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
   a11y/copy/search are server calls on the recorded text index (§11).
 - **Interactions are staged** (§17): 4a static + read-only sheet tiles;
   4b selection/freeze/sheet-navigation parity (client-side geometry, the server
-  never sees selection except as requested ranges). Sort/filter stay refused in
-  stream mode until owner decision (§18 item 3): the existing engine surface is
+  never sees selection except as requested ranges); **4c server-side sort/filter**
+  (owner decision 2026-11-07, §18 item 3).
+- **Server-side sort/filter (4c)**: the server adopts the existing engine surface,
   `op:'sort'`/`'filter'` (`src/worker/viewerProtocol.ts:31`, command kinds at
-  `src/xlsx/view/contracts.ts:709–710`) and the server does not adopt them.
+  `src/xlsx/view/contracts.ts:709–710`), running it in the pool against the
+  server-held workbook. Rules:
+  - **View state, not edits.** Sort/filter state is per session and never changes
+    the source document or another viewer's view. The state lives in the session
+    table (§9) and is dropped on session expiry.
+  - **Cache key.** A tile painted under a sort/filter state adds a canonical
+    `viewStateHash` (sort keys + filter criteria, normalised) to the §9.3 key;
+    the unsorted, unfiltered view keeps the plain key so it stays shareable
+    across viewers.
+  - **Filter value lists are display text only.** The values a filter menu offers
+    come from the formatted display text of cells in rows that are visible under
+    the §6.4 content policy. Formulas, raw cell values, hidden rows/cols and
+    hidden or veryHidden sheets never contribute values; a value that exists only
+    in a policy-hidden row is not listed.
+  - **Replies carry no cell data.** A sort/filter reply returns new axis geometry
+    (row order and sizes for the paint-facing SheetLayout subset) and invalidates
+    tiles; content arrives only as freshly painted tiles. Row-number labels follow
+    the §20 hidden-band note.
+  - **Rate limits.** Sort/filter ops are a separate rate-limit class in the §14
+    table, because each one re-lays out the sheet.
+  - **Wire audit.** 4c's acceptance adds the §16.2 wire-disclosure suite over sort
+    and filter: a secret planted in a hidden row, a hidden column, a hidden sheet
+    and a formula must not appear in any reply, filter value list or tile.
 
 ## 13. Forensic watermark — capacity, retention and collusion (round-2 rewrite)
 
@@ -1297,27 +1322,29 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 | **1: core stream MVP** | core entry + gate; `OVSD` recorder+replayer; OVSM + sniff at `loadOfficeSource`; RemoteDoc rendering of DOCX/PPTX/*visible-sheet* XLSX pages; demo Bun server (open + WS + pool + per-viewer visible mark + token + 406); typed loader errors | §16.1 all gates green; corpus contract test green under the §7.4 wording for the chosen mode (zero-diff only where that mode allows the claim); Playwright happy path; 406 + **stale-version** + **byte-chunk** tests pass; eager diff ≤ 2 B gzip, module map identical apart from the sniff; **the P-rule projection (§7.7) and the wire-disclosure suite (§16.2) are green before any protected response ships** — protected streaming does not start in Stage 1 without them (round-3 fix: they were wrongly deferred to Stage 2) |
 | **2: governance + forensics** | tokens/sessions, rate limits (§14 table), resume/revocation/TTL, cache tiers, §13 with decoys + detection tool; the M-rule mark-embedding pipeline for protected command output (§9.4) | rate-limit numbers asserted in tests; §13.6 gates measured and recorded (single-page recovery on carrier-rich pages ≥ 95 %; JPEG q70 ≥ 80 %; whole-search false-attribution bound ≤ 10⁻⁶ verified by simulation over the declared audit-table size, plus unmarked-page abstain tests); audit-table retention + revocation + key-rotation tests; per-class (sparse/none-page) fallback gates per §18 item 7; protected `culled-commands` may ship only after its M-rule tests are green (until then `final-raster` is the only protected projection shipped) |
 | **3: server text services** | search/copy/a11y WS ops through overlays; visible-band copy and visible-projection chart text; per-viewer mark default on | local feature parity measured by the §11 service vs local query on the same corpus; zero local index building for remote docs; §6.4 policy tests (secrets absent from every service) |
-| **4: XLSX stream mode** | 4a static + sheet tiles; 4b selection/freeze/sheet-nav parity (§12) | hidden/veryHidden/vanish/token/bytes **never cross the wire** (wire audits); tile p95 render ≤ 120 ms pool-side at §14 budgets on a 500-row × 100-col sheet; selection parity passes against local mode |
-| **5: optional extensions** | stream slideshow (§18 item 4), sort/filter server ops (§18 item 3) | only if green-lit |
+| **4: XLSX stream mode** | 4a static + sheet tiles; 4b selection/freeze/sheet-nav parity; 4c server-side sort/filter (§12, §18 item 3) | hidden/veryHidden/vanish/token/bytes **never cross the wire** (wire audits); tile p95 render ≤ 120 ms pool-side at §14 budgets on a 500-row × 100-col sheet; selection parity passes against local mode; 4c: sort/filter results match local mode's row order on the corpus, filter value lists exclude policy-hidden values, and the §12 sort/filter wire audit is green |
+| **5: optional extensions** | stream slideshow animation (§18 item 4: deferred by the owner) | only if the owner reopens it |
 
 ## 18. Open decisions for the owner (round-2 refresh)
 
-1. **Canvas backend** [call pending the Stage 0 matrix]: node-canvas (already in the
-   test/golden path — no new deps but no glyph-outline API and registerFont is
-   process-global) vs. Skia (`skia-canvas` or `@napi-rs/canvas`) for faster raster and
-   text-path/outlining. Stage 0 delivers the matrix; the owner picks. Tie-breakers:
-   pixel parity vs browser canvas, glyph outline availability, Bun compatibility,
-   licence (to verify in Stage 0).
+1. **Canvas backend — decided 2026-11-07: Skia via `@napi-rs/canvas`** for the server
+   pool. node-canvas stays where it is today (the test/golden path) and is not the
+   server backend. Stage 0 still runs the matrix, now to *confirm* the pick rather than
+   choose: pixel parity vs browser canvas, Bun compatibility, font registration scope
+   and licence (to verify in Stage 0). If a gate fails, Stage 0 reports it back to the
+   owner instead of switching backends silently.
 2. **Shaping/outlining dependency** — if §7.4's (a) is picked (my expected default
    after Stage 0), name the lib (HarfBuzz-wasm vs fontkit-class) [call]; rejected
    alternative: staying dependency-free and guessing outlines — recorded as a
    round-2 rejection.
-3. **XLSX interactivity depth** (§12): 4a-only (tiles + server calls) or extend into
-   server-handled sort/filter reads (§12's pointer).
-4. **Slideshow in stream mode**: refuse (the default while it stays optional) or
-   ship a server-driven static-slide advance protocol; the local engine drives its
-   own clock and needs the local package handle, so a server variant is
-   re-authored surface, explicitly optional.
+3. **XLSX interactivity depth — decided 2026-11-07: include server-side sort/filter.**
+   It ships as Stage 4c under the §12 rules (per-session view state, display-text
+   filter lists, no cell data in replies, own rate-limit class, wire audit).
+4. **Slideshow in stream mode — decided 2026-11-07: no animation for server
+   rendering for now.** `present()` is refused for remote documents; slides are
+   viewed as static pages. The local engine drives its own clock and needs the
+   local package handle, so a server variant would be new surface; it stays in
+   Stage 5 until the owner reopens it.
 5. **How documents are marked stream-required** [call]: by path, by content kind,
    by digest rule — one concrete config surface; my call: **path-glob + sha-by-list**
    (a document rarely changes identity within a release workflow).
@@ -1337,8 +1364,8 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
    audit-aligned forensic grid, and for carrier-less documents the promise degrades
    per item 7 — and the audit table remains the attribution record; overriding the
    default and stripping the forensic mark together is not a supported configuration.
-9. **A11y service default** (carried from round 1, unchanged): `can.textA11y` is on
-   by default and any deployment turning it off ships the §15 notice.
+9. **A11y service default — decided 2026-11-07: on.** `can.textA11y` is on by
+   default and any deployment turning it off ships the §15 notice.
 
 ## 19. Boundaries
 
