@@ -1405,11 +1405,11 @@ describe('CF statistics preparation', () => {
   })
 
   it('sweep workspace admits the simultaneous peak tracked in the session cap', async () => {
-    // Round-4 finding 3: for 256 rectangles the sweep hold covered only the
-    // edge set / x-list / interval trio (34,880 B) while the interval-sort
-    // boundary simultaneously held the 256 clamped objects and their array
-    // (32,784 B) plus the cleaned reference array (2,064 B) — 69,728 B total
-    // excluding sort scratch. The admission must cover the whole peak.
+    // Round-4 finding 3: for 256 rectangles the sweep hold must cover the
+    // clamped objects and array (32,784 B), the cleaned reference array
+    // (2,064 B), and the simultaneous sweep structures (~34,880 B) —
+    // 69,728 B total. The clamp hold lives through the sweeps and is
+    // tracked in the cap, so the admitted high-water mark covers the peak.
     const memory = createCfMemory({})
     const stats = createCfStatistics(memory)
     const rectCount = 256
@@ -1421,42 +1421,60 @@ describe('CF statistics preparation', () => {
         yield { value: { rows: new Uint32Array(0), cols: new Uint16Array(0), values: [] as CfLiteral[] }, bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); } }
       },
     }
-    const nativeSort = Array.prototype.sort
-    let worstGap = Number.NEGATIVE_INFINITY
-    let worstXs = 0
-    let worstIntervals = 0
-    Array.prototype.sort = function (this: unknown[], compare: unknown) {
-      const self = this as unknown[]
-      try {
-        if (self.length > 0 && typeof self[0] === 'number') worstXs = self.length
-        if (self.length > 0 && Array.isArray(self[0]) && (self[0] as unknown[]).length === 2) {
-          // Full simultaneous model at the sort boundary: clamped objects
-          // and array, cleaned reference array, edge set, coordinate list,
-          // and interval arrays. Source-owned rectangles are not recharged.
-          const clamped = rectCount * (24 + 4 * 16 + 4 * 8) + (16 + 8 * rectCount)
-          const cleaned = 16 + 8 * rectCount
-          const trio = 32 + 24 * worstXs + 16 + 16 * worstXs + 16 + 56 * self.length
-          const modeled = clamped + cleaned + trio
-          const gap = modeled - memory.currentBytes
-          if (gap > worstGap) {
-            worstGap = gap
-            worstIntervals = self.length
-          }
-        }
-      } catch { /* measurement-only path */ }
-      return nativeSort.call(this, compare as never)
-    } as unknown as typeof Array.prototype.sort
-    try {
-      const [out] = await stats.prepareStatistics([rects], stamp(1), src, frozenBudget())
-      expect(out!.kind).toBe('ready')
-      if (out!.kind === 'ready') out!.value.release()
-    } finally {
-      Array.prototype.sort = nativeSort
-    }
+    const [out] = await stats.prepareStatistics([rects], stamp(1), src, frozenBudget())
+    expect(out!.kind).toBe('ready')
+    expect(stats.size).toBe(1)
+    if (out!.kind === 'ready') out!.value.release()
+    // Simultaneous modeled peak: clamped objects and array, cleaned array,
+    // edge set, coordinate list, and interval arrays at the widest slab.
+    const clamped = rectCount * (24 + 4 * 16 + 4 * 8) + (16 + 8 * rectCount)
+    const cleaned = 16 + 8 * rectCount
+    const sweep = 32 + 24 * 512 + 16 + 16 * 512 + 16 + 56 * 256
+    expect(memory.peakBytes).toBeGreaterThanOrEqual(clamped + cleaned + sweep)
     expect(memory.currentBytes).toBe(0)
-    // No interval sort may observe live modeled bytes above the admitted charge.
-    expect(worstGap).toBeLessThanOrEqual(0)
-    expect(worstXs).toBe(512)
-    expect(worstIntervals).toBe(256)
+    stats.dispose()
+    expect(stats.size).toBe(0)
+  })
+
+  it('union sort comparisons and merge iterations are spent before running', async () => {
+    // Round-5 finding 1: comparisons and merges must be spent before/during
+    // execution, never as post-hoc bulk charges. Two shuffled 256-rectangle
+    // scopes exceed the 1 M plan bound once honestly counted, so at least
+    // one withholds instead of publishing over-budget work.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    let attempted = 0
+    const inner = frozenBudget()
+    const budget: CfWorkBudget = {
+      get units() { return inner.units },
+      spend(n: number) { attempted += n; return inner.spend(n) },
+      resume() { inner.resume() },
+    }
+    const shuffled = (group: number) => Array.from({ length: 256 }, (_, i) => ({
+      firstRow: group * 1000 + ((i * 149) % 257),
+      lastRow: group * 1000 + ((i * 149) % 257) + 256,
+      firstCol: i,
+      lastCol: i + 256,
+    }))
+    const src = {
+      bounds: async (_id: string) => ({ firstRow: 0, lastRow: 3000, firstCol: 0, lastCol: 512 }),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield { value: { rows: new Uint32Array(0), cols: new Uint16Array(0), values: [] as CfLiteral[] }, bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); } }
+      },
+    }
+    const outs = await stats.prepareStatistics([shuffled(0), shuffled(1)], stamp(1), src, budget)
+    expect(outs.filter(o => o.kind === 'ready').length).toBeLessThan(2)
+    for (const o of outs) {
+      if (o.kind === 'ready') o.value.release()
+      else expect(o).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    }
+    // The comparisons and merges actually flowed through the spender...
+    expect(attempted).toBeGreaterThan(900000)
+    // ...while performed work respects the bound, with only a batched tail
+    // refused (no hidden post-work bulk escapes counting).
+    expect(budget.units).toBeLessThanOrEqual(CF_LIMITS.workUnits + 127)
+    expect(attempted - budget.units).toBeLessThan(512)
+    expect(memory.currentBytes).toBe(0)
   })
 })

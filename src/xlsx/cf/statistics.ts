@@ -123,12 +123,36 @@ function rectArea(rect: SourceRect): number {
   return (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1)
 }
 
+/** Cooperative insertion sort: in-place, no allocation, spending one unit
+ * per comparison and per shift before performing it, so large inputs
+ * refuse through the shared budget instead of running uncounted. The
+ * batched spender keeps checkpoints within the 64-unit granularity. */
+async function cooperativeInsertionSort<T>(
+  values: T[],
+  compare: (a: T, b: T) => number,
+  spend: SpendState,
+): Promise<boolean> {
+  for (let i = 1; i < values.length; i++) {
+    const current = values[i]!
+    let j = i - 1
+    while (j >= 0) {
+      if (!(await spendUnits(spend, 1))) return false
+      if (compare(current, values[j]!) >= 0) break
+      if (!(await spendUnits(spend, 1))) return false
+      values[j + 1] = values[j]
+      j--
+    }
+    values[j + 1] = current
+  }
+  return true
+}
+
 /** Exact union area via sweep-line: exact for any rectangle count, with no
  * naive-sum fallback. Cooperative: spends per examined rectangle pair,
- * sort comparison and interval-merge iteration, and per slab, so large
- * scopes stay interruptible and budgeted. Comparisons and merges are
- * counted synchronously per slab and charged before moving on, bounding
- * the uncharged window to one slab. The caller admits the simultaneous
+ * per sort comparison and shift, and per merge iteration — all before or
+ * during execution, never as post-hoc bulk charges — so large scopes stay
+ * interruptible, budgeted within the checkpoint granularity, and refused
+ * rather than published over budget. The caller admits the simultaneous
  * workspace (edges, coordinate list, interval arrays, sort scratch) and
  * tracks it in the session cap; this function only sweeps. Returns
  * undefined when the shared budget refuses. */
@@ -146,7 +170,9 @@ async function sweepUnion(
     xs.add(r.lastCol + 1)
   }
   if (!(await flushSpend(spend))) return undefined
-  const xList = [...xs].sort((a, b) => a - b)
+  const xList: number[] = [...xs]
+  if (!(await cooperativeInsertionSort(xList, (a, b) => a - b, spend))) return undefined
+  if (!(await flushSpend(spend))) return undefined
   let total = 0
   const iv: Array<[number, number]> = []
   for (let xi = 0; xi < xList.length - 1; xi++) {
@@ -161,23 +187,18 @@ async function sweepUnion(
       if (r.firstCol <= x0 && r.lastCol + 1 >= x1) iv.push([r.firstRow, r.lastRow + 1])
     }
     if (iv.length === 0) continue
-    // Sort comparisons and merge iterations are real work at this scale
-    // (hundreds of slabs × hundreds of intervals): count them synchronously
-    // and charge before the next slab, keeping the uncharged window small.
-    let comparisons = 0
-    iv.sort((a, b) => { comparisons++; return a[0] - b[0] || a[1] - b[1] })
+    if (!(await cooperativeInsertionSort(iv, (a, b) => a[0] - b[0] || a[1] - b[1], spend))) return undefined
     let cs = iv[0]![0]
     let ce = iv[0]![1]
-    let merges = 1
     for (let j = 1; j < iv.length; j++) {
-      merges++
+      if (!(await spendUnits(spend, 1))) return undefined
       const s = iv[j]![0]
       const e = iv[j]![1]
       if (s <= ce) { if (e > ce) ce = e }
       else { total += (x1 - x0) * (ce - cs); cs = s; ce = e }
     }
     total += (x1 - x0) * (ce - cs)
-    if (!(await spendUnits(spend, comparisons + merges))) return undefined
+    if (!(await flushSpend(spend))) return undefined
   }
   if (!(await flushSpend(spend))) return undefined
   return total
