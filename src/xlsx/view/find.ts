@@ -43,7 +43,7 @@ import type {
   AuthoritativeCell, CacheIdentity, Page, RowOrder, RowPermutationBand, RowVisibility, ScrollWindow, SearchHit, SearchQuery,
   SheetMetrics, SourceErrorCode, SourceStamp, SourceStore, WorkbookOwner,
 } from './contracts'
-import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect, coverCellsToRects } from './coordinates'
 import { CooperativeSlice, createHostYield, type CooperativeOptions, type HostYield } from './scheduler'
 import { buildCellRecords, LayoutAdmissionError, rawTextOf, type CellLayout, type CellLayoutHost, type LayoutAdmission, type LayoutCache, type Rect } from './textLayout'
 import { navigateSelection, type SheetNavigationSession } from './selection'
@@ -94,9 +94,10 @@ export interface FindOptions extends CooperativeOptions<FindPhase> {
   /** Session/main owner of formatting builders and matching scratch. */
   formatBudget?: FormatBudget
   /** Bounded preparation of one scan batch's current-generation effective formats
-   * (Task 9). The engine prepares per scanned page and disposes in a finally;
-   * returning undefined (or omitting the hook) keeps base formatting. */
-  prepareScope?: (sheetId: string, range: SourceRect, signal: AbortSignal) => Promise<EffectiveFormatScope | undefined>
+   * (Task 9). The engine prepares per scanned page over exact-cover rects and
+   * disposes in a finally; returning undefined (or omitting the hook) keeps
+   * base formatting. */
+  prepareScope?: (sheetId: string, rects: readonly SourceRect[], signal: AbortSignal) => Promise<EffectiveFormatScope | undefined>
   /** The host's current aggregate owner, checked after every await. */
   currentOwner?: () => WorkbookOwner
 }
@@ -479,22 +480,36 @@ export class WorkbookFind {
    * cancels the operation; any other preparation failure keeps base text. */
   private async prepareBatchScope(sheetId: string, items: readonly AuthoritativeCell[]): Promise<EffectiveFormatScope | undefined> {
     if (!this.options.prepareScope || !items.length) return undefined
-    let firstRow = Infinity, lastRow = -Infinity, firstCol = Infinity, lastCol = -Infinity
-    for (const cell of items) {
-      if (cell.row < firstRow) firstRow = cell.row
-      if (cell.row > lastRow) lastRow = cell.row
-      if (cell.col < firstCol) firstCol = cell.col
-      if (cell.col > lastCol) lastCol = cell.col
-    }
+    // Exact cover, never a dense hull: a sparse page prepares only its cells,
+    // so scan and single-cell materialization always agree.
+    const rects = coverCellsToRects(items)
+    if (!rects.length) return undefined
+    // A scope that settles after cancellation, or an acquired scope rejected by
+    // the ownership guard below, still belongs to this batch: dispose it instead
+    // of leaking its charge. The tap is attached synchronously so no late
+    // settlement can slip through.
+    let done = false
+    const pending = this.options.prepareScope(sheetId, rects, this.lifetime.signal)
+    void pending.then(
+      scope => { if (done) scope?.dispose() },
+      () => {},
+    )
     try {
-      const scope = await this.interruptible(this.options.prepareScope(sheetId, { r0: firstRow, r1: lastRow, c0: firstCol, c1: lastCol }, this.lifetime.signal))
-      this.guard()
+      const scope = await this.interruptible(pending)
+      try {
+        this.guard()
+      } catch (guardError) {
+        scope?.dispose()
+        throw guardError
+      }
       return scope
     } catch {
       // A batch whose formats cannot be prepared still searches: base text,
       // never another cell's result. Abort stays an abort.
       if (this.lifetime.signal.aborted) throw new FindError('cancelled', 'Find cancelled')
       return undefined
+    } finally {
+      done = true
     }
   }
 

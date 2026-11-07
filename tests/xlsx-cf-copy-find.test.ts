@@ -4,16 +4,20 @@
  * modes, including cells outside the current viewport. Expected strings follow
  * the stage1-numfmt-accessibility seed hypothesis (`1.25` via CF DXF `0.00`,
  * control `1.3` via cell `0.0`); the case is recipe-pending, never measured.
+ * Sparse batches prepare exact-cover rects, never dense hulls, so scanning and
+ * hit materialization always agree.
  */
 import { describe, expect, it } from 'vitest'
 import { WorkbookFind, type FindSheetInput } from '../src/xlsx/view/find'
 import { serializeSelection, type CopyInput } from '../src/xlsx/view/copy'
-import { cfTextScopeFromWire, prepareCfTextScope, CF_TEXT_SCOPE_GRANT_BYTES } from '../src/xlsx/cf/text'
+import { prepareCfTextScope, prepareCfWireScope, CF_TEXT_SCOPE_GRANT_BYTES } from '../src/xlsx/cf/text'
 import { cellDisplayText } from '../src/xlsx/render'
 import type { AuthoritativeCell, SourceStore, WorkbookOwner } from '../src/xlsx/view/contracts'
 import type { FormatAllocation } from '../src/xlsx/formula/format'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../src/xlsx/types'
-import type { EffectiveFormatScope } from '../src/xlsx/view/formatWorkspace'
+import type { EffectiveFormatScope, FormatBudget } from '../src/xlsx/view/formatWorkspace'
+import { FindError } from '../src/xlsx/view/find'
+import type { SourceRect } from '../src/xlsx/view/coordinates'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
 import { initialWorkbookOwner } from '../src/worker/viewerProtocol'
 import { createIdentityOrder } from '../src/xlsx/view/order'
@@ -25,18 +29,30 @@ import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { drain } from './helpers/xlsx-find'
 
+function trackingBudget(refuse = false): { budget: FormatBudget; net: () => number; retained: () => number } {
+  let held = 0
+  let kept = 0
+  const budget: FormatBudget = {
+    reserve: bytes => { held += bytes; if (refuse) { held -= bytes; throw new FindError('resource-limit', 'refused') } },
+    release: bytes => { held -= bytes },
+    retain: (_targets, bytes, commit) => { kept += bytes; commit() },
+    settle: () => {},
+  }
+  return { budget, net: () => held, retained: () => kept }
+}
+
 const cellIsRule = {
   id: 0,
   priority: 1,
   documentOrder: 0,
   stopIfTrue: false,
-  ranges: [{ firstRow: 0, lastRow: 600, firstCol: 0, lastCol: 1 }],
+  ranges: [{ firstRow: 0, lastRow: 100000, firstCol: 0, lastCol: 1 }],
   writes: new Set(['numFmt']),
   dxf: { 'numFmt.code': '0.00' },
   definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 1 }], dialect: 'base', formulas: [] },
 }
 
-function cfDoc(): XlsxDocument {
+function cfDoc(farRow = 500): XlsxDocument {
   const cell = (row: number, col: number, value: number): XlsxCell => ({
     ref: `R${row}C${col}`, row, col, styleIndex: 0, style: { numFmtId: 0, formatCode: '0.0' }, value, hasCachedValue: true,
   })
@@ -46,7 +62,7 @@ function cfDoc(): XlsxDocument {
       sheetId: 'cf',
       rows: [
         { index: 0, cells: [cell(0, 0, 1.25), cell(0, 1, 0.5)] },
-        { index: 500, cells: [cell(500, 0, 1.25)] },
+        { index: farRow, cells: [cell(farRow, 0, 1.25)] },
       ],
       cols: [],
       merges: [],
@@ -74,14 +90,10 @@ function residentSheets(docId: string, source: { sheets: readonly { sheetId: str
   })
 }
 
-const residentPrepare = (sheet: XlsxSheet) =>
-  (sheetId: string, range: { r0: number; r1: number; c0: number; c1: number }, signal: AbortSignal) => {
+const residentPrepare = (sheet: XlsxSheet, budget: FormatBudget) =>
+  (sheetId: string, rects: readonly SourceRect[], signal: AbortSignal) => {
     if (sheetId !== sheet.sheetId) return Promise.resolve(undefined)
-    return prepareCfTextScope(sheet, {
-      rects: [{ firstRow: range.r0, lastRow: range.r1, firstCol: range.c0, lastCol: range.c1 }],
-      signal,
-      locale: 'en-US',
-    })
+    return prepareCfTextScope(sheet, { rects, signal, locale: 'en-US', budget })
   }
 
 const residentTextOf = (sheet: XlsxSheet) =>
@@ -93,6 +105,7 @@ const residentTextOf = (sheet: XlsxSheet) =>
 
 describe('resident copy/find follow the CF number format outside the viewport', () => {
   it('finds 1.25 (not 1.3) in near and far cells', async () => {
+    const { budget, net, retained } = trackingBudget()
     const doc = cfDoc()
     const source = createObjectWorkbookSource(doc, 'cf-doc')
     const owner = initialWorkbookOwner('cf-doc', source.sheets)
@@ -100,20 +113,57 @@ describe('resident copy/find follow the CF number format outside the viewport', 
     const session = new WorkbookFind(
       { owner, sheets: residentSheets('cf-doc', source, owner) },
       { text: '1.25', caseSensitive: false },
-      { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet) },
+      { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet, budget), formatBudget: budget },
     )
     const hits = await drain(session)
     expect(hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual([[0, 0, '1.25'], [500, 0, '1.25']])
+    // Everything held is owned by the emitted hits: no unowned charge remains.
+    expect(net()).toBe(retained())
+    expect(retained()).toBe(hits.reduce((sum, hit) => sum + hit.text.length * 2 + 128, 0))
 
     const stale = new WorkbookFind(
       { owner, sheets: residentSheets('cf-doc', source, owner) },
       { text: '1.3', caseSensitive: false },
-      { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet) },
+      { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet, budget), formatBudget: budget },
     )
     expect((await drain(stale)).map(hit => [hit.source.row, hit.source.col])).toEqual([])
+    // Still only the first session's hits stay charged; the empty search leaks nothing.
+    expect(net()).toBe(retained())
+  })
+
+  it('sparse batches prepare exact cover, never a dense hull', async () => {
+    const { budget, net, retained } = trackingBudget()
+    const doc = cfDoc(10_000)
+    const source = createObjectWorkbookSource(doc, 'cf-sparse')
+    const owner = initialWorkbookOwner('cf-sparse', source.sheets)
+    const sheet = doc.sheets[0]! as unknown as XlsxSheet
+    const seen: SourceRect[][] = []
+    const session = new WorkbookFind(
+      { owner, sheets: residentSheets('cf-sparse', source, owner) },
+      { text: '1.25', caseSensitive: false },
+      {
+        textOf: residentTextOf(sheet),
+        formatBudget: budget,
+        prepareScope: (sheetId, rects, signal) => {
+          seen.push([...rects])
+          return residentPrepare(sheet, budget)(sheetId, rects, signal)
+        },
+      },
+    )
+    const hits = await drain(session)
+    // Three populated cells tens of thousands of rows apart: scan and
+    // single-cell materialization agree, with no stale-source error.
+    expect(hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual([[0, 0, '1.25'], [10000, 0, '1.25']])
+    for (const rects of seen) {
+      const area = rects.reduce((sum, rect) => sum + (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1), 0)
+      expect(area).toBeLessThanOrEqual(5000)
+    }
+    expect(net()).toBe(retained())
+    expect(retained()).toBe(hits.reduce((sum, hit) => sum + hit.text.length * 2 + 128, 0))
   })
 
   it('copies CF-formatted text in near and far selections', async () => {
+    const { budget, net } = trackingBudget()
     const doc = cfDoc()
     const source = createObjectWorkbookSource(doc, 'cf-copy')
     const owner = initialWorkbookOwner('cf-copy', source.sheets)
@@ -131,10 +181,10 @@ describe('resident copy/find follow the CF number format outside the viewport', 
       allowed: () => true,
       signal: new AbortController().signal,
       format: (cell, allocation, scope) => {
-        const base = docCell(sheet, cell.row, cell.col)?.style
-        return cellDisplayText(sheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, base) ?? base }, allocation)
+        const baseStyle = docCell(sheet, cell.row, cell.col)?.style
+        return cellDisplayText(sheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, baseStyle) ?? baseStyle }, allocation)
       },
-      prepareScope: (range, signal) => residentPrepare(sheet)('cf', range, signal),
+      prepareScope: (rects, signal) => residentPrepare(sheet, budget)('cf', rects, signal),
     }
     const near = await serializeSelection({ ...base, selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 1 }] }] } })
     expect(near).toMatchObject({ kind: 'ready' })
@@ -142,6 +192,47 @@ describe('resident copy/find follow the CF number format outside the viewport', 
     const far = await serializeSelection({ ...base, selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 500, r1: 500 }] }, cols: [{ c0: 0, c1: 0 }] }] } })
     expect(far).toMatchObject({ kind: 'ready' })
     expect(far.kind === 'ready' ? far.text : '').toBe('1.25')
+    expect(net()).toBe(0)
+  })
+
+  it('resident and wire scopes agree on partial wins with blocked aspects', async () => {
+    const { budget, net } = trackingBudget()
+    const doc = cfDoc()
+    const sheet = doc.sheets[0]! as unknown as XlsxSheet
+    // A win on numFmt with fill blocked: the surviving property still formats.
+    const states = [{ row: 0, col: 0, properties: { 'numFmt.code': '0.00' }, unresolvedWrites: ['fill'] as readonly string[] }]
+    const scope = await prepareCfWireScope(
+      async () => ({
+        result: {
+          kind: 'ready' as const,
+          stamp: { owner: 't', sheetId: 'cf', workbookValueGen: 0, cfGen: 7, viewGen: 0, structureGen: 0, clockGen: 0 },
+          sheetId: 'cf',
+          definitions: [],
+          definitionsVersion: 42,
+          diagnostics: [],
+          states,
+        },
+        release: () => {},
+      }),
+      [{ r0: 0, r1: 0, c0: 0, c1: 0 }],
+      { budget },
+    )
+    expect(scope).toBeDefined()
+    const base: XlsxCell['style'] = { numFmtId: 0, formatCode: '0.0' }
+    const wireText = cellDisplayText(sheet, { value: 1.25, style: scope!.effectiveStyle(0, 0, base) })
+    // The resident service resolves the same winning delta.
+    const resident = await prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      locale: 'en-US',
+      budget,
+    })
+    const residentText = cellDisplayText(sheet, { value: 1.25, style: resident!.effectiveStyle(0, 0, base) })
+    expect(wireText).toBe('1.25')
+    expect(residentText).toBe(wireText)
+    scope!.dispose()
+    resident!.dispose()
+    expect(net()).toBe(0)
   })
 })
 
@@ -175,6 +266,7 @@ describe('paged copy/find follow the CF number format outside the viewport', () 
   })
 
   it('main-thread paged copy formats near and far selections through wire states', async () => {
+    const { budget, net } = trackingBudget()
     const bytes = pagedBytes()
     const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer]) }, { docId: 'cf-paged-copy', profile: 'D' })
     try {
@@ -183,15 +275,20 @@ describe('paged copy/find follow the CF number format outside the viewport', () 
       const sheetId = source.sheets[0]!.sheetId
       const store = source.store(sheetId)
       const identity = { docId: 'cf-paged-copy', sheetId, valueGen: store.stamp.valueGen, fontGen: 0, viewGen: 0 }
-      const prepareScope = async (range: { r0: number; r1: number; c0: number; c1: number }, signal: AbortSignal) => {
+      const prepareScope = async (rects: readonly SourceRect[], signal: AbortSignal) => {
         if (!store.readConditionalFormatting) return undefined
-        const result = await store.readConditionalFormatting({
-          rects: [{ r0: range.r0, r1: range.r1, c0: range.c0, c1: range.c1 }],
-          stamp: { owner: 'cf-paged-copy', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
-          grantBytes: CF_TEXT_SCOPE_GRANT_BYTES,
-        }, undefined, { signal })
-        if (result.kind !== 'ready') return undefined
-        return cfTextScopeFromWire(result, {})
+        return prepareCfWireScope(
+          async chunk => {
+            const result = await store.readConditionalFormatting!({
+              rects: chunk,
+              stamp: { owner: 'cf-paged-copy', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+              grantBytes: CF_TEXT_SCOPE_GRANT_BYTES,
+            }, undefined, { signal })
+            return { result, release: () => {} }
+          },
+          rects,
+          { budget },
+        )
       }
       const format = (cell: AuthoritativeCell, allocation?: FormatAllocation, scope?: EffectiveFormatScope): string =>
         source.displayText!(cell, sheetId, allocation, undefined, scope)
@@ -214,6 +311,7 @@ describe('paged copy/find follow the CF number format outside the viewport', () 
       const far = await serializeSelection({ ...base, selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 500, r1: 500 }] }, cols: [{ c0: 0, c1: 0 }] }] } })
       expect(far).toMatchObject({ kind: 'ready' })
       expect(far.kind === 'ready' ? far.text : '').toBe('1.25')
+      expect(net()).toBe(0)
     } finally {
       await session.release()
     }

@@ -11,11 +11,6 @@ const quota = () => new PackageError('resource-limit', 'CF preparation exceeds i
 const cancel = () => new PackageError('cancelled', 'CF preparation cancelled or superseded')
 const blank: CfLiteral = Object.freeze({ kind: 'blank' })
 const inside = (r: SourceRect, row: number, col: number) => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
-function area(r: SourceRect) {
-  if (![r.firstRow, r.lastRow, r.firstCol, r.lastCol].every(Number.isSafeInteger)
-    || r.firstRow < 0 || r.lastRow > 1048575 || r.firstCol < 0 || r.lastCol > 16383 || r.lastRow < r.firstRow || r.lastCol < r.firstCol) throw quota()
-  return (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1)
-}
 function statistical(rule: CfRule) {
   const d = rule.definition
   return d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
@@ -29,6 +24,34 @@ export interface CfPaintStatistics {
   results: Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>
 }
 
+/** Admitted preparation bound for rules over rects (Task 9): the same arithmetic
+ * `prepareCf` enforces, without side effects. Returns undefined when any cap is
+ * exceeded or the bound is unrepresentable, so callers can reserve upfront in
+ * their own aggregate account before constructing anything. */
+export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonly SourceRect[]): number | undefined {
+  const valid = (n: number): boolean => Number.isSafeInteger(n) && n >= 0
+  if (sourceRects.length > CF_LIMITS.rangesPerRule || rules.rules.length > CF_LIMITS.rules) return undefined
+  let cells = 0
+  for (const rect of sourceRects) {
+    if (![rect.firstRow, rect.lastRow, rect.firstCol, rect.lastCol].every(valid)
+      || rect.firstRow > rect.lastRow || rect.firstCol > rect.lastCol
+      || rect.lastRow > 1048575 || rect.lastCol > 16383) return undefined
+    cells += (rect.lastRow - rect.firstRow + 1) * (rect.lastCol - rect.firstCol + 1)
+    if (cells > CF_LIMITS.preparedCells) return undefined
+  }
+  let propertyBytes = 0, ranges = 0
+  for (const rule of rules.rules) {
+    ranges += rule.ranges.length
+    if (rule.ranges.length > CF_LIMITS.rangesPerRule || ranges > CF_LIMITS.rangesPerSheet) return undefined
+    if (rule.dxf) for (const key of Object.keys(rule.dxf)) {
+      const v = (rule.dxf as Record<string, unknown>)[key]
+      propertyBytes += 192 + key.length * 4 + (typeof v === 'string' ? v.length * 2 : 16)
+    }
+    for (const key of rule.writes) propertyBytes += 128 + String(key).length * 4
+  }
+  const bound = 2048 + sourceRects.length * 160 + rules.rules.length * 640 + cells * (512 + propertyBytes)
+  return Number.isSafeInteger(bound) && bound <= CF_LIMITS.scratchBytes ? bound : undefined
+}
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
@@ -41,22 +64,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
     cache.activate(request.stamp) // invalidate old paint even if the new request refuses
     if (request.signal.aborted) throw cancel()
     if (!Number.isSafeInteger(request.grantBytes) || request.grantBytes < 256 || request.sourceRects.length > CF_LIMITS.rangesPerRule) throw quota()
-    let cells = 0
-    for (const rect of request.sourceRects) { cells += area(rect); if (cells > CF_LIMITS.preparedCells) throw quota() }
-    if (sheet.rules.length > CF_LIMITS.rules) throw quota()
-    // Bound every possible retained winning property, not a guessed average.
-    let propertyBytes = 0, ranges = 0
-    for (const rule of sheet.rules) {
-      ranges += rule.ranges.length
-      if (rule.ranges.length > CF_LIMITS.rangesPerRule || ranges > CF_LIMITS.rangesPerSheet) throw quota()
-      for (const key in rule.dxf) {
-        const v = rule.dxf[key]
-        propertyBytes += 192 + key.length * 4 + (typeof v === 'string' ? v.length * 2 : 16)
-      }
-      for (const key of rule.writes) propertyBytes += 128 + key.length * 4
-    }
-    const bound = 2048 + request.sourceRects.length * 160 + sheet.rules.length * 640 + cells * (512 + propertyBytes)
-    if (!Number.isSafeInteger(bound) || bound > request.grantBytes || bound > CF_LIMITS.scratchBytes) throw quota()
+    // Single source of truth with estimateCfPrepareBytes: the same caps and the
+    // same bound, enforced here against the caller's grant as well.
+    const bound = estimateCfPrepareBytes(sheet, request.sourceRects)
+    if (bound === undefined || bound > request.grantBytes) throw quota()
     // Admit temporary encoding before map/join; cache admits retained key ownership
     // synchronously before this temporary hold ends.
     const keyHold = memory.reserve(256 + request.sourceRects.length * 160)

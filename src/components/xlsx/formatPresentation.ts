@@ -20,6 +20,13 @@ export function withCfDescription(text: string, description: string | undefined)
   return description ? `${text}; ${description}` : text
 }
 
+/** Gate a prepared scope by the currently requested key (Task 9 fix round):
+ * a held scope from a previous sheet, generation or rect must never format
+ * new cells; base formatting applies while the matching scope is unavailable. */
+export function liveScopeFor<T>(held: { key: string; scope: T | undefined } | null, key: string | undefined): T | undefined {
+  return held && key !== undefined && held.key === key ? held.scope : undefined
+}
+
 /** Only the bounded label leaves this scope; its text is in the DOM cost model. */
 export function formatCellPresentation(sheet: XlsxSheet, cell: XlsxCell, budget: FormatBudget, cacheInputs = false, cf?: CfPresentationInput): { text: string; state?: 'error' } {
   try {

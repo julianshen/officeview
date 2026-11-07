@@ -35,7 +35,7 @@ import type {
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
 import type { NavigatorRequest, SourceCell, SourceRect } from '../../xlsx/view/coordinates'
-import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate } from '../../xlsx/view/coordinates'
+import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate, coverCellsToRects } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
@@ -52,7 +52,7 @@ import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHi
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
 import { cellDisplayText } from '../../xlsx/render'
-import { SemanticPresentationCache, withCfDescription } from './formatPresentation'
+import { SemanticPresentationCache, liveScopeFor, withCfDescription } from './formatPresentation'
 import { mainFormatBudget } from './mainFormatBudget'
 import type { EffectiveFormatScope, FormatBudget } from '../../xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
@@ -107,7 +107,6 @@ import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } fr
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
-import { versionCfRules } from '../../xlsx/view/contracts'
 import { invalidateRegionStyles, regionStylesFor } from '../../xlsx/tableStyleLoader'
 import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
 // Type-only: the pivot controls (client, layer, menus) are a lazy chunk loaded on a sheet with pivots (Task 28).
@@ -963,61 +962,71 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const cfReady=!scopedCf || assets?.cfViewportKey===cfViewportKey || Boolean(currentViewportCf)
 
   // ---- Task 9 derived text: one prepared current-generation effective format
-  // for the visible source rect (plus the active cell). Find/copy prepare their
-  // own batch scopes through the same helpers; display holds one scope here.
-  // Remote scopes ride the liveness-gated CF cache (stale owners invalidate);
-  // a missing or refused scope always means base formatting, never a guess.
+  // for the visible source cells (resident sheets). Find/copy prepare their own
+  // batch scopes through the helpers below; display holds one scope here.
+  // Remote display stays on base formatting: shell sheets carry no CF metadata
+  // to gate on, and an unconditional acquire would charge a receiver grant on
+  // every plain sheet (the worker tiles already paint remote CF; Task 10's
+  // live coordinator owns remote invalidation). Remote copy prepares on demand.
+  // A missing or refused scope always means base formatting, never a guess.
   const cfAbsent = useRef(new Map<string, boolean>()).current
-  const prepareResidentScope = async (sheet: XlsxSheet, rect: SourceRect, batchSignal: AbortSignal): Promise<EffectiveFormatScope | undefined> => {
-    if (!sheet.conditionalFormatting?.rules.length || batchSignal.aborted) return undefined
+  const prepareResidentScope = async (sheet: XlsxSheet, rects: readonly SourceRect[], batchSignal: AbortSignal, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
+    if (!sheet.conditionalFormatting?.rules.length || !rects.length || batchSignal.aborted) return undefined
     const text = await import('../../xlsx/cf/text')
     if (batchSignal.aborted) return undefined
     return text.prepareCfTextScope(sheet, {
-      rects: [{ firstRow: rect.r0, lastRow: rect.r1, firstCol: rect.c0, lastCol: rect.c1 }],
+      rects,
       signal: batchSignal,
       locale: sheet.semantics?.locale ?? 'en-US',
+      budget,
     })
   }
-  const prepareRemoteScope = async (sheetId: string, rect: SourceRect, batchSignal: AbortSignal, locale: string): Promise<EffectiveFormatScope | undefined> => {
-    if (!remote || batchSignal.aborted) return undefined
+  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
+    if (!remote || !rects.length || batchSignal.aborted) return undefined
     const identity = remote.identity(sheetId)
     const absentKey = `${sheetId}:${identity.valueGen}`
     if (cfAbsent.get(absentKey)) return undefined
-    // The acquire release is idempotent, so an abort-triggered release and the
-    // explicit paths below never double-end the charge. A returned scope owns
-    // its release through onDispose; every other path ends it here.
-    const { state, release } = remote.acquireCfPreparation(sheetId, [rect], {
-      owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0,
-    }, batchSignal)
-    // The entry mutates under the loader: always re-read, never narrow.
-    const settled = (): boolean => state.state === 'ready' || state.state === 'failed'
-    try {
-      if (!settled() && !batchSignal.aborted) {
-        await new Promise<void>(resolve => {
-          if (settled() || batchSignal.aborted) return resolve()
-          const unsub = remote.subscribe(() => {
-            if (settled() || batchSignal.aborted) { unsub(); resolve() }
-          })
-          batchSignal.addEventListener('abort', () => { unsub(); resolve() }, { once: true })
-          if (settled()) { unsub(); resolve() }
-        })
-      }
-      if (batchSignal.aborted || !settled() || state.result?.kind !== 'ready') { release(); return undefined }
-      if (!state.result.states.length && state.result.definitionsVersion === versionCfRules('[]')) {
-        if (cfAbsent.size >= 64) cfAbsent.delete(cfAbsent.keys().next().value!)
-        cfAbsent.set(absentKey, true)
-        release()
-        return undefined
-      }
-      const text = await import('../../xlsx/cf/text')
-      if (batchSignal.aborted) { release(); return undefined }
-      const scope = text.cfTextScopeFromWire(state.result, { locale, onDispose: () => release() })
-      if (!scope) release()
-      return scope ?? undefined
-    } catch {
-      release()
-      return undefined
-    }
+    const text = await import('../../xlsx/cf/text')
+    if (batchSignal.aborted) return undefined
+    return text.prepareCfWireScope(
+      async chunk => {
+        if (batchSignal.aborted) return { result: undefined, release: () => {} }
+        const held = remote.acquireCfPreparation(sheetId, chunk, {
+          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0,
+        }, batchSignal)
+        // The entry mutates under the loader: always re-read, never narrow.
+        const settled = (): boolean => held.state.state === 'ready' || held.state.state === 'failed'
+        try {
+          if (!settled() && !batchSignal.aborted) {
+            await new Promise<void>(resolve => {
+              if (settled() || batchSignal.aborted) return resolve()
+              const unsub = remote.subscribe(() => {
+                if (settled() || batchSignal.aborted) { unsub(); resolve() }
+              })
+              batchSignal.addEventListener('abort', () => { unsub(); resolve() }, { once: true })
+              if (settled()) { unsub(); resolve() }
+            })
+          }
+          // States are copied synchronously by the scope builder; the entry is
+          // always released here, so the scope never holds provider leases.
+          const release = (): void => held.release()
+          if (batchSignal.aborted || !settled() || held.state.result?.kind !== 'ready') return { result: undefined, release }
+          return { result: held.state.result, release }
+        } catch {
+          held.release()
+          return { result: undefined, release: () => {} }
+        }
+      },
+      rects,
+      {
+        locale,
+        budget,
+        onEmpty: () => {
+          if (cfAbsent.size >= 64) cfAbsent.delete(cfAbsent.keys().next().value!)
+          cfAbsent.set(absentKey, true)
+        },
+      },
+    )
   }
   const frameAssets=currentViewportCf && assets ? {...assets.lease.assets,conditionalFormatting:currentViewportCf.batch} : assets?.lease.assets
   const paintedCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
@@ -1037,62 +1046,74 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
 
   // ---- layers ----
-  // Visible source rect for the display text scope: what the grid actually
-  // presents (plus the active cell), in source coordinates. Over-cap rects
-  // skip preparation here; the batch engines still cover their own scopes.
-  const cfTextRect = ((): SourceRect | undefined => {
+  // Visible source cells for the display text scope: what the grid actually
+  // presents (plus the active cell), in source coordinates. Exact cover, never
+  // a dense hull; over-count inputs skip preparation here (the batch engines
+  // still cover their own scopes). Resident only (see the helper note).
+  const cfTextRects = ((): SourceRect[] | undefined => {
     if (!entry || !scroll) return undefined
-    if (!remote && !entry.sheet.conditionalFormatting?.rules.length) return undefined
+    // Same gate as the paint path: sheets without rules (resident or remote
+    // display sheets) never prepare. This also keeps grant-free sheets out of
+    // the receiver budget entirely.
+    if (!entry.sheet.conditionalFormatting?.rules.length) return undefined
     const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
-    let r0 = Infinity, r1 = -Infinity, c0 = Infinity, c1 = -Infinity
-    const eatRow = (row: number): void => { if (row < r0) r0 = row; if (row > r1) r1 = row }
-    const eatCol = (col: number): void => { if (col < c0) c0 = col; if (col > c1) c1 = col }
+    let count = 0
+    for (const [a, b] of spans.y) {
+      for (const run of entry.metrics.rows.visibleBetween(a, b).runs) count += run.end - run.start + 1
+    }
+    let cols = 0
+    for (const [a, b] of spans.x) {
+      for (const run of entry.metrics.cols.visibleBetween(a, b).runs) cols += run.end - run.start + 1
+    }
+    if (count === 0 || cols === 0 || count * cols > CF_PAINT_BATCH_CELLS) return undefined
+    const cells: { row: number; col: number }[] = []
     for (const [a, b] of spans.y) {
       for (const run of entry.metrics.rows.visibleBetween(a, b).runs) {
-        for (let slot = run.start; slot <= run.end; slot++) eatRow(entry.view.order.displayToSource(slot))
+        for (let slot = run.start; slot <= run.end; slot++) {
+          const row = entry.view.order.displayToSource(slot)
+          for (const [c, d] of spans.x) {
+            for (const colRun of entry.metrics.cols.visibleBetween(c, d).runs) {
+              for (let col = colRun.start; col <= colRun.end; col++) cells.push({ row, col })
+            }
+          }
+        }
       }
     }
-    for (const [a, b] of spans.x) {
-      for (const run of entry.metrics.cols.visibleBetween(a, b).runs) {
-        for (let col = run.start; col <= run.end; col++) eatCol(col)
-      }
-    }
-    if (selection.active) { eatRow(selection.active.row); eatCol(selection.active.col) }
-    if (!Number.isFinite(r0) || !Number.isFinite(c0)) return undefined
-    const rect = { r0: Math.max(0, r0), r1, c0: Math.max(0, c0), c1 }
-    if ((rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1) > CF_PAINT_BATCH_CELLS) return undefined
-    return rect
+    if (selection.active) cells.push({ row: selection.active.row, col: selection.active.col })
+    if (!cells.length) return undefined
+    return coverCellsToRects(cells)
   })()
-  const cfTextKey = cfTextRect && entry && activeSheetId
-    ? JSON.stringify([activeSheetId, remote ? remote.identity(activeSheetId).valueGen : entry.valueGen, remote ? remote.loadState(activeSheetId).completeness : 'resident', entry.sheet.semantics?.locale ?? 'en-US', cfTextRect])
+  const cfTextKey = cfTextRects && entry && activeSheetId
+    ? JSON.stringify([activeSheetId, entry.valueGen, entry.sheet.semantics?.locale ?? 'en-US', cfTextRects])
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
   useEffect(() => { const old = heldCfText.current; heldCfText.current = cfText?.scope; if (old !== heldCfText.current) old?.dispose() }, [cfText])
   useEffect(() => () => heldCfText.current?.dispose(), [])
-  const cfTextKeyRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!entry || !scroll || !cfTextRect || !cfTextKey || !activeSheetId) {
-      if (cfTextKeyRef.current !== undefined) { cfTextKeyRef.current = undefined; setCfText(null) }
+    if (!entry || !scroll || !cfTextRects || !cfTextKey || !activeSheetId) {
+      if (cfText !== null) setCfText(null)
       return
     }
-    if (cfTextKeyRef.current === cfTextKey) return
-    cfTextKeyRef.current = cfTextKey
+    // Already holding the matching scope: nothing to do. Otherwise a new
+    // preparation starts; the key is claimed only when it publishes, so a
+    // canceled or superseded run always retries instead of sticking.
+    if (cfText?.key === cfTextKey) return
     let cancelled = false
     const abort = new AbortController()
-    const sheet = entry.sheet, sheetId = activeSheetId
+    const sheet = entry.sheet
     void (async () => {
-      const locale = entry.sheet.semantics?.locale ?? 'en-US'
-      const scope = remote
-        ? await prepareRemoteScope(sheetId, cfTextRect, abort.signal, locale)
-        : await prepareResidentScope(sheet, cfTextRect, abort.signal)
+      const scope = await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
       if (cancelled) { scope?.dispose(); return }
       setCfText({ key: cfTextKey, scope })
     })()
     return () => { cancelled = true; abort.abort() }
     // CF-only work: helpers are render-scoped closures over the same inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry, scroll, viewport, cfTextKey, activeSheetId, remote])
+  }, [entry, scroll, viewport, cfTextKey, cfText, activeSheetId])
+  // Gate scope consumption by identity: while a replacement preparation is
+  // pending, the previous sheet/generation scope must not format new cells.
+  const liveCfScope = liveScopeFor(cfText, cfTextKey)
   const baseRef = useRef<HTMLCanvasElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const palette = useCanvasColors(wrapperRef, props.theme ?? 'system')
@@ -1139,7 +1160,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
   measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
-  const presentCell = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget, cfText?.scope)
+  const presentCell = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget, liveCfScope)
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)
     if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
@@ -1399,10 +1420,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         return cellDisplayText(sheetEntry.sheet, { value: (styled ?? cell).value, style }, allocation)
       },
       // Resident batches prepare their own scope; the worker prepares its own.
-      prepareScope: remote ? undefined : (sheetId, range, batchSignal) => {
+      prepareScope: remote ? undefined : (sheetId, rects, batchSignal) => {
         const sheetEntry = byId.get(sheetId)
         if (!sheetEntry) return Promise.resolve(undefined)
-        return prepareResidentScope(sheetEntry.sheet, range, batchSignal)
+        return prepareResidentScope(sheetEntry.sheet, rects, batchSignal, mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]))
       },
     }
     runArgs.current = { input, query, options }
@@ -1938,6 +1959,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (!admit(next)) throw new Error('Copy is too large. Select a smaller range.')
       columnBytes = next
     }
+    // Aggregate formatting budget for CF text scopes: every scope reserves its
+    // admitted envelope here and releases it on disposal.
+    const copyFormatBudget = mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile])
     setCopyPending(true)
     try {
       // Column visibility is compact authored geometry, not the selected cell product.
@@ -1978,9 +2002,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           const base = styleForCell(entry, { ...cell, style: cellAt(entry, cell)?.style })
           return cellDisplayText(entry.sheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, base) ?? base }, allocation)
         },
-        prepareScope: (range, batchSignal) => remote
-          ? prepareRemoteScope(activeSheetId, range, batchSignal, entry.sheet.semantics?.locale ?? 'en-US')
-          : prepareResidentScope(entry.sheet, range, batchSignal),
+        prepareScope: (rects, batchSignal) => {
+          // Same gate as paint/display: sheets without rules never touch the
+          // receiver budget, so plain-sheet copies pay no CF preparation.
+          if (!entry.sheet.conditionalFormatting?.rules.length) return Promise.resolve(undefined)
+          return remote
+            ? prepareRemoteScope(activeSheetId, rects, batchSignal, entry.sheet.semantics?.locale ?? 'en-US', copyFormatBudget)
+            : prepareResidentScope(entry.sheet, rects, batchSignal, copyFormatBudget)
+        },
       })
       if (!live.current || token !== copyToken.current) return
       setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')
@@ -2646,8 +2675,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 // The grid-facing text carries the reviewed CF descriptor so the
                 // accessible name includes it; presentCell itself stays plain for
                 // pivot text. No new tab stops: focus behavior is unchanged.
-                let shown: { text: string; state?: 'error' } = { text: '' }
-                if (cell) {
+                // Unstored blank cells resolve their descriptor from the scope.
+                let shown: { text: string; state?: 'error' }
+                if (!cell) {
+                  const blankDesc = liveCfScope?.describe(at.row, at.col)
+                  shown = { text: blankDesc ? blankDesc.text : '' }
+                } else {
                   const presented = presentCell(cell, styleForCell(entry, cell))
                   const { description, ...rest } = presented
                   shown = description === undefined ? rest : { ...rest, text: withCfDescription(rest.text, description) }

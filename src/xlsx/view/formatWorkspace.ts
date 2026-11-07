@@ -18,10 +18,12 @@ export interface FormatBudget {
 export interface EffectiveFormatScope {
   /** Live content version the scope was prepared under (cfGen). */
   readonly gen: number
+  /** Admitted bytes this scope retains, released by `dispose`. */
+  readonly bytes: number
   /** Current-generation effective style, or the base when CF does not win. */
   effectiveStyle(row: number, col: number, base: XlsxCellStyle | undefined): XlsxCellStyle | undefined
   /** Localized winning-state descriptor, or undefined when nothing applies. */
-  describe?(row: number, col: number): { key: string; text: string } | undefined
+  describe(row: number, col: number): { key: string; text: string } | undefined
   dispose(): void
 }
 

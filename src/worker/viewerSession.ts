@@ -63,7 +63,7 @@ import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset 
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { OwnedRects, uniqueRectList } from '../xlsx/view/rectIndex'
-import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, versionCfRules, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
+import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
@@ -2997,6 +2997,8 @@ export class DocumentSession {
         const textStores = new Map<string, { store: SourceStore; valueGen: number }>()
         // One bounded CF probe per sheet per search: no-CF sheets never pay per-page.
         const cfPresence = new Map<string, boolean>()
+        // The session format budget, shared by text formatting and CF scopes.
+        let searchFormatBudget!: FormatBudget
         for (const { sheetId } of this.source.sheets) {
           if (query.sheetIds && !query.sheetIds.includes(sheetId)) continue
           // Importing sheets remain searchable. A nonblocking structural probe
@@ -3032,7 +3034,7 @@ export class DocumentSession {
           signal: current.controller.signal, currentOwner: () => this.workbookOwner(),
           awaitYield: work => this.afterYield(work, current.controller.signal),
           ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), current.controller.signal) } : {}), ...(this.options.now ? { now: this.options.now } : {}),
-          formatBudget: {
+          formatBudget: (searchFormatBudget = {
             reserve: bytes => {
               if (!current.charge.set(current.bytes + bytes)) throw new FindError('resource-limit', 'Search formatting exceeds the worker memory budget')
               current.bytes += bytes
@@ -3055,29 +3057,36 @@ export class DocumentSession {
               current.bytes -= bytes
               current.charge.set(current.bytes)
             },
-          },
+          }),
           ...(this.source.displayText ? {
             textOf: (cell, id, allocation, scope) => this.source.displayText!(cell, id, allocation, regions.get(id), scope),
             // Bounded current-generation CF formats for one scan batch (Task 9).
             // Presence is probed once per sheet per search; any other failure
             // keeps base text, never another cell's result.
-            prepareScope: async (sheetId, range, batchSignal) => {
+            prepareScope: async (sheetId, rects, batchSignal) => {
               if (cfPresence.get(sheetId) === false) return undefined
               const entry = textStores.get(sheetId)
               if (!entry?.store.readConditionalFormatting) { cfPresence.set(sheetId, false); return undefined }
               try {
                 const text = await import('../xlsx/cf/text')
-                const result = await entry.store.readConditionalFormatting({
-                  rects: [{ r0: range.r0, r1: range.r1, c0: range.c0, c1: range.c1 }],
-                  stamp: { owner: this.docId, sheetId, workbookValueGen: entry.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
-                  grantBytes: text.CF_TEXT_SCOPE_GRANT_BYTES,
-                }, await this.cfAccount(), { signal: batchSignal })
-                if (result.kind !== 'ready' || result.definitionsVersion === versionCfRules('[]')) {
-                  cfPresence.set(sheetId, false)
-                  return undefined
-                }
+                const scope = await text.prepareCfWireScope(
+                  async chunk => {
+                    const result = await entry.store.readConditionalFormatting!({
+                      rects: chunk,
+                      stamp: { owner: this.docId, sheetId, workbookValueGen: entry.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                      grantBytes: text.CF_TEXT_SCOPE_GRANT_BYTES,
+                    }, await this.cfAccount(), { signal: batchSignal })
+                    return { result, release: () => {} }
+                  },
+                  rects,
+                  {
+                    budget: searchFormatBudget,
+                    onEmpty: () => cfPresence.set(sheetId, false),
+                  },
+                )
+                if (!scope) return undefined
                 cfPresence.set(sheetId, true)
-                return text.cfTextScopeFromWire(result, {})
+                return scope
               } catch {
                 return undefined
               }

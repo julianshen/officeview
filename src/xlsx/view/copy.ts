@@ -1,5 +1,5 @@
 import type { AuthoritativeCell, CacheIdentity, GridSelection, ProfileId, RowOrder, RowVisibility, SourceStore } from './contracts'
-import { cellId, validateSourceRect, type SourceRect } from './coordinates'
+import { cellId, validateSourceRect, coverCellsToRects, type SourceRect } from './coordinates'
 import { rowSetIntervals, sameIdentity, sameStamp } from '../../worker/viewerSession'
 import { MAIN_THREAD_BUDGETS } from './tileCache'
 import { copyText, type CopyOutcome } from '../../core/clipboard'
@@ -27,9 +27,10 @@ export interface CopyInput {
    * Legacy callbacks keep their API and own any unobserved construction. */
   format?: (cell: AuthoritativeCell, allocation?: FormatAllocation, scope?: EffectiveFormatScope) => string
   /** Bounded preparation of one copy batch's current-generation effective formats
-   * (Task 9). The engine prepares per 256-cell block and disposes in a finally;
-   * returning undefined (or omitting the hook) keeps base formatting. */
-  prepareScope?: (range: SourceRect, signal: AbortSignal) => Promise<EffectiveFormatScope | undefined>
+   * (Task 9). The engine prepares per 256-cell block over exact-cover rects and
+   * disposes in a finally; returning undefined (or omitting the hook) keeps
+   * base formatting. */
+  prepareScope?: (rects: readonly SourceRect[], signal: AbortSignal) => Promise<EffectiveFormatScope | undefined>
   onPending?: () => void
   /** Peak output buffers plus compact projection, independent of the row count. */
   sessionBudgetBytes?: number
@@ -301,9 +302,9 @@ function escapedUnits(text: string): number {
 }
 /** Bounded current-generation formats for one copy block. An aborted signal
  * cancels the copy; any other preparation failure keeps base text. */
-async function prepareCopyScope(input: CopyInput, range: SourceRect): Promise<EffectiveFormatScope | undefined> {
+async function prepareCopyScope(input: CopyInput, rects: readonly SourceRect[]): Promise<EffectiveFormatScope | undefined> {
   try {
-    return await abortable(input.prepareScope!(range, input.signal), input.signal)
+    return await abortable(input.prepareScope!(rects, input.signal), input.signal)
   } catch {
     // A block whose formats cannot be prepared still copies: base text, never
     // another cell's result. Abort stays an abort.
@@ -346,24 +347,21 @@ export async function serializeSelection(input: CopyInput): Promise<CopyResult> 
       for (let offset = 0; offset < cells; offset += BATCH_CELLS) {
         check(input)
         const n = Math.min(BATCH_CELLS, cells - offset)
-        // One bounded CF preparation per block: source rows come from the display
-        // order (which may permute), so the range is measured, never assumed.
-        let firstRow = Infinity, lastRow = -Infinity, firstCol = Infinity, lastCol = -Infinity
+        // One bounded CF preparation per block over exact-cover rects: source
+        // rows come from the display order (which may permute), and sparse
+        // blocks never pay a dense hull.
+        const batchCells: { row: number; col: number }[] = []
         for (let i = 0; i < n; i++) {
           const index = offset + i, rank = block.rows.lo + Math.floor(index / width)
-          const row = input.order.displayToSource(input.visibility.select(rank)!), col = input.columns.select(block.cols.lo + index % width)!
-          if (row < firstRow) firstRow = row
-          if (row > lastRow) lastRow = row
-          if (col < firstCol) firstCol = col
-          if (col > lastCol) lastCol = col
+          batchCells.push({ row: input.order.displayToSource(input.visibility.select(rank)!), col: input.columns.select(block.cols.lo + index % width)! })
         }
-        const scope = input.prepareScope ? await prepareCopyScope(input, { r0: firstRow, r1: lastRow, c0: firstCol, c1: lastCol }) : undefined
+        const scope = input.prepareScope ? await prepareCopyScope(input, coverCellsToRects(batchCells)) : undefined
         try {
           const values: { text: string; owned: number }[] = []
           for (let i = 0; i < n; i++) {
-            const index = offset + i, rank = block.rows.lo + Math.floor(index / width)
-            const row = input.order.displayToSource(input.visibility.select(rank)!)
-            const col = input.columns.select(block.cols.lo + index % width)!
+            // The same coordinates the scope was prepared for: preparation and
+            // reads can never disagree on the mapping.
+            const { row, col } = batchCells[i]!
             // Reference slot plus owned value record, before read can format.
             memory.add(32); slots += 32
             const value = await read(input, row, col, memory, scope)
