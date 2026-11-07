@@ -98,6 +98,25 @@ export function viewReplyBytes(rows: number): number {
 export function cachedCellBytes(cell: { value: unknown; formula?: string }): number {
   return 96 + (typeof cell.value === 'string' ? cell.value.length * 2 : 0) + (cell.formula ? cell.formula.length * 2 : 0)
 }
+/** Dirty rectangles kept per sheet before Task 8 drains them; beyond the cap
+ * the list coalesces to a single covering rectangle, so the handoff stays
+ * bounded no matter how many CF notifications arrive between drains. */
+export const MAX_CF_DIRTY_RECTS = 64
+export function accumulateCfDirtyRects(into: Map<string, SourceRect[]>, sheetId: string, rects: readonly SourceRect[]): void {
+  if (rects.length === 0) return
+  const kept = into.get(sheetId) ?? []
+  for (const rect of rects) kept.push({ ...rect })
+  if (kept.length > MAX_CF_DIRTY_RECTS) {
+    let r0 = Infinity, r1 = -Infinity, c0 = Infinity, c1 = -Infinity
+    for (const rect of kept) {
+      if (rect.r0 < r0) r0 = rect.r0
+      if (rect.r1 > r1) r1 = rect.r1
+      if (rect.c0 < c0) c0 = rect.c0
+      if (rect.c1 > c1) c1 = rect.c1
+    }
+    into.set(sheetId, [{ r0, r1, c0, c1 }])
+  } else into.set(sheetId, kept)
+}
 /** Detail rows one tile may request; beyond it the frame is coarse and reads no cells. */
 export const MAX_PENDING_ROWS = 2048
 /** Source rows two missing runs may be apart and still share one bounded read. */
@@ -221,6 +240,10 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
   private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
+  /** Task 7 handoff for Task 8: bounded CF dirty rectangles per sheet.
+   * Merge-topology generations stay independent of CF paint readiness: CF
+   * notifications never bump the merges gen, they only queue rects here. */
+  private readonly cfDirtyRects = new Map<string, SourceRect[]>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -331,8 +354,10 @@ export class RemoteWorkbook implements WorkbookSource {
       release: reply => this.mainLedger.settle(reply),
       changed: (sheetId, rects, reason = 'updated') => {
         if (reason === 'evicted') { this.notify(); return }
-        (this.merges(sheetId) as { gen: number }).gen++; this.notify()
-        void rects
+        // Merge topology stays independent of CF paint readiness: queue the
+        // bounded dirty rectangles for Task 8 instead of bumping merges gen.
+        if (reason === 'updated') accumulateCfDirtyRects(this.cfDirtyRects, sheetId, rects)
+        this.notify()
       },
     }
     this.cfCache = new RemoteCfCache(cfHost, MAIN_THREAD_BUDGETS[this.profile] / 4)
@@ -393,6 +418,9 @@ export class RemoteWorkbook implements WorkbookSource {
     return () => { this.sparklineEvictionListeners.delete(listener) }
   }
   takeSparklineChanges(sheetId: string): readonly { row: number; col: number }[] { const hosts = this.sparklineChanges.get(sheetId) ?? []; this.sparklineChanges.delete(sheetId); return hosts }
+  /** Task 7 handoff for Task 8: drains the sheet's queued CF dirty rectangles
+   * (bounded; overflow coalesces to a covering rectangle). */
+  takeCfDirtyRects(sheetId: string): readonly SourceRect[] { const rects = this.cfDirtyRects.get(sheetId) ?? []; this.cfDirtyRects.delete(sheetId); return rects }
 
   get isClosed(): boolean { return this.closed }
   /** @internal S10.2 tests: document-owned buffers this workbook still holds. */
@@ -1085,6 +1113,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.cfCache.close()
     this.regionStyleEvictionListeners.clear()
     this.sparklineChanges.clear()
+    this.cfDirtyRects.clear()
     for (const entry of this.overflow.values()) entry.cache.close()
     this.overflow.clear()
     // Owned caches go with the document: nothing answers from them after close.

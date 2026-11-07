@@ -69,6 +69,8 @@ import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } 
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
 import { filterValueDomain, scanValueDomain, type ValueDomainScan, type ValueStatus } from '../xlsx/view/values'
 import { awaitQueryDeadline, interruptibleStore, retainUntilDrained } from './viewerAbort'
+import type { CfMemory } from '../xlsx/cf/limits'
+import { measurePayloadBytes } from '../xlsx/view/payloadBytes'
 import { WorkbookFind, FindError, FIND_HIT_BUFFER_BUDGET, type FindPage, type FindSheetInput } from '../xlsx/view/find'
 import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
 import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
@@ -977,6 +979,11 @@ export class DocumentSession {
   /** Insertion order is recency order; bounded by MAX_OPEN_SCANS. */
   private readonly scans = new Map<string, OpenScan>()
   private scanSerial = 0
+  /** Session-scoped CF construction account shared by every preparation of
+   * this document: concurrent preparations hold against the same cap (wired
+   * to the document allocation when main-control provides one), so a full
+   * worker pool refuses CF construction instead of isolating it per request. */
+  private cfMemory: CfMemory | undefined
   activeSheetId: string
 
   constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
@@ -1803,6 +1810,15 @@ export class DocumentSession {
       adopt: (targets, bytes, held) => share.adopt(targets, bytes, held),
       release: () => { released = true; share.release() },
     }
+  }
+  /** Shared CF construction account for this document's preparations. Loaded
+   * lazily so the CF service graph stays out of the paged worker chunk. */
+  private async cfAccount(): Promise<CfMemory> {
+    if (!this.cfMemory) {
+      const { createCfMemory } = await import('../xlsx/cf/limits')
+      this.cfMemory ??= createCfMemory(this.options.allocation ? { context: this.options.allocation } : {})
+    }
+    return this.cfMemory
   }
   private async afterYield(work: Promise<void>, signal: AbortSignal): Promise<void> {
     try {
@@ -3190,33 +3206,56 @@ export class DocumentSession {
         break
       }
       case 'conditionalFormatting': {
-        // The provider manages its own CF account (roomy workspace bounded by
-        // session caps) and releases everything before returning plain
-        // clone-safe data, so the session holds no charge across the await;
-        // the grant gates the wire reply and the kernel charges the posted reply.
-        if (!Number.isSafeInteger(query.grantBytes) || query.grantBytes <= 0) {
-          result = {
-            op: 'conditionalFormatting',
-            result: {
-              sheetId: owner.sheetId, stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
-              kind: 'unresolved', reason: 'cf-resource-limit', states: [], definitions: [], definitionsVersion: 0,
-              diagnostics: [{ kind: 'resource-limit' as const, feature: 'cf-grant-required', message: 'Conditional formatting transfer requires a receiver grant' }],
-            },
+        // The provider builds under the session-scoped CF account (shared by
+        // every preparation of this document, wired to the document
+        // allocation when present), and the session retains outgoing
+        // ownership of the measured payload through posting: the charge is
+        // held across the await and handed off until the kernel drains it,
+        // exactly like the drawing/sparkline paths.
+        const charge = this.charge()
+        let raw: Promise<unknown> | undefined, drained = false
+        const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
+        try {
+          if (!Number.isSafeInteger(query.grantBytes) || query.grantBytes <= 0) {
+            result = {
+              op: 'conditionalFormatting',
+              result: {
+                sheetId: owner.sheetId, stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                kind: 'unresolved', reason: 'cf-resource-limit', states: [], definitions: [], definitionsVersion: 0,
+                diagnostics: [{ kind: 'resource-limit' as const, feature: 'cf-grant-required', message: 'Conditional formatting transfer requires a receiver grant' }],
+              },
+            }
+          } else {
+            // The kernel passes its measured reply envelope; the provider uses
+            // the larger of that floor and its own framed wrapper bound.
+            const work = store.readConditionalFormatting?.(
+              { rects: query.rects, stamp: query.stamp, grantBytes: query.grantBytes },
+              await this.cfAccount(),
+              { signal, envelopeBytes: replyEnvelopeBytes },
+            ) ?? Promise.resolve({
+              sheetId: owner.sheetId,
+              stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+              kind: 'unresolved' as const, reason: 'cf-unavailable',
+              states: [], definitions: [], definitionsVersion: 0,
+              diagnostics: [{ kind: 'unsupported' as const, feature: 'cf-unavailable', message: 'This source cannot resolve conditional formatting.' }],
+            })
+            raw = work
+            void work.then(() => { drained = true }, () => { drained = true })
+            const payload = await work
+            const outgoing = measurePayloadBytes(payload, () => true)
+            if (outgoing === undefined || !charge.set(outgoing)) {
+              result = {
+                op: 'conditionalFormatting',
+                result: {
+                  sheetId: owner.sheetId,
+                  stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                  kind: 'unresolved', reason: 'cf-resource-limit', states: [], definitions: [], definitionsVersion: 0,
+                  diagnostics: [{ kind: 'resource-limit' as const, feature: 'cf-grant-required', message: 'Conditional formatting transfer exceeds the worker memory budget' }],
+                },
+              }
+            } else result = { op: 'conditionalFormatting', result: payload }
           }
-        } else {
-          const payload = await store.readConditionalFormatting?.(
-            { rects: query.rects, stamp: query.stamp, grantBytes: query.grantBytes },
-            undefined,
-            { signal },
-          ) ?? {
-            sheetId: owner.sheetId,
-            stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
-            kind: 'unresolved' as const, reason: 'cf-unavailable',
-            states: [], definitions: [], definitionsVersion: 0,
-            diagnostics: [{ kind: 'unsupported' as const, feature: 'cf-unavailable', message: 'This source cannot resolve conditional formatting.' }],
-          }
-          result = { op: 'conditionalFormatting', result: payload }
-        }
+        } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break

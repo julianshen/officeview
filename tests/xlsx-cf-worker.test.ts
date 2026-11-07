@@ -17,8 +17,9 @@ import {
   type CfCellStateWire,
   type CfSharedDefinition,
 } from '../src/xlsx/view/contracts'
-import { prepareCfRemote, pagedStoreCfPages, type CfPagedReadHost } from '../src/xlsx/view/pagedSource'
-import { RemoteCfCache, type CfReadHost } from '../src/worker/viewerRemoteCf'
+import { prepareCfRemote, pagedStoreCfPages, cfRulesVersion, type CfPagedReadHost } from '../src/xlsx/view/pagedSource'
+import { RemoteCfCache, CF_CACHE_ENTRY_OVERHEAD_BYTES, type CfReadHost } from '../src/worker/viewerRemoteCf'
+import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { boundedQueryStore } from '../src/worker/viewerQueryBudget'
 import { interruptibleStore } from '../src/worker/viewerAbort'
 import type { SourceStore } from '../src/xlsx/view/contracts'
@@ -45,7 +46,7 @@ const nc = (value: number): CfLiteral => ({ kind: 'number', value })
 /** Bare async CF source for provider tests: no admission of its own. */
 function fakeSource(
   cells: { row: number; col: number; value: CfLiteral }[],
-  opts: { bounds?: { firstRow: number; lastRow: number; firstCol: number; lastCol: number } | null; stamp?: CfStamp; gate?: Promise<void>; visits?: { n: number }; release?: () => void } = {},
+  opts: { bounds?: { firstRow: number; lastRow: number; firstCol: number; lastCol: number } | null; stamp?: CfStamp; gate?: Promise<void>; gateAfterChunks?: number; visits?: { n: number }; release?: () => void } = {},
 ): CfValueSource & { live: { stamp: CfStamp } } {
   const live = { stamp: opts.stamp ?? stamp(1) }
   return {
@@ -59,16 +60,22 @@ function fakeSource(
     },
     stamp: (_id: string) => live.stamp,
     pages: async function* (_id: string) {
-      if (opts.gate) await opts.gate
-      yield {
-        value: {
-          rows: Uint32Array.from(cells, c => { if (opts.visits) opts.visits.n += 1; return c.row }),
-          cols: new Uint16Array(cells.map(c => c.col)),
-          values: cells.map(c => c.value),
-        },
-        bytes: 0,
-        release() { opts.release?.() },
-      } as unknown as CfLease<CfValuePage>
+      if (opts.gate && (opts.gateAfterChunks ?? 0) <= 0) await opts.gate
+      let yielded = 0
+      for (let i = 0; i < cells.length; i += 64) {
+        const chunk = cells.slice(i, i + 64)
+        yield {
+          value: {
+            rows: Uint32Array.from(chunk, c => { if (opts.visits) opts.visits.n += 1; return c.row }),
+            cols: new Uint16Array(chunk.map(c => c.col)),
+            values: chunk.map(c => c.value),
+          },
+          bytes: 0,
+          release() { opts.release?.() },
+        } as unknown as CfLease<CfValuePage>
+        yielded++
+        if (opts.gate && yielded >= (opts.gateAfterChunks ?? Number.MAX_SAFE_INTEGER)) await opts.gate
+      }
     },
   } as unknown as CfValueSource & { live: { stamp: CfStamp } }
 }
@@ -77,14 +84,37 @@ const cfRequest = (rects: readonly SourceRect[], st: CfStamp, grantBytes: number
   stamp: { owner: st.owner, sheetId: st.sheetId, workbookValueGen: st.workbookValueGen, cfGen: st.cfGen, viewGen: st.viewGen, structureGen: st.structureGen, clockGen: st.clockGen },
   grantBytes,
 })
+/** Fake source whose stamp carries the live version for the given rules. */
+function versionedSrc(cells: { row: number; col: number; value: CfLiteral }[], rules: CfSheetRules, opts: { bounds?: { firstRow: number; lastRow: number; firstCol: number; lastCol: number } | null; visits?: { n: number }; gate?: Promise<void>; release?: () => void } = {}) {
+  return fakeSource(cells, { ...opts, stamp: stamped(rules) })
+}
+/** Stamp carrying the live content hash for the given rules (what a synced client sends). */
+const stamped = (rules: CfSheetRules, gen = 1, extra: Partial<CfStamp> = {}): CfStamp =>
+  stamp(gen, { ...extra, cfGen: cfRulesVersion(rules) })
 
 describe('CF reply estimator', () => {
-  it('measures a synthetic 1024 B payload exactly', () => {
+  it('measures a synthetic 2048 B payload exactly', () => {
     const def = { id: 'd0', version: 1, properties: { a: 'x' }, writes: ['a'] }
-    expect(measureCfDefinitionBytes(def)).toBe(154)
-    const cell = { row: 0, col: 0, properties: { a: 'x', pad: 'f'.repeat(238) } }
-    expect(measureCfCellBytes(cell)).toBe(614)
-    expect(CF_REPLY_ENVELOPE_BYTES + measureCfDefinitionBytes(def) + measureCfCellBytes(cell)).toBe(1024)
+    expect(measureCfDefinitionBytes(def)).toBe(216)
+    const cell = { row: 0, col: 0, properties: { a: 'x', pad: 'f'.repeat(251) } }
+    expect(measureCfCellBytes(cell)).toBe(680)
+    expect(CF_REPLY_ENVELOPE_BYTES + measureCfDefinitionBytes(def) + measureCfCellBytes(cell)).toBe(2048)
+  })
+
+  it('the envelope bound covers realistic reply wrappers', async () => {
+    const { measurePayloadBytes } = await import('../src/xlsx/view/payloadBytes')
+    const wrap = (requestId: string) => ({
+      commandKind: 'read', requestId,
+      owner: { docId: 'doc', sheetId: 's', valueGen: 1, fontGen: 0, viewGen: 0 },
+      diagnostics: [], replyBytes: 0, kind: 'complete',
+      result: { kind: 'read', result: { op: 'conditionalFormatting', result: {
+        sheetId: 's', stamp: { owner: 'o', sheetId: 's', workbookValueGen: 1, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1 },
+        kind: 'ready', states: [], definitions: [], definitionsVersion: 1, diagnostics: [],
+      } } },
+    })
+    // Typical short ids fit comfortably; the kernel walk backs up outliers.
+    expect(measurePayloadBytes(wrap('r1'), () => true)!).toBeLessThanOrEqual(CF_REPLY_ENVELOPE_BYTES)
+    expect(measurePayloadBytes(wrap('request-123'), () => true)!).toBeLessThanOrEqual(CF_REPLY_ENVELOPE_BYTES)
   })
 
   it('does not hide shared references', () => {
@@ -106,7 +136,7 @@ describe('CF reply estimator', () => {
     expect(estimateCfPreparationBytes(1, 10, 10, -5, 256)).toBeUndefined()
     // 256 + 0 + 50 + 2*100 = 506.
     expect(estimateCfPreparationBytes(2, 100, 50, 0, 256)).toBe(506)
-    expect(measureCfDiagnosticBytes({ kind: 'resource-limit', feature: 'cf-test', message: 'm'.repeat(100) })).toBe(24 + (16 + 28) + (16 + 14) + (16 + 200))
+    expect(measureCfDiagnosticBytes({ kind: 'resource-limit', feature: 'cf-test', message: 'm'.repeat(100) })).toBe(24 + (16 + (16 + 28)) + (16 + (16 + 14)) + (16 + (16 + 200)))
   })
 
   it('versions rule sets deterministically by content', () => {
@@ -114,6 +144,24 @@ describe('CF reply estimator', () => {
     expect(versionCfRules('[{"id":0,"dxf":{"a":"b"}}]')).toBe(a)
     expect(versionCfRules('[{"id":0,"dxf":{"a":"c"}}]')).not.toBe(a)
     expect(versionCfRules('')).toBe(0x811c9dc5)
+  })
+
+  it('wire measures match the kernel payload walker exactly', async () => {
+    // The provider preflight and the kernel publish gate must agree byte for
+    // byte; this pins the shared model against the repository walker.
+    const { measurePayloadBytes } = await import('../src/xlsx/view/payloadBytes')
+    const cases: Array<[string, Record<string, unknown> | unknown[], (v: never) => number]> = [
+      ['cell', { row: 0, col: 1, properties: { a: 'x', n: 5, b: true, z: null } }, measureCfCellBytes as (v: never) => number],
+      ['cell-tainted', { row: 2, col: 3, properties: { 'fill.pattern': 'solid' }, unresolvedWrites: ['fill', 'font.bold'], unresolvedReason: 'r' }, measureCfCellBytes as (v: never) => number],
+      ['def', { id: 'rule-9', version: 3, properties: { a: 'b' }, writes: ['a', 'b'] }, measureCfDefinitionBytes as (v: never) => number],
+      ['diag', { kind: 'unsupported', feature: 'cf-x', message: 'hello' }, (v: never) => measureCfDiagnosticBytes(v as never)],
+    ]
+    for (const [name, value, fn] of cases) {
+      const mine = fn(value as never)
+      const walked = measurePayloadBytes(value, () => true)
+      expect(mine, name).toBe(walked)
+    }
+    expect(measureCfPropertiesBytes({ a: 'x', bb: 1 })).toBe(measurePayloadBytes({ a: 'x', bb: 1 }, () => true))
   })
 
   it('mirrors the service propertyBytes accounting for admission parity', () => {
@@ -131,29 +179,32 @@ describe('CF reply estimator', () => {
 
 describe('CF remote preparation grants and admission', () => {
   it('grant minus one refuses before payload allocation; base cells stay readable', async () => {
-    // The admission bound is the provider's wire preflight estimate; grant
-    // minus one must refuse before any page is ever visited, and the exact
-    // grant must complete with balanced memory. The 1,024 B figure itself
-    // is pinned at the measurement layer above.
+    // The admission bound is the provider's preflight estimate: a walked
+    // template (exact framing + definitions) plus a bounded per-cell term
+    // that matches the walker exactly for full wins. Grant minus one must
+    // refuse before any page is ever visited, and the exact grant must
+    // complete with balanced memory.
     const props = { 'fill.pattern': 'solid', 'fill.fg': 'FF00FF00' }
     const cells = [{ row: 0, col: 0, value: nc(1) }]
     const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, props, ['fill'])] }
     const defs = rules.rules.map((r, i) => ({ id: `rule-${i}`, version: 1, properties: { ...r.dxf }, writes: [...r.writes] }))
-    const definitionBytes = defs.reduce((n, d) => n + measureCfDefinitionBytes(d), 0)
-    let perCell = 40
+    const templateBytes = measurePayloadBytes({ sheetId: SHEET, stamp: stamp(1), kind: 'ready', states: [], definitions: defs, definitionsVersion: 1, diagnostics: [] }, () => true)
+    if (templateBytes === undefined) throw new Error('expected measurable template')
+    let perCell = 96
     for (const r of rules.rules) perCell += measureCfPropertiesBytes((r.dxf ?? {}) as Record<string, string | number | boolean | null>)
-    const exact = estimateCfPreparationBytes(1, perCell, definitionBytes, 0, CF_REPLY_ENVELOPE_BYTES)
+    const exact = templateBytes + estimateCfPreparationBytes(1, perCell, 0, 0, CF_REPLY_ENVELOPE_BYTES)!;
     if (exact === undefined) throw new Error('expected a bounded estimate')
+    const st = stamped(rules)
     const visits = { n: 0 }
     const tight = createCfMemory({})
-    const refused = await prepareCfRemote(cfRequest([rect(0, 0)], stamp(1), exact - 1), SHEET, fakeSource(cells, { visits }), rules, tight, { budget: frozenBudget })
+    const refused = await prepareCfRemote(cfRequest([rect(0, 0)], st, exact - 1), SHEET, versionedSrc(cells, rules, { visits }), rules, tight, { budget: frozenBudget })
     expect(refused).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
     if (refused.kind !== 'unresolved') throw new Error('expected unresolved')
     expect(refused.requiredBytes).toBe(exact)
     expect(visits.n).toBe(0)
     expect(tight.currentBytes).toBe(0)
     const roomy = createCfMemory({})
-    const ready = await prepareCfRemote(cfRequest([rect(0, 0)], stamp(1), exact), SHEET, fakeSource(cells, { visits }), rules, roomy, { budget: frozenBudget })
+    const ready = await prepareCfRemote(cfRequest([rect(0, 0)], st, exact), SHEET, versionedSrc(cells, rules, { visits }), rules, roomy, { budget: frozenBudget })
     expect(ready.kind).toBe('ready')
     expect(visits.n).toBeGreaterThan(0)
     expect(roomy.currentBytes).toBe(0)
@@ -163,21 +214,24 @@ describe('CF remote preparation grants and admission', () => {
     // A rule set carrying a parser diagnostic produces a notice on the roomy
     // reply; a grant that fits only the base still completes ready with the
     // diagnostic omitted (never silently partial data).
-    const st = stamp(1)
     const rules: CfSheetRules = {
       diagnostics: [{ kind: 'unsupported', feature: 'cf-test-parse', message: 'synthetic parser notice' }],
       rules: [rule(0, { 'fill.pattern': 'solid' }, ['fill'])],
     }
-    const src = () => fakeSource([{ row: 0, col: 0, value: nc(5) }])
+    const st = stamped(rules)
+    const src = () => versionedSrc([{ row: 0, col: 0, value: nc(5) }], rules)
     const wide = await prepareCfRemote(cfRequest([rect(0, 0)], st, 1 << 24), SHEET, src(), rules, createCfMemory({}), { budget: frozenBudget })
     expect(wide.kind).toBe('ready')
     if (wide.kind !== 'ready') throw new Error('expected ready')
     expect(wide.diagnostics.length).toBeGreaterThan(0)
     expect(wide.states).toHaveLength(1)
     expect(wide.states[0]!.unresolvedReason).toBeUndefined()
-    const base = CF_REPLY_ENVELOPE_BYTES
-      + wide.definitions.reduce((n: number, d) => n + measureCfDefinitionBytes(d), 0)
-      + wide.states.reduce((n: number, s) => n + measureCfCellBytes(s), 0)
+    // Base is the walked probe result without diagnostics plus the envelope —
+    // the same measure the provider checks — so an exactly-fitting grant
+    // exercises the omit path instead of refusing.
+    const probeBase = measurePayloadBytes({ ...wide, diagnostics: [] }, () => true)
+    if (probeBase === undefined) throw new Error('expected measurable probe')
+    const base = probeBase + CF_REPLY_ENVELOPE_BYTES
     const tight = await prepareCfRemote(cfRequest([rect(0, 0)], st, base), SHEET, src(), rules, createCfMemory({}), { budget: frozenBudget })
     expect(tight.kind).toBe('ready')
     if (tight.kind !== 'ready') throw new Error('expected ready with omitted diagnostic')
@@ -222,6 +276,37 @@ describe('CF remote preparation grants and admission', () => {
     expect(memory.currentBytes).toBe(0)
   })
 
+  it('stale definitions version is dropped and refunded with the live stamp', async () => {
+    // A known-but-wrong cfGen is withheld (not painted); the reply carries the
+    // live version so the caller re-requests current definitions.
+    const memory = createCfMemory({})
+    const st = stamped(oneRule)
+    const stale = { ...st, cfGen: st.cfGen + 1, workbookValueGen: st.workbookValueGen }
+    const src = fakeSource([{ row: 0, col: 0, value: nc(1) }], { stamp: st })
+    let visits = 0
+    const watched = { ...src, pages: async function* (...args: [string, readonly never[], CfWorkBudget, AbortSignal]) { visits++; yield* src.pages(...args) } }
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], stale, 1_000_000), SHEET, watched as never, oneRule, memory, { budget: frozenBudget })
+    expect(out).toMatchObject({ kind: 'unresolved', reason: 'cf-stale-generation' })
+    if (out.kind !== 'unresolved') throw new Error('expected unresolved')
+    expect(out.stamp.cfGen).toBe(stamped(oneRule).cfGen)
+    expect(visits).toBe(0)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('unknown definitions version adopts live and completes', async () => {
+    // cfGen 0 means "unknown": the provider builds against the live rule set
+    // and reports the adopted version, enabling cold-start handshakes.
+    const memory = createCfMemory({})
+    const unknown = { ...stamp(1), cfGen: 0 }
+    const src = fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: stamped(oneRule) })
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], unknown, 1 << 24), SHEET, src, oneRule, memory, { budget: frozenBudget })
+    expect(out.kind).toBe('ready')
+    if (out.kind !== 'ready') throw new Error('expected ready')
+    expect(out.definitionsVersion).toBe(cfRulesVersion(oneRule))
+    expect(out.stamp.cfGen).toBe(cfRulesVersion(oneRule))
+    expect(memory.currentBytes).toBe(0)
+  })
+
   it('unimported ranges stay pending without running any scan', async () => {
     const memory = createCfMemory({})
     const counter = { n: 0 }
@@ -236,7 +321,7 @@ describe('CF remote preparation grants and admission', () => {
         yield* src.pages(...args)
       },
     }
-    const out = await prepareCfRemote(cfRequest([rect(0, 49)], stamp(1), 8 * 1024 * 1024), SHEET, gated as never, oneRule, memory, { budget: frozenBudget })
+    const out = await prepareCfRemote(cfRequest([rect(0, 49)], stamped(oneRule), 8 * 1024 * 1024), SHEET, gated as never, oneRule, memory, { budget: frozenBudget })
     expect(out).toMatchObject({ kind: 'pending', reason: 'cf-pending-data' })
     if (out.kind !== 'pending') throw new Error('expected pending')
     expect(out.pendingSheetIds).toEqual([SHEET])
@@ -244,21 +329,20 @@ describe('CF remote preparation grants and admission', () => {
     expect(memory.currentBytes).toBe(0)
   })
 
-  it('paged store bridge chunks, filters and admits bounded pages', async () => {
-    // 130 cells minus unavailable rows split into 64-cell admitted pages;
-    // out-of-scope and unavailable cells never enter a page; every page is
-    // admitted before construction and released by the consumer.
+  it('paged store bridge chunks and admits bounded pages', async () => {
+    // 130 available cells split into 64-cell admitted pages; out-of-scope
+    // cells never enter a page; every page is admitted before construction
+    // and released by the consumer. Unavailable cells are covered below.
     const memory = createCfMemory({})
     const released: number[] = []
     const store: CfPagedReadHost = {
       stamp: { docId: 'doc', sheetId: SHEET, valueGen: 1 },
       readRows: async (range, cursor) => {
         if (cursor !== undefined) throw new Error('unexpected cursor in single-page fixture')
-        const items: { row: number; cells: { id: number; row: number; col: number; value: number; styleIndex: number; unavailable?: true }[] }[] = []
+        const items: { row: number; cells: { id: number; row: number; col: number; value: number; styleIndex: number }[] }[] = []
         for (let row = 0; row < 130; row++) {
           if (row < range.r0 || row > range.r1) continue
-          if (row % 10 === 9) items.push({ row, cells: [{ id: row * 16384, row, col: 0, value: row, styleIndex: 0, unavailable: true }] })
-          else items.push({ row, cells: [{ id: row * 16384, row, col: 0, value: row, styleIndex: 0 }] })
+          items.push({ row, cells: [{ id: row * 16384, row, col: 0, value: row, styleIndex: 0 }] })
         }
         return { items, completeness: 'complete' as const, stamp: store.stamp }
       },
@@ -276,10 +360,63 @@ describe('CF remote preparation grants and admission', () => {
       lease.release()
       released.push(lease.value.rows.length)
     }
-    // 130 cells minus 13 unavailable = 117 visited, split 64 + 53.
-    expect(seen).toHaveLength(117)
-    expect(seen.every(c => (c.row as number) % 10 !== 9)).toBe(true)
-    expect(released).toEqual([64, 53])
+    expect(seen).toHaveLength(130)
+    expect(released).toEqual([64, 64, 2])
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('withholds on incomplete pages instead of publishing partial statistics', async () => {
+    // A page that is still importing must not certify its partial rows: the
+    // bridge withholds incomplete pages as pending rather than letting the
+    // service compute a partial mean.
+    const memory = createCfMemory({})
+    const store: CfPagedReadHost = {
+      stamp: { docId: 'doc', sheetId: SHEET, valueGen: 1 },
+      readRows: async () => ({
+        items: Array.from({ length: 10 }, (_, row) => ({ row, cells: [{ id: row * 16384, row, col: 0, value: row, styleIndex: 0 }] })),
+        completeness: 'incomplete' as const,
+        stamp: store.stamp,
+      }),
+    }
+    const source: CfValueSource = {
+      bounds: async () => ({ firstRow: 0, lastRow: 49, firstCol: 0, lastCol: 0 }),
+      stamp: (_id: string) => ({ owner: 'owner', sheetId: SHEET, workbookValueGen: 1, cfGen: cfRulesVersion(oneRule), viewGen: 1, structureGen: 1, clockGen: 1 }),
+      pages: pagedStoreCfPages(store, memory),
+    }
+    const out = await prepareCfRemote(cfRequest([rect(0, 49)], stamped(oneRule), 8 * 1024 * 1024), SHEET, source, oneRule, memory, { budget: frozenBudget })
+    expect(out.kind).toBe('pending')
+    if (out.kind !== 'pending') throw new Error('expected pending, not partial statistics')
+    expect(out.pendingSheetIds).toEqual([SHEET])
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('withholds on unavailable cells instead of treating them as blank', async () => {
+    // An unavailable value is unknown, not blank: erasing it would let blank
+    // predicates match falsely and corrupt statistics. The bridge refuses to
+    // build pages from it, and the preparation withholds (never publishes a
+    // partial result), with memory fully refunded.
+    const memory = createCfMemory({})
+    const store: CfPagedReadHost = {
+      stamp: { docId: 'doc', sheetId: SHEET, valueGen: 1 },
+      readRows: async (range) => {
+        const items: { row: number; cells: { id: number; row: number; col: number; value: number | null; styleIndex: number; unavailable?: true }[] }[] = []
+        for (let row = range.r0; row <= range.r1; row++) {
+          if (row === 0) items.push({ row, cells: [{ id: 0, row, col: 0, value: 5, styleIndex: 0 }] })
+          else items.push({ row, cells: [{ id: row * 16384, row, col: 0, value: null, styleIndex: 0, unavailable: true }] })
+        }
+        return { items, completeness: 'complete' as const, stamp: store.stamp }
+      },
+    }
+    const source = {
+      bounds: async () => ({ firstRow: 0, lastRow: 1, firstCol: 0, lastCol: 0 }),
+      stamp: (_id: string) => stamped(oneRule),
+      pages: pagedStoreCfPages(store, memory),
+    }
+    const out = await prepareCfRemote(cfRequest([rect(0, 1)], stamped(oneRule), 8 * 1024 * 1024), SHEET, source, oneRule, memory, { budget: frozenBudget })
+    expect(out.kind).toBe('unresolved')
+    if (out.kind !== 'unresolved') throw new Error('expected withheld preparation')
+    expect(out.reason).toBe('cf-unavailable-values')
+    expect(out.states).toEqual([])
     expect(memory.currentBytes).toBe(0)
   })
 
@@ -312,20 +449,35 @@ describe('CF remote preparation grants and admission', () => {
     for (const way of ways) {
       const memory = createCfMemory({})
       const gate = deferred<void>()
+      const calls = { n: 0 }
       const releases = { n: 0 }
-      const src = fakeSource(
+      const base = fakeSource(
         Array.from({ length: 200 }, (_, i) => ({ row: i, col: 0, value: nc(i) })),
-        { gate: gate.promise, release: () => { releases.n++ } },
+        { stamp: stamped(oneRule), release: () => { releases.n++ } },
       )
+      // Gate the first page so the scan provably blocks inside next() with
+      // admitted workspace held; aborting then draining must unwind exactly
+      // once without publishing.
+      let gated = false
+      const src = {
+        ...base,
+        pages: async function* (...args: [string, readonly never[], CfWorkBudget, AbortSignal]) {
+          calls.n++
+          if (!gated) { gated = true; await gate.promise }
+          yield* base.pages(...args)
+        },
+      }
       const controller = new AbortController()
-      const pending = prepareCfRemote(cfRequest([rect(0, 199)], stamp(1), 8 * 1024 * 1024), SHEET, src, oneRule, memory, { signal: controller.signal, budget: frozenBudget })
-      // Let the scan start and block on the gate (admitted memory held).
-      await new Promise(r => setTimeout(r, 0))
+      const pending = prepareCfRemote(cfRequest([rect(0, 199)], stamped(oneRule), 8 * 1024 * 1024), SHEET, src as never, oneRule, memory, { signal: controller.signal, budget: frozenBudget })
+      // Wait until the service is blocked inside pages.next() (deterministic:
+      // the gate is the only await before the first yield).
+      for (let i = 0; i < 1000 && calls.n === 0; i++) await new Promise(r => setTimeout(r, 1))
+      expect(calls.n).toBeGreaterThan(0)
       expect(memory.currentBytes).toBeGreaterThan(0)
       const held = memory.currentBytes
       if (way === 'timeout') await new Promise(r => setTimeout(r, 5))
-      // The gated provider ignores the abort; the charge persists until it
-      // settles, then unwinds exactly once without publishing.
+      // 'close' on a one-shot preparation is an abort: there is no persistent
+      // handle to close, only the in-flight cancellation to honor.
       controller.abort()
       gate.resolve()
       await expect(pending).rejects.toMatchObject({ code: 'cancelled' })
@@ -403,15 +555,16 @@ describe('CF remote cache (viewerRemoteCf)', () => {
         host.changedCalls.push({ sheetId, rects, reason })
       },
       respond: overrides.respond ?? (async (command: CommandOf<'read'>) => {
-        const q = command.query
+        const q = command.query as { op: 'conditionalFormatting'; rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
         const grant = host.granted.get(command.requestId) ?? 1 << 20
-        const result = wireResult()
+        // Echo the requested identity like a correct worker (which validates
+        // before preparing); tests that need mismatches override respond.
+        const result = wireResult({ stamp: { ...q.stamp } })
         const reply = cfReply(result, 1024, command.requestId, command.owner as CacheIdentity)
         host.granted.delete(command.requestId)
         ledger.delete(`grant:${command.requestId}`)
         const moved = Math.min(1024, grant)
         ledger.set(reply, moved)
-        void q
         return reply
       }),
     } as unknown as FakeHost
@@ -506,11 +659,11 @@ describe('CF remote cache (viewerRemoteCf)', () => {
 
   it('evicts the eldest entry exactly once at the budget edge', async () => {
     const host = testHost()
-    const cache = new RemoteCfCache(host, 1500)
+    const cache = new RemoteCfCache(host, 2000)
     const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
     await flush()
     expect(a.state.state).toBe('ready')
-    expect(cache.retainedBytes).toBe(1024)
+    expect(cache.retainedBytes).toBe(1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES)
     a.release()
     // Released but still cached: a second consumer reuses it without a request.
     const a2 = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
@@ -523,14 +676,14 @@ describe('CF remote cache (viewerRemoteCf)', () => {
     await flush()
     expect(b.state.state).toBe('ready')
     expect(host.releasedReplies).toHaveLength(1)
-    expect(cache.retainedBytes).toBe(1024)
+    expect(cache.retainedBytes).toBe(1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES)
     // While everything is pinned, a new scope fails closed instead of
     // evicting live data or exceeding the budget (its reply still released).
     const c = cache.acquire(SHEET, [rect(20, 20)], cfStamp(1))
     await flush()
     expect(c.state.state).toBe('failed')
     expect(c.state.diagnostics[0]!.feature).toBe('cf-cache-budget')
-    expect(cache.retainedBytes).toBe(1024)
+    expect(cache.retainedBytes).toBe(1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES)
     expect(host.releasedReplies).toHaveLength(2)
     b.release()
     c.release()
@@ -541,10 +694,14 @@ describe('CF remote cache (viewerRemoteCf)', () => {
 
   it('abort, timeout and close each release exactly once with live-ledger assertions', async () => {
     for (const way of ['abort', 'timeout', 'close'] as const) {
-      const deferreds: { resolve: (v: WorkerReply<'read'> | symbol) => void }[] = []
+      // Transport-faithful fake: abort resolves the waiter at once, but the
+      // grant stays with the transport until the deferred producer drains
+      // (settling it, like viewerRemoteSource.request's sent.then). The
+      // cache must never refund early.
+      const producers = new Map<string, (v: WorkerReply<'read'> | symbol) => void>()
       const host = testHost({
-        respond: (_command, signal) => new Promise<WorkerReply<'read'> | symbol>(resolve => {
-          deferreds.push({ resolve })
+        respond: (command, signal) => new Promise<WorkerReply<'read'> | symbol>(resolve => {
+          producers.set(command.requestId, resolve)
           signal?.addEventListener('abort', () => resolve(Symbol('cancelled')), { once: true })
         }),
       })
@@ -557,14 +714,22 @@ describe('CF remote cache (viewerRemoteCf)', () => {
       expect(host.ledger.size).toBeGreaterThan(0)
       if (way === 'timeout') await new Promise(r => setTimeout(r, 5))
       // The waiter detaches; the shared build is cancelled only when its
-      // entry drops (evict/invalidate/close). Resolving the late reply must
-      // release, never publish nor double-count.
+      // entry drops (evict/invalidate/close). Resolving the late waiter must
+      // never publish, and the grant stays held until the producer drains.
+      const requestId = [...host.granted.keys()][0]!
       if (way === 'close') cache.close()
       else controller.abort()
-      for (const d of deferreds) d.resolve(Symbol('cancelled'))
+      for (const [, resolve] of producers) resolve(Symbol('cancelled'))
+      await flush()
+      expect(host.granted.has(requestId)).toBe(true)
+      held.release()
+      // The late producer drains: the transport settles the grant into the
+      // late reply and settles that reply at once (its waiter is gone) —
+      // net grant gone, no leak, no double release.
+      host.granted.delete(requestId)
+      host.ledger.delete(`grant:${requestId}`)
       await flush()
       expect(host.granted.size).toBe(0)
-      held.release()
       if (way !== 'close') cache.close()
       expect(host.ledger.size).toBe(0)
     }
@@ -619,7 +784,54 @@ describe('CF remote cache (viewerRemoteCf)', () => {
     expect(host.granted.size).toBe(0)
     cache.close()
   })
+
+  it('drops a reply whose stamp does not match the request', async () => {
+    // A worker that answers with a different generation must not publish:
+    // the entry stays non-ready and the reply is released exactly once.
+    const host = testHost({
+      respond: async (command) => {
+        const q = command.query as { rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
+        const wrong = { ...wireResult(), stamp: { ...q.stamp, cfGen: q.stamp.cfGen + 999 }, definitionsVersion: 1 as const, states: [] as never[] };
+        const reply = cfReply(wrong as CfReadResult, 1024, command.requestId, command.owner as CacheIdentity)
+        host.granted.delete(command.requestId)
+        host.ledger.delete(`grant:${command.requestId}`)
+        host.ledger.set(reply, 1024)
+        return reply
+      },
+    })
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(held.state.state).toBe('failed')
+    expect(held.state.diagnostics[0]).toMatchObject({ feature: 'cf-stale-generation' })
+    expect(host.releasedReplies).toHaveLength(1)
+    held.release()
+    cache.close()
+    expect(host.ledger.size).toBe(0)
+  })
+
+  it('keys entries on the full stamp including view and clock generations', async () => {
+    const host = testHost()
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(a.state.state).toBe('ready')
+    // Same scope and value generation but a new view generation is a
+    // different key: no stale hit, a fresh preparation is built.
+    const b = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { viewGen: 2 }))
+    await flush()
+    expect(b.state.state).toBe('ready')
+    expect(b.state.result).not.toBe(a.state.result)
+    expect(host.requests).toHaveLength(2)
+    a.release()
+    b.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(host.releasedReplies).toHaveLength(2)
+    cache.close()
+  })
 })
+
 
 describe('CF store wrappers', () => {
   const baseStamp = { docId: 'doc', sheetId: SHEET, valueGen: 1 }
@@ -769,6 +981,369 @@ describe('CF worker round trip (in-process kernel)', () => {
     // Malformed grants surface as a typed error or an unresolved refusal;
     // either way the provider never ran.
     expect(out.kind === 'error' || (out.kind === 'complete' && out.result.kind === 'read')).toBe(true)
+  })
+})
+
+describe('CF fix round 1 (review-t7-r1)', () => {
+  const identity = (sheetId = SHEET, valueGen = 1): CacheIdentity => ({ docId: 'doc', sheetId, valueGen, fontGen: 0, viewGen: 0 })
+  const cfStamp = (gen = 1, extra: Partial<CfReadStamp> = {}): CfReadStamp => ({
+    owner: 'owner', sheetId: SHEET, workbookValueGen: gen, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1, ...extra,
+  })
+  const wireResult = (over: Partial<CfReadResult> = {}): CfReadResult => ({
+    sheetId: SHEET, stamp: cfStamp(1), kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid' } }],
+    definitions: [{ id: 'rule-0', version: 7, properties: { 'fill.pattern': 'solid' }, writes: ['fill'] }],
+    definitionsVersion: 7, diagnostics: [], ...over,
+  })
+  const cfReply = (result: CfReadResult, bytes: number, requestId = 'r1', owner: CacheIdentity = identity()): WorkerReply<'read'> => ({
+    commandKind: 'read', requestId, owner, diagnostics: [], replyBytes: bytes, kind: 'complete',
+    result: { kind: 'read', result: { op: 'conditionalFormatting', result } },
+  } as WorkerReply<'read'>)
+  const flush = () => new Promise(r => setTimeout(r, 0))
+
+  it('F1: refuses on a zero-byte account before touching rule content', async () => {
+    // Normalized serialization, definition copies and diagnostics must all
+    // be admitted before they are built: a getter on a rule value observes
+    // any pre-admission serialization or copying (key enumeration alone,
+    // which the admission bound uses, never evaluates values).
+    let touched = 0
+    const dxfProbe: Record<string, unknown> = {}
+    Object.defineProperty(dxfProbe, 'fill.pattern', { enumerable: true, configurable: true, get() { touched++; return 'solid' } })
+    const evil = { ...rule(0, {}, ['fill']), dxf: dxfProbe } as unknown as CfSheetRules['rules'][number]
+    const rules: CfSheetRules = { diagnostics: [], rules: [evil] }
+    const reqStamp = stamped(rules)
+    touched = 0
+    const memory = createCfMemory({ limitBytes: 0 })
+    const source = fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: reqStamp })
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], reqStamp, 8 * 1024 * 1024), SHEET, source, rules, memory, { budget: frozenBudget })
+    expect(out.kind).toBe('unresolved')
+    expect(touched).toBe(0)
+    expect(memory.peakBytes).toBe(0)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F1: the page bridge admits its workspace before touching the store', async () => {
+    // Chunk entries and materialized values must live inside an admitted
+    // hold: with an account too small for the workspace the bridge refuses
+    // before the first readRows call, not after materializing a page.
+    const memory = createCfMemory({ limitBytes: 100 })
+    let reads = 0
+    const store: CfPagedReadHost = {
+      stamp: { docId: 'doc', sheetId: SHEET, valueGen: 1 },
+      readRows: async (range) => {
+        reads++
+        const items: { row: number; cells: { id: number; row: number; col: number; value: number; styleIndex: number }[] }[] = []
+        for (let row = range.r0; row <= range.r1; row++) items.push({ row, cells: [{ id: row * 16384, row, col: 0, value: row, styleIndex: 0 }] })
+        return { items, completeness: 'complete' as const, stamp: store.stamp }
+      },
+    }
+    const pages = pagedStoreCfPages(store, memory)
+    const drain = async () => {
+      for await (const lease of pages('s', [{ firstRow: 0, lastRow: 9, firstCol: 0, lastCol: 0 }], frozenBudget(), new AbortController().signal)) lease.release()
+    }
+    await expect(drain()).rejects.toMatchObject({ code: 'resource-limit' })
+    expect(reads).toBe(0)
+    expect(memory.peakBytes).toBe(0)
+  })
+
+  it('F1: the session passes one shared memory account to the provider', async () => {
+    // The worker pool must be able to refuse CF construction: the session
+    // connects its shared CF account (wired to the document allocation when
+    // present) instead of leaving the provider on an isolated per-request one.
+    const { ViewerClient } = await import('../src/worker/viewerClient')
+    const { connectInProcess, ViewerKernel } = await import('../src/worker/viewerKernel')
+    const { createObjectWorkbookSource } = await import('../src/worker/viewerObjectSource')
+    const { initialIdentity } = await import('../src/worker/viewerProtocol')
+    const { workbookOf } = await import('./helpers/xlsx-find')
+    const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 5 }] }])
+    const base = createObjectWorkbookSource(doc, 'doc')
+    const seen: unknown[] = []
+    const wrapped = {
+      ...base,
+      store: (id: string) => ({
+        ...base.store(id),
+        readConditionalFormatting: async (request: CfReadRequest, memory: unknown) => {
+          seen.push(memory)
+          return {
+            sheetId: id, stamp: { ...request.stamp }, kind: 'ready' as const,
+            states: [], definitions: [], definitionsVersion: 0, diagnostics: [],
+          }
+        },
+      }),
+    }
+    const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => wrapped }, { yield: async () => {} })
+    const port = connectInProcess(kernel)
+    const client = new ViewerClient(port)
+    const open = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'doc', source: { kind: 'object', document: doc }, profile: 'D' })
+    if (open.kind !== 'complete') throw new Error('open failed')
+    const owner = initialIdentity('doc', 's')
+    const query = (requestId: string) => ({
+      kind: 'read' as const, requestId, owner,
+      query: { op: 'conditionalFormatting' as const, rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], stamp: { owner: 'owner', sheetId: 's', workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 1, clockGen: 0 }, grantBytes: 1 << 20 },
+    })
+    await client.send(query(client.nextRequestId()))
+    await client.send(query(client.nextRequestId()))
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).toBeDefined()
+    // One session-scoped account, so concurrent preparations share the cap.
+    expect(seen[0]).toBe(seen[1])
+  })
+
+  it('F2: abort keeps the grant with the transport until the producer drains', async () => {
+    // Models viewerRemoteSource.request faithfully: aborting the in-flight
+    // entry resolves the public promise with CANCELLED at once, but the
+    // grant stays held until the late reply arrives and the transport
+    // settles it. The cache must not refund early and let other work
+    // consume the headroom first.
+    const CANCELLED = Symbol('cf-test-cancelled')
+    const granted = new Map<string, number>()
+    const ledger = new Map<string | object, number>()
+    const producers = new Map<string, (v: WorkerReply<'read'> | symbol) => void>()
+    const releasedReplies: WorkerReply<'read'>[] = []
+    const requests: string[] = []
+    let n = 0
+    const host = {
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: (requestId: string) => { granted.set(requestId, 1 << 20); ledger.set(`grant:${requestId}`, 1 << 20); return 1 << 20 },
+      releaseGrant: (requestId: string) => { granted.delete(requestId); ledger.delete(`grant:${requestId}`) },
+      request: (command: CommandOf<'read'>, signal?: AbortSignal) => new Promise<WorkerReply<'read'> | symbol>(resolve => {
+        requests.push(command.requestId)
+        producers.set(command.requestId, resolve)
+        signal?.addEventListener('abort', () => resolve(CANCELLED as unknown as symbol), { once: true })
+      }),
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { releasedReplies.push(reply); ledger.delete(reply) },
+      changed: () => {},
+      // The transport settling the late reply: the grant is adopted into the
+      // reply charge and settled at once (its waiter is gone) — net zero,
+      // but only once the producer actually drains.
+      settleProducer: (requestId: string, reply?: WorkerReply<'read'>) => {
+        const resolve = producers.get(requestId)
+        producers.delete(requestId)
+        granted.delete(requestId)
+        ledger.delete(`grant:${requestId}`)
+        if (reply && resolve) {
+          ledger.set(reply, 1024)
+          resolve(reply)
+        }
+      },
+    }
+    const cache = new RemoteCfCache(host, 1 << 20)
+    cache.get(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    const requestId = [...granted.keys()][0]!
+    expect(requests).toHaveLength(1)
+    // Eviction aborts the in-flight entry: the waiter resolves CANCELLED,
+    // but the transport still owns the grant — no early refund for other
+    // work to consume before the reply drains.
+    cache.invalidate(SHEET)
+    await flush()
+    expect(granted.has(requestId)).toBe(true)
+    host.settleProducer(requestId)
+    await flush()
+    expect(granted.has(requestId)).toBe(false)
+    // A live re-get starts a fresh request and settles exactly once.
+    cache.get(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(requests).toHaveLength(2)
+    const liveId = requests[1]!
+    const reply = cfReply(wireResult(), 1024, liveId)
+    host.settleProducer(liveId, reply)
+    await flush()
+    expect(cache.get(SHEET, [rect(0, 0)], cfStamp(1)).state).toBe('ready')
+    cache.invalidate(SHEET)
+    await flush()
+    expect(releasedReplies).toHaveLength(1)
+    expect(ledger.size).toBe(0)
+    cache.close()
+  })
+
+  function readyHost(budgetBytes = 1 << 20) {
+    const granted = new Map<string, number>()
+    const ledger = new Map<string | object, number>()
+    const releasedReplies: WorkerReply<'read'>[] = []
+    const changedCalls: { sheetId: string; rects: readonly SourceRect[]; reason?: string }[] = []
+    let n = 0
+    return {
+      granted, ledger, releasedReplies, changedCalls,
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: (requestId: string) => { granted.set(requestId, budgetBytes); ledger.set(`grant:${requestId}`, budgetBytes); return budgetBytes },
+      releaseGrant: (requestId: string) => { granted.delete(requestId); ledger.delete(`grant:${requestId}`) },
+      request: async (command: CommandOf<'read'>) => {
+        const q = command.query as { rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
+        const result = wireResult({ stamp: { ...q.stamp } })
+        const reply = cfReply(result, 1024, command.requestId, command.owner as CacheIdentity)
+        granted.delete(command.requestId)
+        ledger.delete(`grant:${command.requestId}`)
+        ledger.set(reply, 1024)
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { releasedReplies.push(reply); ledger.delete(reply) },
+      changed: (sheetId: string, rects: readonly SourceRect[], reason?: 'updated' | 'evicted' | 'status') => { changedCalls.push({ sheetId, rects, reason }) },
+    }
+  }
+
+  it('F6: entry metadata is charged and detached versions stay charged', async () => {
+    const { CF_CACHE_ENTRY_OVERHEAD_BYTES } = await import('../src/worker/viewerRemoteCf')
+    const host = readyHost()
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(held.state.state).toBe('ready')
+    // Reply bytes plus the admitted entry metadata (key, scope, stamp).
+    expect(cache.retainedBytes).toBe(1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES)
+    const fresh = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { cfGen: 2 }))
+    await flush()
+    expect(fresh.state.state).toBe('ready')
+    // Both versions charged while both are held (old detached but pinned).
+    expect(cache.retainedBytes).toBe(2 * (1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES))
+    expect(host.releasedReplies).toHaveLength(0)
+    held.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(host.releasedReplies).toHaveLength(1)
+    expect(cache.retainedBytes).toBe(1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES)
+    fresh.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(host.releasedReplies).toHaveLength(2)
+    expect(cache.retainedBytes).toBe(0)
+    cache.close()
+  })
+
+  it('F6: the pinned entry cap refuses closed instead of growing without bound', async () => {
+    // Every entry pinned by a live consumer counts toward the cap: once 64
+    // entries are live, a new scope fails closed without sending a request.
+    const host = readyHost()
+    const cache = new RemoteCfCache(host, 64 * (1024 + 512) + (1 << 20))
+    const held: { release(): void }[] = []
+    for (let i = 0; i < 64; i++) {
+      const h = cache.acquire(SHEET, [rect(i, i)], cfStamp(1))
+      held.push(h)
+    }
+    await flush()
+    await flush()
+    expect(host.releasedReplies).toHaveLength(0)
+    const extra = cache.acquire(SHEET, [rect(1000, 1000)], cfStamp(1))
+    await flush()
+    expect(extra.state.state).toBe('failed')
+    expect(extra.state.diagnostics[0]).toMatchObject({ feature: 'cf-cache-budget' })
+    extra.release()
+    for (const h of held) h.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(host.releasedReplies).toHaveLength(64)
+    expect(cache.retainedBytes).toBe(0)
+    cache.close()
+  })
+
+  it('F6: close keeps held entries charged until their last release', async () => {
+    const host = readyHost()
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(held.state.state).toBe('ready')
+    cache.close()
+    // The held preparation stays charged across close; no new reads start.
+    expect(cache.retainedBytes).toBeGreaterThan(0)
+    expect(host.releasedReplies).toHaveLength(0)
+    // New consumers after close get nothing and start no requests.
+    const after = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    expect(after.state.state).toBe('waiting')
+    after.release()
+    held.release()
+    expect(host.releasedReplies).toHaveLength(1)
+    expect(cache.retainedBytes).toBe(0)
+  })
+
+  it('F6: version replacement under a byte cap fails closed with pinned charged', async () => {
+    // A tight budget that fits one preparation but not two: replacing the
+    // version withholds the new one while the pinned old one stays charged.
+    const host = readyHost()
+    const { CF_CACHE_ENTRY_OVERHEAD_BYTES } = await import('../src/worker/viewerRemoteCf')
+    const one = 1024 + CF_CACHE_ENTRY_OVERHEAD_BYTES
+    const cache = new RemoteCfCache(host, one + 512)
+    const old = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(old.state.state).toBe('ready')
+    const next = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1, { cfGen: 2 }))
+    await flush()
+    expect(next.state.state).toBe('failed')
+    expect(next.state.diagnostics[0]).toMatchObject({ feature: 'cf-cache-budget' })
+    // The withheld new reply released at once; the pinned old version is
+    // still charged and releasable exactly once.
+    expect(host.releasedReplies).toHaveLength(1)
+    expect(cache.retainedBytes).toBe(one)
+    old.release()
+    next.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(host.releasedReplies).toHaveLength(2)
+    expect(cache.retainedBytes).toBe(0)
+    cache.close()
+  })
+
+  it('F7: empty scopes refuse tiny grants and serve blanks through the service', async () => {
+    const { PagedXlsxSheetAdapter } = await import('../src/xlsx/view/pagedSource')
+    const sourceStamp = { docId: 'doc', sheetId: SHEET, valueGen: 1 }
+    const fakeSheet = (over: Record<string, unknown>) => ({
+      sheetId: SHEET, name: SHEET, state: 'complete' as const, importedThroughRow: 1048575,
+      metadata: {}, tables: undefined, arrayCells: [], drawingAnchors: { records: [], unresolved: 0 },
+      mergeRects: [], invalidMerges: 0, used: undefined, conditionalFormatting: undefined,
+      ...over,
+    })
+    // A rule over blank cells is grant-gated like any other preparation:
+    // a one-byte grant refuses instead of returning ready.
+    const tiny = new PagedXlsxSheetAdapter(sourceStamp, {} as never, fakeSheet({ conditionalFormatting: oneRule }) as never, undefined, {}, false)
+    const refused = await tiny.readConditionalFormatting(
+      cfRequest([rect(0, 0)], stamped(oneRule), 1), createCfMemory({}), { budget: frozenBudget },
+    )
+    expect(refused.kind).toBe('unresolved')
+    expect(refused).toMatchObject({ reason: 'cf-resource-limit' })
+    await tiny.release().catch(() => {})
+    // And an empty scope with room evaluates through the common service
+    // (no shortcut): blank cells compose to a ready preparation.
+    const memory = createCfMemory({})
+    const source = fakeSource([], { stamp: stamped(oneRule), bounds: { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 16383 } })
+    const ready = await prepareCfRemote(cfRequest([rect(0, 0)], stamped(oneRule), 8 * 1024 * 1024), SHEET, source, oneRule, memory, { budget: frozenBudget })
+    expect(ready.kind).toBe('ready')
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F8: identical rule sets share one frozen definition array', async () => {
+    const memory = createCfMemory({})
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: stamped(oneRule) })
+    const a = await prepareCfRemote(cfRequest([rect(0, 0)], stamped(oneRule), 8 * 1024 * 1024), SHEET, mkSource(), oneRule, memory, { budget: frozenBudget })
+    const b = await prepareCfRemote(cfRequest([rect(5, 5)], stamped(oneRule), 8 * 1024 * 1024), SHEET, mkSource(), oneRule, memory, { budget: frozenBudget })
+    expect(a.kind).toBe('ready')
+    expect(b.kind).toBe('ready')
+    if (a.kind !== 'ready' || b.kind !== 'ready') throw new Error('expected ready preparations')
+    // Two viewport scopes, unchanged rules: one shared definition array.
+    expect(b.definitions).toBe(a.definitions)
+    expect(Object.isFrozen(a.definitions)).toBe(true)
+    // A changed rule set builds a new array; the old one stays intact.
+    const changed: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'dashed' }, ['fill'])] }
+    const cSource = fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: stamped(changed) })
+    const c = await prepareCfRemote(cfRequest([rect(0, 0)], stamped(changed), 8 * 1024 * 1024), SHEET, cSource, changed, memory, { budget: frozenBudget })
+    expect(c.kind).toBe('ready')
+    if (c.kind !== 'ready') throw new Error('expected ready preparation')
+    expect(c.definitions).not.toBe(a.definitions)
+    expect(a.definitions).toHaveLength(1)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('F9: CF dirty-rectangle handoff stays bounded', async () => {
+    const { accumulateCfDirtyRects } = await import('../src/worker/viewerRemoteSource')
+    const into = new Map<string, SourceRect[]>()
+    for (let i = 0; i < 200; i++) accumulateCfDirtyRects(into, SHEET, [rect(i, i)])
+    const kept = into.get(SHEET) ?? []
+    // Bounded: overflow coalesces to covering rectangles along the way.
+    expect(kept.length).toBeLessThanOrEqual(64)
+    expect(kept.length).toBeGreaterThan(0)
+    // Nothing is lost: every notified row stays covered by some kept rect.
+    for (let i = 0; i < 200; i++) expect(kept.some(r => r.r0 <= i && r.r1 >= i)).toBe(true)
   })
 })
 

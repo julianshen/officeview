@@ -415,25 +415,31 @@ export interface CfReadResult {
   /** Exact estimate when the receiver grant was too small; retry with at least this. */
   readonly requiredBytes?: number
 }
-/** Reply envelope accounted on top of every CF read reply (kernel-added
- * owner, diagnostics and stamped size), mirroring the region-style bound. */
-export const CF_REPLY_ENVELOPE_BYTES = 256
+/** Reply envelope accounted on top of every CF read reply: the kernel-added
+ * command/owner/request/stamp framing around the payload (a 1,042 B empty
+ * wrapper with short identities, 594 B of which is wrapper overhead),
+ * measured with the same walker the kernel publishes with, plus margin.
+ * The preflight and post-build checks share this bound, so a fitting grant
+ * always admits an exact build; outliers fall back to the kernel walk. */
+export const CF_REPLY_ENVELOPE_BYTES = 1152
 function cfWireStringBytes(value: string): number {
   return 16 + value.length * 2
 }
 function cfWireValueBytes(value: string | number | boolean | null | undefined): number {
   return typeof value === 'string' ? cfWireStringBytes(value) : 8
 }
-/** Measured bytes of one properties object (no cross-cell dedup). Exported so
+/** Measured bytes of one properties object, mirroring the repository payload
+ * walker exactly (24 per object, 16 per property slot, keys counted once):
+ * shared helpers keep preflight and publication on one model. Exported so
  * providers bound per-cell wire cost with the same arithmetic the reply is
  * measured with. */
 export function measureCfPropertiesBytes(properties: Record<string, string | number | boolean | null>): number {
   let bytes = 24
-  for (const key of Object.keys(properties)) bytes += 16 + key.length * 2 + cfWireValueBytes(properties[key])
+  for (const key of Object.keys(properties)) {
+    void key
+    bytes += 16 + cfWireValueBytes(properties[key])
+  }
   return bytes
-}
-function cfWirePropertiesBytes(properties: Record<string, string | number | boolean | null>): number {
-  return measureCfPropertiesBytes(properties)
 }
 /** Mirrors the Task 5/6 service's retained per-rule property accounting so the
  * read-side estimate can never admit less than the producer checks. */
@@ -449,27 +455,29 @@ export function cfRulePropertyBytes(rules: readonly { dxf?: Record<string, unkno
   }
   return bytes
 }
-/** Measured bytes of one wire cell state (no cross-cell dedup: shared
- * references never hide bytes, matching the repository payload model). */
+/** Measured bytes of one wire cell state, mirroring the repository payload
+ * walker exactly (24 per object; 16 per property slot plus the walked value;
+ * arrays 16 + 8 per item plus walked elements; strings 16 + 2 per char;
+ * numbers, booleans and null 8; no cross-cell dedup). */
 export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason'>>): number {
-  let bytes = 24 + 8 + 8
-  bytes += cfWirePropertiesBytes(cell.properties)
+  // {row, col, properties} plus optional unresolvedWrites/unresolvedReason.
+  let bytes = 24 + (16 + 8) + (16 + 8) + (16 + measureCfPropertiesBytes(cell.properties))
   if (cell.unresolvedWrites !== undefined) {
-    bytes += 16 + 8 * cell.unresolvedWrites.length
+    bytes += 16 + 16 + 8 * cell.unresolvedWrites.length
     for (const w of cell.unresolvedWrites) bytes += cfWireStringBytes(w)
   }
-  if (cell.unresolvedReason !== undefined) bytes += cfWireStringBytes(cell.unresolvedReason)
+  if (cell.unresolvedReason !== undefined) bytes += 16 + cfWireStringBytes(cell.unresolvedReason)
   return bytes
 }
 /** Measured bytes of one shared definition (counted once however many cells reference it). */
 export function measureCfDefinitionBytes(definition: Pick<CfSharedDefinition, 'id' | 'version' | 'properties' | 'writes'>): number {
-  let bytes = 24 + cfWireStringBytes(definition.id) + 8 + cfWirePropertiesBytes(definition.properties)
-  bytes += 16 + 8 * definition.writes.length
+  let bytes = 24 + (16 + cfWireStringBytes(definition.id)) + (16 + 8) + (16 + measureCfPropertiesBytes(definition.properties))
+  bytes += 16 + 16 + 8 * definition.writes.length
   for (const w of definition.writes) bytes += cfWireStringBytes(w)
   return bytes
 }
 export function measureCfDiagnosticBytes(diagnostic: Pick<CfReadDiagnostic, 'kind' | 'feature' | 'message'>): number {
-  return 24 + cfWireStringBytes(diagnostic.kind) + cfWireStringBytes(diagnostic.feature) + cfWireStringBytes(diagnostic.message)
+  return 24 + (16 + cfWireStringBytes(diagnostic.kind)) + (16 + cfWireStringBytes(diagnostic.feature)) + (16 + cfWireStringBytes(diagnostic.message))
 }
 /** Upper bound the provider checks before touching the source or building:
  * envelope plus diagnostics plus each shared definition once plus a per-cell
