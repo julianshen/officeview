@@ -758,7 +758,10 @@ export class RemoteWorkbook implements WorkbookSource {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
-  notify(): void { for (const listener of [...this.listeners]) listener() }
+  notify(): void {
+    this.cfCache?.wakeWaiting()
+    for (const listener of [...this.listeners]) listener()
+  }
 
   /** One command with caller cancellation. Resolves CLOSED after release and
    * CANCELLED as soon as `signal` aborts (the worker gets a `cancel`). */

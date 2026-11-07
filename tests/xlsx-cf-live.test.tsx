@@ -246,3 +246,27 @@ it('worker whole-column statistics include the expanded pivot overlay extent',as
   const after=await read();expect(after.kind).toBe('ready');expect(after.states.find(s=>s.row===0)?.properties['fill.fg']).toBeUndefined()
  }finally{await source.release()}
 })
+
+it('a refused resident scroll scope never lends its new coverage to the old batch',async()=>{
+ const {fireEvent}=await import('@testing-library/react')
+ const {SheetTileRenderer}=await import('../src/components/xlsx/sheetTiles')
+ const s=sheet();s.rows=Array.from({length:200},(_,r)=>({index:r,cells:[{row:r,col:0,ref:`A${r+1}`,styleIndex:0,value:2}]}))
+ s.conditionalFormatting={...s.conditionalFormatting!,rules:[{...s.conditionalFormatting!.rules[0],ranges:[{firstRow:0,lastRow:1048575,firstCol:0,lastCol:0}]}]}
+ const doc={sheets:[s]},source=createObjectWorkbookSource(doc,'refused-scroll')
+ let refuse=false,refusals=0
+ const original=paint.prepareCfPaint, present=SheetTileRenderer.prototype.present
+ const prep=vi.spyOn(paint,'prepareCfPaint').mockImplementation(async(...args)=>{if(refuse){refusals++;return undefined}return original(...args)})
+ const frames:import('../src/components/xlsx/sheetTiles').SheetFrame[]=[]
+ const spy=vi.spyOn(SheetTileRenderer.prototype,'present').mockImplementation(function(this:InstanceType<typeof SheetTileRenderer>,ctx,f){frames.push(f);return present.call(this,ctx,f)})
+ const ui=render(<InteractiveSheetDoc doc={doc} source={source}/>)
+ try{
+  await waitFor(()=>expect(frames.some(f=>f.assets?.conditionalFormatting?.layer.styleAt(0,0,undefined)?.fillColor==='FF00FF00')).toBe(true))
+  refuse=true
+  const scroll=ui.getByTestId('officeview-sheet-scroller')
+  act(()=>{scroll.scrollTop=1200;fireEvent.scroll(scroll)})
+  await waitFor(()=>expect(refusals).toBeGreaterThan(0))
+  await act(async()=>{await new Promise(r=>setTimeout(r,50))})
+  const f=frames.at(-1)!
+  expect(f.cfPending || !f.cfCoverage?.({x:0,y:1024,width:512,height:512})).toBe(true)
+ }finally{ui.unmount();prep.mockRestore();spy.mockRestore()}
+})

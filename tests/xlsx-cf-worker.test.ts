@@ -593,6 +593,20 @@ describe('CF remote cache (viewerRemoteCf)', () => {
   }
   const flush = () => new Promise(r => setTimeout(r, 0))
 
+  it.each(['structure', 'grant', 'failure'] as const)('wakes a pinned waiting entry after %s without reacquiring', async reason => {
+    const host=testHost(), originalGrant=host.grant
+    if(reason==='grant')host.grant=()=>null
+    else host.load='loading'
+    const cache=new RemoteCfCache(host),held=cache.acquire(SHEET,[rect(0,0)],cfStamp(1))
+    await flush();expect(held.state.state).toBe('waiting');expect(host.requests).toHaveLength(0)
+    host.load=reason==='failure'?'incomplete':'complete';host.grant=originalGrant
+    cache.wakeWaiting()
+    await flush()
+    expect(held.state.state).toBe(reason==='failure'?'failed':'ready')
+    expect(host.requests).toHaveLength(reason==='failure'?0:1)
+    held.release();cache.close();expect(cache.retainedBytes).toBe(0);expect(host.ledger.size).toBe(0)
+  })
+
   it('late pinned preparation cannot publish after explicit invalidation', async () => {
     const host = testHost()
     const respond = host.respond

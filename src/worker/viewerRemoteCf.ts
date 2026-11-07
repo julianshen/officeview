@@ -500,10 +500,26 @@ export class RemoteCfCache {
     return reply.result.result.result
   }
 
+  /** Retry pinned preparations when structure or receiver headroom changes. */
+  wakeWaiting(): void {
+    if (this.closed) return
+    for (const entry of this.entries.values()) {
+      if (entry.refs > 0 && entry.state === 'waiting' && !entry.controller) void this.load(entry)
+    }
+  }
+
   private async load(entry: Entry): Promise<void> {
     const { sheetId } = entry
     if (this.closed) return
-    if (this.host.loadState(sheetId).completeness !== 'complete') return
+    const completeness = this.host.loadState(sheetId).completeness
+    if (completeness === 'loading') return
+    if (completeness === 'incomplete') {
+      entry.state = 'failed'
+      entry.diagnostics = [{ kind: 'unsupported', feature: 'cf-read-failed', message: 'Conditional formatting is unavailable because the sheet did not finish loading.' }]
+      entry.gen++
+      this.deferChanged(sheetId, entry.rects, 'status')
+      return
+    }
     const owner = this.host.identity(sheetId)
     if (entry.owner && !sameOwner(entry.owner, owner)) {
       this.reset(entry)

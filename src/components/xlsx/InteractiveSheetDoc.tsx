@@ -959,7 +959,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     void ensureConditionalFormatting([sheet]).then(async cf=>{
       const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',viewport:cfViewport})
       if(cancelled){batch?.dispose();return}
-      setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:cfViewport?.boxes,batch})
+      setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:batch ? cfViewport?.boxes : undefined,batch})
     })
     return()=>{cancelled=true}
     // CF-only work: font/image/chart leases do not depend on scroll position.
@@ -985,7 +985,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       budget,
     })
   }
-  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer): Promise<EffectiveFormatScope | undefined> => {
+  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer, onEmpty?: () => void): Promise<EffectiveFormatScope | undefined> => {
     if (!remote || !rects.length || batchSignal.aborted) return undefined
     const identity = remote.identity(sheetId)
     const structureGen = remote.merges(sheetId).gen
@@ -1022,10 +1022,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         }
       },
       rects,
-      { locale, budget, current, base, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+      { locale, budget, current, base, onEmpty, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
   const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
+  const residentCoverage = currentViewportCf?.batch ? currentViewportCf.boxes : residentBatch ? assets?.cfBoxes : undefined
   const residentFrameAssets = !cfRules ? assets?.lease.assets : assets ? {...assets.lease.assets, conditionalFormatting: residentBatch} : undefined
   useEffect(()=>{
     if(assets?.cfLiveKey && assets.cfLiveKey!==cfLiveKey) assets.lease.assets.conditionalFormatting?.dispose()
@@ -1138,7 +1139,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Gate scope consumption by identity: while a replacement preparation is
   // pending, the previous sheet/generation scope must not format new cells.
   const liveCfScope = liveScopeFor(cfText, cfTextKey)
-  type RemotePaintState = { key: string; generation: string; scope?: EffectiveFormatScope; coverage?: ReturnType<typeof collectCfCoverage> }
+  type RemotePaintState = { key: string; generation: string; scope?: EffectiveFormatScope; empty?: boolean; coverage?: ReturnType<typeof collectCfCoverage> }
   const [remotePaintState, setRemotePaintState] = useState<RemotePaintState | null>(null)
   const heldRemotePaint = useRef<RemotePaintState | null>(null)
   useEffect(() => {
@@ -1150,18 +1151,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if(!remote || !hasRemoteCf || !cfViewport || !cfViewportKey || !cfLiveKey || !entry || remote.isClosed){setRemotePaintState(null);return}
     let cancelled=false
     const abort=new AbortController(),key=cfViewportKey,generation=cfLiveKey,sheetId=activeSheetId
+    const identity=remote.identity(sheetId),structureGen=remote.merges(sheetId).gen
+    const current=()=>!cancelled && !abort.signal.aborted && !remote.isClosed && remote.identity(sheetId).docId===identity.docId && remote.identity(sheetId).valueGen===identity.valueGen && remote.identity(sheetId).viewGen===identity.viewGen && remote.merges(sheetId).gen===structureGen
     let coverage:ReturnType<typeof collectCfCoverage>|undefined
     void(async()=>{
+      let empty=false
       let scope:EffectiveFormatScope|undefined
       try {
         coverage=collectCfCoverage(entry.metrics,cfViewport.boxes,semanticFormatBudget)
-        scope=await prepareRemoteScope(sheetId,coverage.rects,abort.signal,entry.sheet.semantics?.locale??'en-US',semanticFormatBudget,regionStylesFor(entry.sheet))
-        if(!scope) throw new Error('Conditional formatting is unavailable for these tiles; base formatting is shown.')
-      } catch(error) {
-        if(!cancelled)setAnnouncement(error instanceof Error?error.message:'Conditional formatting unavailable; base formatting is shown.')
+        scope=await prepareRemoteScope(sheetId,coverage.rects,abort.signal,entry.sheet.semantics?.locale??'en-US',semanticFormatBudget,regionStylesFor(entry.sheet),()=>{empty=true})
+        if(!scope && !empty) throw new Error('Conditional formatting is unavailable for these tiles; base formatting is shown.')
+      } catch {
+        coverage?.dispose();coverage=undefined
+        if(current())setAnnouncement('Conditional formatting unavailable; base formatting is shown.')
       }
-      if(cancelled){scope?.dispose();coverage?.dispose();return}
-      setRemotePaintState({key,generation,scope,coverage})
+      if(!current()){scope?.dispose();coverage?.dispose();return}
+      setRemotePaintState({key,generation,scope,empty,coverage})
     })()
     return()=>{cancelled=true;abort.abort()}
     // Coverage changes only on tile-ring, committed view, source or geometry changes.
@@ -1269,7 +1274,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {
       sheet: entry.sheet, geometry: entry.geometry, ...(sparklineViews ? { sparklineViews } : {}), identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-      assets: frameAssets, ...((cfRules && !residentBatch) || (hasRemoteCf && !currentRemotePaint?.scope) ? {cfPending:true} : {}), ...(hasRemoteCf ? {cfCoverage:currentRemotePaint?.coverage?.contains ?? (()=>false)} : scopedCf ? {cfCoverage:(box:LogicalCellBox)=>(currentViewportCf?.boxes??assets?.cfBoxes??[]).some(b=>box.x>=b.x-1e-7&&box.y>=b.y-1e-7&&box.x+box.width<=b.x+b.width+1e-7&&box.y+box.height<=b.y+b.height+1e-7)} : {}), layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      assets: frameAssets, ...((cfRules && !residentBatch) || (hasRemoteCf && !currentRemotePaint?.scope && !currentRemotePaint?.empty) ? {cfPending:true} : {}), ...(hasRemoteCf ? {cfCoverage:currentRemotePaint?.coverage?.contains ?? (()=>false)} : scopedCf ? {cfCoverage:(box:LogicalCellBox)=>(residentCoverage??[]).some(b=>box.x>=b.x-1e-7&&box.y>=b.y-1e-7&&box.x+box.width<=b.x+b.width+1e-7&&box.y+box.height<=b.y+b.height+1e-7)} : {}), layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
       ...(scroll.frozen ? { frozen: scroll.frozen } : {}),
       // Row-cache proof gates worker requests: tiles the cache already proves

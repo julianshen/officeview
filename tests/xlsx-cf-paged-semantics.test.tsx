@@ -22,14 +22,15 @@ const CF_SHEET_DATA = '<row r="1"><c r="A1" s="0"><v>1.25</v></c><c r="B1" s="0"
 const CF_STYLES = '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs><dxfs count="2"><dxf><numFmt numFmtId="164" formatCode="0.00"/></dxf><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'
 const CF_AFTER = '<conditionalFormatting sqref="A1:A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="B1:B1"><cfRule type="cellIs" dxfId="1" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting>'
 
-function workerPort() {
+function workerPort(delayedStructure = false) {
   const requests: unknown[] = []
   let holdCf=false
-  const held:(()=>void)[]=[]
+  const held:(()=>void)[]=[], structure:(()=>void)[]=[]
   const kernel = new ViewerKernel({ parse: async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)) }, { yield: async () => {} })
   const listeners = new Set<(event: MessageEvent) => void>()
   return {
     requests, kernel,
+    releaseStructure(){delayedStructure=false;for(const f of structure.splice(0))f()},
     holdCf(){holdCf=true},
     release(){holdCf=false;for(const f of held.splice(0))f()},
     get heldCount(){return held.length},
@@ -41,7 +42,7 @@ function workerPort() {
       if(blob) command.source={kind:'blob',blob}
       void kernel.handle(command as never, (out: unknown, replyTransfer) => {
         const deliver=()=>{const data = structuredClone(out, { transfer: replyTransfer as ArrayBuffer[] }); for (const listener of [...listeners]) listener({ data } as MessageEvent)}
-        if(holdCf && (command as any).query?.op==='conditionalFormatting')held.push(deliver);else deliver()
+        if(holdCf && (command as any).query?.op==='conditionalFormatting')held.push(deliver);else if(delayedStructure && ['structural','layout'].includes((command as any).query?.op))structure.push(deliver);else deliver()
       })
     },
     addEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.add(listener) },
@@ -142,6 +143,7 @@ it.each(['resize','close'] as const)('a delayed paged preparation after %s never
   if(action==='resize')expect(remote!.merges('1').gen).toBeGreaterThan(before)
   act(()=>port.release())
   await new Promise(r=>setTimeout(r,150))
+  expect(ui.getByRole('status').textContent).not.toMatch(/CF wire|Conditional formatting unavailable|unavailable for these tiles/)
   // A cancelled old scope must not be returned to any consumer. A new resize
   // scope is allowed, but its generation predicate must still retire on close.
   if(action==='close')expect(scopes).toHaveLength(0)
@@ -178,3 +180,21 @@ it('worker-shell in-flight g1 is withdrawn before the negative g2 overlay publis
   expect(scopes.some(s=>s.effectiveStyle(0,0,undefined)?.fillColor==='FF00FF00')).toBe(false)
  }finally{port.release();ui.unmount()}
 },60000)
+
+it.each(['rule','empty'] as const)('asynchronous unchanged structure wakes %s CF without false notices or permanently pending tiles',async(kind)=>{
+ const {SheetTileRenderer}=await import('../src/components/xlsx/sheetTiles')
+ const {RemoteWorkbook}=await import('../src/worker/viewerRemoteSource')
+ await import('../src/xlsx/cf/text') // warm lazy import: structure must really win the race later
+ const states:string[]=[],acquire=RemoteWorkbook.prototype.acquireCfPreparation
+ vi.spyOn(RemoteWorkbook.prototype,'acquireCfPreparation').mockImplementation(function(this:InstanceType<typeof RemoteWorkbook>,...args){const out=acquire.apply(this,args);states.push(out.state.state);return out})
+ const frames:import('../src/components/xlsx/sheetTiles').SheetFrame[]=[],present=SheetTileRenderer.prototype.present
+ vi.spyOn(SheetTileRenderer.prototype,'present').mockImplementation(function(this:InstanceType<typeof SheetTileRenderer>,ctx,f){frames.push(f);return present.call(this,ctx,f)})
+ const bytes=xlsxBytes({beforeSheetData:'<dimension ref="A1:B2"/>',sheetData:CF_SHEET_DATA+'<row r="2"><c r="A2"><v>2</v></c></row>',styles:CF_STYLES,afterSheetData:kind==='rule'?CF_AFTER:'<conditionalFormatting sqref="A1"/>'})
+ const port=workerPort(true),ui=render(<OfficeFile data={new Blob([new Uint8Array(bytes).buffer])} interactiveSheets viewerWorker={()=>port}/>)
+ try{
+  await waitFor(()=>expect(states).toContain('waiting'))
+  await act(async()=>port.releaseStructure())
+  await waitFor(()=>expect(frames.some(f=>f.cfCoverage && !f.cfPending && (kind==='empty'||!!f.assets?.conditionalFormatting?.layer.styleAt(0,1,undefined)?.fillColor))).toBe(true),{timeout:3000})
+  expect(ui.getByRole('status').textContent).not.toMatch(/CF wire|Conditional formatting unavailable|unavailable for these tiles/)
+ }finally{ui.unmount()}
+},15000)

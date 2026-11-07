@@ -377,6 +377,7 @@ export async function prepareCfWireScope(
         // Absence is deterministic and needs no consistency tracking. Every
         // other non-ready outcome (including pending imports) is a refusal:
         // recording it keeps scan and materialization in agreement.
+        if (options.current && !options.current()) return fail()
         if (!result) throw refused('CF wire preparation produced no result')
         if (first && !result.states.length && result.kind === 'ready' && result.definitionsVersion === versionCfRules('[]')) {
           try { options.onEmpty?.() } finally { /* observer-only */ }

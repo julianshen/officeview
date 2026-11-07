@@ -50,3 +50,10 @@ it('worker compatibility formatting finds the workbook palette on a later CF she
  expect(source.formatting?.().colors).toEqual(colors)
  await source.release()
 })
+
+it('superseding a wire preparation while its read waits is silent cancellation',async()=>{
+ let current=true,resolve!:(v:{result:undefined;release():void})=>void
+ const pending=prepareCfWireScope(()=>new Promise(r=>{resolve=r}),[{r0:0,r1:0,c0:0,c1:0}],{budget,current:()=>current})
+ current=false;resolve({result:undefined,release(){}})
+ await expect(pending).resolves.toBeUndefined()
+})
