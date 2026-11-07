@@ -1,10 +1,11 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 4 (reviews: codex r1–r3, claude r1)** — draft 2 folded codex r1 and
+Status: **draft 5 (reviews: codex r1–r3, claude r1)** — draft 2 folded codex r1 and
 claude r1 (first disposition table); draft 3 folded codex r2 (second table);
-draft 4 folds codex r3 (third table). Owner decided §18 items 1, 3, 4 and 9 on
-2026-11-07, and revised item 4 the same day: presentation mode is supported for
-server-streamed decks with animation and speaker notes for the presenter (§12a). Docs-only stage continues.
+draft 4 folded codex r3 (third table). Owner decided §18 items 1, 3, 4, 4a and 9 on
+2026-11-07 (presentation mode with animation and presenter notes, §12a), and on
+2026-11-08 replaced §2 item 1 and §18 item 5: **the developer chooses the mode by
+source type** (round-5 note, §21). Docs-only stage continues.
 Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no source edits.
 
 Notation: **"to verify in Stage 0"** marks a claim this spec could not prove while writing
@@ -21,7 +22,7 @@ and the corrected anchor used.
 3. Goals, non-goals, anti-goals
 4. Current state (recon, main `ca952c50`, anchors re-verified)
 5. Architecture overview
-6. Open protocol: negotiation, manifest, and the server content policy
+6. The stream source, the session handshake, and the server content policy
 7. The draw-command format (`OVSD`), the recorder, and the protected projection
 8. The client replayer and the library side
 9. The server side
@@ -56,19 +57,26 @@ also "nothing that is hidden". The original file never crosses the wire in this 
 Search, copy and semantic services become server calls whose answers are
 client-rendered exactly like every other response.
 
-The client stays one library. There is **no client "secure mode"**: the loader looks at
-what the server actually sent and behaves accordingly.
+The client stays one library, and the mode is not a client decision and not inferred
+from a response: **it follows the type of source the host passes in** — a file source
+opens local file view exactly as today; a **stream source** (a WebSocket endpoint,
+§6.1) opens stream mode (owner decision 2026-11-08, §2 item 1).
 
-## 2. Owner decisions (2026-11-07)
+## 2. Owner decisions (2026-11-07, revised 2026-11-08)
 
-These are binding; this draft implements them. Round-2 changes sharpen several of them
-but revise none of the seven.
+These are binding; this draft implements them. Round-2 changes sharpen several of them;
+the 2026-11-08 owner decision **replaces item 1** and removes §18 item 5 (round-5 note,
+§21).
 
-1. **No client-side secure-mode switch.** The client renders whatever the server's
-   response is: office file bytes → local render exactly as today; a stream manifest
-   (its own content type + magic bytes, §6.2) → remote session. The server decides.
-   For a protected document the server must refuse (406) clients that cannot handle
-   streams, never fall back to sending the file.
+1. **The mode is the type of source the developer passes to the component** (owner
+   words 2026-11-08: "Client/Server does not need to determine the doc should be
+   stream or not. That is developer's decision. If a doc is supplied to the viewer,
+   it goes file view. And if a stream, websocket, is supplied, go stream mode.").
+   A file source (URL to a file, bytes, Blob — today's `OfficeDocSource` feed) →
+   local file view, exactly as today; a **stream source** — a WebSocket endpoint,
+   the new `{ kind: 'stream', url, token? }` shape (§6.1) — → stream mode. Nothing
+   is inferred from response content, and there is no per-document "stream-required"
+   marking anywhere in the library.
 2. **Open source, same repo.** The library stays at the repo root; the server becomes a
    `server/` Bun workspace package depending on a new React-free `officeview/core` entry
    (§8.1). *(Round-2 scope note:* the *library* stays dependency-free; the server may
@@ -76,10 +84,11 @@ but revise none of the seven.
 3. **Library side:** React-free core entry (§8.1); versioned draw-command format +
    recorder, with the record point inside the single `getPaintables` provider —
    `page.paint(ctx)` closures (`src/render/paint.ts:354` declares `getPaintables`; the
-   paint closures begin at `:389`) — + client replayer (§7, §8); manifest detection in
-   the loader seam (§6.3; the actual choke point is `loadOfficeSource`, `src/components/
-   loadOfficeSource.ts:199–224`, not only `openResponse`); a remote document source for
-   `OfficeDoc` (§8.3); a Node `registerFont` adapter (§8.4).
+   paint closures begin at `:389`) — + client replayer (§7, §8); the stream source
+   enters the component surface as a **source-kind branch at the `OfficeFile` layer**
+   (§6.3; verified anchors `src/components/OfficeFile.tsx:37–49`, `:60`, `:91`), not a
+   response sniff; a remote document source for `OfficeDoc` (§8.3); a Node
+   `registerFont` adapter (§8.4).
 4. **Server side:** HTTP/WebSocket service, short-lived tokens, rate limits, render
    worker pool, caching, per-viewer **visible** watermark, **invisible forensic
    watermark** (sub-pixel line/word shifts encoding a session id with error correction,
@@ -113,12 +122,15 @@ stages may not silently pick them.
    faces are present (a §7.4 face handshake otherwise picks the raster fallback).
    Within a mode, recorder→replayer equals the same-backend direct render (§16
    contract test), and cross-backend tolerance is published, not claimed.
-3. **Protected documents never leak bytes — nor hidden or covered content.** A
-   stream-required document is answered 406 for non-capable clients (§6.1), never
-   carries original media bytes on the wire (§7.7), and every one of its responses
-   ships under the **mandatory final-visibility projection** (the single rule of §7.7,
-   P-rule) so covered or clipped-out content cannot be recovered even from a
-   re-ordered replay; hidden content (§6.4) never streams regardless.
+3. **Every stream session is protected by default.** A stream session never carries
+   original media bytes on the wire (§7.7), and by default every one of its responses
+   ships under the **mandatory final-visibility projection** (the single rule of
+   §7.7, P-rule) so covered or clipped-out content cannot be recovered even from a
+   re-ordered replay; hidden content (§6.4) never streams regardless. Only the
+   developer's server-side `authorize` hook may relax a session's projection and
+   content policy (never the client, §6.1); keeping the original file off every
+   surface, including the `server/` package itself, is the developer's deployment
+   boundary (§6.1, §20).
 4. **Watermarks (§9.4, §13).**
    - **Visible:** per-viewer by default (identity text), deployable as a fixed
      deployment-wide mark, painted into the raster server-side.
@@ -150,18 +162,20 @@ stages may not silently pick them.
 ### 3.3 Anti-goals: failures even if they "work"
 
 - Covered content in the transport. Commands that record later-covered z-order
-  content both leak on a re-ordered replay and break the P-rule (§7.7), which every
-  stream-required response must satisfy by construction (final-unit rasterisation or
-  proof-culled commands); the §16 boundary tests inspect **transmitted payloads**, not
-  screenshots.
+  content both leak on a re-ordered replay and break the P-rule (§7.7), which a
+  stream session must satisfy **by default** (final-unit rasterisation or
+  proof-culled commands; only a server-side authorize relaxation departs from it);
+  the §16 boundary tests inspect **transmitted payloads**, not screenshots.
 - Original bytes anywhere in the stream: no ZIP member, no embedded media file, no font
   file, no EXIF/metadata-bearing image bytes (§7.7, §19).
 - Hidden content on the wire: a stream of a document with `veryHidden` sheets or
   vanish-text that exposes them through pixels, the text index, copy, a11y or the
   manifest (§6.4).
-- A "protected" document whose bytes reach the client through any endpoint (406 must be
-  truthful; any debug protocol that serves bytes for a protected doc is a bug it
-  implies — never ship one).
+- A stream server that also serves the original document bytes through any route —
+  a normal file route, a debug or diagnostic endpoint, an export link. The
+  `server/` package has no file-download route (§6.1) and the library cannot stop a
+  developer who exposes the file elsewhere; that is their deployment boundary and it
+  is recorded as such in §19/§20, never papered over.
 - A client-side switch that turns a stream into a file fetch. There is no such switch,
   and no prop that if mis-set would create one.
 - A visible-in-source claim of "un-screenshot-able" content. The forensic watermark's
@@ -185,13 +199,13 @@ stages may not silently pick them.
   `X-OfficeView-Protection: no-copy, no-print` (`src/core/stream.ts:51–75`) and
   `X-OfficeView-Watermark: text=DRAFT; rotate=…` (parser at
   `src/core/watermark.ts:164`) — the "server is the authority" pattern this design
-  extends. `openResponse` (`src/core/stream.ts:328–339`) throws the plain HTTP
-  error on any non-OK status **before reading the body** — a 406 JSON body is
-  therefore unreadable through today's seam (round-2 fix in §6.3). `pullStream`
-  (`:279–325`) forwards chunks and has **no push-back buffer**; the loaded prefix
-  that already exists lives one layer up, in `loadOfficeSource`'s sequential loader
-  (`src/components/loadOfficeSource.ts:184–224`, the `prefixBytes` pull and the
-  `bytes / blob / stream` arms).
+  extends. `openResponse` (`src/core/stream.ts:328–339`) still throws a plain HTTP
+  error on any non-OK status **before reading the body**, and `pullStream`
+  (`:279–325`) forwards chunks with no push-back — recorded as facts. With the
+  2026-11-08 owner decision the loader seam is no longer about sniffing responses
+  at all (round-5 note, §21): local mode keeps these paths exactly as they are,
+  and a stream source is routed at the `OfficeFile` layer before any byte
+  plumbing runs (§6.3).
 - **Everything document-shaped reaches the canvas through one provider.**
   `getPaintables(doc, options)` (`src/render/paint.ts:354`) returns paintables whose
   per-unit `paint(ctx)` closures (first at `:389`) are the record point every
@@ -270,9 +284,9 @@ dependencies are Stage 0 choices, §18 item 2):
 +--------------------------------------+        +----------------------------------------+
 | HOST (embedding officeview)          |        | SERVER ("server/" Bun workspace)       |
 |                                      |        |                                        |
-|  <OfficeFile source={url}>           |        |  HTTP: /open (manifest | 406)          |
-|      │  sniff at loadOfficeSource    | <----> |  WS:   /session (token, §9.3)          |
-|      ▼    (§6.3)                     | HTTP/WS|      │ policy gate (§6.4)             |
+|  <OfficeFile source={url ↦ file view}|        |  WS: /stream — hello → OVSM (§6.1–6.2) |
+|      │  <OfficeFile source={stream}  |        |      │ policy gate (§6.4)             |
+|      ▼    → stream session (§6.3)    |   WS   |      ▼ parse+layout once per hash     |
 |  <OfficeDoc document={RemoteDoc}>    |        |      ▼ parse+layout once per hash     |
 |      │  unit → replay at its scale   |        |      ▼ (doc cache, §9.3)              |
 |      │   (plays OVSD §7)             |        |  pool: render workers (§9.2)          |
@@ -289,11 +303,16 @@ dependencies are Stage 0 choices, §18 item 2):
   from `officeview/core` — the server depends on React-free machinery only.
 - **Server** is a new `server/` Bun workspace package (§9). It imports
   `officeview/core` for parse/layout/paint, runs its own canvas backend and render
-  pool, and owns the policy gate, tokens, caches, marks and the detection tool.
-- **The wire** is: one HTTP open call, one WebSocket per session. The open response
-  is either the original bytes (transparent local path, §6.1) or a **manifest**
-  (§6.2). The manifest carries unit geometry, a `docRef` (not the plain hash, §6.2),
-  capability flags, a short-lived signed session token, and the recorder parameters.
+  pool, and owns the policy gate, tokens, caches, marks and the detection tool. It
+  **has no file-download route and never serves original document bytes** — keeping
+  the file itself off the wire is the developer's deployment responsibility (§6.1,
+  §20).
+- **The wire** is one **WebSocket per stream session** (there is no HTTP open call
+  and no manifest-over-HTTP). The client connects to the `StreamSource` url, sends a
+  `hello`, and receives the **OVSM manifest** (§6.2) as the session's first message
+  — unit geometry, a `docRef` (not the plain hash), capability flags, a short-lived
+  session token binding, and the recorder parameters — or a typed handshake error
+  (§6.2). File sources never touch this wire; nothing about them changes.
 - **Data on the page wire** is per-unit `OVSD` chunks (§7.1): a versioned,
   length-prefixed draw-command record — transforms, state, path geometry, glyph
   runs, image references — produced by wrapping each `page.paint(ctx)` closure
@@ -302,53 +321,56 @@ dependencies are Stage 0 choices, §18 item 2):
   per session for the marks (§13.3). Units the recorder cannot express become
   **tiles** at stream time (§7.6).
 
-## 6. Open protocol: negotiation, manifest, and the server content policy
+## 6. The stream source, the session handshake, and the server content policy
 
-### 6.1 Who decides what — and the 406 contract
+### 6.1 The stream source — the developer chooses the mode
 
-- **The client announces capability with safelisted headers only.** Round-2 fix
-  (claude I6): the loader sets **no custom request header** (a custom header forces a
-  CORS preflight on every cross-origin local load). It sets:
-  - `Accept: application/vnd.officeview.stream` (with parameters of the media type,
-    e.g. `application/vnd.officeview.stream;v=1`, all values of `Accept` are
-    CORS-safelisted, so the local path stays a simple request);
-  - the same media-type parameter carries the largest recorder version the loader can
-    replay (`;rec=1`), which replaces draft 1's `X-OfficeView-Recorder` header.
-  The loader sets these **additively** on every request it issues and never reads,
-  filters or copies the host's own headers; a host supplying its own `Request` or
-  `Response` can add whatever it wants — an important door for
-  host-credentialled loads.
-- **Server-side configuration decides per document** (the host's server config marks a
-  document stream-required **by a rule the owner supplies** — path, content-kind or
-  digest; the concrete config surface is owner decision §18 item 5). For a
-  stream-required document the open endpoint answers a manifest **only when the
-  client announced the capability** (`Accept` media type + a `rec=` parameter the
-  server can replay).
-  Otherwise it answers **`406 Not Acceptable`** with a bounded JSON body
-  `{ error: 'stream-required', required: 'rec' }` (≤ 256 B). That body must be
-  *readable*, which is why the loader's 406 handling is defined on a typed
-  non-OK-response reader (§6.3), not inside today's `openResponse` throw. A server
-  that cannot classify the client treats it as **capability-absent** — never as an
-  invitation to send bytes.
-- Un-required documents may be answered with either bytes or a manifest — the
-  server's choice; the client is unaffected (the loader sniffs, §6.3) and **never
-  upgrades a refusal into a second request for the file**; for a protected document
-  that would be the leak.
-- `X-OfficeView-Protection` still travels on manifest answers; in stream mode the
-  **effective policy is the AND of the protection header and the manifest's `can.*`**
-  (§8.3) — a server cannot widen policy through the manifest, only narrow it.
-  `X-OfficeView-Watermark` is not sent on manifest answers: the visible mark is baked
-  server-side (§9.4), and a remote document ignores the client's watermark prop and
-  header entirely (§8.3).
+**New source shape** (the owner's decision, 2026-11-08):
 
-### 6.2 The stream manifest (`OVSM`) — one normative schema
+```ts
+export interface StreamSource {
+  kind: 'stream'
+  /** A WebSocket endpoint run by the developer's backend (the `server/` package or
+   * any conforming implementation). `wss://` is expected; the origin must appear in
+   * the deployment's allowlist (§9.3). */
+  url: string
+  /** Optional pre-authorization token for the client hello (§6.2). Never placed in
+   * a URL path by the library; a deployment that wants header/cookie auth does it
+   * at the WebSocket upgrade via its `authorize` hook (§9.1) and omits this. */
+  token?: string
+}
+```
 
-Content type **`application/vnd.officeview.stream`** (round-2 fix: the framing is
-binary; no `+json` suffix). Magic bytes **`OVSM`**:
+- **The mode is the branch, not an inference.** `<OfficeFile source={…}>` accepts
+  `ByteSource | StreamSource` (§6.3); a file source takes today's local path
+  untouched, a stream source opens a stream session. Neither branch inspects the
+  other's content, and there is no per-document "stream-required" configuration
+  anywhere (the old §18 item 5 is recorded as decided in §21).
+- **The developer's backend is the safety boundary.** The `server/` package serves
+  *only* streams — it has no file-download route — but the library cannot stop a
+  developer from exposing the original file elsewhere; the honest statement of that
+  boundary lives in §19/§20 (round-5 owner decision, §21).
+- **Default protection per session (round-5 rule):** every stream session carries
+  the protected rules by default — the P-rule projection (§7.7), the §6.4 content
+  policy and both marks. The developer's server-side `authorize` hook may relax a
+  session's **projection** or **content policy** (§7.7), never the marks and never
+  from the client; any relaxation is written into the audit table (§13.4).
+- There is **no HTTP endpoint and no media-type negotiation** in stream mode: the
+  round-1–4 `Accept`/406 machinery existed only for manifest-over-HTTP, which this
+  decision removes (the round-2 "keep local loads a simple request" concern is
+  void — the stream source never originates an HTTP request, §21 round-5 note).
+
+### 6.2 The session handshake and the manifest (`OVSM`)
+
+The manifest is **the first server message on the session's WebSocket**, after the
+client's `hello` — round 5 moved it off HTTP (owner decision, §21); round 2's
+"manifest over HTTP" path no longer exists. The media-type and magic bytes are now
+only the **message envelope** the client parser validates after connecting, never a
+transport-detection mechanism:
 
 ```
 Offset Size
-0      4   'O''V''S''M'                    ASCII magic
+0      4   'O''V''S''M'                    envelope magic (validated, not detected)
 4      2   u16 LE  formatVersion = 1
 6      2   u16 LE  compression flag: 0 = raw JSON, 1 = gzip (the single flag)
 8      4   u32 LE  manifest JSON length — **decoded** length in bytes
@@ -356,6 +378,21 @@ Offset Size
            recoverable by reading to the frame boundary; the field is never a mix of
            compressed/decoded semantics)
 ```
+
+**Handshake (normative, one definition):**
+
+1. Client → server, first WS frame: `hello { client: 'officeview/1.0',
+   recVersions: [1], token?: <StreamSource.token>, resume?: { sid } }` — the largest
+   recorder versions it can replay; the token is bound to the socket here (never a
+   URL path; a cookie-authenticated upgrade happens at the WS upgrade itself).
+2. Server (after the §9.3 origin allowlist and the §9.1 `authorize` hook):
+   the `OVSM` manifest message — session accepted; or a **typed close**, mapped by
+   the client to `StreamSessionError { code }`:
+   `unsupported-version`, `auth-failed`, `session-expired`, `revoked`,
+   `rate-limited`. A malformed or incapable hello fails closed (§19); there is no
+   go-slower path and no contract to leak bytes.
+3. Client → server, second WS frame: the §7.4 `faces-ack` when the manifest declares
+   `textMode: 'text'` (else skipped).
 
 Manifest JSON (normative; fields marked `[call]` are first-pass defaults):
 
@@ -370,16 +407,21 @@ Manifest JSON (normative; fields marked `[call]` are first-pass defaults):
   layoutFingerprint: <hash over (officeview version, parser/layout inputs, backend
     version, canvas font set, locale)>,                  // one canonical key input (§9.3)
   session: {
-    token, wsUrl,                                       // origin pinned by §9.3
+    sid,                                                // bound at the hello (§6.2)
     expiresSec,                                         // [call] 900
-    resume: 'session'                                   // single scope, §9.3
+    resume: 'session'                                   // single scope, §9.3; renewal
+                                                        // is a WS re-hello (§10)
   },
-  can: { search, copy, print, textA11y, present, notes, links }, // ANDed with protection header; present/notes/links: §12a
+  can: { search, copy, print, textA11y, present, notes, links }, // server-set (§9.3); present/notes/links: §12a
   policy: { contentPolicyId, viewerMarkId,
-            semantic: 'visible-only' | 'off' },       // §6.4 chart-text rule; cache-key input
+            semantic: 'visible-only' | 'off',         // §6.4 chart-text rule; cache-key input
+            protection: 'protected' | 'relaxed' },    // default-protected (§6.1, §7.7); cache-key input
   recorder: { commands: 'ovsd-1', textMode: 'outlines'|'text',
               scalesBuckets: [1, 2],                    // replay-only-at-bucket (§8.3)
-              projection: 'final-raster' | 'culled-commands' }, // P-rule (§7.7)
+              // projected per session: final-raster (default) or culled-commands
+              // on protected sessions under the P-rule (§7.7); a relaxed session
+              // (§6.1) answers 'commands' without the M-rule mark rules (§9.4)
+              projection: 'final-raster' | 'culled-commands' | 'commands' },
   limits: { maxUnitPx: 8192, maxAssetBytes, wsFrameBytes, tilePx },
   notices: [ '...' ]                                    // viewer status-line string, dedup'd
 }
@@ -399,53 +441,45 @@ ignored (the same forward-compat stance the protection header already takes,
 | `sid` | 48-bit random per render session (not the viewer's identity; §13.4) |
 | `token` | HS256-signed claims `{v, docRef, sid, exp, iat, jti, scope:'stream'}` under `kToken` (`kMaster ⊃ HKDF` subkey §13.4) |
 | `jti` | token instance id; every WS op re-checks signature, `docRef`, `exp`, and the `sid` bound to the connection |
-| resume | one scope: 'session'; a resume re-attaches viewport + visible units. Renewal exists only for replayable-by-URL sources (§6.3): such a token carries the **optional** `refresh` claim naming the re-open grace; bytes/Blob/Response manifests carry no renewal and are terminal at expiry |
+| resume | one scope: 'session'; a resume re-attaches viewport + visible units via a WS re-hello carrying the old `sid` (§10). Expiry without a renewing reply is a typed terminal `session-expired` close; the recovery is the developer re-supplying a stream source. No `Accept`-era renewal-of-manifest machinery survives round 5 |
 
-### 6.3 Where the sniff actually lives (loader seam) — round-2 rewrite, renewal classified round 3
+### 6.3 Routing a stream source (round 5 — the loader seam is a branch, not a sniff)
 
-Round-1 draft claimed `openResponse` peeks the first 12 bytes with an "appendable
-reader". Both reviewers are right that this is false: `pullStream` (`stream.ts:279–325`)
-forwards chunks with no push-back, `openResponse` throws on non-OK before reading any
-body, and `loadOfficeSource` **already holds** the first chunk(s) of the stream in its
-sequential-loader prefix (`loadOfficeSource.ts:184–200`) before choosing an arm
-(`:210–224`), with `blob`/bytes arms beside it. Round-2 rule, one coherent seam:
+Rounds 2–4 specified a response sniff inside `loadOfficeSource` (its history and
+corrections live in §21); the 2026-11-08 owner decision removes it. What survives is
+verified against this worktree's code:
 
-1. **Sniff in `loadOfficeSource`**, on the prefix it already holds (`loadSequential`):
-   if the first bytes (tolerating a 12-byte header that may span chunk boundaries)
-   match `OVSM`, route to the **manifest arm** (`loadManifest`);
-   `largeSource().continueSequential` (the existing large-source arm) gains the
-   manifest outcome instead of spooling bytes.
-2. The `bytes` / blob arms sniff their first bytes symmetrically (`loadBytes`, blob
-   hint) — an office file never starts with `OVSM`, and the fail-closed default on any
-   ambiguity is the existing (bytes) arm.
-3. **406 handling**: `openResponse` (`stream.ts:328–339`) gains one early branch — on
-   non-OK, read up to 256 B of the body (bounded, aborted-safe) and throw a typed
-   `StreamRequiredError { status, code, required }` when the body parses to
-   `stream-required`; other statuses keep today's error. **Nothing in this path ever
-   re-fetches the document from a second endpoint.**
-4. **Result union and lifecycle**: `loadOfficeSource` `AnyDoc` union gains a
-   `RemoteDoc` member; `OfficeFileState` grows `{ status:'ready', document: RemoteDoc }`;
-   OfficeDoc's remote path is §8.3. The remote arm owns: the held socket client, the
-   buffers, and close-on-unmount — the existing `pagedWorkbookOf(document)?.release()`
-   lifecycle pattern in `OfficeFile.tsx:127,140` is the disposal model to copy.
-5. **Renewal classification (round-3 fix):** sources split decisively, because
-   re-reading a Blob or byte array that carried a manifest replays the *same expired
-   token*:
-   - **Renewable**: URL, HttpSource. A **Request** is renewable only under a
-     documented replayability condition — no body, or a body not yet consumed
-     (`request.bodyUsed === false`); a body-bearing or already-consumed Request is
-     terminal.
-   - **Promises are classified by their resolved value**, not by being promises:
-     the loader awaits such a promise once and dispatches the resolved object
-     (`src/core/stream.ts:368–373`), so `Promise<HttpSource>` inherits
-     renewability, while `Promise<Response>` yields the *same consumed Response*
-     and is terminal.
-   - **Terminal**: bytes, Blob, Response, ReadableStream, and any already-consumed
-     or body-bearing Request — when the manifest's token expires the loader
-     surfaces the typed terminal `stream-expired` state; recovery is the viewer's
-     reload affordance, never a speculative re-open. A host that wants renewable
-     in-memory input passes a live `HttpSource` (or a factory returning fresh
-     Requests).
+- **The branch point is `OfficeFile`, not the loader.** Today
+  `loadOfficeFile(source: ByteSource, …)` (`src/components/OfficeFile.tsx:37–49`)
+  delegates straight to `loadOfficeSource(source: ByteSource, …)`
+  (`src/components/loadOfficeSource.ts:202`, `AnyDoc` union of the three documents
+  at `:32`), and `useOfficeFile(source: ByteSource | null | undefined, …)`
+  (`OfficeFile.tsx:60`) drives the same route through its `routeKey`/`oneShot`
+  re-load guard (`OfficeFile.tsx:91`). Round 5 widens **only the prop/argument type**
+  to `ByteSource | StreamSource | null` and branches **before** the byte path:
+  a source with `kind: 'stream'` never touches `loadOfficeSource` — it goes to the
+  stream arm (the lazy `src/stream/` chunk, §8.2/§8.3; the socket URL and hello of
+  §6.1–6.2, then the same `OfficeFileState { status: 'ready', document: RemoteDoc }`
+  shape). `<OfficeDoc>` is untouched by all of this — it keeps taking a parsed
+  document (`document: OfficeDocSource`, `src/components/OfficeDoc.tsx:51`) and
+  renders a `RemoteDoc` exactly like a local one.
+- **Local verification** (round-5 item 6): nothing in the route inspects response
+  content, no sniff constant reaches eager code, and `loadOfficeSource`'s byte/blob/
+  stream arms (its sequential-loader prefix included,
+  `loadOfficeSource.ts:184–224`) become implementation detail of local mode only.
+- **Session lifecycle** (kept from earlier rounds): the remote arm owns the socket
+  client, the buffers, and close-on-unmount — the `pagedWorkbookOf(document)?.release()`
+  disposal pattern (`OfficeFile.tsx:127,140`) is the model to copy. A source
+  replacement closes the running session exactly once and the client drops buffered
+  chunks atomically (never a half-painted unit).
+- **Renewal lives inside the session now** (round-5 note): the round-3/r4
+  source-classification rules (URL/HttpSource renewable vs bytes/Blob/Response/
+  `Promise<Response>`/consumed-Request terminal) existed only because an HTTP
+  manifest could be trapped inside a re-read byte value. With a dedicated WS
+  source there is no such trap: **a stream source is always its own session**, and
+  token expiry is handled by the §10 handshake (typed `session-expired` close or a
+  server `renew` reply), never by re-reading local bytes. The round-4 classification
+  text is retired with thanks to its reviewers (§21, round-5 note).
 
 ### 6.4 Server content policy — the server decides what exists (new; codex 2, claude C1/I2)
 
@@ -457,7 +491,7 @@ wire tests (§16.2):
 
 | Content | Local mode today | Stream-mode rule |
 |---|---|---|
-| Hidden / `veryHidden` XLSX sheets (`state` attribute, unread by `src/xlsx/parse.ts:290–300`) | painted as extra pages (`getPaintables` maps every sheet, `paint.ts:427–429`) | **not streamed** as units and excluded from the unit list, sheet navigation and all text services; restricted case: a deployment option may stream hidden sheets for a restricted class of viewer (owner choice, default off) |
+| Hidden / `veryHidden` XLSX sheets (`state` attribute, unread by `src/xlsx/parse.ts:290–300`) | painted as extra pages (`getPaintables` maps every sheet, `paint.ts:427–429`) | **not streamed** as units and excluded from the unit list, sheet navigation and all text services; a developer-side `authorize` relaxation (§6.1) may stream them for a restricted, audited session (default off) |
 | `w:vanish` runs (unread by the DOCX parser today) | painted (no handling exists) | excluded from painting, text index, copy and a11y. **A deliberate deviation from local mode**, diagnosed with a per-document notice; a Stage 1 test asserts absence everywhere (§16.2) |
 | PPTX hidden slides (`show="0"`) | painted as units | not streamed as units |
 | Speaker notes / comments / bookmarks panels | notes unread by the static pipeline; comments unread | comments never streamed; speaker notes streamed only as marked images to a viewer the host marks as presenter, in Presenter View only (§12a.5) |
@@ -625,11 +659,13 @@ snapshots, see §7.7**), decoded scratch surfaces, patterns/gradients (with thei
 
 ### 7.6 Versioning, tiles and the runtime-fallback discriminator (round-2 fixes)
 
-- Negotiation is one mechanism: `Accept` media-type parameters (`;v=1;rec=1`), the
-  manifest's `recorder.commands`, and the frame header's version. Server picks the
-  minimum of what it knows and what the client announced; a *higher* frame version
-  than the client supports is a protocol bug and fails closed (the manifest-only
-  pre-agreement makes version skew mismatch-free by construction).
+- Negotiation is one mechanism, **inside the WS handshake** (round 5; the old
+  `Accept` parameters are gone with manifest-over-HTTP): the `hello`'s
+  `recVersions`, the manifest's `recorder.commands`, and the frame header's
+  version. The server picks the minimum of what it knows and what the client
+  announced; a *higher* frame version than the client supports is a protocol bug
+  and fails closed (the hello/manifest pre-agreement makes version skew
+  mismatch-free by construction).
 - **Tiles are a runtime outcome, not a pre-declared list.** Units are known to be
   unrecordable only when the pool renders them; the manifest therefore **does not
   pre-list** draft 1's `fallbackTiles` — the server session reads each stream unit
@@ -641,15 +677,19 @@ snapshots, see §7.7**), decoded scratch surfaces, patterns/gradients (with thei
   obligation is to render whichever the unit says, fully, or refuse the unit with
   the missing-unit diagnostic.
 
-### 7.7 The mandatory final-visibility projection (the P-rule, round-3: one rule, all sections reference it)
+### 7.7 The mandatory final-visibility projection (the P-rule — the default for every stream session; one rule, all sections reference it)
 
-> **The P-rule.** Every response that serves a **stream-required** document contains
-> only content that belongs to the unit's **final composited image** — no covered
-> text, no clipped-out media, no full z-order history. It is not a configuration:
-> a server cannot answer a stream-required client without it.
+> **The P-rule.** Every response of a stream **session carries the protected rules
+> by default** (round-5 owner decision, §6.1): it contains only content that belongs
+> to the unit's **final composited image** — no covered text, no clipped-out media,
+> no full z-order history. It is not a configuration: a client cannot relax it, and
+> only the developer's server-side `authorize` hook may open a **relaxed** session
+> (§6.1) whose responses may use the ordinary command projection, and that choice is
+> recorded in the audit table.
 
-Enforcement, in one of two ways (the server owns the choice; `recorder.projection`
-names it, §6.2):
+Enforcement, per session protection state (`policy.protection`, §6.2) as chosen by
+the server's authorize decision, and in one of two ways the server owns
+(`recorder.projection` names it per unit):
 
 - **`final-raster` (default)** — the pool paints the whole unit to the final frame
   server-side and ships it as a `RASTER_BLOCK`/`TILE` op. Final visibility is
@@ -666,8 +706,9 @@ names it, §6.2):
   visible mark composited into its transmitted content rasters, no removable
   mark op); a pure-vector unit that cannot meet M-rule answers `final-raster`.
 
-Both projections also inherit the rule beneath; an *unproven* protected command is a
-§16.1/§16.2 gate failure, not a configuration error.
+Protected projections inherit the rules beneath; a relaxed session's plain
+  commands inherit only the media/asset rules. An *unproven* protected command is a
+  §16.1/§16.2 gate failure, not a configuration error.
 
 - **No original media bytes (both projections).** Every `drawImage` of a document
   picture contributes the **drawn-bitmap snapshot**: the pixels as painted
@@ -701,29 +742,36 @@ Both projections also inherit the rule beneath; an *unproven* protected command 
   stream plumbing (`readSource`/`openByteStream`, `stream.ts:207/:368`; header
   parsers at `stream.ts:51–75` and `watermark.ts:164`); the manifest/OVSM and
   OVSD format types and helpers; the recorder facade + text index for server use.
-- **Eager gate (measurable, not assumed).** The gate is the measured claim:
-  `dist/index.js` module map **identical apart from the sniff constant**, and eager
-  bytes ≤ the pre-Stage baseline + 2 B gzip recorded as a diff; if the extra Vite
-  entry shifts any shared chunk, Stage 1 fixes it before anything else.
+- **Eager gate (measurable, not assumed; loosened round 5).** The mode branch costs
+  no sniff constant any more, so the gate is: `dist/index.js` module map **identical**,
+  and eager bytes within **16 B** of the pre-Stage baseline recorded as a diff (the
+  source-kind discriminant branch only). The stream source arm itself (§6.3) sits in
+  the lazy `src/stream/` chunk, so the main bundle must not gain module-map entries;
+  if the extra Vite entry shifts any shared chunk, Stage 1 fixes it before anything
+  else.
 - Documented boundary: `officeview/core` never imports React or DOM-only modules
   beyond the existing facade adapters.
 
-### 8.2 How the loader decides; the client-side seam
+### 8.2 How the client enters stream mode; the client-side seam
 
-- The server owns the mode (§6.1); the client's only mode logic is the sniff
-  (§6.3) — in `loadOfficeSource` on the prefix it already holds, with the arms
-  (`bytes` / `blob` / `stream`) each getting the same check, plus the typed 406.
-- New surfaces: **none** for choosing a mode. Two plumbing-only surfaces:
-  - `streamClient?: (manifest) => StreamClient` — the WS factory hook (mirrors
-    `viewerWorker`, `OfficeFile.tsx:63–80`): hosts that need credentials, resume
-    semantics or telemetry supply the client; the default uses `WebSocket` with
-    tokens in the first frame (§9.3) and a heartbeat;
+- The developer's parameter (§6.1) decides the mode; the client's only mode logic
+  is the **source-kind branch** at the `OfficeFile` layer (§6.3) — empty for file
+  sources and lazy for stream sources.
+- New Library surfaces: **one** (round 5): the `source` prop/argument accepts the
+  `StreamSource` shape (§6.1, `{ kind: 'stream', url, token? }`). Two
+  plumbing-only surfaces remain:
+  - `streamClient?: (source: StreamSource) => StreamClient` — the WS factory hook
+    (mirrors `viewerWorker`, `OfficeFile.tsx:63–80`): hosts that need credentials,
+    resume semantics or telemetry supply the client; the default uses `WebSocket`
+    to the source's url with the token in the hello (§6.2/§9.3) and a heartbeat;
   - `onStreamNotice(diag)` — deduplicated per the §10 notice behaviour.
 
 ### 8.3 `RemoteDoc` — the remote document source for OfficeDoc (round-2 fixes)
 
 A **lazy `src/stream/remote/` chunk** satisfies OfficeDoc's paintable-provider
-contract (the local path keeps `getPaintables`):
+contract (the local path keeps `getPaintables`). A `RemoteDoc` reaches OfficeDoc
+only through the stream branch's `OfficeFileState` (§6.3) — there is no
+content-sniffed entry point any more:
 
 ```
 RemoteOfficeDoc = {
@@ -742,11 +790,12 @@ RemoteOfficeDoc = {
 - Replay is 1:1: the replayer builds the canvas at the recorded scale bucket
   (server-declared `scalesBuckets`, §6.2) and never re-roots; the visible resolution
   always names its bucket.
-- **Policy conjunction**: the effective policy is the AND of the
-  `X-OfficeView-Protection` header (if the server sent one on the manifest) and the
-  manifest's `can.*`.
+- **Policy**: the effective stream policy is the manifest's `can.*`
+  **as enforced server-side per op** (§9.3) — there is no protection header in
+  stream mode, because there is no file-download response; the developer's backend
+  is where the policy numbers live (§6.1). The client never widens it.
 - **Visible watermark ownership**: the server baked it; the client **ignores** the
-  host's `watermark` prop and never double-paints a header mark (§9.4).
+  host's `watermark` prop for a remote document entirely (§9.4).
 
 ### 8.4 Fonts, backends and measurement seams (round-2 fixes)
 
@@ -775,10 +824,16 @@ server/
                         package (workspace protocol) + the canvas backend chosen
                         in §18 item 1 (declared as a direct dependency)
   src/
-    http.ts             /open endpoint, Accept negotiation, typed 406 (§6.1)
-    ws.ts               /session upgrade, op routing, backpressure, per-op authZ
-    authorize.ts        deployment hook authorize(req) → {viewerId?, role?, policy} (§13.4; role 'presenter' → §12a.5)
-    tokens.ts           HS256 claims schema (§6.2), key loading, renewal
+    ws.ts               the only endpoint: upgrade (origin allowlist + authorize
+                        hook), hello → OVSM handshake (§6.1–6.2), op routing,
+                        backpressure, per-op authZ, typed closes (§10). The
+                        package has no HTTP document route (§6.1) — a `/open`
+                        does not exist; only server-internal WS handshakes.
+    authorize.ts        deployment hook authorize(req) → {viewerId?, role?, policy,
+                        relax?} — relax sets a session's projection/content-policy
+                        only (marks are never relaxable, §6.1); role 'presenter'
+                        → §12a.5
+    tokens.ts           HS256 claims schema (§6.2), key loading, WS-level renewal
     audit.ts            sessionId → {viewerId?, ip, startedAt, keyGen, revoked?}
                         (attribution mapping; retention separate from §9.3)
     pool.ts             render worker pool + deadline retirement (§9.2)
@@ -877,13 +932,14 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
   - `final-raster`: paint the document frame, composite the mark into the final
     raster server-side, then assemble. The mark is pixels — a replayer cannot
     delete it without corrupting the only content it receives.
-  - plain `commands` (unprotected only): the mark ships as a last-position,
-    opaque `RASTER_BLOCK` overlay op (asset-table referenced). **Honest, and now
+  - plain `commands` (**relaxed sessions only**, §6.1): the mark ships as a
+    last-position, opaque `RASTER_BLOCK` overlay op (asset-table referenced). **Honest, and now
     stated plainly (round 4): the overlay is removable by a modified replayer —
     changing its representation from text to bitmap does not prevent dropping one
     op. Only `final-raster` guarantees the visible mark.** Command projections
     with an overlay mark are therefore never offered to protected documents.
-  - `culled-commands` (protected, opt-in): the mark must be embedded by the
+  - `culled-commands` (protected sessions; the default projection is
+    `final-raster`, this is the opt-in): the mark must be embedded by the
     **M-rule** — the mark bitmap is **composited into every transmitted content
     raster** (document image assets) before framing, and any transmitted asset
     that the pool computed unmarked is removed from the frame, so there is no
@@ -895,12 +951,12 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
     command projection — is **forbidden** by the null spot-check of §7.7 (P-rule
     consistency).
 - **Ordering with the forensic pass (§13.2 pipeline)**, one order for every unit
-  record: (1) document paint with text intact; (2) protected-projection culling
-  proof over the command list; (3) forensic text-displacement mutate (needs glyph
+  record: (1) document paint with text intact; (2) protected session's culling
+  proof over the command list (skipped on relaxed sessions); (3) forensic text-displacement mutate (needs glyph
   coordinates, so it runs where glyph runs survive — i.e. not on `final-raster`,
   which uses the image-domain mark of §13.2); (4) visible-mark compositing
   (raster-side on `final-raster`/M-rule units; an overlay op only on plain
-  commands, unprotected only); (5) flatten/rasterise any remaining group, then
+  commands, relaxed sessions only); (5) flatten/rasterise any remaining group, then
   frame. Nothing before step (3) may have baked pixels where the forensic mutation
   needs coordinates, and nothing after step (3) may exist as removable mark
   commands.
@@ -916,35 +972,41 @@ docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPoli
 
 ## 10. Behaviour detail: open, failure, resume, expiry
 
-**(Open flow)**
+**(Open flow — round 5: the developer supplies the source; the branch does the rest)**
 
-1. Host navigates to `source` (or passes bytes / a Response — unchanged APIs).
-2. `loadOfficeSource` → the prefix it holds is sniffed (§6.3): office bytes → the
-   existing loader; `OVSM` → the manifest arm.
-3. Manifest parses and validates (§6.2); the loader opens `session.wsUrl`, token
-   delivery in the first WS frame (§9.3).
-4. Server validates the token (signature, `jti`, `docRef`, `exp`, origin fence,
-   optional `authorize` hook), creates or resumes the session, replies.
-5. Client requests the units it needs (first visible page + next/prev prefetch
-   within the §9.2 outstanding-units cap; scope the viewport budget on XLSX, §12).
-6. Pool renders a cold unit → applies the protected projection (§7.7) and the
-   marks → chunks over WS; the client replays 1:1 at the unit's scale bucket.
+1. Host passes a source: a file source (bytes/Blob/URL, unchanged APIs) or a
+   `StreamSource` (§6.1). The §6.3 branch routes accordingly; file sources keep
+   today's loader untouched.
+2. Stream arm: the client opens the WebSocket to `source.url` (the `streamClient`
+   hook, §8.2) and sends the `hello` (supported recorder versions, `token?` from
+   the source when the deployment uses token auth, or the upgrade's own
+   credentials, §6.2).
+3. Server runs the §9.3 origin allowlist and the §9.1 `authorize` hook → the `OVSM`
+   manifest (§6.2) as the session's first message, or a typed close
+   (`unsupported-version | auth-failed | session-expired | revoked | rate-limited`)
+   mapped to a `StreamSessionError` the loader surfaces as a load-error state
+   (deduplicated, no automatic retry; the viewer is otherwise usable).
+4. Client answers `faces-ack` when the manifest declares `textMode:'text'`, then
+   requests the units it needs (first visible page + next/prev prefetch within the
+   §9.2 outstanding-units cap; scope the viewport budget on XLSX, §12; show plan +
+   layers for a present, §12a).
+5. Pool renders a cold unit → applies the session's projection (§7.7) and the marks
+   → chunks over WS; the client replays 1:1 at the unit's scale bucket.
 
 **(Failure, refusal, expiry)**
 
-- 406 / bad token / refused upgrade / expired token while paginating → the client
-  surfaces a load error state with the server-supplied notice (deduplicated, no
-  retry loop on 406); the viewer is otherwise usable.
-- **Renewal vs terminal** (round-4 fix for promises and Requests): token staleness
-  follows the §6.3 classification — **renewable** only URL/HttpSource, or a
-  body-unconsumed Request; a promise inherits its **resolved** source's class
-  (`Promise<Response>` is terminal, §6.3). Renewable sources re-run open and link
-  the fresh token's optional `refresh` claim into one audit history; **terminal**
-  sources — bytes, Blob, Response, `Promise<Response>` and consumed Requests
-  (re-reading replays the same expired token) — enter the typed `stream-expired`
-  state and recover only through the viewer's reload affordance.
-- Cancelled load / unmounted viewer / document changed → session `close` exactly
-  once, with buffered chunks dropped atomically (never a half-painted unit).
+- Typed handshake closes (above) surface as load-error states with the
+  server-supplied notice, deduplicated per code.
+- **Expiry mid-session** (round-5 revision): a token that ages out while the
+  session is open is answered at the protocol level — the server either sends a
+  `renew` reply with a fresh token (authorising session continuation in the audit
+  table) or closes with the typed `session-expired`. The client then surfaces the
+  terminal `stream-expired` state; recovery is the **developer re-supplying a
+  stream source** (or their backend refreshing its grants) — there is no
+  manifest-in-bytes renewal path left to classify (§6.3; §21 round-5 note).
+- Revocation: `revoked` close → session `close` exactly once, buffers dropped
+  atomically (never a half-painted unit); a presentation exits and `ended`
+  resolves (§12a.7).
 - **Rendering failure on a unit** → tile fallback (§7.6), never hidden from the
   diagnostics; replayer-side frame validation failure (header/version/checksum)
   drops the unit and asks the server to re-send once; second failure → the
@@ -1222,7 +1284,7 @@ projection-dependent pipeline placement (§9.4):
 
 - **Where the token enters the pipeline (round-3 fix, per projection)**: text
   displacement needs glyph coordinates, so it runs on records that still carry
-  glyph runs — plain `commands` (unprotected only) and protected
+  glyph runs — plain `commands` (relaxed sessions only) and protected
   `culled-commands` **after** the §7.7 culling proof (displacement cannot resurrect
   culled text; carriers are drawn only from servable, unclipped words of the §11
   join). On `final-raster` records there are no coordinates left, so the forensic
@@ -1379,12 +1441,12 @@ queue does not bound a fleet of sessions):
 
 | Key | Limit [call] | Burst |
 |---|---|---|
-| `ip` (unauthenticated) | 30 `/open` per rolling minute | 8 concurrent opens |
+| `ip` (unauthenticated) | 30 new stream sessions per rolling minute | 8 concurrent connects |
 | `sid` (per session) | 120 WS messages per rolling 10 s | 20 messages/s |
 | `sid` (unit paint requests) | 60 unit requests per rolling minute | in-caps only |
 | process socket bound | 256 concurrent sockets, 4,096 queued units fleet-wide | new connections delayed, never silently dropped |
-Client [call]: replay cost ≈ today's interactive paints; the loader gains one 12-byte
-peek; DOM pressure *drops* (a 20 MB DOCX: local mode holds every byte resident, remote
+Client [call]: replay cost ≈ today's interactive paints; the loader gains one
+source-kind branch (§6.3); DOM pressure *drops* (a 20 MB DOCX: local mode holds every byte resident, remote
 mode holds at most a couple of unit-sized command buffers).
 
 Determinism is the contract test's foundation, **conditioned**: same doc bytes +
@@ -1428,8 +1490,10 @@ Before any wire implementation is written, the Stage 0 matrix closes these:
 5. **Per-page carrier count** measurement (§13.2, §14).
 6. **Asset-snapshot correctness** — cropped/duotoned images inspectable
    (§7.7/§16.2), no original byte leakage in any sampled record.
-7. **CORS simple-request check** — the `Accept`-only negotiation keeps local
-   cross-origin loads simple (§16.3).
+7. **Session-restore + handshake sizing probe** — reconnect with the `resume: sid`
+   hello restores viewport and visible units and cannot mint a new token without
+   the authorize hook (§9.3); replaces the round-3 CORS gate, whose only purpose
+   (the removed `Accept` negotiation) is gone (round-5 note, §21).
 8. **Eager core-entry split measurement** (§8.1 gates).
 9. **WS transport scaling probe** — 1,000 concurrent unit requests hold the
    per-process caps (§14).
@@ -1447,9 +1511,13 @@ Before any wire implementation is written, the Stage 0 matrix closes these:
   sparse/pure-faces/carrier-poor fixtures; decoy-jitter distribution checks;
   key-absence fail-closed; the two-stream collusion harness (§13.5) publishes the
   measured bound.
-- Loader: **one-byte-chunked and truncated `OVSM`** parse fail-closed (round-2 gate);
-  abort; source replacement; expiry on non-reopenable sources (typed
-  `stream-expired`); ordinary file preservation when no magic (round-2 gate).
+- Handshake: a truncated `OVSM` envelope or malformed hello fails closed with a
+  typed close before any allocation (the envelope is now a WS message; the parse
+  gate is bounded, §6.2); `unsupported-version` / `auth-failed` /
+  `session-expired` / `revoked` / `rate-limited` each surface their mapped
+  `StreamSessionError`; **a client-side relax request is refused** (protections are
+  server-side state, §6.1); local file loads remain byte-for-byte unchanged when no
+  stream source is supplied (§6.3).
 - **Per-endpoint visibility tests (round-3 fix):** a partially clipped logical run
   and a fully covered run are each asserted **absent** from search rects, copy
   output and a11y text on every format (the §11 join rule), and a partially
@@ -1469,10 +1537,11 @@ Before any wire implementation is written, the Stage 0 matrix closes these:
 
 - Live against the **in-repo test server** (`server/test/app.ts`) wired by the
   Playwright harness (the existing `scripts/harness/fixture-server.ts` pattern).
-- Manifest detection (mocked, then real), the §16.2 pipeline in-browser, server-call
-  round-trips, print refusal under `no-print`, session expiry mid-view → open-recover,
-  406 display (round-2 explicit), resume after network drop, **cross-origin local
-  load stays a CORS simple request** (round-2 gate).
+- The stream source connects → hello → manifest → render (mocked, then against the
+  real WS); the §16.2 pipeline in-browser; typed handshake errors surface as
+  load-error states; print refusal under `no-print`; session expiry mid-view →
+  `session-expired` state and eventually a developer re-open; resume after network
+  drop restores viewport + visible units (§16.1 gate 7).
 - Replayed-unit goldens only (no local baselines).
 
 ## 17. Staging with acceptance criteria (round-2 tightened; M4)
@@ -1482,7 +1551,7 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 | Stage | Scope | Done when |
 |---|---|---|
 | **0: prototypes** | §16.1 gates, incl. the backend matrix + the projection/§13.2 carrier measurements + the §7.4 mode decision | §16.1 gates 1–9 resolved **with published numbers** in `docs/validation/streaming.md`; §18 items that depend on data are recorded |
-| **1: core stream MVP** | core entry + gate; `OVSD` recorder+replayer; OVSM + sniff at `loadOfficeSource`; RemoteDoc rendering of DOCX/PPTX/*visible-sheet* XLSX pages; demo Bun server (open + WS + pool + per-viewer visible mark + token + 406); typed loader errors | §16.1 all gates green; corpus contract test green under the §7.4 wording for the chosen mode (zero-diff only where that mode allows the claim); Playwright happy path; 406 + **stale-version** + **byte-chunk** tests pass; eager diff ≤ 2 B gzip, module map identical apart from the sniff; **the P-rule projection (§7.7) and the wire-disclosure suite (§16.2) are green before any protected response ships** — protected streaming does not start in Stage 1 without them (round-3 fix: they were wrongly deferred to Stage 2) |
+| **1: core stream MVP** | core entry + gate; `OVSD` recorder+replayer; WS session handshake (`hello` → `OVSM`, §6.2) wired from the `OfficeFile` source branch (§6.3); RemoteDoc rendering of DOCX/PPTX/*visible-sheet* XLSX pages; demo Bun server (WS-only, pool, per-viewer visible mark, token + typed handshake errors); typed loader errors | §16.1 all gates green; corpus contract test green under the §7.4 wording for the chosen mode (zero-diff only where that mode allows the claim); Playwright happy path; **stale-version** + typed-error tests pass; eager diff ≤ 16 B gzip (`dist/index.js` module map identical — the branch is the only main-path change, §8.1); **the P-rule projection (§7.7) and the wire-disclosure suite (§16.2) are green before any default-protected stream response ships** — no stream session ships without them (round-3 fix, protection now default for every session, round 5) |
 | **2: governance + forensics** | tokens/sessions, rate limits (§14 table), resume/revocation/TTL, cache tiers, §13 with decoys + detection tool; the M-rule mark-embedding pipeline for protected command output (§9.4) | rate-limit numbers asserted in tests; §13.6 gates measured and recorded (single-page recovery on carrier-rich pages ≥ 95 %; JPEG q70 ≥ 80 %; whole-search false-attribution bound ≤ 10⁻⁶ verified by simulation over the declared audit-table size, plus unmarked-page abstain tests); audit-table retention + revocation + key-rotation tests; per-class (sparse/none-page) fallback gates per §18 item 7; protected `culled-commands` may ship only after its M-rule tests are green (until then `final-raster` is the only protected projection shipped) |
 | **3: server text services** | search/copy/a11y WS ops through overlays; visible-band copy and visible-projection chart text; per-viewer mark default on | local feature parity measured by the §11 service vs local query on the same corpus; zero local index building for remote docs; §6.4 policy tests (secrets absent from every service) |
 | **4: XLSX stream mode** | 4a static + sheet tiles; 4b selection/freeze/sheet-nav parity; 4c server-side sort/filter (§12, §18 item 3) | hidden/veryHidden/vanish/token/bytes **never cross the wire** (wire audits); tile p95 render ≤ 120 ms pool-side at §14 budgets on a 500-row × 100-col sheet; selection parity passes against local mode; 4c: sort/filter results match local mode's row order on the corpus, filter value lists exclude policy-hidden values, and the §12 sort/filter wire audit is green |
@@ -1513,9 +1582,11 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
    - **4a. Speaker notes — decided 2026-11-07: sent to the presenter.** Only to a
      viewer the host marks `role: 'presenter'`, only in Presenter View, as marked
      images, recorded in the audit table (§12a.5).
-5. **How documents are marked stream-required** [call]: by path, by content kind,
-   by digest rule — one concrete config surface; my call: **path-glob + sha-by-list**
-   (a document rarely changes identity within a release workflow).
+5. **How documents are marked stream-required — decided 2026-11-08: not the
+   library's decision; the developer chooses by source type** (owner words in §2
+   item 1; round-5 note, §21). No per-document configuration remains: a stream
+   source opens a protected session by default, and the developer's `authorize`
+   hook may relax it per session (§6.1, §7.7).
 6. **Print in stream mode**: pool re-renders print units through the recorder
    (costs capacity) or declares `no-print`; **my call: allow by manifest flag in
    Stage 3**, print-to-PDF from a stream is a real user need and cannot be faked
@@ -1539,9 +1610,11 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 
 **Always**
 
-- The server owns the mode decision, from §6.1 negotiation through §6.4 content
-  policy to §7.7 projection. The loader owns only the sniff; no client surface may
-  set or override any of it.
+- The developer owns the mode by source type (§6.1); once a stream session is
+  open, its protections — the §7.7 P-rule, the §6.4 content policy and the marks —
+  are server-side state applied by default, and no client surface may set or
+  override any of them (only the server-side `authorize` hook may relax projection
+  or content policy, §6.1). Local mode is untouched above the `OfficeFile` branch.
 - Fail closed: unknown opcode, unknown manifest version, unavailable backend,
   refused unit, unresolvable token → refuse the unit/session; never a
   plausible-but-wrong paint; never a fallback fetch.
@@ -1570,15 +1643,17 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 
 **Never**
 
-- Send a stream-required document's bytes, or any member/media/font bookkeeping
-  bytes from it, to the client through any endpoint — including debug, internal or
-  diagnostic responses (the ban is scoped to stream-required responses; an
-  unprotected byte answer remains an ordinary server choice, §6.1).
+- Ship document bytes, or any member/media/font/bookkeeping bytes from them, over
+  this protocol in any form — including debug, internal or diagnostic frames
+  (§7.7). The `server/` package additionally has **no file-download route**
+  (§6.1); the library cannot stop a developer from exposing the file elsewhere,
+  which is exactly why this boundary is stated here and in §20 rather than
+  claimed away.
 - Ship original encoded image/media bytes or metadata-bearing replicas (§7.7).
-- Answer a **stream-required** client **without** the mandatory final-visibility
-  projection (the P-rule, §7.7): covered, clipped-out content and full z-order
-  history never reach the wire — by final-unit rasterisation by default or by a
-  stored culling proof, never by configuration alone.
+- Answer a **protected (default) stream session** **without** the mandatory
+  final-visibility projection (the P-rule, §7.7): covered, clipped-out content
+  and full z-order history never reach the wire — by final-unit rasterisation by
+  default or by a stored culling proof, never by configuration alone.
 - Ship hidden content in any transmitted payload (§6.4, always).
 - Log or emit in telemetry `OFFICEVIEW_STREAM_KEY`, a session token, any `sid`, or
   any audit-table row beyond what the owner configured (§9.3, §19).
@@ -1589,6 +1664,13 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
 
 ## 20. Honest limits
 
+- **Who keeps the file safe is the developer's backend** (round-5 owner decision):
+  the library cannot stop a host that points a file URL at the same document, or
+  that mirrors a stream to disk, or that exposes the original media elsewhere. This
+  design's guarantee is scoped honestly: the `server/` package ships no
+  file-download route, the stream protocol carries no per-document marking, and
+  every stream session is protected by default — but a developer who also publishes
+  the file has made a deployment choice outside the library's reach (§6.1, §19).
 - **Screenshots, cameras, and determined readers**: any visible pixel can be
   captured; the forensic watermark's character is *traceability* after
   unauthorised resharing, not prevention. The promise is precise: a session token
@@ -1601,8 +1683,8 @@ Each stage is its own PR; gates per §16; primarily measured, not narrated:
   axis numbering — the two options are named, not hidden.
 - **The visible mark's guarantee is projection-specific.** On `final-raster` the
   mark is inseparable pixels. On any command projection the mark is either an
-  overlay op (unprotected documents — removable by a modified replayer, stated as
-  such, because the command projection already trusts the replayer) or, on
+  overlay op (**relaxed** sessions — removable by a modified replayer, stated as
+  such, because a relaxed command projection already trusts the replayer) or, on
   protected `culled-commands`, embedded into content rasters by the §9.4 M-rule
   and made *stage-gated*: until that pipeline is tested, `final-raster` is the
   only projection that ships with a mark-guarantee for protected documents
@@ -1661,7 +1743,7 @@ was verified and then not accepted, with reason.
 | claude I5 | **Fixed** — see codex 8 (merged) |
 | claude I6 (custom header forces CORS preflight) | **Fixed** — §6.1 `Accept` media-type parameters only; §16.3 simple-request test |
 | claude I7 (replay can drop the visible mark; shifts detectable from advances) | **Fixed** — §13.3 keyed decoy jitter + quantised coordinates; mark baked into the raster before recording (§9.4), so replay cannot drop it; limits restated (§13.5, §20) |
-| claude I8 (no viewer identity/auth hook/WS token transport; missing "how docs are marked" decision) | **Fixed** — §9.1 `authorize` hook; §9.3 token transport in the first WS frame + origin allowlist; §18 item 5 names the marking surface as an owner decision |
+| claude I8 (no viewer identity/auth hook/WS token transport; missing "how docs are marked" decision) | **Fixed** — §9.1 `authorize` hook; §9.3 token transport in the hello + origin allowlist; the "how docs are marked" decision was §18 item 5, **superseded round 5** by the source-type owner decision (§2 item 1) |
 | claude I9 (cache keys + precedence contradictions) | **Fixed** — §9.3 single canonical key (incl. DPR/scale bucket, policy, mark) used identically for tiles; §9.4/§8.3 precedence: server-baked mark, `can.*` AND protection header |
 | claude I10 (core entry could change the eager graph) | **Fixed** — §8.1 measured gate (module map unchanged apart from the sniff; ≤ 2 B gzip delta) |
 | claude M1 (wrong citations) | **Fixed** — anchors corrected per the codex audit (§4); the cited `workerProtocol.ts` filename never existed (orchestrator-confirmed round 3; round 2 wrongly "rejected" this): the real symbol is `src/worker/viewerProtocol.ts:30–33` (`VIEWER_COMMAND_KINDS` incl. `'sort'`/`'filter'`; command kinds at `src/xlsx/view/contracts.ts:709–710`), cited correctly in §12; `RECORD_TEXT` is at `src/core/text-recording.ts:2` (citations updated) |
@@ -1694,3 +1776,37 @@ was verified and then not accepted, with reason.
 | codex-r3 3 (face handshake claimed but undefined) | PARTIAL (R2-7) | **Fixed** — §7.4 now defines the concrete protocol: `requiredFaces` identity list (hashes only, no face bytes), a bounded one-time `faces-ack` first-WS-frame message (≤ 128 ids, 2 s window, none-on-no-answer), hash-equality match (version mismatch counts as missing), per-unit raster transition with a `face-missing` diagnostic; the fidelity claim holds per satisfied unit, not document-wide |
 | codex-r3 4 (promises and Requests treated as fetch factories) | PARTIAL (R2-5) | **Fixed** — §6.3/§10: promises classified by their *resolved* value (`Promise<Response>` terminal, matching `stream.ts:368–373`); Request renewable only when bodyless or body-not-consumed; expiry tests extend to `Promise<Response>` and body-bearing Requests |
 | codex-r3 5 (stale wording: §19 "over"; §21 C3 row; §11 final-raster parenthetical) | PARTIAL (R2-4 clarifications) | **Fixed** — §19 now reads "without"; §21's round-1 claude C3 row points to the superseded/round-3/round-4 lineage; §11 clarifies that final pixels do not identify covered logical ranges and the conservative withhold applies equally on `final-raster` |
+
+### Round-5 owner revision (2026-11-08) — not a review finding
+
+The owner replaced §2 item 1 and removed §18 item 5: **the developer chooses the
+mode by source type** ("If a doc is supplied to the viewer, it goes file view. And
+if a stream, websocket, is supplied, go stream mode."). Everything keyed on
+response inspection was removed rather than reworded, and the underlying round-2
+and round-3 findings are retired on their own terms:
+
+- **Removed:** response sniffing in `loadOfficeSource` (the OVSM-over-HTTP path,
+  the bytes/blob arms' `OVSM` checks), the `Accept` media-type negotiation, the
+  406 / `StreamRequiredError` contract, the per-document "stream-required"
+  configuration, the CORS-simple-request gate (and its §16 gate), and the
+  promise/Request renewal-classification text of rounds 3–4 (that problem existed
+  only when an HTTP manifest could be trapped inside a re-read byte value — a
+  dedicated WS source has no such trap; §6.3).
+- **Moved:** the `OVSM` manifest format survives as the **first message on the
+  session's WebSocket** after a client `hello`, with the same normative schema
+  (§6.2, plus `policy.protection` and the `faces-ack` second frame); version and
+  capability negotiation now happen inside the WS handshake, with typed closes
+  (`unsupported-version`, `auth-failed`, `session-expired`, `revoked`,
+  `rate-limited`) replacing the 406 path.
+- **Rewritten:** the P-rule (§7.7) applies to **every stream session by default**
+  (adopting the round-5 proposal, §6.1: final-raster projection, content policy
+  and both marks; the developer's server-side `authorize` hook may relax
+  projection and content policy per session, never the marks, never from the
+  client, and every relaxation is recorded in the audit table); §19/§20 state the
+  deployment boundary plainly — the library cannot stop a developer who also
+  exposes the file elsewhere.
+- **Verified, not assumed** (round-5 item 6): the branch lives at the `OfficeFile`
+  layer (`OfficeFile.tsx:37–49` load-path signature, `:60` `useOfficeFile`,
+  `:91` route guard; `loadOfficeSource.ts:202,32`; `OfficeDoc.tsx:51` keeps its
+  parsed document contract), so local mode gains no sniff constant and the §8.1
+  eager gate becomes "`dist/index.js` module map identical, eager within 16 B".
