@@ -33,7 +33,13 @@ export interface CfPrepared { readonly stamp: CfStamp; at(sourceRow: number, col
 export interface CfPrepareRequest { readonly stamp: CfStamp; readonly sourceRects: readonly SourceRect[]; readonly signal: AbortSignal; readonly grantBytes: number }
 export interface CfValuePage { readonly rows: Uint32Array; readonly cols: Uint16Array; readonly values: readonly CfLiteral[] }
 export interface CfValueSource {
-  bounds(sheetId: string): SourceRect | undefined
+  /**
+   * Populated extent. Implementations should serve this from existing
+   * metadata where possible; when a scan is required it must spend the
+   * shared budget per examined cell and observe the abort signal, so cold
+   * bounds stay cooperative instead of rescanning silently.
+   */
+  bounds(sheetId: string, budget?: CfWorkBudget, signal?: AbortSignal): SourceRect | undefined
   stamp(sheetId: string): CfStamp
   pages(sheetId: string, rects: readonly SourceRect[], budget: CfWorkBudget, signal: AbortSignal): AsyncIterable<CfLease<CfValuePage>>
 }

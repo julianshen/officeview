@@ -536,17 +536,25 @@ describe('CF statistics preparation', () => {
 
   it('the adopted candidate survives the async handoff with its charge', async () => {
     // Reviewer probe: a microtask observing mid-handoff state must never see
-    // 0 charged bytes while the result is still alive.
+    // 0 charged bytes while the result is still alive. Only post-adoption
+    // releases are observed: transient workspace holds (union sweep, pages)
+    // are acquired and released before any result exists.
     const memory = createCfMemory({})
     const reserve = memory.reserve.bind(memory)
     const observed: number[] = []
+    let adopted = false
     memory.reserve = ((bytes: number) => {
       const hold = reserve(bytes)
       if (hold.kind === 'reserved') {
+        const adopt = hold.adopt.bind(hold)
+        hold.adopt = ((value: unknown, retained?: number) => {
+          adopted = true
+          return adopt(value as never, retained)
+        }) as typeof hold.adopt
         const release = hold.release.bind(hold)
         hold.release = () => {
           release()
-          void queueMicrotask(() => observed.push(memory.currentBytes))
+          if (adopted) void queueMicrotask(() => observed.push(memory.currentBytes))
         }
       }
       return hold
@@ -1184,5 +1192,212 @@ describe('CF statistics preparation', () => {
     expect(out!.value.value.storedCells).toBe(1)
     out!.value.release()
     expect(memory.currentBytes).toBe(0)
+  })
+
+  it('bounds follow owner and structure generations instead of stale geometry', async () => {
+    // Round-3 finding 1: the bounds memo keyed only sheet+generation, so a
+    // structure change or owner replacement reused the old A1 bounds and
+    // reported numericCount 0 for A11's value 99.
+    const run = async (change: 'structure' | 'owner'): Promise<void> => {
+      const memory = createCfMemory({})
+      const stats = createCfStatistics(memory)
+      const firstSource = {
+        bounds: (_id: string) => rect(0, 0),
+        stamp: (_id: string) => stamp(1),
+        pages: async function* (_id: string) {
+          yield {
+            value: { rows: new Uint32Array([0]), cols: new Uint16Array([0]), values: [{ kind: 'number', value: 1 } as const] },
+            bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+          }
+        },
+      }
+      const [first] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), firstSource, frozenBudget())
+      expect(first!.kind).toBe('ready')
+      if (first!.kind === 'ready') first!.value.release()
+      const next: CfStamp = { ...stamp(1), structureGen: 2, ...(change === 'owner' ? { owner: 'new' } : {}) }
+      const secondSource = {
+        bounds: (_id: string) => rect(0, 10),
+        stamp: (_id: string) => next,
+        pages: async function* (_id: string) {
+          yield {
+            value: { rows: new Uint32Array([10]), cols: new Uint16Array([0]), values: [{ kind: 'number', value: 99 } as const] },
+            bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+          }
+        },
+      }
+      const [second] = await stats.prepareStatistics([[rect(10, 10)]], next, secondSource, frozenBudget())
+      expect(second!.kind).toBe('ready')
+      if (second!.kind !== 'ready') throw new Error('expected ready statistics after generation change')
+      expect(second!.value.value.numericCount).toBe(1)
+      expect(second!.value.value.sum).toBe(99)
+      second!.value.release()
+      expect(memory.currentBytes).toBe(0)
+      expect(stats.size).toBe(0)
+    }
+    await run('structure')
+    await run('owner')
+  })
+
+  it('a pending bounds answer is not memoized past its generation', async () => {
+    // Round-3 finding 1: an undefined bounds (importing source) was cached,
+    // so a later complete source at the same generation stayed pending.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const pendingSource = {
+      bounds: (_id: string) => undefined,
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {},
+    }
+    const [pending] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), pendingSource, frozenBudget())
+    expect(pending!).toMatchObject({ kind: 'unresolved', reason: 'cf-pending-data' })
+    const completeSource = {
+      bounds: (_id: string) => rect(0, 0),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield {
+          value: { rows: new Uint32Array([0]), cols: new Uint16Array([0]), values: [{ kind: 'number', value: 7 } as const] },
+          bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); },
+        }
+      },
+    }
+    const [ready] = await stats.prepareStatistics([[rect(0, 0)]], stamp(1), completeSource, frozenBudget())
+    expect(ready!.kind).toBe('ready')
+    if (ready!.kind !== 'ready') throw new Error('expected ready statistics once bounds arrive')
+    expect(ready!.value.value.sum).toBe(7)
+    ready!.value.release()
+    expect(memory.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+  })
+
+  it('inner union examinations are budgeted per visit', async () => {
+    // Round-3 finding 2: one coordinate slab scanned 256 rectangles with a
+    // single unit. 64 shifted rectangles (257-span, 1-column shift) force
+    // ~8k examinations per union; the shared budget must count them.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const budget = frozenBudget()
+    const rects = Array.from({ length: 64 }, (_, i) => ({ firstRow: i, lastRow: i + 256, firstCol: i, lastCol: i + 256 }))
+    const src = {
+      bounds: (_id: string) => ({ firstRow: 0, lastRow: 319, firstCol: 0, lastCol: 319 }),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield { value: { rows: new Uint32Array(0), cols: new Uint16Array(0), values: [] as CfLiteral[] }, bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); } }
+      },
+    }
+    const [out] = await stats.prepareStatistics([rects], stamp(1), src, budget)
+    expect(out!.kind).toBe('ready')
+    if (out!.kind === 'ready') out!.value.release()
+    // Two unions (declared + span) of ~127 slabs × ~64 examinations each.
+    expect(budget.units).toBeGreaterThanOrEqual(10000)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('four heavy union scopes exceed the shared work budget instead of hiding it', async () => {
+    // Round-3 finding 2: 4 scopes × 256 shifted rectangles cost 1,046,528
+    // inner examinations but reported only 7,160 units. Counted honestly
+    // they exceed the 1,000,000-unit plan bound, so later scopes withhold.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const budget = frozenBudget()
+    const scopes = Array.from({ length: 4 }, (_, group) =>
+      Array.from({ length: 256 }, (_, i) => ({ firstRow: group * 600 + i, lastRow: group * 600 + i + 256, firstCol: i, lastCol: i + 256 })),
+    )
+    const src = {
+      bounds: (_id: string) => ({ firstRow: 0, lastRow: 3000, firstCol: 0, lastCol: 512 }),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield { value: { rows: new Uint32Array(0), cols: new Uint16Array(0), values: [] as CfLiteral[] }, bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); } }
+      },
+    }
+    const outs = await stats.prepareStatistics(scopes, stamp(1), src, budget)
+    expect(outs.filter(o => o.kind === 'ready').length).toBeLessThan(4)
+    expect(outs.filter(o => o.kind === 'unresolved').length).toBeGreaterThanOrEqual(1)
+    for (const o of outs) {
+      if (o.kind === 'ready') o.value.release()
+      else expect(o).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    }
+    expect(budget.units).toBeGreaterThan(900000)
+    expect(memory.currentBytes).toBe(0)
+    expect(stats.size).toBe(0)
+  })
+
+  it('a zero-byte account refuses before touching the source', async () => {
+    // Round-3 finding 2: a cold 10,000-cell preparation performed 30,001 row
+    // reads before refusing on an exhausted account. The session probes for
+    // minimum room first, so refusal costs zero reads and zero units.
+    let reads = 0
+    const cells: XlsxCell[] = Array.from({ length: 10000 }, (_, i) => ({
+      get row() { reads++; return i },
+      col: 0, ref: `A${i + 1}`, value: 1, styleIndex: 0,
+    } as unknown as XlsxCell))
+    const budget = frozenBudget()
+    const source = createResidentCfSource(cells, SHEET, stamp(1), createCfMemory({}))
+    const session = createCfStatistics(createCfMemory({ limitBytes: 0 }))
+    const [out] = await session.prepareStatistics([[rect(0, 0)]], stamp(1), source, budget)
+    expect(out!).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+    expect(reads).toBe(0)
+    expect(budget.units).toBe(0)
+  })
+
+  it('resident bounds count actual examined cells and observe cancellation', async () => {
+    // Round-3 finding 2: populated-bounds computation must spend for every
+    // examined cell and abort promptly, instead of scanning silently.
+    const cells: XlsxCell[] = Array.from({ length: 1000 }, (_, i) => cell(i, 0, 1))
+    const source = createResidentCfSource(cells, SHEET, stamp(1), createCfMemory({}))
+    const budget = frozenBudget()
+    const bounds = source.bounds(SHEET, budget, new AbortController().signal)
+    expect(bounds).toMatchObject({ firstRow: 0, lastRow: 999 })
+    expect(budget.units).toBe(1000)
+    const aborted = new AbortController()
+    aborted.abort()
+    expect(() => source.bounds(SHEET, frozenBudget(), aborted.signal)).toThrowError(/cancelled/)
+  })
+
+  it('sweep workspace admits the simultaneous peak tracked in the session cap', async () => {
+    // Round-3 finding 3: a 256-rectangle sweep reserved 16,640 B while the
+    // interval-sort boundary simultaneously held ~34,880 B (512-number set,
+    // 512-number x-list, 256 interval arrays). The hold must cover the peak
+    // and count toward the dedicated cap.
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const rects = Array.from({ length: 256 }, (_, i) => ({ firstRow: i, lastRow: i + 256, firstCol: i, lastCol: i + 256 }))
+    const src = {
+      bounds: (_id: string) => ({ firstRow: 0, lastRow: 512, firstCol: 0, lastCol: 512 }),
+      stamp: (_id: string) => stamp(1),
+      pages: async function* (_id: string) {
+        yield { value: { rows: new Uint32Array(0), cols: new Uint16Array(0), values: [] as CfLiteral[] }, bytes: 0, release() {}, transfer() { throw new Error('t5 probe'); } }
+      },
+    }
+    const nativeSort = Array.prototype.sort
+    let worstGap = Number.NEGATIVE_INFINITY
+    let worstXs = 0
+    let worstIntervals = 0
+    Array.prototype.sort = function (this: unknown[], compare: unknown) {
+      const self = this as unknown[]
+      try {
+        if (self.length > 0 && typeof self[0] === 'number') worstXs = self.length
+        if (self.length > 0 && Array.isArray(self[0]) && (self[0] as unknown[]).length === 2) {
+          const modeled = 32 + 24 * worstXs + 16 + 16 * worstXs + 16 + 56 * self.length
+          const gap = modeled - memory.currentBytes
+          if (gap > worstGap) {
+            worstGap = gap
+            worstIntervals = self.length
+          }
+        }
+      } catch { /* measurement-only path */ }
+      return nativeSort.call(this, compare as never)
+    } as unknown as typeof Array.prototype.sort
+    try {
+      const [out] = await stats.prepareStatistics([rects], stamp(1), src, frozenBudget())
+      expect(out!.kind).toBe('ready')
+      if (out!.kind === 'ready') out!.value.release()
+    } finally {
+      Array.prototype.sort = nativeSort
+    }
+    expect(memory.currentBytes).toBe(0)
+    // No interval sort may observe live modeled bytes above the admitted charge.
+    expect(worstGap).toBeLessThanOrEqual(0)
+    expect(worstXs).toBe(512)
+    expect(worstIntervals).toBe(256)
   })
 })
