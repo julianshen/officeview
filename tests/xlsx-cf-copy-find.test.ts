@@ -7,7 +7,7 @@
  * Sparse batches prepare exact-cover rects, never dense hulls, so scanning and
  * hit materialization always agree.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { WorkbookFind, type FindSheetInput } from '../src/xlsx/view/find'
 import { serializeSelection, type CopyInput } from '../src/xlsx/view/copy'
 import { prepareCfTextScope, prepareCfWireScope, CF_TEXT_SCOPE_GRANT_BYTES } from '../src/xlsx/cf/text'
@@ -375,6 +375,99 @@ describe('paged copy/find follow the CF number format outside the viewport', () 
         if (!('hits' in result)) throw new Error('search did not complete')
         expect(result.hits.map(hit => [hit.source.row, hit.source.col, hit.text]).sort()).toEqual([[0, 0, '1.25'], [500, 0, '1.25']])
       } finally {
+        await worker.release()
+      }
+    } finally {
+      await session.release()
+    }
+  })
+
+  it('a refused worker batch stays on base text without a false stale', async () => {
+    // A pressured provider refuses multi-cell preparations but admits single
+    // cells: scan falls back to base text and records the refusal, so the
+    // later single-cell materialization agrees instead of throwing stale.
+    const bytes = pagedBytes()
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer]) }, { docId: 'cf-paged-refused', profile: 'D' })
+    try {
+      await session.done
+      const source = createPagedWorkbookSource(session)
+      const sheetId = source.sheets[0]!.sheetId
+      const store = source.store(sheetId)
+      const read = store.readConditionalFormatting!.bind(store)
+      const probe = vi.spyOn(store, 'readConditionalFormatting').mockImplementation(async (request, memory, options) => {
+        const cells = request.rects.reduce((sum, rect) => sum + (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1), 0)
+        if (cells > 1) {
+          return {
+            sheetId,
+            stamp: { ...request.stamp },
+            kind: 'unresolved' as const,
+            reason: 'cf-budget-exceeded',
+            states: [],
+            definitions: [],
+            definitionsVersion: 42,
+            diagnostics: [],
+          }
+        }
+        return read(request, memory, options)
+      })
+      const worker = new DocumentSession('cf-paged-refused', source)
+      try {
+        const found = await worker.search(worker.workbookOwner(), { text: '1.25', caseSensitive: false }, undefined, new AbortController().signal)
+        expect(found).toMatchObject({ complete: true })
+        if (!('hits' in found)) throw new Error('search did not complete')
+        expect(found.hits).toEqual([])
+        const base = await worker.search(worker.workbookOwner(), { text: '1.3', caseSensitive: false }, undefined, new AbortController().signal)
+        expect(base).toMatchObject({ complete: true })
+        if (!('hits' in base)) throw new Error('search did not complete')
+        expect(base.hits.map(hit => [hit.source.row, hit.source.col, hit.text]).sort()).toEqual([[0, 0, '1.3'], [500, 0, '1.3']])
+      } finally {
+        probe.mockRestore()
+        await worker.release()
+      }
+    } finally {
+      await session.release()
+    }
+  })
+
+  it('a pending worker import stays on base text without a false stale', async () => {
+    // A pending import reports no states: the scan records the refusal and
+    // materialization agrees on base text instead of throwing a false stale.
+    const bytes = pagedBytes()
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer]) }, { docId: 'cf-paged-pending', profile: 'D' })
+    try {
+      await session.done
+      const source = createPagedWorkbookSource(session)
+      const sheetId = source.sheets[0]!.sheetId
+      const store = source.store(sheetId)
+      const real = store.readConditionalFormatting!.bind(store)
+      const probe = vi.spyOn(store, 'readConditionalFormatting').mockImplementation(async (request, memory, options) => {
+        const cells = request.rects.reduce((sum, rect) => sum + (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1), 0)
+        if (cells > 1) {
+          return {
+            sheetId,
+            stamp: { ...request.stamp },
+            kind: 'pending' as const,
+            pendingSheetIds: [sheetId],
+            states: [],
+            definitions: [],
+            definitionsVersion: 0,
+            diagnostics: [],
+          }
+        }
+        return real(request, memory, options)
+      })
+      const worker = new DocumentSession('cf-paged-pending', source)
+      try {
+        const found = await worker.search(worker.workbookOwner(), { text: '1.25', caseSensitive: false }, undefined, new AbortController().signal)
+        expect(found).toMatchObject({ complete: true })
+        if (!('hits' in found)) throw new Error('search did not complete')
+        expect(found.hits).toEqual([])
+        const base = await worker.search(worker.workbookOwner(), { text: '1.3', caseSensitive: false }, undefined, new AbortController().signal)
+        expect(base).toMatchObject({ complete: true })
+        if (!('hits' in base)) throw new Error('search did not complete')
+        expect(base.hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual([[0, 0, '1.3'], [500, 0, '1.3']])
+      } finally {
+        probe.mockRestore()
         await worker.release()
       }
     } finally {

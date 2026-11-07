@@ -334,6 +334,102 @@ describe('red-fill-only alert has bounded zh-TW text and no added tab stop', () 
     scope!.dispose()
     expect(net()).toBe(0)
   })
+
+  it('a sheet-wide unresolved rule admits every retained per-cell state', async () => {
+    // 1,000 blank cells under an unevaluatable expression rule: each copied
+    // unresolved state must be admitted before it is retained, and the live
+    // scope must survive service disposal with its full retained bytes.
+    const cells: XlsxCell[] = []
+    for (let row = 0; row < 1000; row++) cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: null, hasCachedValue: true })
+    const sheet = {
+      name: 'CF',
+      sheetId: 'cf',
+      rows: [{ index: 0, cells }],
+      cols: [],
+      mergeRefs: [],
+      mergeRanges: [],
+      conditionalFormatting: {
+        diagnostics: [],
+        rules: [{
+          id: 0,
+          priority: 1,
+          documentOrder: 0,
+          stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 999, firstCol: 0, lastCol: 0 }],
+          writes: new Set(['numFmt']),
+          dxf: { 'numFmt.code': '0.00' },
+          definition: { kind: 'unresolved', type: 'expression', reason: 'cf-unsupported-rule' } as const,
+        }],
+      },
+    } as unknown as XlsxSheet
+    const { budget, net } = trackingBudget()
+    const one = trackingBudget()
+    const single = await prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      locale: 'en-US',
+      budget: one.budget,
+    })
+    expect(single).toBeDefined()
+    const perCell = single!.bytes - 2048
+    expect(perCell).toBeGreaterThan(0)
+    single!.dispose()
+    expect(one.net()).toBe(0)
+    const scope = await prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 999, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      locale: 'en-US',
+      budget,
+    })
+    expect(scope).toBeDefined()
+    expect(scope!.bytes).toBe(2048 + 1000 * perCell)
+    // The last cell still announces unavailable from live retained state.
+    expect(scope!.describe(999, 0)?.text).toBe('Conditional formatting unavailable')
+    expect(cellDisplayText(sheet, { value: null, style: scope!.effectiveStyle(999, 0, undefined) })).toBe('')
+    scope!.dispose()
+    expect(net()).toBe(0)
+  })
+
+  it('a sheet-level unresolved sentinel admits every retained per-cell state', async () => {
+    // Over-cap sheets withhold the whole preparation as one unresolved outcome
+    // per cell: each copied state must be admitted before it is retained.
+    const cells: XlsxCell[] = []
+    for (let row = 0; row < 100; row++) cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: row, hasCachedValue: true })
+    const sheet = {
+      name: 'CF',
+      sheetId: 'cf',
+      rows: [{ index: 0, cells }],
+      cols: [],
+      mergeRefs: [],
+      mergeRanges: [],
+      conditionalFormatting: {
+        diagnostics: [],
+        rules: [{
+          id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }],
+          writes: new Set(['numFmt']),
+          dxf: { 'numFmt.code': '0.00' },
+          definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 1 }], dialect: 'base', formulas: [] },
+        }],
+        unresolvedSheet: { reason: 'cf-resource-limit', writes: 'ALL' as const },
+      },
+    } as unknown as XlsxSheet
+    const { budget, net } = trackingBudget()
+    const scope = await prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 99, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      locale: 'en-US',
+      budget,
+    })
+    expect(scope).toBeDefined()
+    // Exact admission: workspace plus one retained entry per requested cell.
+    // (measureCfCellBytes over {properties:{}} plus the 17-char reason.)
+    expect(scope!.bytes).toBe(2048 + 100 * (24 + 24 + 24 + 40 + 16 + (16 + 17 * 2)))
+    expect(scope!.describe(99, 0)?.text).toBe('Conditional formatting unavailable')
+    expect(cellDisplayText(sheet, { value: 99, style: scope!.effectiveStyle(99, 0, undefined) })).toBe('99')
+    scope!.dispose()
+    expect(net()).toBe(0)
+  })
 })
 
 describe('format budget refusal releases descriptor workspace', () => {

@@ -264,21 +264,24 @@ export async function prepareCfTextScope(
                 if (outcome.reason === 'cf-outside-preparation') continue
                 // Admit the retained copy before constructing it, like wins.
                 const occupied = measureCfCellBytes({ properties: {}, unresolvedWrites: undefined, unresolvedReason: outcome.reason })
-                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); return fail() }
+                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 states.set(row * 16384 + col, { properties: {}, writes: undefined, reason: outcome.reason })
                 continue
               }
-              const properties: Record<string, string | number | boolean | null> = {}
-              for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
-              const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
-              // Admit the retained copy before constructing it (wire measure).
-              const occupied = measureCfCellBytes({ properties, unresolvedWrites: writes })
-              if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); return fail() }
-              admit(occupied)
-              bytes += occupied
-              states.set(row * 16384 + col, { properties, writes, reason: undefined })
+                // Measure the source-owned winning state first, admit the retained
+                // copy before constructing it, then store: no retained byte
+                // ever exists uncharged (the spread below is transient scratch
+                // for measurement; the stored copy is built after admission).
+                const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
+                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes })
+                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
+                admit(occupied)
+                bytes += occupied
+                const properties: Record<string, string | number | boolean | null> = {}
+                for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
+                states.set(row * 16384 + col, { properties, writes, reason: undefined })
             }
           }
         }
@@ -337,10 +340,12 @@ export async function prepareCfWireScope(
   const chunks = chunkRects(rects)
   let bytes = DESCRIPTOR_WORKSPACE_BYTES
   const states = new Map<number, CopiedState>()
+  // The initial workspace admission throws like any other refusal so callers
+  // can tell a refused preparation apart from an absent one.
   try {
     options.budget.reserve(bytes)
   } catch {
-    return undefined
+    throw refused('CF wire preparation exceeds the admitted format budget')
   }
   const fail = (): undefined => {
     states.clear()

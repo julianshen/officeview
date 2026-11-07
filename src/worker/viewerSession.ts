@@ -1,4 +1,5 @@
 import { linkPivotCharts } from '../xlsx/pivotChartLink'
+import { PackageError } from '../core/package-error'
 import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import type { XlsxFrozenPane } from '../xlsx/frozenPane'
 import type { XlsxCellStyle } from '../xlsx/types'
@@ -3089,7 +3090,11 @@ export class DocumentSession {
                 if (!scope) return undefined
                 cfPresence.set(sheetId, true)
                 return scope
-              } catch {
+              } catch (error) {
+                // Typed resource refusals propagate so the engine records the
+                // batch and keeps scan/materialization consistent; aborts and
+                // anything else stay base (the engine detects cancellation).
+                if (error instanceof PackageError && error.code === 'resource-limit') throw error
                 return undefined
               }
             },
