@@ -457,7 +457,11 @@ export class WorkbookFind {
     if (page.error?.code === 'cancelled') throw new FindError('cancelled', 'Find cancelled')
     if (page.completeness !== 'complete' || page.error) this.incompleteSheets.add(scan.sheet.sheetId)
     if (page.error) this.fail({ sheetId: scan.sheet.sheetId, code: page.error.code, retryable: page.error.retryable, message: page.error.message, range: scan.range })
-    const scope = await this.prepareBatchScope(scan.sheet.sheetId, page.items)
+    const prep = await this.prepareBatchScope(scan.sheet.sheetId, page.items)
+    // A refused batch keeps base text, and its rects are remembered so hit
+    // materialization agrees instead of reporting a false stale cell.
+    if (prep.kind === 'refused') this.rememberRefused(scan.sheet.sheetId, coverCellsToRects(page.items))
+    const scope = prep.kind === 'ready' ? prep.scope : undefined
     try {
       for (const cell of page.items) {
         const key = this.visit(scan, cell, scope)
@@ -476,14 +480,16 @@ export class WorkbookFind {
     }
   }
 
-  /** Bounded current-generation formats for one scanned page. An aborted signal
-   * cancels the operation; any other preparation failure keeps base text. */
-  private async prepareBatchScope(sheetId: string, items: readonly AuthoritativeCell[]): Promise<EffectiveFormatScope | undefined> {
-    if (!this.options.prepareScope || !items.length) return undefined
+  /** Bounded current-generation formats for one scanned page. Resolves ready
+   * (possibly without a scope when hooks are absent), refused when preparation
+   * fails, and throws FindError cancelled on abort. Refusals keep base text;
+   * callers record them so hit materialization agrees (never a false stale). */
+  private async prepareBatchScope(sheetId: string, items: readonly AuthoritativeCell[]): Promise<{ kind: 'ready'; scope: EffectiveFormatScope | undefined } | { kind: 'refused' }> {
+    if (!this.options.prepareScope || !items.length) return { kind: 'ready', scope: undefined }
     // Exact cover, never a dense hull: a sparse page prepares only its cells,
     // so scan and single-cell materialization always agree.
     const rects = coverCellsToRects(items)
-    if (!rects.length) return undefined
+    if (!rects.length) return { kind: 'ready', scope: undefined }
     // A scope that settles after cancellation, or an acquired scope rejected by
     // the ownership guard below, still belongs to this batch: dispose it instead
     // of leaking its charge. The tap is attached synchronously so no late
@@ -502,15 +508,30 @@ export class WorkbookFind {
         scope?.dispose()
         throw guardError
       }
-      return scope
+      return { kind: 'ready', scope }
     } catch {
-      // A batch whose formats cannot be prepared still searches: base text,
-      // never another cell's result. Abort stays an abort.
       if (this.lifetime.signal.aborted) throw new FindError('cancelled', 'Find cancelled')
-      return undefined
+      return { kind: 'refused' }
     } finally {
       done = true
     }
+  }
+
+  /** Source rects whose preparation was refused: hit materialization must use
+   * base text there too, or a withheld scan format becomes a false stale hit.
+   * Bounded; exceeding it refuses the operation rather than disagreeing. */
+  private readonly refusedRects: { sheetId: string; rect: SourceRect }[] = []
+  private rememberRefused(sheetId: string, rects: readonly SourceRect[]): void {
+    for (const rect of rects) {
+      if (this.refusedRects.length >= 4096) throw new FindError('resource-limit', 'Find refused too many source batches; narrow the search or retry when memory pressure drops', true)
+      this.refusedRects.push({ sheetId, rect })
+    }
+  }
+  private isRefused(sheetId: string, row: number, col: number): boolean {
+    for (const entry of this.refusedRects) {
+      if (entry.sheetId === sheetId && row >= entry.rect.r0 && row <= entry.rect.r1 && col >= entry.rect.c0 && col <= entry.rect.c1) return true
+    }
+    return false
   }
 
   /** Matches one scanned cell; returns its display key when it is a hit. */
@@ -604,8 +625,13 @@ export class WorkbookFind {
     }
     if (read.kind !== 'cell') throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
     // The hit text is re-read under its own bounded preparation so it cannot go
-    // stale between scan and emission: a lost preparation drops the hit as stale.
-    const scope = await this.prepareBatchScope(sheet.sheetId, [read.cell])
+    // stale between scan and emission. A cell whose scan batch was refused uses
+    // base text here too (never a false stale); a fresh refusal fails the
+    // search loudly instead of dropping the hit silently.
+    const refused = this.isRefused(sheet.sheetId, row, col)
+    const prep = refused ? { kind: 'ready' as const, scope: undefined } : await this.prepareBatchScope(sheet.sheetId, [read.cell])
+    if (prep.kind === 'refused') throw new FindError('resource-limit', `Find could not prepare the hit text for cell ${row},${col}; retry when memory pressure drops`, true)
+    const scope = prep.scope
     try {
       return this.withText(read.cell, sheet.sheetId, (text, allocation) => {
         const match = firstMatch(text, this.needle, this.query.caseSensitive)

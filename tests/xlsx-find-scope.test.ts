@@ -108,4 +108,22 @@ describe('refused preparation path', () => {
     expect(hits.map(hit => hit.text)).toEqual(['hit'])
     expect(calls).toBeGreaterThan(0)
   })
+
+  it('a materialize-time preparation failure refuses loudly instead of going stale', async () => {
+    const { budget } = trackingBudget()
+    const { input } = findInputOf(doc())
+    let calls = 0
+    const session = new WorkbookFind(input, { text: 'hit', caseSensitive: false }, {
+      formatBudget: budget,
+      textOf: (cell: AuthoritativeCell) => String(cell.value ?? ''),
+      prepareScope: async () => {
+        calls++
+        // The scan batch prepares fine; the later hit re-read does not.
+        if (calls > 1) throw new Error('transient pressure')
+        return trackedScope(budget)
+      },
+    })
+    await expect(drain(session)).rejects.toMatchObject({ name: 'FindError', code: 'resource-limit' })
+    expect(calls).toBeGreaterThan(1)
+  })
 })

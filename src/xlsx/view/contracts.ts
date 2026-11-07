@@ -832,6 +832,8 @@ export interface SheetLayout {
   /** S3: metadata-only fast path; false lets sheets without sparklines avoid
    * any per-frame preparation or worker request. */
   hasSparklines?: boolean
+  /** Task 9 CF metadata fast path; absent/false means no per-batch CF reads. */
+  hasConditionalFormatting?: boolean
   /** S8: table metadata fast path; absent/false has no per-frame style work. */
   hasRegionStyles?: boolean
   /** Number of table descriptors a bounded regionStyles read may return. */

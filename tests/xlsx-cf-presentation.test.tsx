@@ -14,6 +14,7 @@ import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 import {
   SemanticPresentationCache,
+  cfTextKeyFor,
   formatCellPresentation,
   liveScopeFor,
   withCfDescription,
@@ -148,8 +149,8 @@ function mountedCfDoc(): XlsxDocument {
           documentOrder: 0,
           stopIfTrue: false,
           ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 1 }],
-          writes: new Set(['fill']),
-          dxf: { 'fill.bg': 'FFFFC7CE' },
+          writes: new Set(['numFmt', 'fill']),
+          dxf: { 'numFmt.code': '0.00', 'fill.bg': 'FFFFC7CE' },
           definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 1 }], dialect: 'base', formulas: [] },
         }],
       },
@@ -206,6 +207,32 @@ describe('mounted viewer exposes CF text and localized state through the real pa
       ui.unmount()
     }
   })
+
+  it('a changed CF generation refreshes derived text instead of reusing the old scope', async () => {
+    const ui = render(<InteractiveSheetDoc doc={mountedCfDoc()} />)
+    try {
+      await ui.findByRole('gridcell', { name: /A1, value 2\.00/ }, { timeout: 10_000 })
+      // Same value, same coordinates, new rule generation (0.000): the cached
+      // key must change or the stale 0.00 formatting would persist.
+      const next = mountedCfDoc()
+      const sheet = next.sheets[0] as unknown as XlsxSheet
+      sheet.conditionalFormatting = {
+        diagnostics: [],
+        rules: [{
+          id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 1 }],
+          writes: new Set(['numFmt']),
+          dxf: { 'numFmt.code': '0.000' },
+          definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 1 }], dialect: 'base', formulas: [] },
+        }],
+      }
+      ui.rerender(<InteractiveSheetDoc doc={next} />)
+      const updated = await ui.findByRole('gridcell', { name: /A1, value 2\.000/ }, { timeout: 10_000 })
+      expect(updated.textContent).toContain('2.000')
+    } finally {
+      ui.unmount()
+    }
+  }, 30_000)
 })
 
 describe('scope consumption is gated by the requested key', () => {
@@ -217,6 +244,15 @@ describe('scope consumption is gated by the requested key', () => {
     expect(liveScopeFor({ key: 'a', scope: undefined }, 'a')).toBeUndefined()
     expect(liveScopeFor(null, 'a')).toBeUndefined()
     expect(liveScopeFor({ key: 'a', scope }, undefined)).toBeUndefined()
+  })
+
+  it('includes the CF definition generation in the producer key', () => {
+    const rects = [{ r0: 0, r1: 0, c0: 0, c1: 0 }]
+    const base = { sheetId: 's', valueGen: 1, cfGen: 11, locale: 'en-US', rects }
+    expect(cfTextKeyFor(base)).toBe(cfTextKeyFor({ ...base }))
+    // Same sheet, value generation, locale and rects — but changed rules.
+    expect(cfTextKeyFor({ ...base, cfGen: 12 })).not.toBe(cfTextKeyFor(base))
+    expect(cfTextKeyFor({ ...base, sheetId: 't' })).not.toBe(cfTextKeyFor(base))
   })
 })
 
@@ -301,7 +337,7 @@ describe('format budget refusal releases descriptor workspace', () => {
   it('zero budget refuses allocation; lifecycles return to baseline', async () => {
     const sheet = numFmtSheet('0.00')
     const refusing = trackingBudget(true)
-    await expect(scopeFor(sheet, refusing.budget)).resolves.toBeUndefined()
+    await expect(scopeFor(sheet, refusing.budget)).rejects.toMatchObject({ name: 'PackageError', code: 'resource-limit' })
     expect(refusing.net()).toBe(0)
 
     const live = trackingBudget()

@@ -243,6 +243,8 @@ export interface WorkbookSource {
   /** Workbook-level formula scan for the paged dependent fallback, excluding saved pivot rectangles. */
   scanFormulaCellsOutsidePivots?(signal?: AbortSignal): boolean | undefined | Promise<boolean | undefined>
   hasSparklines?(sheetId: string): boolean
+  /** Task 9: CF metadata fast path; absent/false means no per-batch CF work. */
+  hasConditionalFormatting?(sheetId: string): boolean
   hasRegionStyles?(sheetId: string): boolean
   regionStyleTableCount?(sheetId: string): number
   hasPivotDisplay?(sheetId: string): boolean
@@ -3224,6 +3226,7 @@ export class DocumentSession {
       ...(geometry.hiddenCols?.length ? { hiddenCols: geometry.hiddenCols.map(interval => ({ ...interval })) } : {}),
       ...(used ? { used: { ...used } } : {}),
       ...(this.source.hasSparklines ? { hasSparklines: this.source.hasSparklines(sheetId) } : {}),
+      ...(this.source.hasConditionalFormatting ? { hasConditionalFormatting: this.source.hasConditionalFormatting(sheetId) } : {}),
       ...(this.source.hasRegionStyles ? { hasRegionStyles: this.source.hasRegionStyles(sheetId) } : {}),
       ...(this.source.regionStyleTableCount ? { regionStyleTableCount: this.source.regionStyleTableCount(sheetId) } : {}),
       ...(this.source.hasPivotDisplay ? { hasPivotDisplay: this.source.hasPivotDisplay(sheetId) } : {}),

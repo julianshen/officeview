@@ -27,6 +27,19 @@ export function liveScopeFor<T>(held: { key: string; scope: T | undefined } | nu
   return held && key !== undefined && held.key === key ? held.scope : undefined
 }
 
+/** Producer key for one display text scope: sheet, value generation, CF
+ * definition generation, locale and exact-cover rects. The generation is
+ * required: values and geometry alone cannot detect a rule change. */
+export function cfTextKeyFor(parts: {
+  sheetId: string
+  valueGen: number
+  cfGen: number
+  locale: string
+  rects: readonly { r0: number; r1: number; c0: number; c1: number }[]
+}): string {
+  return JSON.stringify([parts.sheetId, parts.valueGen, parts.cfGen, parts.locale, parts.rects])
+}
+
 /** Only the bounded label leaves this scope; its text is in the DOM cost model. */
 export function formatCellPresentation(sheet: XlsxSheet, cell: XlsxCell, budget: FormatBudget, cacheInputs = false, cf?: CfPresentationInput): { text: string; state?: 'error' } {
   try {

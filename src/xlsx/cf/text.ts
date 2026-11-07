@@ -7,12 +7,16 @@ import { residentSource } from './render'
 import { cfRuntimeEvidence } from './predicates'
 import { cfRulesVersion } from '../view/pagedSource'
 import type { EffectiveFormatScope, FormatBudget } from '../view/formatWorkspace'
+import type { AllocationContext, AllocationReservation } from '../view/allocationAccount'
 import type { SheetColorContext } from '../sheetColors'
 import type { ValuePolicy } from '../view/values'
 import type { CfReadResult } from '../view/contracts'
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
+import { PackageError } from '../../core/package-error'
+
+const refused = (message: string): PackageError => new PackageError('resource-limit', message)
 
 /** Bounded per-batch effective-format preparation for derived text (Task 9). */
 export interface CfTextScopeRequest {
@@ -32,6 +36,64 @@ const DESCRIPTOR_CACHE_KEYS = 32
 /** Mirrors the service per-call limits so every chunk is admittable. */
 const CHUNK_RECTS = 256
 const CHUNK_CELLS = 5000
+
+/** Bridges a caller's FormatBudget into a CfMemory allocation context so every
+ * resident byte — service workspace, shared statistics, transient text and
+ * retained results — is admitted in the aggregate ledger before allocation and
+ * released on disposal. Refusals fail closed through the existing quota paths. */
+function budgetAllocationContext(budget: FormatBudget): AllocationContext {
+  return {
+    get limitBytes() { return CF_LIMITS.scratchBytes },
+    reserve: () => {
+      let held = 0, released = false
+      const reservation: AllocationReservation = {
+        owner: 'cf-text-scope',
+        get bytes() { return held },
+        trySet: (next: number) => {
+          if (released || !Number.isSafeInteger(next) || next < 0) return false
+          if (next > held) {
+            try {
+              budget.reserve(next - held)
+            } catch {
+              return false
+            }
+          } else if (next < held) {
+            try {
+              budget.release(held - next)
+            } catch {
+              return false
+            }
+          }
+          held = next
+          return true
+        },
+        charge: (amount: number) => {
+          if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('cf-text-scope: invalid charge')
+          try {
+            budget.reserve(amount)
+          } catch {
+            throw new Error('cf-text-scope: aggregate budget refused')
+          }
+          held += amount
+        },
+        release: (amount?: number) => {
+          if (released) return
+          const value = amount ?? held
+          held = Math.max(0, held - value)
+          try {
+            budget.release(value)
+          } catch { /* release-only path */ }
+        },
+        adopt: () => {
+          throw new Error('cf-text-scope: adopt unsupported')
+        },
+      }
+      return reservation
+    },
+    canReserve: () => true,
+    owns: () => false,
+  }
+}
 
 /** Copied winning state: the scope owns this data, charged in the budget. */
 interface CopiedState {
@@ -62,6 +124,15 @@ const winDescriptor = (
     : describeCfWin(properties, unresolvedWrites, undefined, locale)
   if (descriptor && cache.size < DESCRIPTOR_CACHE_KEYS) cache.set(key, descriptor)
   return descriptor ?? undefined
+}
+
+/** Coordinates rects must be well-formed before chunking measures them. */
+function rectsAreValid(rects: readonly SourceRect[]): boolean {
+  for (const rect of rects) {
+    if (![rect.r0, rect.r1, rect.c0, rect.c1].every(n => Number.isSafeInteger(n) && n >= 0)) return false
+    if (rect.r0 > rect.r1 || rect.c0 > rect.c1 || rect.r1 > 1048575 || rect.c1 > 16383) return false
+  }
+  return true
 }
 
 /** Greedy chunks honoring the service per-call limits; a single over-cap rect
@@ -132,30 +203,35 @@ export async function prepareCfTextScope(
   request: CfTextScopeRequest,
 ): Promise<EffectiveFormatScope | undefined> {
   const rules = sheet.conditionalFormatting
-  if (!rules || rules.rules.length === 0 || !request.rects.length || request.signal.aborted) return undefined
+  // Absence (nothing to prepare) resolves undefined; every other failure
+  // throws, so engines can tell a refused preparation from an absent one.
+  if (!rules || rules.rules.length === 0 || !rectsAreValid(request.rects) || request.rects.length === 0 || request.signal.aborted) return undefined
   const chunks = chunkRects(request.rects)
   const modelChunks = chunks.map(chunk => chunk.map(toModel))
-  let envelope = DESCRIPTOR_WORKSPACE_BYTES
+  // Fail fast on caps before any allocation; the bounded account below admits
+  // every constructed byte in the caller's budget instead of a second estimate.
   for (const chunk of modelChunks) {
-    const estimate = estimateCfPrepareBytes(rules, chunk)
-    if (estimate === undefined) return undefined
-    envelope += estimate
-    if (!Number.isSafeInteger(envelope)) return undefined
+    if (estimateCfPrepareBytes(rules, chunk) === undefined) throw refused('CF text preparation exceeds its admitted batch')
   }
-  try {
-    request.budget.reserve(envelope)
-  } catch {
-    return undefined
-  }
-  const fail = (held: number): undefined => {
-    if (held > 0) {
-      try { request.budget.release(held) } catch { /* release-only path */ }
+  // Reserve through a helper so budget refusals surface as refusals while
+  // unrelated failures still fail closed to no scope.
+  const admit = (amount: number): void => {
+    try {
+      request.budget.reserve(amount)
+    } catch {
+      throw refused('CF text preparation exceeds the admitted format budget')
     }
+  }
+  let bytes = DESCRIPTOR_WORKSPACE_BYTES
+  const states = new Map<number, CopiedState>()
+  admit(bytes)
+  const fail = (): undefined => {
+    states.clear()
+    try { request.budget.release(bytes) } catch { /* release-only path */ }
     return undefined
   }
-  const account = createCfMemory({ limitBytes: CF_LIMITS.scratchBytes })
+  const account = createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) })
   const service = createCfService(rules, account, { evidence: cfRuntimeEvidence })
-  const states = new Map<number, CopiedState>()
   try {
     const gen = cfRulesVersion(rules)
     const stamp: CfStamp = {
@@ -171,7 +247,7 @@ export async function prepareCfTextScope(
     const colors = request.colors ?? {}
     const locale = request.locale ?? 'en-US'
     for (const chunk of modelChunks) {
-      if (request.signal.aborted) { service.dispose(); account.close(); return fail(envelope) }
+      if (request.signal.aborted) { service.dispose(); account.close(); return fail() }
       const lease = await service.prepareCf(
         { stamp, sourceRects: chunk, signal: request.signal, grantBytes: CF_LIMITS.scratchBytes },
         source,
@@ -192,6 +268,11 @@ export async function prepareCfTextScope(
               const properties: Record<string, string | number | boolean | null> = {}
               for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
               const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
+              // Admit the retained copy before constructing it (wire measure).
+              const occupied = measureCfCellBytes({ properties, unresolvedWrites: writes })
+              if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); return fail() }
+              admit(occupied)
+              bytes += occupied
               states.set(row * 16384 + col, { properties, writes, reason: undefined })
             }
           }
@@ -203,10 +284,10 @@ export async function prepareCfTextScope(
     service.dispose()
     account.close()
     let disposed = false
-    const scope = assembleScope(gen, states, colors, locale, envelope, () => {
+    const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
         disposed = true
-        request.budget.release(envelope)
+        request.budget.release(bytes)
       }
     })
     if (request.signal.aborted) {
@@ -214,9 +295,16 @@ export async function prepareCfTextScope(
       return undefined
     }
     return scope
-  } catch {
+  } catch (error) {
+    // Abort converges to no scope (engines detect cancellation on their own
+    // signal); admitted-budget refusal propagates so engines can classify it;
+    // anything else fails closed to no scope. Held bytes are always released.
+    states.clear()
     try { service.dispose() } finally { account.close() }
-    return fail(envelope)
+    try { request.budget.release(bytes) } catch { /* release-only path */ }
+    if (request.signal.aborted) return undefined
+    if (error instanceof PackageError && error.code === 'resource-limit') throw error
+    return undefined
   }
 }
 
@@ -226,8 +314,9 @@ export const CF_TEXT_SCOPE_GRANT_BYTES = 2 * 1024 * 1024
 /**
  * Scope over paged/worker read results. The caller performs one read per chunk
  * and owns the results; states are copied into budget-charged scope ownership.
- * Any non-ready chunk fails the whole scope closed. `onEmpty` fires when the
- * first chunk is ready, stateless and definition-free (absent CF).
+ * Any non-ready chunk that is not a pending import fails the whole scope
+ * closed; an empty first chunk means absent CF and resolves undefined.
+ * `onEmpty` fires exactly in that absent case so callers can cache presence.
  */
 export async function prepareCfWireScope(
   read: (rects: readonly SourceRect[]) => Promise<{ result: CfReadResult | undefined; release(): void }>,
@@ -253,13 +342,23 @@ export async function prepareCfWireScope(
     try { options.budget.release(bytes) } catch { /* release-only path */ }
     return undefined
   }
+  // Refusals throw so callers can tell them apart from absence; anything else
+  // fails closed to no scope. Held bytes are always released first.
+  const admitWire = (amount: number): void => {
+    try {
+      options.budget.reserve(amount)
+    } catch {
+      throw refused('CF wire preparation exceeds the admitted format budget')
+    }
+  }
   try {
     let first = true
     let gen = 0
     for (const chunk of chunks) {
       const { result, release } = await read(chunk)
       try {
-        if (!result || result.kind !== 'ready') return fail()
+        if (!result || result.kind === 'pending') return fail()
+        if (result.kind !== 'ready') throw refused(`CF wire preparation is ${result.kind}`)
         if (first) {
           first = false
           gen = result.stamp.cfGen
@@ -269,17 +368,13 @@ export async function prepareCfWireScope(
           }
         } else if (result.stamp.cfGen !== gen) {
           // Rules changed mid-preparation: never publish a mixed generation.
-          return fail()
+          throw refused('CF wire preparation crossed a definition generation')
         }
         for (const state of result.states) {
           const occupied = measureCfCellBytes(state)
           const next = bytes + occupied
-          if (!Number.isSafeInteger(next)) return fail()
-          try {
-            options.budget.reserve(occupied)
-          } catch {
-            return fail()
-          }
+          if (!Number.isSafeInteger(next)) throw refused('CF wire preparation exceeds its admitted batch')
+          admitWire(occupied)
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
@@ -303,7 +398,12 @@ export async function prepareCfWireScope(
       }
     })
     return scope
-  } catch {
-    return fail()
+  } catch (error) {
+    // Abort converges to no scope (callers detect cancellation on their own
+    // signal); admitted-budget refusal propagates for classification.
+    states.clear()
+    try { options.budget.release(bytes) } catch { /* release-only path */ }
+    if (!(error instanceof PackageError) || error.code !== 'resource-limit') return undefined
+    throw error
   }
 }

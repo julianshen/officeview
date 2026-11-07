@@ -52,7 +52,7 @@ import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHi
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
 import { cellDisplayText } from '../../xlsx/render'
-import { SemanticPresentationCache, liveScopeFor, withCfDescription } from './formatPresentation'
+import { SemanticPresentationCache, cfTextKeyFor, liveScopeFor, withCfDescription } from './formatPresentation'
 import { mainFormatBudget } from './mainFormatBudget'
 import type { EffectiveFormatScope, FormatBudget } from '../../xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
@@ -107,6 +107,7 @@ import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } fr
 import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
+import { cfRulesVersion } from '../../xlsx/view/pagedSource'
 import { invalidateRegionStyles, regionStylesFor } from '../../xlsx/tableStyleLoader'
 import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
 // Type-only: the pivot controls (client, layer, menus) are a lazy chunk loaded on a sheet with pivots (Task 28).
@@ -962,14 +963,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const cfReady=!scopedCf || assets?.cfViewportKey===cfViewportKey || Boolean(currentViewportCf)
 
   // ---- Task 9 derived text: one prepared current-generation effective format
-  // for the visible source cells (resident sheets). Find/copy prepare their own
-  // batch scopes through the helpers below; display holds one scope here.
-  // Remote display stays on base formatting: shell sheets carry no CF metadata
-  // to gate on, and an unconditional acquire would charge a receiver grant on
-  // every plain sheet (the worker tiles already paint remote CF; Task 10's
-  // live coordinator owns remote invalidation). Remote copy prepares on demand.
-  // A missing or refused scope always means base formatting, never a guess.
-  const cfAbsent = useRef(new Map<string, boolean>()).current
+  // for the visible source cells (plus the active cell). Find/copy prepare their
+  // own batch scopes through the same helpers; display holds one scope here.
+  // Resident sheets gate on their parsed rules; remote sheets gate on the
+  // worker-published CF presence flag, so plain sheets never take a receiver
+  // grant. A missing or refused scope always means base formatting, never a guess.
   const prepareResidentScope = async (sheet: XlsxSheet, rects: readonly SourceRect[], batchSignal: AbortSignal, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
     if (!sheet.conditionalFormatting?.rules.length || !rects.length || batchSignal.aborted) return undefined
     const text = await import('../../xlsx/cf/text')
@@ -984,8 +982,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
     if (!remote || !rects.length || batchSignal.aborted) return undefined
     const identity = remote.identity(sheetId)
-    const absentKey = `${sheetId}:${identity.valueGen}`
-    if (cfAbsent.get(absentKey)) return undefined
     const text = await import('../../xlsx/cf/text')
     if (batchSignal.aborted) return undefined
     return text.prepareCfWireScope(
@@ -1018,14 +1014,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         }
       },
       rects,
-      {
-        locale,
-        budget,
-        onEmpty: () => {
-          if (cfAbsent.size >= 64) cfAbsent.delete(cfAbsent.keys().next().value!)
-          cfAbsent.set(absentKey, true)
-        },
-      },
+      { locale, budget },
     )
   }
   const frameAssets=currentViewportCf && assets ? {...assets.lease.assets,conditionalFormatting:currentViewportCf.batch} : assets?.lease.assets
@@ -1051,11 +1040,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // a dense hull; over-count inputs skip preparation here (the batch engines
   // still cover their own scopes). Resident only (see the helper note).
   const cfTextRects = ((): SourceRect[] | undefined => {
-    if (!entry || !scroll) return undefined
-    // Same gate as the paint path: sheets without rules (resident or remote
-    // display sheets) never prepare. This also keeps grant-free sheets out of
-    // the receiver budget entirely.
-    if (!entry.sheet.conditionalFormatting?.rules.length) return undefined
+    if (!entry || !scroll || !activeSheetId) return undefined
+    // Presence gate before any admission: resident sheets carry their parsed
+    // rules; remote sheets use the worker-published CF presence flag (worker
+    // tiles already paint remote CF; this only gates derived text).
+    const hasCf = remote
+      ? remote.layout(activeSheetId).hasConditionalFormatting === true
+      : !!entry.sheet.conditionalFormatting?.rules.length
+    if (!hasCf) return undefined
     const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
     let count = 0
     for (const [a, b] of spans.y) {
@@ -1083,8 +1075,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!cells.length) return undefined
     return coverCellsToRects(cells)
   })()
+  // Live CF generation for the display key: a changed rule set must invalidate
+  // the held scope even when value generations and rects are unchanged.
+  // Memoized on the parsed rules object so the JSON normalization runs only
+  // when rules actually change (per render it would dominate scrolling).
+  const cfRules = entry?.sheet.conditionalFormatting
+  const cfTextGen = useMemo(() => (!remote && cfRules ? cfRulesVersion(cfRules) : 0), [remote, cfRules])
   const cfTextKey = cfTextRects && entry && activeSheetId
-    ? JSON.stringify([activeSheetId, entry.valueGen, entry.sheet.semantics?.locale ?? 'en-US', cfTextRects])
+    ? cfTextKeyFor({ sheetId: activeSheetId, valueGen: entry.valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects })
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
@@ -1101,9 +1099,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (cfText?.key === cfTextKey) return
     let cancelled = false
     const abort = new AbortController()
-    const sheet = entry.sheet
+    const sheet = entry.sheet, sheetId = activeSheetId
     void (async () => {
-      const scope = await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
+      // A refused preparation (budget pressure) leaves base text rather than
+      // failing the render; a canceled one is simply dropped.
+      let scope: EffectiveFormatScope | undefined
+      try {
+        const locale = entry.sheet.semantics?.locale ?? 'en-US'
+        scope = remote
+          ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget)
+          : await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
+      } catch {
+        scope = undefined
+      }
       if (cancelled) { scope?.dispose(); return }
       setCfText({ key: cfTextKey, scope })
     })()
@@ -2003,9 +2011,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           return cellDisplayText(entry.sheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, base) ?? base }, allocation)
         },
         prepareScope: (rects, batchSignal) => {
-          // Same gate as paint/display: sheets without rules never touch the
-          // receiver budget, so plain-sheet copies pay no CF preparation.
-          if (!entry.sheet.conditionalFormatting?.rules.length) return Promise.resolve(undefined)
+          // Same presence gate as display: no rules/flag, no receiver grant.
+          const hasCf = remote
+            ? remote.layout(activeSheetId).hasConditionalFormatting === true
+            : !!entry.sheet.conditionalFormatting?.rules.length
+          if (!hasCf) return Promise.resolve(undefined)
           return remote
             ? prepareRemoteScope(activeSheetId, rects, batchSignal, entry.sheet.semantics?.locale ?? 'en-US', copyFormatBudget)
             : prepareResidentScope(entry.sheet, rects, batchSignal, copyFormatBudget)

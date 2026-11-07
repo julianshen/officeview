@@ -41,6 +41,19 @@ function trackingBudget(refuse = false): { budget: FormatBudget; net: () => numb
   return { budget, net: () => held, retained: () => kept }
 }
 
+/** Refuses once held bytes would exceed the limit (deterministic pressure). */
+function limitedBudget(limit: number): { budget: FormatBudget; net: () => number } {
+  let held = 0
+  const budget: FormatBudget = {
+    reserve: bytes => {
+      if (held + bytes > limit) throw new FindError('resource-limit', 'refused')
+      held += bytes
+    },
+    release: bytes => { held -= bytes },
+  }
+  return { budget, net: () => held }
+}
+
 const cellIsRule = {
   id: 0,
   priority: 1,
@@ -162,6 +175,39 @@ describe('resident copy/find follow the CF number format outside the viewport', 
     expect(retained()).toBe(hits.reduce((sum, hit) => sum + hit.text.length * 2 + 128, 0))
   })
 
+  it('a refused batch and its materialization agree on base text', async () => {
+    // A bounded budget admits a single-cell preparation (~7.5 KiB: workspace,
+    // admission framing, shared statistics session, one-cell service bound)
+    // but refuses the three-cell scan batch (~9.7 KiB). Both paths must use
+    // base text rather than disagreeing with a false stale.
+    const { budget, net } = limitedBudget(9000)
+    const doc = cfDoc(10_000)
+    const source = createObjectWorkbookSource(doc, 'cf-limited')
+    const owner = initialWorkbookOwner('cf-limited', source.sheets)
+    const sheet = doc.sheets[0]! as unknown as XlsxSheet
+    const textOf = residentTextOf(sheet)
+    const prepare = residentPrepare(sheet, budget)
+    // The boundary is real: a single cell prepares fine under this budget.
+    const single = await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], signal: new AbortController().signal, locale: 'en-US', budget })
+    expect(single).toBeDefined()
+    single!.dispose()
+    const found = new WorkbookFind(
+      { owner, sheets: residentSheets('cf-limited', source, owner) },
+      { text: '1.25', caseSensitive: false },
+      { textOf, prepareScope: prepare, formatBudget: budget },
+    )
+    expect(await drain(found)).toEqual([])
+    const base = new WorkbookFind(
+      { owner, sheets: residentSheets('cf-limited', source, owner) },
+      { text: '1.3', caseSensitive: false },
+      { textOf, prepareScope: prepare, formatBudget: budget },
+    )
+    // Base matches survive materialization; no FindError('stale', ...) escapes.
+    const hits = await drain(base)
+    expect(hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual([[0, 0, '1.3'], [10000, 0, '1.3']])
+    expect(net()).toBe(0)
+  })
+
   it('copies CF-formatted text in near and far selections', async () => {
     const { budget, net } = trackingBudget()
     const doc = cfDoc()
@@ -195,8 +241,51 @@ describe('resident copy/find follow the CF number format outside the viewport', 
     expect(net()).toBe(0)
   })
 
-  it('resident and wire scopes agree on partial wins with blocked aspects', async () => {
-    const { budget, net } = trackingBudget()
+  it('shared statistics workspace is admitted in the aggregate budget', async () => {
+    let peak = 0
+    let held = 0
+    const budget: FormatBudget = {
+      reserve: bytes => { held += bytes; peak = Math.max(peak, held) },
+      release: bytes => { held -= bytes },
+    }
+    const cells = Array.from({ length: 5000 }, (_, row) => ({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: row, hasCachedValue: true }))
+    const sheet = {
+      name: 'CF',
+      sheetId: 'cf',
+      rows: cells.map(cell => ({ index: cell.row, cells: [cell] })),
+      cols: [],
+      merges: [],
+      mergeRanges: [],
+      conditionalFormatting: {
+        diagnostics: [],
+        rules: [{
+          id: 0,
+          priority: 1,
+          documentOrder: 0,
+          stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 4999, firstCol: 0, lastCol: 0 }],
+          writes: new Set(['numFmt']),
+          dxf: { 'numFmt.code': '0.00' },
+          definition: { kind: 'top10', rank: 3, bottom: false, percent: false },
+        }],
+      },
+    } as unknown as XlsxSheet
+    // Preparing only the last cell still builds statistics over the rule scope:
+    // two 40,960-byte typed arrays must be admitted before they exist.
+    const scope = await prepareCfTextScope(sheet, {
+      rects: [{ r0: 4999, r1: 4999, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      locale: 'en-US',
+      budget,
+    })
+    expect(scope).toBeDefined()
+    expect(peak).toBeGreaterThanOrEqual(2 * 40960)
+    expect(cellDisplayText(sheet, { value: 4999, style: scope!.effectiveStyle(4999, 0, undefined) })).toBe('4999.00')
+    scope!.dispose()
+    expect(held).toBe(0)
+  })
+
+  it('resident and wire scopes agree on partial wins with blocked aspects', async () => {    const { budget, net } = trackingBudget()
     const doc = cfDoc()
     const sheet = doc.sheets[0]! as unknown as XlsxSheet
     // A win on numFmt with fill blocked: the surviving property still formats.
