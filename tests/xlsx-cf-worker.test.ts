@@ -2581,6 +2581,71 @@ describe('CF fix round 5 (review-t7-r5)', () => {
     releaseSharedCfDefinitions(rules)
   })
 
+  it('R5-1: a pressured retry reclaims the share and stays reclaimed', async () => {
+    // Reclaim-then-retry: a preparation that fails for account headroom
+    // while a share for its rules is retained releases that share and tries
+    // once more without committing a new one. Even when the retry itself
+    // cannot succeed, nothing is retained and no share entry remains.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'solid' }, ['fill'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
+    // Commit the share on a roomy account first (separate lifetime).
+    const roomy = createCfMemory({})
+    const primed = await prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), rules, roomy, { budget: frozenBudget })
+    expect(primed.kind).toBe('ready')
+    expect(sharedCfDefinitionStats(rules)).toBeDefined()
+    expect(roomy.currentBytes).toBeGreaterThan(0)
+    // A starved account fails the same preparation; the retry reclaims the
+    // share first, then also fails closed — with nothing retained anywhere.
+    const tight = createCfMemory({ limitBytes: 100 })
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), rules, tight, { budget: frozenBudget })
+    expect(out.kind).toBe('unresolved')
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+    expect(tight.currentBytes).toBe(0)
+    expect(roomy.currentBytes).toBe(0)
+    releaseSharedCfDefinitions(rules)
+  })
+
+  it('R6-1: a retained share does not starve retries at a tight budget', async () => {
+    // Exact review probe scenario: one rule, one cell, a 14,824 B account.
+    // The first preparation commits its share; every later one reclaims (or
+    // skips) and still completes ready — never stuck unresolved.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.fg': 'FF00FF00' }, ['fill'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(1) }], { stamp: st })
+    const memory = createCfMemory({ limitBytes: 14824 })
+    const tableBytes: number[] = []
+    const retainedAfterDrain: number[] = []
+    const tablePresent: boolean[] = []
+    for (let i = 0; i < 4; i++) {
+      const releases: Array<() => void> = []
+      const out = await prepareCfRemote(cfRequest([rect(0, 0)], st, 100000), SHEET, mkSource(), rules, memory,
+        { budget: frozenBudget, retainOutgoing: release => { releases.push(release) } })
+      expect(out.kind).toBe('ready')
+      expect(releases).toHaveLength(1)
+      const stats = sharedCfDefinitionStats(rules)
+      tablePresent.push(stats !== undefined)
+      releases[0]!()
+      retainedAfterDrain.push(memory.currentBytes)
+      if (stats !== undefined) tableBytes.push(memory.currentBytes)
+    }
+    // Cold start commits; pressured retries reclaim (or skip) and still
+    // complete — the table never blocks a preparation that otherwise fits.
+    expect(tablePresent[0]).toBe(true)
+    expect(tablePresent[1]).toBe(false)
+    expect(retainedAfterDrain[0]).toBeGreaterThan(0)
+    expect(retainedAfterDrain[1]).toBe(0)
+    expect(tableBytes[0]).toBe(retainedAfterDrain[0])
+    for (const held of retainedAfterDrain) expect(held === 0 || held === tableBytes[0]).toBe(true)
+    releaseSharedCfDefinitions(rules)
+    expect(memory.currentBytes).toBe(0)
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+  })
+
   it('R5-note: shared definitions are charged once across viewport consumers', async () => {
     // Single-charge accounting: two scopes with the same definitions version
     // hold one registry charge plus one states charge each — the second scope

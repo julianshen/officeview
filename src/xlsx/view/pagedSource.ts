@@ -1726,6 +1726,34 @@ export async function prepareCfRemote(
   memory: CfMemory,
   options?: CfRemotePrepareOptions,
 ): Promise<CfReadResult> {
+  const first = await prepareCfRemoteOnce(request, sheetId, source, rules, memory, options, false)
+  if (first.kind !== 'unresolved' || first.reason !== 'cf-resource-limit' || rules === undefined) return first
+  // A retained share is an optimization, never a requirement: if this
+  // preparation failed for account headroom while a share for these rules
+  // is retained, release it and retry once without committing a new one.
+  // Live outgoing leases belong to other calls and are untouched, and the
+  // retry runs at most once, so this always terminates.
+  const withheld = first.diagnostics[0]?.feature
+  if (withheld === 'cf-grant-required' || withheld === 'cf-scope-too-large' || withheld === 'cf-invalid-rect' || withheld === 'cf-sheet-scope-unresolved') {
+    return first
+  }
+  if (sharedCfDefinitionStats(rules) === undefined) return first
+  releaseSharedCfDefinitions(rules)
+  return prepareCfRemoteOnce(request, sheetId, source, rules, memory, options, true)
+}
+
+/** Single preparation attempt. `skipShare` (retry path only) reuses a
+ * rechecked winner but never commits a new table entry, so a reclaimed
+ * share stays reclaimed for the rest of the pressured window. */
+async function prepareCfRemoteOnce(
+  request: CfReadRequest,
+  sheetId: string,
+  source: CfValueSource,
+  rules: CfSheetRules | undefined,
+  memory: CfMemory,
+  options?: CfRemotePrepareOptions,
+  skipShare = false,
+): Promise<CfReadResult> {
   const signal = options?.signal
   // The session forwards the kernel's measured envelope floor; the provider
   // uses the larger of that and its own framed wrapper bound.
@@ -2078,15 +2106,16 @@ export async function prepareCfRemote(
     const omitted = fullWithEnvelope > grantBytes ? [] : diagnostics
     // Publish the share only after all admission succeeds — never on a
     // refusal or withhold path, and only with its own charged lease (no
-    // unowned table entries). The recheck below runs before any commit and
-    // the commit runs only after the outgoing adopt: a concurrent
-    // preparation may have committed while this one built, and
-    // recheck-plus-commit plus adopt are synchronous with no await between,
-    // so the second publisher reuses the winner instead of overwriting (and
-    // leaking) its lease. Skipping the commit on pressure is fail-soft —
-    // sharing is an optimization; the adopted result stays fully owned.
-    // Winner and local build have identical content, so the walked sizes
-    // checked above hold for either array.
+    // unowned table entries). The recheck runs before any commit and the
+    // commit runs only after the outgoing adopt: a concurrent preparation
+    // may have committed while this one built, and recheck plus adopt plus
+    // commit are synchronous with no await between, so the second publisher
+    // reuses the winner instead of overwriting (and leaking) its lease.
+    // Skipping the commit on pressure — or on a pressure retry, which must
+    // not re-retain what it just reclaimed — is fail-soft: sharing is an
+    // optimization; the adopted result stays fully owned. Winner and local
+    // build have identical content, so the walked sizes checked above hold
+    // for either array.
     const live = peekSharedCfDefinitions(rules, version)
     const published = live ?? definitions
     const result: CfReadResult = {
@@ -2112,7 +2141,7 @@ export async function prepareCfRemote(
     // The table commit lands only now that the outgoing admission succeeded;
     // a failed commit simply skips sharing and returns the adopted result.
     let committedHere = false
-    if (live === undefined) {
+    if (live === undefined && !skipShare) {
       const owned = limitsModule.admitSharedCopy(memory, published)
       if (owned !== undefined) {
         commitSharedCfDefinitions(rules, version, owned.value, owned)
