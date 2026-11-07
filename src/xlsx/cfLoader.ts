@@ -58,3 +58,24 @@ export function hasConditionalFormatting(data: XmlNode | undefined): boolean {
   }
   return false
 }
+
+/** Explicit finite CF applies-to bounds, without loading the evaluator. Full
+ * rows/columns never enlarge the raster into a worksheet-sized allocation. */
+export function cfExplicitBounds(sheet: Pick<XlsxSheet, 'conditionalFormatting'>): { r0: number; r1: number; c0: number; c1: number } | undefined {
+  const cf = sheet.conditionalFormatting
+  if (!cf || cf.rules.length > 4096) return undefined
+  let r0 = 1048576, r1 = -1, c0 = 16384, c1 = -1, count = 0
+  for (const rule of cf.rules) for (const r of rule.ranges) {
+    if (++count > 16384) return undefined
+    if (r.firstRow === 0 && r.lastRow === 1048575 || r.firstCol === 0 && r.lastCol === 16383) continue
+    if (!Number.isSafeInteger(r.firstRow) || !Number.isSafeInteger(r.lastRow) || !Number.isSafeInteger(r.firstCol) || !Number.isSafeInteger(r.lastCol)
+      || r.firstRow < 0 || r.lastRow >= 1048576 || r.firstCol < 0 || r.lastCol >= 16384 || r.lastRow < r.firstRow || r.lastCol < r.firstCol) continue
+    r0 = Math.min(r0, r.firstRow); r1 = Math.max(r1, r.lastRow); c0 = Math.min(c0, r.firstCol); c1 = Math.max(c1, r.lastCol)
+  }
+  return r1 < 0 ? undefined : { r0, r1, c0, c1 }
+}
+let renderPending: Promise<typeof import('./cf/render')> | undefined
+export function ensureConditionalFormatting(sheets: readonly Pick<XlsxSheet, 'conditionalFormatting'>[]): Promise<typeof import('./cf/render') | undefined> {
+  if (!sheets.some(sheet => sheet.conditionalFormatting !== undefined)) return Promise.resolve(undefined)
+  return renderPending ??= import('./cf/render').catch(error => { renderPending = undefined; throw error })
+}

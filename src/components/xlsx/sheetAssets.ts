@@ -1,3 +1,5 @@
+import { ensureConditionalFormatting } from '../../xlsx/cfLoader'
+import type { CfPaintBatch } from '../../xlsx/cf/render'
 /**
  * Font/image lease for the interactive sheet viewport (plan S5.2; spec §12.4).
  *
@@ -232,7 +234,8 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
     const held: ImageCandidates[] = []
     // This lease's receiving chart context (per document, parent and profile), carried by its assets, released with it.
     let charts: ChartReceiverLease | undefined
-    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset); charts?.release() }
+    let conditionalFormatting: CfPaintBatch | undefined
+    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset); charts?.release(); conditionalFormatting?.dispose() }
     try {
       const sheet = doc.sheets[options.sheetIndex ?? 0]
       const indexed = doc.images ?? []
@@ -246,6 +249,10 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       // admitted; sheets without groups stay on the undefined-check path.
       if (sheet?.resolvedSparklines?.size) await ensureSparklinePainter([sheet])
       if (sheet && sheetHasRegionStyles(sheet)) await ensureTableStyleEngine([sheet])
+      if (sheet?.conditionalFormatting) {
+        const cf = await ensureConditionalFormatting([sheet])
+        conditionalFormatting = await cf?.prepareCfPaint(sheet)
+      }
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {
@@ -262,7 +269,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       await Promise.all(cached.map(async image => { byObject.set(image, await take(image)) }))
       let released = false
       return {
-        assets: { images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) },
+        assets: { conditionalFormatting, images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) },
         fontDiagnostics: lease.diagnostics,
         decodedBytes,
         imageBudgetBytes: cache.limitBytes,

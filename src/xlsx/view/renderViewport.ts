@@ -1,3 +1,4 @@
+import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import type { CanvasColors } from '../../components/canvasColors'
 /**
  * Interactive viewport painter (spec §§5.3, 11.1, 11.2; plans S2.3/S5.1/S5.2).
@@ -216,7 +217,7 @@ export function renderSheetViewport(
     }
     // The host lays a cell out in a box at the origin: records are box-relative.
     const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
-    const regionStyles = regionStylesFor(sheet)
+    const regionStyles = prepared?.conditionalFormatting?.layer ?? regionStylesFor(sheet)
     // Styled empty cells are records too: admitted against the planner's caps,
     // degrading the frame to its coarse summary when they do not fit.
     const admitted = planned.kind === 'detail' && geometry?.kind === 'ready' && regionStyles ? admitRegionSurfaces(planned, geometry, viewport, regionStyles, (() => {
@@ -241,8 +242,8 @@ export function renderSheetViewport(
     let records: CellLayout[] = [], active: CellLayout | undefined
     if (options.layoutAdmission) cache.beginBatch(options.layoutAdmission)
     try {
-      records = plan.kind === 'detail' ? buildCellRecords(cellPlacements, owner, host, cache) : []
-      active = activePlacement ? buildCellRecords([activePlacement], owner, host, cache)[0] : undefined
+      records = plan.kind === 'detail' ? buildCellRecords(prepared?.conditionalFormatting ? cellPlacements.map(item => ({ ...item, cfKey: prepared.conditionalFormatting!.key })) : cellPlacements, owner, host, cache) : []
+      active = activePlacement ? buildCellRecords([prepared?.conditionalFormatting ? { ...activePlacement, cfKey: prepared.conditionalFormatting.key } : activePlacement], owner, host, cache)[0] : undefined
     } catch (error) {
       if (!(error instanceof LayoutAdmissionError)) throw error
       // Declared resource outcome: a pending-tone summary and one notice,
@@ -354,7 +355,7 @@ export function renderSheetViewport(
       }
       // Pivot interiors and filled styled-region cells hide their gridlines (regionGrid.ts). A sheet with
       // no pivot and no styled table pays only the guard: no allocation, no style lookup (spec §8 hot path).
-      const region = geometry?.kind === 'ready' && mayHaveRegionGrid(sheet) ? viewportRegionLines(sheet, geometry, yTop, yBottom, xLeft, xRight, viewport.zoom * viewport.deviceScale) : undefined
+      const region = geometry?.kind === 'ready' && (regionStyles || mayHaveRegionGrid(sheet)) ? viewportRegionLines(sheet, geometry, yTop, yBottom, xLeft, xRight, viewport.zoom * viewport.deviceScale, prepared?.conditionalFormatting?.layer) : undefined
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
         for (const band of spills) if (band.x0 < x && x < band.x1) hidden.push([band.y0, band.y1])
@@ -426,9 +427,9 @@ export function renderSheetViewport(
  * (RegionGrid.keyedLine): one style resolution per (row class, column class) pair, a cell's own fill read from
  * its stored cell, and a cell the layer cannot classify (a pivot with `formats`) resolved by itself. What is
  * left per summarized row is the per-row segment the paint needs anyway. */
-function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number, scale: number):
+function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number, scale: number, styles?: RegionStyleLayer):
   { lines(segments: Array<[number, number]>, at: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
-  const lineRule = regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style)
+  const lineRule = regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style, styles)
   if (!lineRule) return undefined
   const { rows, cols, order } = geometry.metrics
   const rects = lineRule.rects

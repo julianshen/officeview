@@ -7,7 +7,7 @@
  * `loadFrame`, `crop`) from `scripts/sparkline-compare.ts`, validates manifest hashes and strict capture
  * dimensions/scale (`1 px/pt` copy-picture screen/printer references; `PRINT_SCALE = 2` for print rasterization),
  * and enforces per-case tolerances (`meanAbs <= 2.0/255`, `rowMax <= 4.0/255`, `strong <= round(0.003 * W * H)`).
- * Before Task 8 wires CF into `renderSheet`, measured cases report `implementation-pending` rather than claiming pass.
+ * Static/print/export use the shared prepared Paintable; unmeasured references remain pending.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { computeMetrics, renderSheet } from '../src/xlsx/render'
+import { getPaintables } from '../src/render/paint'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { verifyCfCase } from './cf-refs/verify'
@@ -102,25 +102,17 @@ export async function compareCfCase(
     return { id: c.id, mode, outcome: 'fail', reason: `Sheet ${c.sheet} missing in ${c.saved}` }
   }
 
-  // Until Task 3 & Task 8 attach and render `sheet.conditionalFormatting`, report implementation-pending
-  // rather than claiming a green pixel match.
-  const hasCfRendered = Array.isArray((sheet as unknown as { conditionalFormatting?: unknown[] }).conditionalFormatting)
-  if (!hasCfRendered) {
-    return {
-      id: c.id,
-      mode,
-      outcome: 'implementation-pending',
-      reason: 'Task 3/8 conditionalFormatting parser and renderer not yet wired',
-    }
+  if (mode === 'interactive' || mode === 'paged') return {
+    id: c.id, mode, outcome: 'implementation-pending', reason: 'Browser viewport comparison is verified by Task 11',
   }
-
   const refFrame = await loadFrame(resolve(rootDir, cap.pngPath))
-  const m = computeMetrics(sheet)
+  const units = await getPaintables(doc)
+  const unit = units[doc.sheets.indexOf(sheet)]!
   const scale = Number(sidecar.pxPerPt) / CSS_PX_PER_PT
-  const canvas = createCanvas(Math.max(1, Math.round(m.widthPx * scale)), Math.max(1, Math.round(m.heightPx * scale)))
+  const canvas = createCanvas(Math.max(1, Math.round(unit.spec.widthPx * scale)), Math.max(1, Math.round(unit.spec.heightPx * scale)))
   const ctx = canvas.getContext('2d')
   ctx.scale(scale, scale)
-  renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m)
+  try { unit.paint(ctx as unknown as CanvasRenderingContext2D) } finally { units.dispose() }
   const fullData = ctx.getImageData(0, 0, canvas.width, canvas.height).data as unknown as Uint8ClampedArray
   const oursFull: Frame = { width: canvas.width, height: canvas.height, data: fullData }
   const oursCropped = crop(oursFull, 0, 0, refFrame.width, refFrame.height)

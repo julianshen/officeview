@@ -1,3 +1,4 @@
+import { cfExplicitBounds } from '../cfLoader'
 import { RectCover, uniqueRectList } from './rectIndex'
 import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type SourceAllocationOptions } from './allocationAccount'
 import type { FormatAllocation } from '../formula/format'
@@ -255,6 +256,8 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       r0 = Math.min(r0, merge.minRow); r1 = Math.max(r1, merge.maxRow)
       c0 = Math.min(c0, merge.minCol); c1 = Math.max(c1, merge.maxCol)
     }
+    const cf = cfExplicitBounds(sheet)
+    if (cf) { r0 = Math.min(r0, cf.r0); r1 = Math.max(r1, cf.r1); c0 = Math.min(c0, cf.c0); c1 = Math.max(c1, cf.c1) }
     this.dynamicAnchors = dynamic
     this.baseExtent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
   }

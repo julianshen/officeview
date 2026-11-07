@@ -1,3 +1,5 @@
+import { ensureConditionalFormatting } from '../xlsx/cfLoader'
+import type { CfPaintBatch } from '../xlsx/cf/render'
 import { acquireFonts, type RegisterFont } from '../core/fonts/register'
 import { withFallbackFonts, type FallbackFontsOptions } from '../core/fonts/fallback'
 import type { FontDiagnostic } from '../core/fonts/types'
@@ -411,12 +413,15 @@ export function getPaintables(
       let decoded: Array<CanvasImageSource | undefined> = []
       let charts: ChartReceiverLease | undefined
       let metadata: ChartPaintables | undefined
+      const cfBatches: Array<CfPaintBatch | undefined> = []
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
         const drawings = doc.sheets.flatMap(sheet => sheet.drawings ?? [])
         charts = await ensureChartPainter(drawings, chartReceiver(doc, options))
         await ensureSparklinePainter(doc.sheets)
         await ensureTableStyleEngine(doc.sheets)
+        const cf = await ensureConditionalFormatting(doc.sheets)
+        if (cf) { const memory = cf.createPaintMemory(); for (const sheet of doc.sheets) cfBatches.push(await cf.prepareCfPaint(sheet, { memory })) }
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
@@ -424,10 +429,10 @@ export function getPaintables(
         // Sheet charts are described by the sheet viewer; here only their pictures are prepared (no placement).
         metadata = await chartMetadata(charts, sceneSource(doc.sheets.map(sheet => sheet.drawings ?? []), () => 1 / 9525), options, false)
         metadata?.release()
-        return withLease(doc.sheets.map((sheet): Paintable =>
-          sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) }, watermark),
-        ), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded, charts || !hasXlsxCharts(drawings) ? metadata : { diagnostics: [CHART_ENGINE_UNAVAILABLE] })
-      } catch (error) { releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
+        return withLease(doc.sheets.map((sheet, index): Paintable =>
+          sheetPaintable(sheet, { conditionalFormatting: cfBatches[index], images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) }, watermark),
+        ), () => { for (const cf of cfBatches) cf?.dispose(); charts?.release(); lease.dispose() }, lease.diagnostics, decoded, charts || !hasXlsxCharts(drawings) ? metadata : { diagnostics: [CHART_ENGINE_UNAVAILABLE] })
+      } catch (error) { for (const cf of cfBatches) cf?.dispose(); releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
     })
   }
   // A failed appearance chunk leaves the pre-Stage-0 appearance, diagnosed, never a failed paint.

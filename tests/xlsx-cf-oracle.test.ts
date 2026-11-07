@@ -540,9 +540,11 @@ describe('CF oracle verifier', () => {
     )
     expect(() => assertCanCloseWorkbook('.work-stage1.xlsx', new Set(['UserBudget.xlsx']))).not.toThrow()
 
-    // 7. Comparator reports implementation-pending before Task 8 wires CF rendering
+    // 7. Task 8 exercises the real raster route; synthetic capture pixels
+    // are a comparator fixture, never Excel-fidelity evidence.
     const cmpRes = await compareCfCase(baseCase, 'static', { rootDir: dir })
-    expect(cmpRes.outcome).toBe('implementation-pending')
+    expect(cmpRes.outcome).not.toBe('implementation-pending')
+    expect(cmpRes.diff).toBeDefined()
   })
 
   it('verifies all Stage 1 manifest cases have valid structural markers and honest status', () => {

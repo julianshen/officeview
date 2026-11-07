@@ -1,3 +1,4 @@
+import type { RegionStyleLayer } from './tableStyles/regionLayer'
 /**
  * Excel's gridlines over styled regions (pivots spec §6.6; measured in docs/validation/xlsx-pivots.md,
  * "Gridlines over pivots and styled tables"):
@@ -68,14 +69,14 @@ function styledTable(sheet: XlsxSheet): boolean {
 }
 
 /** The sheet's gridline rule, or undefined when it has no pivot and no styled region. `own` is a cell's own style. */
-export function regionGrid(sheet: XlsxSheet, own: (row: number, col: number) => XlsxCellStyle | undefined): RegionGrid | undefined {
-  if (!mayHaveRegionGrid(sheet)) return undefined
+export function regionGrid(sheet: XlsxSheet, own: (row: number, col: number) => XlsxCellStyle | undefined, override?: RegionStyleLayer): RegionGrid | undefined {
+  if (!override && !mayHaveRegionGrid(sheet)) return undefined
   const pivots: SheetRect[] = []
   for (const ref of [...sheet.pivotTables?.map(def => def.location.ref) ?? [], ...sheet.pivotRegions?.map(region => region.ref) ?? []]) {
     const rect = ref && rangeRect(ref)
     if (rect && !pivots.some(p => p.minRow === rect.minRow && p.minCol === rect.minCol && p.maxRow === rect.maxRow && p.maxCol === rect.maxCol)) pivots.push(rect)
   }
-  const styles = regionStylesFor(sheet)
+  const styles = override ?? regionStylesFor(sheet)
   const regions = styles?.rects ?? []
   if (!pivots.length && !regions.length) return undefined
   const memo = new Map<string, string>()
@@ -90,6 +91,8 @@ export function regionGrid(sheet: XlsxSheet, own: (row: number, col: number) => 
   const byKeys = new Map<string, string>()
   const keyedFill = (cell: KeyedCell): string => {
     if (!styles || !regions.some(r => inside(r, cell.row, cell.col))) return ''
+    // A prepared CF override can replace even an explicit own fill.
+    if (override) return fill(cell.row, cell.col)
     if (cell.own?.fillColor !== undefined) return cell.own.fillColor
     if (cell.rowKey === undefined || cell.colKey === undefined) return fill(cell.row, cell.col)
     const key = `${cell.rowKey}\u0000${cell.colKey}`

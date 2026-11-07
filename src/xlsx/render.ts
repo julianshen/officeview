@@ -1,3 +1,4 @@
+import { cfExplicitBounds } from './cfLoader'
 /**
  * XLSX rendering: paint sheets as a grid onto a canvas 2D context.
  * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
@@ -272,7 +273,8 @@ function validMerge(r: XlsxMergeRange): boolean {
  * this check the renderer drew cells at `rowY[row] ?? 0` / `colX[col] ?? 0`, i.e.
  * over A1, and clipped merges to the bitmap edge. */
 function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): StaticExportLimit[] {
-  let maxRow = -1, maxCol = -1
+  const cf = cfExplicitBounds(sheet)
+  let maxRow = cf?.r1 ?? -1, maxCol = cf?.c1 ?? -1
   for (const row of sheet.rows) {
     for (const cell of row.cells) {
       const source = cellSourceRow(row, cell)
@@ -322,7 +324,8 @@ function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom
 
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   const merges = (sheet.mergeRanges ?? []).filter(validMerge)
-  let maxCol = 0
+  const cfBounds = cfExplicitBounds(sheet)
+  let maxCol = cfBounds?.c1 ?? 0
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
   // Merged ranges are part of the painted grid even where only the anchor is populated.
   for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
@@ -351,7 +354,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     }
   }
   const diagnostics: WorkerDiagnostic[] = []
-  let maxRow = 0, inconsistent = 0
+  let maxRow = cfBounds?.r1 ?? 0, inconsistent = 0
   for (const row of sheet.rows) if (!drawing || Number.isSafeInteger(row.index) && row.index >= 0) maxRow = Math.max(row.index, maxRow)
   // An explicit cell reference names its row even when the row record does not.
   for (const row of sheet.rows) {
@@ -399,7 +402,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     code: 'table-style-region-clipped',
     message: `${clippedStyleRegions.length} resolved table style region(s) extend beyond the static grid and were clipped to ${MAX_GRID_ROWS} rows by ${MAX_GRID_COLS} columns`,
   })
-  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras([]) }
+  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras(cfBounds ? rasterLimits(gridWidth, gridHeight) : []) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
   // The retained bitmap stays clamped (parse-time coverage reporting relies on
@@ -484,6 +487,7 @@ export function computePrintMetrics(sheet: XlsxSheet, grid: GridMetrics, dpi = 9
  * content beyond one page clips (multi-page paintables are a follow-up).
  */
 export interface RenderSheetAssets {
+  conditionalFormatting?: import('./cf/render').CfPaintBatch
   images?: ReadonlyArray<CanvasImageSource | undefined>
   resolveFont?: (family: string) => string
   imageFor?: ContentPaintAssets['imageFor']
@@ -790,7 +794,7 @@ export function renderSheet(
   // measurement is cached by face+text.
   const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
   const measured = textMeasurer(ctx)
-  const regionStyles = regionStylesFor(sheet)
+  const regionStyles = prepared?.conditionalFormatting?.layer ?? regionStylesFor(sheet)
   if (!isTableStyleEngineLoaded() && (sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length)) {
     const diagnostics = (sheet.diagnostics ??= [])
     if (!diagnostics.some(d => d.feature === 'table-style-engine-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'table-style-engine-unavailable', message: 'Table styles could not be loaded; table cells paint with their stored formatting only' })
@@ -902,7 +906,7 @@ export function renderSheet(
   // sheet with no pivot and no styled table pays only the guard (spec §8).
   // The rule is asked only about cells beside the part of each line this request
   // can show (see staticRegionLines), never along the whole table.
-  const region = mayHaveRegionGrid(sheet) ? staticRegionLines(sheet, colX, rowY, colWidthsPx.length, rowHeightsPx.length, vp) : undefined
+  const region = regionStyles || mayHaveRegionGrid(sheet) ? staticRegionLines(sheet, colX, rowY, colWidthsPx.length, rowHeightsPx.length, vp, prepared?.conditionalFormatting?.layer) : undefined
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]
     const open = withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)
@@ -1057,7 +1061,7 @@ function syntheticRegionRows(
  * an axis where data continues. Nothing uncovered is ever drawn over A1. */
 function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
   const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
-  if (!viewport) return [...coverage, ...requestedRasterLimits(m)]
+  if (!viewport) return [...coverage, ...requestedRasterLimits(m), ...(cfExplicitBounds(sheet) ? rasterLimits(m.widthPx, m.heightPx) : [])]
   const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
   const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
   // Merges the grid truncates are laid out at their true extent (mergeEdges), so
@@ -1531,12 +1535,12 @@ export function paintCoveredLines(ctx: CanvasRenderingContext2D, covered: Readon
  * consults the cells on both sides of the line, so a line on the page edge sees
  * its off-page neighbour. Whole-sheet paints keep every band.
  */
-function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], cols: number, rows: number, vp: SheetViewport):
+function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], cols: number, rows: number, vp: SheetViewport, styles?: RegionStyleLayer):
   { lines(segments: Array<[number, number]>, line: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
-  const lineRule = regionGrid(sheet, ownStyleLookup(sheet))
-  if (!lineRule) return undefined
   const rowSpan = bandWindow(rowY, rows, vp.y - 1, vp.y + vp.height + 1)
   const colSpan = bandWindow(colX, cols, vp.x - 1, vp.x + vp.width + 1)
+  const lineRule = regionGrid(sheet, ownStyleLookup(sheet, rowSpan, colSpan), styles)
+  if (!lineRule) return undefined
   const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
   return {
     covered,
@@ -1558,12 +1562,17 @@ function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], col
   }
 }
 /** A cell's own style by source coordinates, indexed on first use. */
-function ownStyleLookup(sheet: XlsxSheet): (row: number, col: number) => XlsxCellStyle | undefined {
+function ownStyleLookup(sheet: XlsxSheet, rows: [number, number], cols: [number, number]): (row: number, col: number) => XlsxCellStyle | undefined {
   let index: Map<number, XlsxCellStyle | undefined> | undefined
   return (row, col) => {
     if (!index) {
       index = new Map()
-      for (const r of sheet.rows) for (const c of r.cells) index.set(cellSourceRow(r, c) * MAX_COLS + c.col, c.style)
+      for (const r of sheet.rows) for (const c of r.cells) {
+        const row = cellSourceRow(r, c)
+        // Include neighbours on either side of the clipped page's gridlines.
+        if (row < rows[0] - 1 || row > rows[1] + 1 || c.col < cols[0] - 1 || c.col > cols[1] + 1) continue
+        index.set(row * MAX_COLS + c.col, c.style)
+      }
     }
     return index.get(row * MAX_COLS + col)
   }

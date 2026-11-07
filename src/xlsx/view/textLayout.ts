@@ -85,7 +85,7 @@ export interface CellLayout {
 }
 
 /** A cell the planner admitted, in logical CSS geometry. */
-export interface PlacedCell { cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
+export interface PlacedCell { cfKey?: string; cell: XlsxCell; source: SourceCell; x: number; y: number; width: number; height: number; merge?: XlsxMergeRange
   /** Room the text may use past the box into empty neighbours (S13); a layout
    * key unless the host certifies an identical body under another allowance. */
   overflow?: { left: number; right: number } }
@@ -285,9 +285,9 @@ function styleKey(style: XlsxCellStyle | undefined): string {
   if (key === undefined) styleKeys.set(style, key = JSON.stringify(style))
   return key
 }
-function layoutKey({ cell, source, width, height }: PlacedCell): string {
+function layoutKey({ cell, source, width, height, cfKey }: PlacedCell): string {
   const value = cell.value === null ? 'n' : `${typeof cell.value}:${String(cell.value)}`
-  return `${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
+  return `${cfKey ?? ''}|${source.row},${source.col}|${width}|${height}|${cell.valueIsError === undefined ? '' : cell.valueIsError ? 1 : 0}${cell.formula === undefined ? '' : 'f'}|${styleKey(cell.style)}|${value}`
 }
 
 /** Raw logical text of a value: what search/copy see before display formatting. */
