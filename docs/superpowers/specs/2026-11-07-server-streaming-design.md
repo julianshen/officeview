@@ -1,2170 +1,1161 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 6 (reviews: codex r1–r4, claude r1)** — draft 2 folded codex r1 and
-claude r1 (first disposition table); draft 3 folded codex r2 (second table);
-draft 4 folded codex r3 (third table); draft 5 carried the 2026-11-08 owner
-revision (the developer chooses the mode by source type, round-5 note in §21);
-draft 6 folds codex r4 (fourth table). All committed owner decisions are carried as
-decided: §18 items 1, 3, 4, 4a, 9 (2026-11-07), 5 (2026-11-08), and the 2026-11-08
-watermark decisions (items 2, 6, 7, 8). Docs-only stage continues.
-Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no source edits.
+Status: **draft 7 (reviews: codex r1–r4, agy r1, claude r1)** — drafts 2–6 folded
+codex r1–r4, claude r1 and the agy sweep (row tables live in the sibling file
+`2026-11-07-server-streaming-reviews.md`); draft 7 folds the agy review and
+consolidates the document. **Every owner decision is settled** (§2); branches and
+"textModes" still marked open in older drafts no longer exist.
+Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no source
+edits.
 
-Notation: **"to verify in Stage 0"** marks a claim this spec could not prove while writing
-— mostly about canvas backends, glyph shaping/outlining, disclosure projections and
-protocol sizes. Stage 0's prototypes must confirm or correct each one before any
-production code lands. Values are stated as facts only where the code was actually read,
-at the paths shown; round-2 review corrections to round-1 citation anchors are applied
-and the corrected anchor used.
+Notation: **"to verify in Stage 0"** marks a claim to be proven by Stage 0's
+prototypes before production code lands. Code facts cite the worktree's HEAD;
+anchors follow agy's re-verified table (§reviews).
 
 ## Table of contents
 
 1. Intent
-2. Owner decisions (2026-11-07)
+2. Owner decisions (all decided; 2026-11-07/08)
 3. Goals, non-goals, anti-goals
-4. Current state (recon, main `ca952c50`, anchors re-verified)
+4. Current state (recon, main `ca952c50`; anchors re-verified)
 5. Architecture overview
-6. The stream source, the session handshake, and the server content policy
-7. The draw-command format (`OVSD`), the recorder, and the protected projection
-8. The client replayer and the library side
+6. Stream source, session policy and the handshake (normative)
+7. Draw-command format (`OVSD`), recorder, and the projection rule (normative)
+8. The client side
 9. The server side
-10. Behaviour detail: open, failure, resume, expiry
-11. Search, copy and semantic services become server calls
+10. Behaviour: open, failure, resume, expiry
+11. Search, copy, and semantic text services
 12. XLSX in stream mode
-12a. Presentation mode for streamed decks (animation, notes)
-13. Forensic watermark
+12a. Presentation mode for streamed decks
+13. Forensic marks
 14. Performance, memory and limits
 15. Accessibility
-16. Testing and validation
-17. Staging with acceptance criteria
-18. Open decisions for the owner
-19. Boundaries: always / ask first / never
-20. Honest limits
-21. Review dispositions (round 1)
+16. Testing and validation (suite IDs `T1…T12`; the single home of test gates)
+17. Staging
+18. Boundaries
+19. Honest limits
+20. Appendix: command-projection extension (Stage 2+)
+21. Review history pointer
 
 ## 1. Intent
 
-officeview is a client-side renderer: whoever wants to read a document must receive the
-document. For a confidential corporate spreadsheet that is the wrong trust model — the
-bytes sit in the browser cache, the inspector's network tab shows the original file, and
-every "protection" the viewer offers (`src/core/watermark.ts:6–13` documents it) is a
-*deterrent, not DRM*.
+officeview renders Office documents to canvas in the browser. For a confidential
+document that means the bytes sit in the browser cache; every client-side
+"protection" (`src/core/watermark.ts:6–13`) is documented as *a deterrent, not
+DRM*.
 
-This design adds a second, server-driven mode: a server parses, lays out and paints the
-Office document on its own machine, and **streams the client only what is drawn** —
-recorded Canvas 2D draw commands (or pre-rasterised image tiles) plus the minimal
-interaction geometry a purely visual viewer needs, all filtered by an explicit
-**content policy** and a **protected projection** (§6.4, §7.7) so "what is drawn" is
-also "nothing that is hidden". The original file never crosses the wire in this mode.
-Search, copy and semantic services become server calls whose answers are
-client-rendered exactly like every other response.
+This design adds a second mode with a different trust model: a server parses,
+lays out, and paints the Office document, and **streams the client only what is
+drawn** — Canvas 2D draw commands or rasters, plus the minimum interaction
+geometry. The original file never crosses the wire in this mode; search, copy
+and semantic text are server calls. The mode a viewer runs in is **the
+developer's choice, made by source type** (§6.1); the library does not decide it
+and nothing can be inferred by inspecting a response.
 
-The client stays one library, and the mode is not a client decision and not inferred
-from a response: **it follows the type of source the host passes in** — a file source
-opens local file view exactly as today; a **stream source** (a WebSocket endpoint,
-§6.1) opens stream mode (owner decision 2026-11-08, §2 item 1).
+## 2. Owner decisions (all decided — 2026-11-07/08)
 
-## 2. Owner decisions (2026-11-07, revised 2026-11-08)
+These are binding. Superseded branches (outlines, HTTP/`OVSM`/406/Accept
+negotiation, per-document "stream-required" marking, §18-as-separate-section)
+were **deleted** in the round-7 consolidation; the rules below are the single
+normative home of everything they once covered.
 
-These are binding; this draft implements them. Round-2 changes sharpen several of them;
-the 2026-11-08 owner decision **replaces item 1** and removes §18 item 5 (round-5 note,
-§21).
+1. **Mode = source type (2026-11-08, replaces the round-1 item-1 rule).**
+   "Client/Server does not need to determine the doc should be stream or not.
+   That is developer's decision. If a doc is supplied to the viewer, it goes file
+   view. And if a stream, websocket, is supplied, go stream mode." The component
+   takes `ByteSource | StreamSource` (§6.1); the branch is at the `OfficeFile`
+   layer; nothing is sniffed. There is no per-document marking; **the
+   developer's backend is the boundary** (§6.1, §19).
+2. **Same repo, open source.** The library stays at the root; the server is a
+   `server/` Bun workspace package depending on a React-free `officeview/core`
+   entry (§8.1). Library-side dependencies stay zero; server-side deps are Stage
+   0 choices (originally: outlines-mode; **decided 2026-11-08** per item 6 — no
+   outlines dependency at all).
+3. **Routing (2026-11-08).** The component prop is **`data`** (not `source`; the
+   real prop at `src/components/OfficeFile.tsx:154` is `data: ByteSource`, and
+   `<OfficeFile>` declares it at `:219`); a stream source enters via the widened
+   `data` union and is guarded against `HttpSource` structural collision (§6.3).
+   `<OfficeDoc>` renders a remote document through a discriminated arm of
+   `OfficeDocSource` dispatched inside `OfficeDoc` (§6.3). The record point stays
+   the per-unit `page.paint(ctx)` closure inside `getPaintables`
+   (`src/render/paint.ts:354`, closures at `:389`) — the server always paints
+   through it.
+4. **Server surface (2026-11-07/08).** HTTP/WebSocket service, short-lived
+   signed tokens, rate limits, render pool, caching, per-session marks
+   (switchable, see 8), session/audit tables, detection tool. **The `server/`
+   package has no file-download route**; it serves streams only.
+5. **Content policy and projection.** Every stream session is **protected by
+   default**: final-raster projection (§7.7), pre-layout content policy (§6.4),
+   marks on. The developer's server-side `authorize` hook may relax projection,
+   content policy, or marks per session (audited, §6.1) — never the P-rule in a
+   way that breaks final visibility (§7.7) and never from the client.
+6. **Text mode (2026-11-08).** Plain text + pinned server faces only (§7.4); no
+   shaping/outlining dependency; missing faces ⇒ raster units. Applies to command
+   projections; `final-raster` ships pixels.
+7. **XLSX depth (2026-11-07).** Server-side sort/filter ships as Stage 4c with
+   per-session view state, display-text-only filter lists, no cell data in
+   replies, its own rate-limit class and a wire audit; interactive tiles render
+   through the paged viewport pipeline (§12), never `getPaintables`.
+8. **Presentation (2026-11-07, revised same day).** Full presentation mode with
+   animation and Morph (§12a); speaker notes only for a presenter-role viewer,
+   Presenter View only, as marked images (§12a.5); media poster-frames by
+   default with optional transcoded Stage 3d.
+9. **Print (2026-11-08).** A per-session setting defaulting on (§18 old item 6):
+   `can.print` is set by `authorize`, the pool re-renders print units at print
+   resolution with the session's marks, requests carry their own rate class, and
+   each job is audited.
+10. **Forensic mark (2026-11-08).** The keyed **spread-spectrum pixel mark** is
+    the primary mark **on every unit** (§13.2); keyed text displacement stays as
+    a second, independent layer on command-projection units. Rejected: hidden
+    QR codes (public reveal, single croppable region, JPEG-fragile).
+11. **Visible mark (2026-11-08).** Per-session: fixed text (default, e.g.
+    `CONFIDENTIAL`), or viewer identity fields, or off. Both marks off ⇒ an
+    **untraceable** session, recorded in its audit row (§6.1, §19.2).
+12. **A11y (2026-11-07).** `can.textA11y` defaults on; a deployment turning it
+    off ships the §15 notice. It alone never authorises notes (§12a.5).
+13. **Canvas backend (2026-11-07).** Skia via `@napi-rs/canvas` for the server
+    pool; Stage 0 confirms rather than chooses (§9.2). Every canvas-construction
+    site in the render pipeline goes through one **`CanvasBackend`** seam (§9.2).
 
-1. **The mode is the type of source the developer passes to the component** (owner
-   words 2026-11-08: "Client/Server does not need to determine the doc should be
-   stream or not. That is developer's decision. If a doc is supplied to the viewer,
-   it goes file view. And if a stream, websocket, is supplied, go stream mode.").
-   A file source (URL to a file, bytes, Blob — today's `OfficeDocSource` feed) →
-   local file view, exactly as today; a **stream source** — a WebSocket endpoint,
-   the new `{ kind: 'stream', url, token? }` shape (§6.1) — → stream mode. Nothing
-   is inferred from response content, and there is no per-document "stream-required"
-   marking anywhere in the library.
-2. **Open source, same repo.** The library stays at the repo root; the server becomes a
-   `server/` Bun workspace package depending on a new React-free `officeview/core` entry
-   (§8.1). *(Round-2 scope note:* the *library* stays dependency-free; the server may
-   adopt rendering-side dependencies (shaping, out) as Stage 0 choices (§18 item 2).)
-3. **Library side:** React-free core entry (§8.1); versioned draw-command format +
-   recorder, with the record point inside the single `getPaintables` provider —
-   `page.paint(ctx)` closures (`src/render/paint.ts:354` declares `getPaintables`; the
-   paint closures begin at `:389`) — + client replayer (§7, §8); the stream source
-   enters the component surface as a **source-kind branch at the `OfficeFile` layer**
-   (§6.3; verified anchors `src/components/OfficeFile.tsx:37–49`, `:60`, `:91`), not a
-   response sniff; a remote document source for `OfficeDoc` (§8.3); a Node
-   `registerFont` adapter (§8.4).
-4. **Server side:** HTTP/WebSocket service, short-lived tokens, rate limits, render
-   worker pool, caching, per-viewer **visible** watermark, **invisible forensic
-   watermark** (sub-pixel line/word shifts encoding a session id with error correction,
-   HMAC-keyed), session-id table, and an internal detection tool (§9, §13).
-5. **Search and copy become server calls** whose availability the manifest declares; the
-   existing `X-OfficeView-Protection` / `X-OfficeView-Watermark` precedent
-   (`src/core/stream.ts:51–75`, header parser at `src/core/watermark.ts:164`) is the
-   model for "server is the authority" (§11, §9.4).
-6. **XLSX:** the existing interactive viewer sends cell records including formulas
-   (`src/xlsx/view/contracts.ts:74–80`), hidden rows/cols (`src/xlsx/view/
-   contracts.ts:671–673`, declaration at `:668`), and raw picture bytes
-   (`src/xlsx/types.ts:27`) to the client; stream mode needs server-painted tiles and
-   display-only replies (§12).
-7. **Honesty:** screenshots and cameras cannot be prevented, only traced.
-
-Where this spec places a default that is not in the owner list, it is marked **[call]**
-and sized to be changeable without rework. Owner-level decisions still open are in §18;
-stages may not silently pick them.
+History (3 lines): drafts 1–4 routed stream sessions through an HTTP-manifest
+sniff with an `Accept`/406 negotiation, then through a per-document
+"stream-required" flag, before the 2026-11-08 decision moved the mode choice to
+the source itself and mandated default protection; an outlines text mode
+existed above item 6's plain-text decision until the same date. The full round
+dispositions live in the reviews file (§21).
 
 ## 3. Goals, non-goals, anti-goals
 
-### 3.1 Goals
+(Full rules are normative in §6/§7; this section only names the goals.)
 
-1. **Stream mode exists and is safe by construction.** A server can serve any DOCX /
-   PPTX / static XLSX document as a manifest + draw-command stream, and officeview
-   renders it without ever holding the file.
-2. **Same pixels, two routes — with one fidelity gate per text mode.** Each text mode
-   names exactly the reference its fidelity is measured against (§7.4): outline mode is
-   graded against the server's own outline-rendered reference (never against the
-   hinted original), text mode can be graded zero-diff only where the agreed client
-   faces are present (a §7.4 face handshake otherwise picks the raster fallback).
-   Within a mode, recorder→replayer equals the same-backend direct render (§16
-   contract test), and cross-backend tolerance is published, not claimed.
-3. **Every stream session is protected by default.** A stream session never carries
-   original media bytes on the wire (§7.7), and by default every one of its responses
-   ships under the **mandatory final-visibility projection** (the single rule of
-   §7.7, P-rule) so covered or clipped-out content cannot be recovered even from a
-   re-ordered replay; hidden content (§6.4) never streams regardless. Only the
-   developer's server-side `authorize` hook may relax a session's projection,
-   content policy and either watermark (never the client, §6.1); keeping the original file off every
-   surface, including the `server/` package itself, is the developer's deployment
-   boundary (§6.1, §20).
-4. **Watermarks (§9.4, §13).**
-   - **Visible:** fixed text by default, or the viewer's name/email/id/time, or off —
-     chosen per session by the developer's server (§18 item 8), painted into the
-     raster server-side.
-   - **Forensic:** a per-session keyed pixel pattern invisible at reading size, on
-     every page (§18 item 7), plus sub-pixel text shifts on text-rich command units
-     (§13.3) — encoding a session token with error correction, recoverable from a
-     single screenshot page by the §13.6 tool. Switchable per session (§6.1).
-5. **Search, copy and semantic text by server calls** over the visible projection
-   (§11), constrained by the same content policy as the pixels (§6.4).
-6. **XLSX stream tiles** (§12): interactive spreadsheet mode renders server-painted
-   tiles; cell formulas, hidden rows/cols metadata and drawing picture bytes stay on
-   the server.
-7. **Session governance** (§9.3): short-lived signed tokens, typed rate limits with
-   numbers, per-op authorisation checks, revocation, resume, an audit mapping that
-   outlives the render session, and detection confidence rules (§13.6).
+Goals: (1) stream mode exists and is safe by construction (protected by
+default, §6.1); (2) same pixels on both routes — a unit replayed equals the
+same-backend direct render, with one fidelity gate per text mode (§7.4/§16);
+(3) a stream session never leaks original media bytes, hidden content (§6.4),
+or covered content (§7.7) — and the developer's backend keeps the file itself
+off every surface including `server/` (§6.1); (4) both marks behave per §13 and
+are switchable only by the developer's server; (5) search/copy/semantic text
+are server calls over the visible-projection join (§11); (6) XLSX streams tiles
+through the viewport pipeline (§12); (7) sessions are governed (§6.2, §9.3).
 
-### 3.2 Non-goals
+Non-goals: true DRM (§19.1); a general display protocol (only document ink
+travels); rewriting the local renderer; an officeview-branded product/server;
+client-side content inspection as a trust boundary (the server enforces, the
+client just paints).
 
-- True DRM. Anything a human can read can be photographed; §20 states this plainly.
-- Preventing the *document owner* from doing anything — this is about restricting
-  *distribution to the client*, not the reader's rendering fidelity.
-- Converting stream mode into a general display protocol (no cursor/video streaming, no
-  VNC in the browser). Only document ink travels.
-- Rewriting the client's local renderer; local mode stays exactly what it is today.
-- Publishing, multi-tenant account management, dashboards. The server is an embedded
-  component for a host application, not a product.
-- Client-side content inspection as a boundary: the boundary is enforced **server-side
-  before anything leaves** (§6.4, §7.7); the client is not trusted with it.
+Anti-goals (failures even if they "work"): covered or hidden content in any
+transmitted payload (the §16 tests inspect **transmitted payloads**, not
+screenshots); a stream server that also serves document bytes anywhere; a
+client-side relaxation surface; a replayer that silently mispaints (unknown ops
+⇒ tile, §7.6); treating client-submitted text as code (§18 Never).
 
-### 3.3 Anti-goals: failures even if they "work"
+## 4. Current state (recon, main `ca952c50`; anchors re-verified against this worktree)
 
-- Covered content in the transport. Commands that record later-covered z-order
-  content both leak on a re-ordered replay and break the P-rule (§7.7), which a
-  stream session must satisfy **by default** (final-unit rasterisation or
-  proof-culled commands; only a server-side authorize relaxation departs from it);
-  the §16 boundary tests inspect **transmitted payloads**, not screenshots.
-- Original bytes anywhere in the stream: no ZIP member, no embedded media file, no font
-  file, no EXIF/metadata-bearing image bytes (§7.7, §19).
-- Hidden content on the wire: a stream of a document with `veryHidden` sheets or
-  vanish-text that exposes them through pixels, the text index, copy, a11y or the
-  manifest (§6.4).
-- A stream server that also serves the original document bytes through any route —
-  a normal file route, a debug or diagnostic endpoint, an export link. The
-  `server/` package has no file-download route (§6.1) and the library cannot stop a
-  developer who exposes the file elsewhere; that is their deployment boundary and it
-  is recorded as such in §19/§20, never papered over.
-- A client-side switch that turns a stream into a file fetch. There is no such switch,
-  and no prop that if mis-set would create one.
-- A visible-in-source claim of "un-screenshot-able" content. The forensic watermark's
-  value is traceability, stated as traceability (§20).
-- A replayer that silently mis-paints. Every unrecordable canvas operation either
-  downgrades that unit to the tile mode (§7.6) or refuses the unit with a diagnostic;
-  nothing fakes it.
-- A server that treats client-submitted text or markup as content, style or code inside
-  the render pipeline; the only client inputs are validated commands and tokens, and
-  neither ever reaches the painter.
-
-## 4. Current state (recon, main `ca952c50`; anchors corrected in round 2)
-
-- **Byte sources and policy headers today.** `loadOfficeFile` accepts any `ByteSource`
-  (bytes, Blob, URL, Request, Response, ReadableStream, HttpSource and promises —
-  the union is authoritative at `src/core/stream.ts:14–31`, the loader entry is
-  `src/components/OfficeFile.tsx:37–49` which delegates to `loadOfficeSource`);
-  every request/response source flows through `readSource`/`openByteStream`
-  (`src/core/stream.ts:207`, `:368`) which fires the protection and watermark
-  listeners **before the first byte**, from the download response headers:
-  `X-OfficeView-Protection: no-copy, no-print` (`src/core/stream.ts:51–75`) and
-  `X-OfficeView-Watermark: text=DRAFT; rotate=…` (parser at
-  `src/core/watermark.ts:164`) — the "server is the authority" pattern this design
-  extends. `openResponse` (`src/core/stream.ts:328–339`) still throws a plain HTTP
-  error on any non-OK status **before reading the body**, and `pullStream`
-  (`:279–325`) forwards chunks with no push-back — recorded as facts. With the
-  2026-11-08 owner decision the loader seam is no longer about sniffing responses
-  at all (round-5 note, §21): local mode keeps these paths exactly as they are,
-  and a stream source is routed at the `OfficeFile` layer before any byte
-  plumbing runs (§6.3).
-- **Everything document-shaped reaches the canvas through one provider.**
-  `getPaintables(doc, options)` (`src/render/paint.ts:354`) returns paintables whose
-  per-unit `paint(ctx)` closures (first at `:389`) are the record point every
-  renderer — layout-engine DOCX pages, `renderSheet` spreadsheets, `renderSlide` —
-  funnels into. **Public direct painters also exist** (`renderSheet`, `renderSlide`,
-  `renderPages` re-exported at `src/index.ts:49–56`); the server commits to
-  `getPaintables` and never paints through the direct exports (§8.2), so one wrapper
-  context genuinely wraps the paint surface. Paint options already carry the headless
-  seams: `registerFont` (the `RegisterFont` type at `src/core/fonts/register.ts:9`;
-  the browser default at `:21` is module-private and unexported; the exported worker
-  one is `:30`) and `decodeImage` (`paint.ts:219–220`).
-- **Text measurement is already headless — with a caveat.** The headless path in
-  `measurerFromDoc` (`src/render/paint.ts:184–211`, not where draft 1 cited it) falls
-  back to `import('canvas')`, **hard-coding node-canvas**; the same hard-coded import
-  exists in the search-index builder (`src/core/search.ts:212–215`). A backend factory
-  seam is required for Stage 0's backend matrix (§8.4, §18 item 1).
-- **A Proxy recording context already exists — text-only.** `createRecordingContext`
-  (`src/core/search.ts:92`) wraps a 2-D context and captures `fillText` /
-  `strokeText` calls with document-space positions; `buildTextIndex`
-  (`search.ts:315–335`) drives it as **a separate, second paint pass**, with
-  `setWatermarkMuted(true)` around it (`search.ts:322–334`) so the search index never
-  ingests watermark text. Round-2 rule (both reviewers): the visual recorder is
-  **not** this context — painters branch on `RECORD_TEXT`
-  (`src/core/text-recording.ts:2`; e.g. `src/pptx/render.ts:81` skips the master
-  underlay in index mode), so the index must remain its own pass (§7.3).
-- **Painting is device-space dependent — measured, not assumed.** `snapToPixels`
-  (`src/drawing/scene-paint.ts:32–40`) reads the current transform and writes an
-  absolute `setTransform`; text shadows (`src/drawing/paint.ts:363–397`) read the CTM
-  and write device-space offsets and an absolute transform; the radial-gradient brush
-  fallback builds a scratch `ImageData`, `putImageData`s it and calls
-  `pattern.setTransform` during paint (`src/drawing/paint.ts:178–196`); sparklines
-  scale off `ctx.getTransform()` (`src/xlsx/render.ts:774–775`); charts lay out with
-  the document's DPR and key their layout cache on `dpr`
-  (`src/charts/paint.ts:767–768`, `src/charts/layout.ts:253–263`). Text painting
-  constructs measurers and performs layout **during** paint (`src/drawing/
-  text-paint.ts:972–989`, side canvases via `src/core/text-metrics.ts:23–40`), draws
-  cached scratch surfaces back into the main context under skew
-  (`text-paint.ts:712–765`), and feature-detects with `'letterSpacing' in ctx`
-  (`text-paint.ts:113`) — so any recorder must be a **facade over a real backing
-  context**, not a description-only proxy (§7.3). Round-2 rule: record at a concrete
-  resolved scale and replay only at it (§8.3).
-- **Watermarks paint into the bitmap**, not the DOM, so a screenshot pipeline captures
-  them (`src/core/watermark.ts:6–13`); defaults (`WATERMARK_DEFAULTS`,
-  `src/core/watermark.ts:48–57`) cover placement/rotation/opacity/tile gap. Note
-  `setWatermarkMuted` is **module-global** (`watermark.ts:249`) — pool workers must
-  not interleave index and paint passes inside one isolate until the mute is
-  context-scoped (§9.2).
-- **The worker render protocol already has the server-shaped env seam.**
-  `WorkerRenderEnv` (`src/worker/office-worker.ts:42–47`) abstracts `createCanvas` /
-  `toBitmap` / `parse` / `paintables`; `handleWorkerRequest` (`:50–72`) validates and
-  paints one unit. The server pool reuses the shape (§9.2).
-- **XLSX today paints every sheet.** There is no `state`/hidden flag on `XlsxSheet`
-  (`src/xlsx/types.ts:151–175` — verified: no hidden/veryHidden anywhere in `src/`).
-  `getPaintables` maps `doc.sheets` in document order (`paint.ts:427–429`) with no
-  hidden-sheet policy, and nothing in the parsers reads `w:vanish`, hidden PPTX
-  slides or notes for the static path. Draft 1's "static XLSX streams with no special
-  work" claim is **withdrawn**: hidden-content policy (§6.4) applies to every format
-  and is a Stage 1 gate.
-- **Eager budget.** Last recorded measurement: eager 38,582 B vs project ceiling
-  38,647 B and hard limit 38,720 B (`scripts/eager-budget.ts:14`; ledger in
-  `docs/validation/chart-compat.md:25,31` — re-measure fresh, never reuse stale
-  numbers). The core entry (§8.1) is a *new build target*; the gate is a measured
-  unchanged main bundle (§8.1, §16.1), not an assumption.
-- **Test infrastructure the work reuses.** `src/test/pixel-diff.ts` gives RGBA +
-  `diffBitmaps` + `renderPaintables` (`:98`) plumbing; `scripts/golden.ts` a per-file
-  record/compare CLI; `scripts/golden-corpus.ts` renders the whole real-file
-  `corpus/` through `loadOfficeFile → getPaintables → renderPaintables` — the
-  corpus contract test (§16.1) is this loop with a recorder between the renders.
+- **Byte sources.** `loadOfficeFile(data: ByteSource, …)`
+  (`src/components/OfficeFile.tsx:39`; the prop is `data`, `OfficeFileProps` at
+  `:152–156`, `<OfficeFile>` at `:219`) → `loadOfficeSource(source: ByteSource,
+  …)` (`src/components/loadOfficeSource.ts:202`); local `AnyDoc` union is
+  `DocxDocument | PptxDocument | XlsxDocument` (`:32`). The loader also
+  normalises **ODT (`parseOdt`) and RTF (`parseRtf`) into `DocxDocument`**
+  (`:67–68`, `:117`) — the server's format scope addresses this in §6.2.
+- **Policy headers (local mode only).** `X-OfficeView-Protection: no-copy,
+  no-print` (`src/core/stream.ts:51–75`) and `X-OfficeView-Watermark` (parser
+  `src/core/watermark.ts:164`) still travel on local byte downloads; there is no
+  HTTP response in stream mode, so stream policy is `manifest.can.*` as
+  server-enforced (§6.2).
+- **Paint surface.** `getPaintables` (`src/render/paint.ts:354`) returns
+  per-unit `paint(ctx)` closures (`:389`) — the single record point. Public
+  direct painters exist (`src/index.ts:49–56`); the server uses `getPaintables`
+  only (§7.3). `measurerFromDoc` (`:184–211`) measures headless but
+  **hard-codes `import('canvas')`** — as do **five** server-relevant sites
+  total: `paint.ts:~202`, `src/core/search.ts:~212`, `src/core/images.ts:65,
+  :149`, `src/slideshow/render/svg-raster.ts:64` (all written as
+  `import(/* @vite-ignore */ 'canvas')`, which is why a plain `grep
+  "import('canvas')"` misses them; verified). `ctx.canvas.constructor` surface
+  cloning appears at `src/core/text-metrics.ts:31,42`,
+  `src/drawing/paint.ts:126`, `src/drawing/pattern.ts:155` — all become
+  `CanvasBackend` seams (§9.2, agy I3.4).
+- **Device-space dependence (recorded, round-2's basis for scale buckets).**
+  `snapToPixels` (`src/drawing/scene-paint.ts:32–41`), CTM-scaled shadows
+  (`src/drawing/paint.ts:363–397`), `pattern.setTransform` in the radial brush
+  (`:178–196`), sparkline scale from the transform (`src/xlsx/render.ts:774–775`),
+  charts keyed by DPR (`src/charts/paint.ts:767–768`,
+  `src/charts/layout.ts:253–263`), text laid out during paint
+  (`src/drawing/text-paint.ts:972–989` + side canvases in
+  `src/core/text-metrics.ts:23–42`), `'letterSpacing' in ctx`
+  (`text-paint.ts:113`), scratch surfaces drawn back under skew
+  (`text-paint.ts:712–765`).
+- **A text-only recording context exists.** `createRecordingContext`
+  (`src/core/search.ts:92`) captures `fillText`/`strokeText`;
+  `buildTextIndex` (`:315`) drives a **separate** pass with the watermark muted
+  (`:322–334`, module-global mute at `src/core/watermark.ts:244–249`). Painters
+  branch on `RECORD_TEXT` (`src/core/text-recording.ts:2`; e.g.
+  `src/pptx/render.ts:81` skips master underlay) — so the visual recorder never
+  exposes `RECORD_TEXT` (§7.3).
+- **XLSX disclosure surface.** The interactive viewer ships formulas
+  (`AuthoritativeCell`, `src/xlsx/view/contracts.ts:74–80`), hidden rows/cols
+  (`SheetLayout`, `:668–674`), and raw picture bytes
+  (`contracts.ts:362–366`, `XlsxImage data: Uint8Array` at
+  `src/xlsx/types.ts:27`, via an `op:'drawings'` read,
+  `src/worker/viewerRemoteDrawings.ts:1–18`). Sheets parse with **no hidden
+  state** (`src/xlsx/parse.ts:290–301` ignores `state`) and `getPaintables`
+  paints every sheet (`paint.ts:427–429`). Sort/filter kinds are client-typed
+  (`contracts.ts:709–710`; command list `src/worker/viewerProtocol.ts:31`, which
+  also lists `pivot*`/`control*`). **A filter can reveal author-hidden rows:**
+  `isVisibleSource` (`src/xlsx/view/visibility.ts:149–155`) lets a supplied
+  filter override `baseHidden` inside its range —
+  `src/xlsx/view/viewport.ts:176–179` documents "a filter may reveal a
+  snapshot-hidden body row" (agy-confirmed; the local intent, and the reason
+  stream-mode 4c must purge, §12).
+- **Drawings ignore `hidden`.** `sourceOf` reads `cNvPr` id/name only
+  (`src/pptx/parse.ts:714–717`; same pattern in `src/xlsx/drawing.ts:559ff` and
+  `src/docx/parse.ts:580,620`) — `p:cNvPr`/`xdr:cNvPr`/`wp:docPr`
+  `hidden="1"` is unread, and RTF's `applyControlWord`
+  (`src/rtf/parse.ts:1130ff`) has no `\v` case; ODT
+  (`src/odt/parse.ts`, `src/odf/styles.ts`) does not filter
+  `text:display="none"` / `<text:hidden-*>` / annotations. §6.4 closes these.
+- **Eager budget.** Ceiling 38,720 B (`scripts/eager-budget.ts:14`), last
+  measured 38,582 B (`docs/validation/chart-compat.md:25`), re-measured fresh
+  per stage. `eager-budget.ts:16` currently gzips **only `dist/index.js`** and
+  ignores its static-import graph, while `vite.config.ts` sets
+  `preserveEntrySignatures: 'allow-extension'` (`:59`) — the §8.1 gate
+  therefore measures the **transitive graph** and asserts `dist/core.js` has no
+  React/document imports (round-7 fix, agy I3.3).
+- **Contract tests.** `src/test/pixel-diff.ts` (RGBA + `diffBitmaps` +
+  `renderPaintables` at `:98`), `scripts/golden.ts` and
+  `scripts/golden-corpus.ts` are the corpus contract loop (§16).
 
 ## 5. Architecture overview
-
-Two new libraries in the same repo; zero new library-side dependencies (server-side
-dependencies are Stage 0 choices, §18 item 2):
 
 ```
 +--------------------------------------+        +----------------------------------------+
 | HOST (embedding officeview)          |        | SERVER ("server/" Bun workspace)       |
 |                                      |        |                                        |
-|  <OfficeFile source={url ↦ file view}|        |  WS: /stream — hello → OVSM (§6.1–6.2) |
-|      │  <OfficeFile source={stream}  |        |      │ policy gate (§6.4)             |
-|      ▼    → stream session (§6.3)    |   WS   |      ▼ parse+layout once per hash     |
-|  <OfficeDoc document={RemoteDoc}>    |        |      ▼ parse+layout once per hash     |
-|      │  unit → replay at its scale   |        |      ▼ (doc cache, §9.3)              |
-|      │   (plays OVSD §7)             |        |  pool: render workers (§9.2)          |
-|  search/copy → WS op (§11)           |        |  recorder over page.paint (§7.3)      |
-|  a11y text → server text op (§15)    |        |  projection (§7.7) + marks (§13)      |
-|                                      |        |  caches, audit table, detection tool  |
+|  <OfficeFile data={source}>          |        |  WS /stream (the only endpoint)        |
+|      │  file source → local view     |        |      │ origin allowlist + authorize    |
+|      │  (unchanged local path)       |        |      ▼ content policy (§6.4, pre-layout)|
+|      ▼  stream source → stream session        |      ▼ parse+layout per (docRef,       |
+|  <OfficeDoc document={RemoteDoc}>    |        |        contentPolicy) (§9.3)           |
+|      │  per unit → replay/raster at  |        |  pool: CanvasBackend render workers    |
+|      │   the recorded scale (§7)     |        |  recorder over page.paint (§7.3)       |
+|  search/copy → WS op (§11)           |        |  projection (§7.7) + marks (§13)       |
+|  a11y/print/present → remote impls   |        |  caches, session/audit, detection tool |
 +--------------------------------------+        +----------------------------------------+
 ```
 
-- **Client** stays `officeview` at the repo root. The React-free core entry
-  (`officeview/core`, §8.1) exports parsing, paint, fonts and stream plumbing without
-  React. The stream loader, format code, manifest types and the remote document
-  source live in the library's lazy `src/stream/` plus shared format code exported
-  from `officeview/core` — the server depends on React-free machinery only.
-- **Server** is a new `server/` Bun workspace package (§9). It imports
-  `officeview/core` for parse/layout/paint, runs its own canvas backend and render
-  pool, and owns the policy gate, tokens, caches, marks and the detection tool. It
-  **has no file-download route and never serves original document bytes** — keeping
-  the file itself off the wire is the developer's deployment responsibility (§6.1,
-  §20).
-- **The wire** is one **WebSocket per stream session** (there is no HTTP open call
-  and no manifest-over-HTTP). The client connects to the `StreamSource` url, sends a
-  `hello`, and receives the **OVSM manifest** (§6.2) as the session's first message
-  — unit geometry, a `docRef` (not the plain hash), capability flags, a short-lived
-  session token binding, and the recorder parameters — or a typed handshake error
-  (§6.2). File sources never touch this wire; nothing about them changes.
-- **Data on the page wire** is per-unit `OVSD` chunks (§7.1): a versioned,
-  length-prefixed draw-command record — transforms, state, path geometry, glyph
-  runs, image references — produced by wrapping each `page.paint(ctx)` closure
-  (`paint.ts:354/389`) in a backend-backed recording facade (§7.3), filtered by the
-  protected projection (§7.7), cached under the §9.3 canonical key, and post-processed
-  per session for the marks (§13.3). Units the recorder cannot express become
-  **tiles** at stream time (§7.6).
+- **Client** (`officeview` at the root): the React-free core entry
+  (`officeview/core`, §8.1) exports parse/layout/paint/fonts/stream plumbing;
+  the stream loader, format code and remote document source live in a lazy
+  `src/stream/`; the server depends on `officeview/core`, never React.
+- **Server** (`server/`, §9.1): CanvasBackend + pool + recorder + projection +
+  policy gate + caches + marks. **No file route, no HTTP document endpoint.**
+- **Wire**: one WebSocket per stream session. A JSON-text control frame
+  multiplexing namespace with `reqId`s (§6.2) and one little-endian binary
+  frame header for all payload kinds (§7.1).
 
-## 6. The stream source, the session handshake, and the server content policy
+## 6. Stream source, session policy and the handshake (normative)
 
-### 6.1 The stream source — the developer chooses the mode
-
-**New source shape** (the owner's decision, 2026-11-08):
+### 6.1 The stream source and per-session policy
 
 ```ts
 export interface StreamSource {
   kind: 'stream'
-  /** A WebSocket endpoint run by the developer's backend (the `server/` package or
-   * any conforming implementation). `wss://` is expected; the origin must appear in
-   * the deployment's allowlist (§9.3). */
+  /** A WebSocket endpoint run by the developer's backend. `wss://` expected;
+   * the origin must be in the deployment's allowlist (§9.3). */
   url: string
-  /** Optional pre-authorization token for the client hello (§6.2). Never placed in
-   * a URL path by the library; a deployment that wants header/cookie auth does it
-   * at the WebSocket upgrade via its `authorize` hook (§9.1) and omits this. */
+  /** Optional preauthorization proof for the open decision (§6.2). Never put in
+   * a URL path; unused after HELLO (it is NOT the session token). */
   token?: string
 }
 ```
 
-- **The mode is the branch, not an inference.** `<OfficeFile source={…}>` accepts
-  `ByteSource | StreamSource` (§6.3); a file source takes today's local path
-  untouched, a stream source opens a stream session. Neither branch inspects the
-  other's content, and there is no per-document "stream-required" configuration
-  anywhere (the old §18 item 5 is recorded as decided in §21).
-- **The developer's backend is the safety boundary.** The `server/` package serves
-  *only* streams — it has no file-download route — but the library cannot stop a
-  developer from exposing the original file elsewhere; the honest statement of that
-  boundary lives in §19/§20 (round-5 owner decision, §21).
-- **Default protection per session (round-5 rule):** every stream session carries
-  the protected rules by default — the P-rule projection (§7.7), the §6.4 content
-  policy and both marks. The developer's server-side `authorize` hook may relax a
-  session's **projection**, **content policy** or **watermarks** (§7.7, §9.4) —
-  the visible mark and the forensic mark switch independently (owner decision
-  2026-11-08) — never from the client; any relaxation is written into the audit
-  table (§13.4). A session with both marks off is untraceable: the detection tool
-  cannot attribute a capture from it, and the audit row says so (§20).
-- There is **no HTTP endpoint and no media-type negotiation** in stream mode: the
-  round-1–4 `Accept`/406 machinery existed only for manifest-over-HTTP, which this
-  decision removes (the round-2 "keep local loads a simple request" concern is
-  void — the stream source never originates an HTTP request, §21 round-5 note).
+- **The mode is the branch, not an inference.** `<OfficeFile data={…}>` accepts
+  `ByteSource | StreamSource | Promise<ByteSource | StreamSource>`; a file
+  source runs today's local path untouched; a stream source opens a stream
+  session. Neither branch reads the other's content. `HttpSource`
+  (`src/core/stream.ts:42–46: { url, headers?, credentials? }`) is
+  **structurally collidable** with a StreamSource, so `HttpSource` gains
+  `kind?: never` (round 7, agy I3.1) and `readSource`/`openByteStream` throw a
+  typed `StreamSourceMisuseError` if handed one — a spread `wss://` url must
+  never reach `fetch`.
+- **Per-session policy (the single normative home; §3/§19 summarize):** every
+  stream session is **protected by default** — `final-raster` (§7.7), content
+  policy `visible-only` (§6.4), visible mark fixed-text on, forensic pixel mark
+  on (§13). The developer's server-side `authorize(request)` hook decides per
+  session:
+  ```ts
+  authorize(req) → { viewerId?: string; role?: 'presenter' | 'audience';
+                     policy: { contentPolicy?: 'visible-only' | 'full';
+                               projection?: 'protected' | 'relaxed';
+                               visibleMark?: 'fixed' | 'viewer' | 'off';
+                               forensicMark?: boolean;      // default true
+                               print?: boolean } }          // default true, §2 item 9
+  ```
+  Relaxations are recorded in the audit table (§13.4); **the client has no
+  relax surface** — a client-requested relax is refused (§16 T6). Turning both
+  marks off makes the session **untraceable** and the audit row says so (§19.2).
+- **Who keeps the file safe is the developer's backend.** `server/` has no
+  file-download route and no HTTP document endpoint; the library cannot stop a
+  developer from exposing the file elsewhere (§19.2, the owner words in §2 item 1).
 
-### 6.2 The session handshake and the manifest (`OVSM`)
+### 6.2 The session handshake, one state machine (normative)
 
-The manifest is **the first server message on the session's WebSocket**, after the
-client's `hello` — round 5 moved it off HTTP (owner decision, §21); round 2's
-"manifest over HTTP" path no longer exists. The media-type and magic bytes are now
-only the **message envelope** the client parser validates after connecting, never a
-transport-detection mechanism:
-
-```
-Offset Size
-0      4   'O''V''S''M'                    envelope magic (validated, not detected)
-4      2   u16 LE  formatVersion = 1
-6      2   u16 LE  compression flag: 0 = raw JSON, 1 = gzip (the single flag)
-8      4   u32 LE  manifest JSON length — **decoded** length in bytes
-12     n   manifest JSON (UTF-8), gzip-compressed when flagged (the wire length is
-           recoverable by reading to the frame boundary; the field is never a mix of
-           compressed/decoded semantics)
-```
-
-**Handshake state machine (normative, one definition; round-6 fix — message =
-a protocol element charged to the session, frame = the wire boundary; a message
-may span several WS frames per the §14 framing rules):**
+Terminology: a **message** is one protocol element (it may ride several
+WebSocket frames); a **frame** is the wire boundary. Text messages are JSON
+objects with `{ id, type, … }`; binary payload kinds share one little-endian
+frame header with a `reqId` (§7.1), so a control reply can reference its
+request.
 
 ```
-states: HELLO → (MANIFEST → FACES-ACK? → STREAM) | (CLOSE code)
-        HELLO(resume) → MANIFEST | CLOSE
-        STREAM → (RENEW → STREAM) | CLOSE
+states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* → CLOSE(code)
+        HELLO{resume} → (re)MANIFEST → READY(ack) → STREAM | CLOSE
 ```
 
-1. **HELLO (client → server, first message):** bounded to `4 KiB` [call] —
-   `{ client: 'officeview/1.0', recVersions: [1], token?: <StreamSource.token>,
-   resume?: { sid, resumeProof } }`. `recVersions` is a **set**, not a
-   preference; the token is bound to the socket here (never a URL path;
-   a cookie-authenticated upgrade happens at the WS upgrade itself). A hello
-   of any other shape is a protocol error → CLOSE.
-2. **Version compatibility is set intersection, not a minimum** (round-6 fix):
-   the server picks a version it supports **from the client's set**; the empty
-   intersection is a CLOSED `unsupported-version`, never a downgraded guess.
-3. **Server decision (after the §9.3 origin allowlist and the §9.1 `authorize`
-   hook):** the `OVSM` manifest — session/adapter accepted — or a **typed
-   close**, mapped by the client to `StreamSessionError { code }`:
-   `unsupported-version`, `auth-failed`, `session-expired`, `revoked`,
-   `rate-limited`. A malformed or incapable hello fails closed (§19); there is
-   no go-slower path and no contract to leak bytes.
-4. **FACES-ACK (client → server, only when the manifest declares
-   `textMode: 'text'`; otherwise absent):** the §7.4 face acknowledgement — the
-   SECOND message, which fixes draft 3's "first frame" wording that round 5's
-   hello retired.
-5. **Preauthorization vs session token (round-6 fix):** two distinct secrets.
-   A `StreamSource.token` is **preauthorization proof** for the *open* decision —
-   validated then discarded; it never revalidates mid-session. The **session
-   token** is issued by the server inside the manifest's `session` object
-   (HS256, §6.2 schema), confirmed by an explicit client `ack-session` message
-   before STREAM runs, and **renewed** by a server `renew` reply carrying the
-   replacement token, confirmed by the client's `renew-ack` (also before expiry;
-   a race where both sides issue is resolved last-writer-wins-latest-expiry with
-   the loser's `jti` revoked). A RESUME attempt with only a `sid` is invalid
-   (see 6).
-6. **Authenticated resume (round-6 fix; sid alone is never enough):** the
-   resume hello carries `{ sid, resumeProof }` where `resumeProof` is the
-   session token of the still-running session (or the authorization the
-   §9.1 `authorize` hook re-issues for that viewer). The server rebinds the
-   same `sid` and re-admits the session to the same **viewer and policy** —
-   a wrong viewer's proof, a proof matching another sid's viewer, or a
-   policy-mismatched session is a typed `auth-failed`, never a silent switch
-   (§16 tests pin wrong-viewer resume). **Notes capability is rechecked after
-   resume**: `can.notes` is recomputed for the resumed session's viewer, and
-   the notes/semantic/search/cache endpoints re-evaluate it conjunctively
-   (§12a.5) — presenter-after-presenter resume keeps notes, and a
-   presenter-that-became-audience resume loses them.
-7. **Font registry enters the handshake** (§7.4): the `faces-ack` message names
-   face entries from a **client-side face registry** whose identity is the hash
-   of the actual pinned face bytes; a face the client locally *cannot prove*
-   (an installed system face whose bytes it cannot hash) counts as **absent**
-   (§7.4) and its units are rasters. Nothing else about hashes ever travels.
+1. **HELLO (client → server, first message; bounded `4 KiB`):** `{ client:
+   'officeview/1.0', recVersions: number[] (a set), token?: string,
+   resume?: { sid, resumeProof } }`.
+2. **Version compatibility is set intersection** — the server picks a version
+   it supports **from the client's set**; the empty intersection closes with
+   `unsupported-version` (never a downgraded guess).
+3. **MANIFEST (server → client):** the `OVSM` envelope (§6.2 framing below)
+   carrying the normative manifest JSON:
+   ```json
+   { v: 1,
+     docRef: "<HMAC(kDoc, sha256(bytes)) truncated 96-bit, hex>",
+     kind: 'docx'|'xlsx'|'pptx', name: "<label>",
+     units: { count, list: [ { w, h } ] },
+     layoutFingerprint: "<hash over (officeview version, backend version,
+        font set, locale, parser inputs)>",          // §9.3 canonical key input
+     session: { sid, token, expiresSec, resume: 'session' },   // token ISSUED here (I1 fix)
+     policy: { contentPolicy, protection, semantic, contentPolicyId,
+               viewerMarkId },                     // §6.1/§6.4; cache-key inputs
+     can: { search, copy, print, textA11y, present, notes, links },
+     recorder: { commands: 'ovsd-1', textMode: 'text',
+                 scalesBuckets: [1, 2],
+                 projection: 'final-raster' | 'culled-commands' | 'commands' },
+     limits: { maxUnitPx: 8192, maxAssetBytes, wsFrameBytes, tilePx },
+     notices: ['...'] }
+   ```
+4. **READY (client → server): exactly one client readiness message**, merging
+   the old `ack-session` and `faces-ack`:
+   `{ type: 'ready', tokenJti, missingFaces?: id[] }` (I1 fix). FACES-ACK is
+   not a separate first/second frame debate any more; the §7.4 face-registry
+   contract decides `missingFaces` and missing faces ⇒ raster units.
+5. **STREAM:** normal ops (units/viewport/tiles/show plans/notes/copy/search).
+6. **RENEW (server → client) before expiry:** the server pushes a signed
+   replacement `session.token` (only the server can sign; the round-5
+   "both-sides" race wording was impossible and is deleted) and the client
+   answers `renew-ack { jti }`; on silent expiry the connection ends with
+   CLOSE `session-expired`.
+7. **RESUME (HELLO with `resume`):** bound **to the same viewer and policy**
+   (verified against the session table, not the sid alone): the table stores
+   `{ viewerId, role, effectivePolicy, activeSocket, jti }` (I1 fix); resume
+   closes any prior `activeSocket` atomically (WS close `4409 superseded`),
+   **rotates `jti`**, issues a fresh `session.token`, and re-evaluates
+   `can.notes` for the resumed viewer (§12a.5). A wrong-viewer proof, a
+   proof/policy mismatch or a missing `resumeProof` closes with
+   `auth-failed` (never a silent switch).
+8. **CLOSE codes (typed, all fail-closed):** `unsupported-version`,
+   `auth-failed`, `session-expired`, `revoked`, `rate-limited`,
+   `policy-refused` (client-relax attempts land here), `rotation` (see 7).
+   The client maps each to a `StreamSessionError` surfaced as a load-error
+   state (§10).
 
-Manifest JSON (normative; fields marked `[call]` are first-pass defaults):
+**OVSM frame envelope (still binary framing, no `+json`, never
+transport-detection):** `magic 'OVSM', u16 LE version, u16 LE compression
+(0 raw / 1 gzip), u32 LE decoded JSON length, JSON`.
 
-```
-{
-  v: 1,
-  // Document identity. docRef is HMAC(kDoc, sha256(bytes)) truncated to 96 bits,
-  // hex — NEVER the plain hash: a wire-visible plain hash would let a holder
-  // confirm a byte-exact match against an offline guess list (round-2 fix).
-  docRef: <hex>, kind: 'docx'|'xlsx'|'pptx', name: <label>,
-  units: { count: N, list: [ per unit { w, h } ] },      // CSS px at 96 dpi
-  layoutFingerprint: <hash over (officeview version, parser/layout inputs, backend
-    version, canvas font set, locale)>,                  // one canonical key input (§9.3)
-  session: {
-    sid,                                                // bound at the hello (§6.2)
-    expiresSec,                                         // [call] 900
-    resume: 'session'                                   // single scope, §9.3; renewal
-                                                        // is a WS re-hello (§10)
-  },
-  can: { search, copy, print, textA11y, present, notes, links }, // server-set (§9.3); present/notes/links: §12a
-  policy: { contentPolicyId, viewerMarkId,
-            semantic: 'visible-only' | 'off',         // §6.4 chart-text rule; cache-key input
-            protection: 'protected' | 'relaxed' },    // default-protected (§6.1, §7.7); cache-key input
-  recorder: { commands: 'ovsd-1', textMode: 'outlines'|'text',
-              scalesBuckets: [1, 2],                    // replay-only-at-bucket (§8.3)
-              // projected per session: final-raster (default) or culled-commands
-              // on protected sessions under the P-rule (§7.7); a relaxed session
-              // (§6.1) answers 'commands' without the M-rule mark rules (§9.4)
-              projection: 'final-raster' | 'culled-commands' | 'commands' },
-  limits: { maxUnitPx: 8192, maxAssetBytes, wsFrameBytes, tilePx },
-  notices: [ '...' ]                                    // viewer status-line string, dedup'd
-}
-```
+Validation (client, fail-closed): numbers range-checked; unit sizes 1..8192
+(oversized units are tiled server-side, §14); enums closed; token ≤ 512 chars,
+never in a URL path, bound at HELLO; unknown fields ignored.
 
-Validation rules (client, fail-closed): numbers range-checked; unit pixel sizes in
-`1..8192` (a unit larger than `maxUnitPx` cannot be rendered — oversized units
-are down-scaled or tiled server-side, §14); enums closed; `token` ≤ 512 chars and **never**
-placed in a URL path (transport in the first WS frame, §9.3); unknown properties
-ignored (the same forward-compat stance the protection header already takes,
-`stream.ts:65–75`).
+**Format scope (round-7 fix, agy C2/c):** the stream server admits **OOXML
+only** — `doc.format: 'docx' | 'xlsx' | 'pptx'`. `.odt` / `.rtf` are refused
+fail-closed at admission (`unsupported-format`) until their hidden-text
+filters exist locally (RTF `\v` is unread today,
+`src/rtf/parse.ts:1130ff`; ODF `text:display="none"` /
+`<text:hidden-*>` / annotations are unfilted) — a deliberate scope limit, not
+an oversight, recorded honestly in §19.3.
 
-**Session and token schema (normative, one definition):**
+### 6.3 Routing a stream source (round-7 fix, agy I3.1/I3-5)
 
-| Field | Meaning |
-|---|---|
-| `sid` | 48-bit random per render session (not the viewer's identity; §13.4) |
-| `token` | HS256-signed claims `{v, docRef, sid, exp, iat, jti, scope:'stream'}` under `kToken` (`kMaster ⊃ HKDF` subkey §13.4) |
-| `jti` | token instance id; every WS op re-checks signature, `docRef`, `exp`, and the `sid` bound to the connection |
-| resume | one scope: 'session'; a resume re-attaches viewport + visible units via a WS re-hello carrying the old `sid` (§10). Expiry without a renewing reply is a typed terminal `session-expired` close; the recovery is the developer re-supplying a stream source. No `Accept`-era renewal-of-manifest machinery survives round 5 |
+Verified anchors: `src/components/OfficeFile.tsx:39`
+(`loadOfficeFile(data: ByteSource, …)`), `:152–156` (the `data` prop),
+`:219` (`<OfficeFile>`), `:88ff` (`useOfficeFile`), `:92` (its route key),
+`:127/:140` (`pagedWorkbookOf(…)?.release()` disposal pattern);
+`src/components/loadOfficeSource.ts:32` (local `AnyDoc`),
+`:202` (the loader); `src/components/OfficeDoc.tsx:48–51`
+(`OfficeDocSource`), `:344/:672` (`getPaintables` calls),
+`:947–962` (the XLSX structural dispatch).
 
-### 6.3 Routing a stream source (round 5 — the loader seam is a branch, not a sniff)
+- **`OfficeFile` layer:** the `data` union widens to
+  `ByteSource | StreamSource | Promise<ByteSource | StreamSource>`. A branch
+  checks `'kind' in src && src.kind === 'stream'` **before** any byte path;
+  stream sources never call `loadOfficeSource`. The branch result state is
+  `OfficeFileState { status: 'ready', document: RemoteOfficeDoc }`; disposal
+  copies the `pagedWorkbookOf(...)?.release()` lifecycle.
+- **`OfficeDoc` layer (round-6 correction stands, hardened):**
+  `OfficeDocSource` gains a fourth arm `{ kind: 'remote'; session:
+  RemoteOfficeDoc }`; the dispatch at `OfficeDoc.tsx:947–962` becomes
+  remote → `src/stream/remote/` lazily, local-sheet, legacy. Local
+  search/present/a11y code never inspects a remote doc (the union branch
+  precedes them); `present()` reads the manifest synchronously (§8.2).
+- **Eager gate:** the §8.1 gate measures the **transitive static-import graph
+  of `dist/index.js`** (the same closure `tests/helpers/eager-graph.ts`
+  computes), not just its own bytes, and a separate assert pins
+  `dist/core.js` to zero React/document imports while keeping
+  `preserveEntrySignatures` behaviour safe (§8.1.
 
-Rounds 2–4 specified a response sniff inside `loadOfficeSource` (its history and
-corrections live in §21); the 2026-11-08 owner decision removes it. What survives is
-verified against this worktree's code:
+### 6.4 The server content policy — pre-layout, per `contentPolicyId` (normative)
 
-- **The branch point is `OfficeFile`, not the loader.** Today
-  `loadOfficeFile(source: ByteSource, …)` (`src/components/OfficeFile.tsx:37–49`)
-  delegates straight to `loadOfficeSource(source: ByteSource, …)`
-  (`src/components/loadOfficeSource.ts:202`, `AnyDoc` union of the three documents
-  at `:32`), and `useOfficeFile(source: ByteSource | null | undefined, …)`
-  (`OfficeFile.tsx:60`) drives the same route through its `routeKey`/`oneShot`
-  re-load guard (`OfficeFile.tsx:91`). Round 5 widens **only the prop/argument type**
-  to `ByteSource | StreamSource | null` and branches **before** the byte path:
-  a source with `kind: 'stream'` never touches `loadOfficeSource` — it goes to the
-  stream arm (the lazy `src/stream/` chunk, §8.2/§8.3; the socket URL and hello of
-  §6.1–6.2, then the same `OfficeFileState { status: 'ready', document: RemoteDoc }`
-  shape). `<OfficeDoc>` is untouched by all of this — it keeps taking a parsed
-  document (`document: OfficeDocSource`, `src/components/OfficeDoc.tsx:51`) and
-  renders a `RemoteDoc` exactly like a local one.
-- **OfficeDoc is touched — round-6 correction** (round-5's "untouched" was wrong;
-  verified against `src/components/OfficeDoc.tsx:48–51`, `:344,672`, `:947–961`,
-  and `src/components/loadOfficeSource.ts:32`): the local unions are closed to the
-  three local documents, and `OfficeDoc` calls `getPaintables` directly in two
-  places while dispatching local spreadsheets by structural fields. So the design
-  is an explicit **discriminated provider**: `OfficeDocSource` gains a fourth arm,
-  `{ kind: 'remote'; session: RemoteOfficeDoc }`, and `OfficeDoc`'s dispatch
-  (`OfficeDoc.tsx:947–961`) becomes a three-way branch — remote → the lazy remote
-  viewer (§8.3's adapters), local sheet, local legacy — before any 'sheets'-in
-  check. The remote branch loads only `src/stream/remote/` and never falls into
-  the local code paths; local `search`/`present`/`a11y` modules never inspect a
-  remote document as a local one (the union branch precedes them). The eager gate
-  of §8.1 measures this (module map identical — the dispatcher branch is a few
-  bytes; the eager closure must not gain `src/stream/` entries).
-- **Session lifecycle** (kept from earlier rounds): the remote arm owns the socket
-  client, the buffers, and close-on-unmount — the `pagedWorkbookOf(document)?.release()`
-  disposal pattern (`OfficeFile.tsx:127,140`) is the model to copy. A source
-  replacement closes the running session exactly once and the client drops buffered
-  chunks atomically (never a half-painted unit).
-- **Renewal lives inside the session now** (round-5 note): the round-3/r4
-  source-classification rules (URL/HttpSource renewable vs bytes/Blob/Response/
-  `Promise<Response>`/consumed-Request terminal) existed only because an HTTP
-  manifest could be trapped inside a re-read byte value. With a dedicated WS
-  source there is no such trap: **a stream source is always its own session**, and
-  token expiry is handled by the §10 handshake (typed `session-expired` close or a
-  server `renew` reply), never by re-reading local bytes. The round-4 classification
-  text is retired with thanks to its reviewers (§21, round-5 note).
+"Stream what is drawn" is bounded by "drawn **for this viewer**". The gate
+runs **before layout**, keyed by a `contentPolicyId` recorded in the §9.3
+canonical key. **Processing is per `contentPolicyId` over an immutable parsed
+source** (a relaxed session never mutates the parse another session sees;
+§16 isolation tests).
 
-### 6.4 Server content policy — the server decides what exists (new; codex 2, claude C1/I2)
-
-"Stream what is drawn" is bounded by "drawn **for this viewer**": a document can
-contain content that the local renderer would paint but a stream deployment must not.
-The policy gate runs **before layout**, once per document, under a
-`contentPolicyId` recorded in the policy projection (§9.3) and asserted by Stage 1
-wire tests (§16.2):
-
-| Content | Local mode today | Stream-mode rule |
+| Content (as parsed, worktree-verified) | Local mode | Stream rule |
 |---|---|---|
-| Hidden / `veryHidden` XLSX sheets (`state` attribute, unread by `src/xlsx/parse.ts:290–300`) | painted as extra pages (`getPaintables` maps every sheet, `paint.ts:427–429`) | **not streamed** as units and excluded from the unit list, sheet navigation and all text services; a developer-side `authorize` relaxation (§6.1) may stream them for a restricted, audited session (default off) |
-| `w:vanish` runs (unread by the DOCX parser today) | painted (no handling exists) | excluded from painting, text index, copy and a11y. **A deliberate deviation from local mode**, diagnosed with a per-document notice; a Stage 1 test asserts absence everywhere (§16.2) |
+| `state="hidden"/"veryHidden"` XLSX sheets (unread by `src/xlsx/parse.ts:290–301`) | painted as extra pages (`paint.ts:427–429`) | not streamed; excluded from units/sheet-nav/all text services; an authorize relaxation may stream them per audited session (default off) |
+| **Author-hidden rows/cols** (`row@hidden`, `col@hidden`) | painted collapsed (authored geometry) | **purged from the server's projected sheet snapshot before any `SheetView`/`FilterEngine` is built on protected sessions** (round-7 fix, agy C1) — or, where a sheet declares `<autoFilter>` and the `spec.range` matches that block, carried as a separate immutable `authorHidden` tier that no filter may flip; either way `isVisibleSource` never sees an overrideable author-hidden tier |
+| w:vanish runs (unread) | painted | excluded from paint/index/copy/a11y; per-document notice; T2 assert |
 | PPTX hidden slides (`show="0"`) | painted as units | not streamed as units |
-| Speaker notes / comments / bookmarks panels | notes unread by the static pipeline; comments unread | comments never streamed; speaker notes streamed only as marked images to a viewer the host marks as presenter, in Presenter View only (§12a.5) |
-| Hidden rows / columns | painted collapsed (today's own geometry) | axis sizing intervals only (the client sees collapsed gaps); **row/column *numbering* alone while a hidden row has zero extent still reveals the presence of hidden bands — accepted limitation, stated in §20 and §12** |
-| Chart text (`chartDescription`, `src/charts/describe.ts:40–62`) | emits model categories, per-series values (first 12 or min..max) — **model data, not paint** | stream-mode chart descriptions are **visible-projection only**: names/labels/categories that are painted; no value ranges. Server-declared via `policy.semantic: 'visible-only'` (§6.2) |
-| PTX/DOCX comments, tracked-changes remnants | not parsed | never streamed |
+| **Hidden shapes** — `p:cNvPr`, `xdr:cNvPr`, `wp:docPr` `hidden="1"`, propagated through `grpSp` ancestors (unread by `src/pptx/parse.ts:714–717`, `src/xlsx/drawing.ts:559ff`, `src/docx/parse.ts:580,620`) | painted (Selection Pane hides would leak) | excluded from paint, index, copy, a11y, and show plans (round-7 fix, agy C2b); T2 fixture class |
+| Speaker notes / comments | notes unread; comments unread | comments never streamed; notes only as §12a.5 marked images for a presenter-role viewer |
+| Hidden rows/cols **shape** (collapsed extents) | painted collapsed | axis sizes + collapsed gaps only; numbering reveals a band's existence (§19.4) — the deployment accepts this or drops streamed axis numbering |
+| Chart text (`src/charts/describe.ts:40–62` reads model data) | model-based text | visible-projection only: painted names/labels/categories, never model value ranges (`policy.semantic`) |
+| Pivot tables / slicers / timelines (`src/worker/viewerProtocol.ts:31` lists `pivot*`/`control*`) | interactive, pre-cache | **refused on protected 4c streams** unless/until a scoped design lands; pivot caches and slicer items backed by hidden/veryHidden sheets or hidden rows/cols are **stripped before serving** (round-7 fix, agy C1c) |
+| ODT / RTF inputs | parsed into DocxDocument locally (`loadOfficeSource.ts:67–68`) | **refused fail-closed at stream admission** (`unsupported-format`, §6.2) until hidden-text filters exist — deliberate scope limit (§19.3) |
 
-The policy list is versioned by `contentPolicyId` so a policy change invalidates
-caches (§9.3). **Processing is per `contentPolicyId` over an immutable source**
-(round-6 isolation fix): a session's relaxation or policy state never mutates the
-shared parse — each policy reads its own pass of the same immutable parsed
-document, so a relaxed session's later cache lookups (or a collapsed relaxed
-then protected ordering, §16.2) can never reuse another policy's screened view.
-The client never participates in the policy — it renders what arrives.
+The client never participates; it renders what arrives.
 
-## 7. The draw-command format (`OVSD`), the recorder, and the protected projection
+## 7. Draw-command format (`OVSD`), recorder, and the projection rule (normative)
 
-### 7.1 Container
+### 7.1 One binary frame header for every payload kind (round-7 fix, agy I5)
 
-```
-Magic 'O''V''S''D', formatVersion u16 LE = 1
-assetTable: counted, length-prefixed records (§7.5)
-unitIndex[]: u32 offsets into the frame, one ordinal per unit
-for each unit: u32 LE byteLen + u32 LE opCount + a gzip-compressed body
-```
-
-One `OVSD` frame holds a document's units; chunks can also be **per unit** (what the
-WS sends: an asset-table preamble on the first frame of a session, then one chunk per
-unit on demand). A `TILE` op carries its bitmap **inline in the frame** (bounded by
-`wsFrameBytes` chunking), not as a data URI — round-2 fix.
-
-### 7.2 Why commands, not video
-
-A document unit is redrawn, not re-filmed: its draw state is resolution-independent
-*given the recorded scale* (§7.3), command streams compress very well, and the client
-paints any requested unit without fetching the rest. That independence is what makes
-the per-session forensic edit (§13.3) a post-pass on cached records instead of a
-re-film. The limit is recording fidelity at scale changes (§8.3), which is why the
-whole pipeline always names its scale.
-
-### 7.3 The recorder — a backend-backed recording facade (round-2 rewrite)
-
-- **Where.** The server wraps one recording context around each `page.paint(ctx)`
-  closure — the record point is inside `getPaintables`
-  (`src/render/paint.ts:354` entry; per-unit closures at `:389` and on). The context
-  is a **Proxy over a real backing 2-D context** (the generalisation of
-  `createRecordingContext`, `src/core/search.ts:92`), not a description-only proxy:
-  - **truthiness and `'in'` come from the backing context** (painters feature-detect
-    with `'letterSpacing' in ctx`, `src/drawing/text-paint.ts:113` — the facade must
-    forward gets/has/sets or feature detection lies);
-  - **measureText works**: painters capture measurers and lay out **during** paint
-    (`text-paint.ts:972–989`, `src/core/text-metrics.ts:23–40` create side 2-D
-    contexts from `ctx.canvas`), so the facade answers deterministic server-side
-    measurement synchronously;
-  - **side surfaces**: painters build scratch surfaces and draw them back with
-    `drawImage` (skewed text through a cached `PaintSurface`,
-    `text-paint.ts:712–765`; radial-gradient brush patterns from scratch ImageData,
-    `drawing/paint.ts:178–196`). Scratch sources are **mutable and cached**, so a
-    `drawImage(surface, …)` on the facade records a **snapshot-by-consumer**: the
-    facade snapshots the surface's pixels at draw time, keyed by content hash, and
-    records the hash — never a reference that could later be repainted;
-  - **patterns and gradients are wrapper objects**: recorded as asset-table entries
-    with their own recorded `setTransform` (the `pattern.setTransform` call at
-    `drawing/paint.ts:194–196` is real state, not free).
-- **The recorded subset** is the painted Canvas 2-D surface the painters use today,
-  with a Stage-0 census making it exhaustive (§16.1): state (`save/restore/setTransform
-  /translate/scale/rotate/transform/getTransform-consumers/globalAlpha/
-  globalCompositeOperation/setLineDash/lineDashOffset/lineCap/lineJoin/miterLimit/
-  imageSmoothing*/letterSpacing/wordSpacing/direction/lang/fontFeature-family flags`),
-  styles (solid colours, `createLinearGradient`/`createRadialGradient`,
-  `createPattern` + wrapper `setTransform`, shadow fields), geometry
-  (`beginPath/moveTo/lineTo/quadraticCurveTo/bezierCurveTo/arc/arcTo/ellipse/rect/
-  roundRect/closePath`), drawing (`fill`/`stroke` incl. the combined
-  fill-then-stroke op, `fillRect`, `strokeRect`, `clearRect`, `clip`), text
-  (`font/textAlign/textBaseline`, `fillText` with `maxWidth`, `strokeText`,
-  glyph runs §7.4), images (`drawImage`, all 9-arg forms), and the raster-inlining
-  ops of §7.7. Ops **outside** the subset are unrecordable → tile (§7.6).
-- **`RECORD_TEXT` is not part of the visual recorder** (round-2 merged rule): the
-  facade must not expose `RECORD_TEXT` (`src/core/text-recording.ts:2`), so painters
-  that branch on it (`src/pptx/render.ts:81` skips the master underlay in index mode;
-  `text-paint.ts:994` uses it for records) behave exactly as they do for a real
-  canvas — full-fidelity. The text index remains its own separate pass through the
-  existing `createRecordingContext` + `buildTextIndex`
-  (`search.ts:92,315`) with the watermark muting (§9.2 pass-interleaving, §11).
-- **Determinism and scale.** Because the record captures post-decision device values
-  (`snapToPixels`, shadow CTM math, `pattern.setTransform`, sparkline scale) at the
-  paint-time transform, replay reproduces pixels **only under the same resolved
-  scale**; the client replays 1:1 at the unit's scale bucket and re-requests on other
-  buckets (§8.3). Recorded coordinates are IEEE-754 little-endian doubles by
-  definition of the format (round-2 fix: no "varint coordinates" language; sizes
-  stay bounded by the chunk budget, §14).
-- **The render deadline is enforced by retirement, not by cooperation.** A paint
-  cannot be aborted inside its synchronous `paint()` callback. The pool's 2 s unit deadline
-  [call] ends by **worker retirement**: the worker is terminated (not asked to
-  yield); the buffers it allocated refund to the pool ledger only after
-  termination is confirmed — never before, and never by reusing a buffer the
-  dead worker still holds (drain-then-refund, tightened round 3, tested §16.2);
-  the in-flight unit retries once on a fresh worker and falls back to tile (§7.6)
-  if it fails again.
-
-### 7.4 Text mode (round-2 rewrite; **owner decided 2026-11-08: (b) `textMode:'text'`**)
-
-**Decision (§18 item 2):** command projections use (b), plain text plus
-server-pinned fonts checked by the face handshake below; a unit whose faces the
-client lacks is sent as a raster unit. (a) outlines is not built, so no
-shaping/outlining dependency is added. The text below keeps both options as the
-record of the choice.
-
-Draft 1 claimed glyph outlines "with zero new dependencies" arrive for free; both
-reviews reject that. The recorder sees strings plus a CSS font string, not glyph ids;
-joined-outlining needs a shaping/outlining library (HarfBuzz-wasm or fontkit-class)
-and hinted text is not vector-reproducible bit-for-bit. Stage 0 must pick:
-
-- **(a) `textMode:'outlines'`** — a named shaping+outlining dependency server-side
-  (open decision, §18 item 2); outlines recorded into the §7.5 asset table; the
-  parity gate becomes *(near)-zero-diff only against an **outline-rendered
-  reference** generated the same way on the server* — never against the original
-  page. Fallback if shaping/complex-script (CJK, Indic, BiDi) parity fails: per-cluster
-  bitmap tiles of text (the §7.6 tile path applied to text bands), not per-glyph hope.
-- **(b) `textMode:'text'`** — glyph runs recorded as strings plus advances; replay uses
-  **server-pinned font data** (embedded-on-the-server faces that the client must
-  already have, or the document's own embedded faces — the "ask-first" boundary,
-  §19). When the pinned faces exist on the client, this mode is the only one under
-  which the §16 zero-diff gate on a real browser is claimable.
-- **Face-availability handshake (concrete protocol, round 4; draft 3 referenced it
-  without defining it):**
-  1. **Identity list.** For `textMode:'text'` the manifest carries
-     `requiredFaces: readonly { id, hash, alias? }` where `hash` is SHA-256 of the
-     pinned face file truncated to 96 bits [call] — hashes only, no face bytes ever
-     travel (§19 unchanged); `alias` is a display name for diagnostics, not a match
-     key.
-  2. **Bounded acknowledgement.** The client answers with the §6.2 handshake's
-     second message (`faces-ack { have: id[] }`), bounded to 128 ids and a **2 s**
-     window [call]; silence past the window counts as `have: []` (fail-closed)
-     and once-only; a late ack is refused with an already-answered diagnostic.
-  3. **Match criterion.** A face is satisfied when its `hash` equality holds; a
-     hash mismatch (a differing version) counts as **missing, not close**. The
-     client computes hashes from a **face registry** of the pinned face bytes it
-     actually uses; a locally installed face whose bytes the client cannot hash
-     **counts as absent** (round-6 fix — the `faces-ack` assertion alone proves
-     nothing), and such units go to the raster fallback.
-  4. **Missing/mismatch transition.** Before any text unit streams, the server
-     classifies each unit by the face ids its recorded text ops use; a unit needing
-     an unsatisfied face is served as a per-unit raster (`unitMode:'tile'`, §7.6)
-     with a typed `face-missing` diagnostic. Substituted faces are never painted,
-     and the zero-diff fidelity claim is voided only for such units — the
-     text-mode goal holds per satisfied unit, not document-wide.
-- **One fidelity gate per mode (round-4 fix — round 3 referenced this wording but
-  never landed it here):**
-  - outline mode → **replay fidelity** is graded recorder→replayer vs the
-    outline-rendered reference (server-generated, same shaping); **renderer
-    fidelity** to the existing hinted painter is a *published tolerance* per script
-    family, never a zero-diff claim;
-  - text mode → for units whose required faces all pass the handshake **both**
-    gates may be zero-diff; unsatisfied units degrade to raster before streaming.
-- Either way, **a11y does not depend on the mode** (§15): the server is the text
-  authority through the §15 service.
-- Font **subsetting** and never shipping a font file remain hard rules (§19).
-
-### 7.5 Asset table and op list (OVSD v1)
-
-The asset table dedups by content hash: document images (**their drawn-bitmap
-snapshots, see §7.7**), decoded scratch surfaces, patterns/gradients (with their
-`setTransform`), glyph-outline groups (mode (a)), and pinned font *data hashes*
-(mode (b) — hashes, never faces). Ops (normative, ~26):
-
-| Op | Meaning | Replay notes |
-|---|---|---|
-| STATE_PUSH / STATE_POP | save / restore | full stack incl. clip |
-| TRANSFORM | transform / setTransform | exact f64s at the recorded scale |
-| STYLE_COLOR | solid fill or stroke target | hex + alpha |
-| STYLE_OBJ(gradient / pattern) | asset-table ref | wrapper carries its own `setTransform` |
-| STATE_SETUP | width/join/cap/miter/dash/dashOffset/alpha/composite/smoothing/letterSpacing/wordSpacing/direction/lang/shadow fields | dense dword packing decided in Stage 0 |
-| PATH_BEGIN/…_MOVE/…_LINE/…_QUAD/…_CUBIC/…_ARC/…_ARC_TO/…_ELLIPSE/…_RECT/…_ROUND_RECT/…_CLOSE / PATH_END {FILL,STROKE,FILL_STROKE,CLIP} | geometry | paths over a budget are shared into the asset table by hash |
-| GLYPH_RUN | font ref + glyph data (mode-dependent) + advances + paint style | mode (a) outlines; mode (b) strings + advances |
-| IMAGE_DRAW | asset ref + transform + optional source rect | from the drawn snapshot, §7.7 |
-| TILE | inline (already-rasterised) bitmap + dest box | fallback mode, §7.6 |
-| RASTER_BLOCK | inline raster — the final-frame block of a `final-raster` unit or the visible-mark overlay (§7.7/§9.4) | painted straight |
-
-### 7.6 Versioning, tiles and the runtime-fallback discriminator (round-2 fixes)
-
-- Negotiation is one mechanism, **inside the WS handshake** (round 5; the old
-  `Accept` parameters are gone with manifest-over-HTTP): the `hello`'s
-  `recVersions`, the manifest's `recorder.commands`, and the frame header's
-  version. The server picks the minimum of what it knows and what the client
-  announced — **intersected, not minimised** (round-6 fix: server `{1}`, client
-  `{2}` means no compatible version, i.e. `unsupported-version`, not a forced
-  downgrade); a frame version outside the agreed set is a protocol bug and fails
-  closed (the hello/manifest pre-agreement makes version skew mismatch-free by
-  construction).
-- **Tiles are a runtime outcome, not a pre-declared list.** Units are known to be
-  unrecordable only when the pool renders them; the manifest therefore **does not
-  pre-list** draft 1's `fallbackTiles` — the server session reads each stream unit
-  discriminator (`unitMode: 'tile'` in the per-unit preamble) when it streams.
-  *(Net effect: no preflight is required — a manifest-declared tile promise would
-  be a promise the pool cannot yet know is keepable.)* Chunk-1 preflight stays a
-  server config option [call] reserved for status displays.
-- Mixing commands and tiles in one document is fine and expected; the client's only
-  obligation is to render whichever the unit says, fully, or refuse the unit with
-  the missing-unit diagnostic.
-
-### 7.7 The mandatory final-visibility projection (the P-rule — the default for every stream session; one rule, all sections reference it)
-
-> **The P-rule.** Every response of a stream **session carries the protected rules
-> by default** (round-5 owner decision, §6.1): it contains only content that belongs
-> to the unit's **final composited image** — no covered text, no clipped-out media,
-> no full z-order history. It is not a configuration: a client cannot relax it, and
-> only the developer's server-side `authorize` hook may open a **relaxed** session
-> (§6.1) whose responses may use the ordinary command projection, and that choice is
-> recorded in the audit table.
-
-Enforcement, per session protection state (`policy.protection`, §6.2) as chosen by
-the server's authorize decision, and in one of two ways the server owns
-(`recorder.projection` names it per unit):
-
-- **`final-raster` (default)** — the pool paints the whole unit to the final frame
-  server-side and ships it as a `RASTER_BLOCK`/`TILE` op. Final visibility is
-  satisfied by construction: a group later covered by another group is cropped away
-  *in the raster*, which is exactly what draft 2's per-group flattening failed to do
-  (cross-group covers leaked lower groups' text).
-- **`culled-commands` (opt-in)** — commands may ship only after the pool runs a
-  server-side culling pass over the recorded op list, computing per-command the
-  region occluded by every later op (clips, opaque fills, opaque images); any
-  command that paints content not surviving with the final frame is dropped or the
-  unit **downgrades to `final-raster`**. The proof, not the recorder's opinion, is
-  stored with the record; an under-proven unit never sends commands. A protected
-  `culled-commands` unit must additionally satisfy the **M-rule** of §9.4 (the
-  visible mark composited into its transmitted content rasters, no removable
-  mark op); a pure-vector unit that cannot meet M-rule answers `final-raster`.
-
-Protected projections inherit the rules beneath; a relaxed session's plain
-  commands inherit only the media/asset rules. An *unproven* protected command is a
-  §16.1/§16.2 gate failure, not a configuration error.
-
-- **No original media bytes (both projections).** Every `drawImage` of a document
-  picture contributes the **drawn-bitmap snapshot**: the pixels as painted
-  (duotone/recolour already applied at decode, `src/core/images.ts:80–92`),
-  **source-rect-cropped** (scene-paint crops with `drawImage` source rectangles,
-  `src/drawing/scene-paint.ts:132–149` — cropped-away regions stay on the server),
-  **re-encoded metadata-free** at the recorded scale, and keyed by pixel hash.
-  Session device scale determines the bitmap; other scales re-request (§8.3).
-- **Wire audits inspect all transmitted content, not only commands.** Every §16.2
-  boundary test decompresses and inspects **transmitted payloads** — frames, the
-  asset table and raster blocks (a covered-text check must scan rasters too, since
-  `final-raster` is the default) — for forbidden content: secret strings, pixels
-  of the crop region outside the painted crop, EXIF-bearing originals. The
-  screenshot-path assertion is never the evidence, because screenshots cannot
-  witness the whole stream.
-- What stays in scope intentionally: highlight rectangles, the visible mark
-  (§9.4), and the visible-projection text data of §11 — nothing else is data the
-  client needs for reading.
-
-## 8. The client replayer and the library side
-
-### 8.1 The React-free core entry (`officeview/core`), with a measured eager gate (round-2 fix)
-
-- New build target: `src/core-entry.ts` (name [call]) built by Vite as a **separate
-  rollup input** (`dist/core.js`) with React `external`, next to the existing
-  `worker.js` entry (`vite.config.ts:41–43`).
-- Exports (React-free, no canvas-API assumptions in the round-2 sense — the canvas
-  objects flow through `getPaintables` either way): parse/layout/painters
-  (`src/index.ts:49–56` equivalents) + `getPaintables` (`paint.ts:354`);
-  fonts (`acquireFonts` at `register.ts:40`, adapters `:9/:21/:30`);
-  stream plumbing (`readSource`/`openByteStream`, `stream.ts:207/:368`; header
-  parsers at `stream.ts:51–75` and `watermark.ts:164`); the manifest/OVSM and
-  OVSD format types and helpers; the recorder facade + text index for server use.
-- **Eager gate (measurable, not assumed; loosened round 5).** The mode branch costs
-  no sniff constant any more, so the gate is: `dist/index.js` module map **identical**,
-  and eager bytes within **16 B** of the pre-Stage baseline recorded as a diff (the
-  source-kind discriminant branch only). The stream source arm itself (§6.3) sits in
-  the lazy `src/stream/` chunk, so the main bundle must not gain module-map entries;
-  if the extra Vite entry shifts any shared chunk, Stage 1 fixes it before anything
-  else.
-- Documented boundary: `officeview/core` never imports React or DOM-only modules
-  beyond the existing facade adapters.
-
-### 8.2 How the client enters stream mode; the client-side seam
-
-- The developer's parameter (§6.1) decides the mode; the client's only mode logic
-  is the **source-kind branch** at the `OfficeFile` layer (§6.3) — empty for file
-  sources and lazy for stream sources.
-- New Library surfaces: **one** (round 5): the `source` prop/argument accepts the
-  `StreamSource` shape (§6.1, `{ kind: 'stream', url, token? }`). Two
-  plumbing-only surfaces remain:
-  - `streamClient?: (source: StreamSource) => StreamClient` — the WS factory hook
-    (mirrors `viewerWorker`, `OfficeFile.tsx:63–80`): hosts that need credentials,
-    resume semantics or telemetry supply the client; the default uses `WebSocket`
-    to the source's url with the token in the hello (§6.2/§9.3) and a heartbeat;
-  - `onStreamNotice(diag)` — deduplicated per the §10 notice behaviour.
-
-### 8.3 `RemoteDoc` — the remote document source for OfficeDoc (round-2 fixes)
-
-A **lazy `src/stream/remote/` chunk** delivers the remote provider AS a
-discriminated arm of `OfficeDocSource` (round-6 fix per the code: `OfficeDoc`
-dispatches on the union at `OfficeDoc.tsx:947–961`; there is no injected
-provider). Each remote service maps to a remote-only implementation — paint to
-the replayer, search/copy to the §11 WS ops, a11y text to the §15 service,
-print units to the §18-item-6 print service, `present()` to the §12a show plan
-player — and the local implementations are never consulted for a remote
-document. A `RemoteDoc` reaches OfficeDoc through the stream branch's
-`OfficeFileState` (§6.3) — there is no content-sniffed entry point:
+All binary WS payloads share one little-endian header; the §7.1 body follows it:
+`magic u32 ('OVSD') | frameSeq u32 | crc32 u32 (of payload) | kind u8 | reqId
+u32 | flags u8 | payloadLen u32 | payload`. Kinds: `ASSET_DEFINE`,
+`UNIT_RASTER`, `UNIT_COMMANDS`, `XLSX_TILE`, `SHOW_PLAN` (`OVSP` §12a.2),
+`NOTES_RASTER`, `PRINT_RASTER`. `reqId` matches the JSON control frame that
+requested the payload. **The old whole-document `unitIndex[]` offset table is
+gone** — units stream on demand in any order at any scale bucket.
 
 ```
+per unit: u32 LE unitId + u32 LE byteLen + u32 LE opCount +
+          u8 per-unit discriminator (commands | raster | tile) +
+          gzip-compressed body   // never a monolithic upfront index
+```
+
+A `TILE` op carries its bitmap **inline in the frame** (bounded by
+`wsFrameBytes`), not as a data URI.
+
+### 7.2 Why commands (short)
+
+Command streams compress well, are resolution-independent *given the recorded
+scale bucket* (§7.3), and make per-session forensic edits a mutate-pass on
+cached records (§13). Resolution dependence is why the pipeline names its
+scale everywhere.
+
+### 7.3 The recorder (normative contract) + `CanvasBackend`
+
+- **Facade over a real backing 2-D context** (the generalisation of
+  `src/core/search.ts:92`), so `'letterSpacing' in ctx` truthiness
+  (`src/drawing/text-paint.ts:113`), `measureText` during paint
+  (`text-paint.ts:972–989`, side canvases in `src/core/text-metrics.ts:23–42`),
+  scratch-surface `drawImage` (`text-paint.ts:712–765` — snapshotted by content
+  hash at draw time), wrapper patterns with recorded `setTransform`
+  (`src/drawing/paint.ts:178–196`) all behave as on a real canvas.
+- **Recorded subset is typed and Stage-0-census-final** (§16 T3): transforms,
+  state incl. dash/alpha/composite/smoothing/letterSpacing, gradients
+  (`createPattern` wrappers) and shadows, path ops, `fill`/`stroke`/
+  `fillRect`/`strokeRect`/`clip`, text (`font/textAlign/textBaseline`,
+  `fillText` with `maxWidth`, `strokeText`), `drawImage` (all 9-arg forms),
+  and the raster-inlining ops of §7.7. Unknown ops ⇒ promote that unit to
+  `tile` (never a silent skip).
+- **`RECORD_TEXT` is never exposed by the facade** (painters branch on it,
+  `src/core/text-recording.ts:2`, e.g. `src/pptx/render.ts:81`) — the text
+  index stays its own second pass through `createRecordingContext` +
+  `buildTextIndex` (`src/core/search.ts:92,315`) with the watermark muted.
+- **Scale discipline:** record at the session's scale bucket
+  (`scalesBuckets`, §6.2) and replay 1:1 at it; device-space decisions above
+  (`snapToPixels`, shadow CTMs, sparkline scale, charts' DPR) are captured as
+  recorded values. Client-side zoom re-requests the bucket (§8.3).
+- **`CanvasBackend` (round-7 fix, agy I3.4): one seam for every
+  canvas-construction site the recorder pool uses:**
+  `CanvasBackend { createCanvas(w, h); decodeImage(bytes); loadImage(bytes);
+  rasteriseSvg(bytes) }` threaded into `paint.ts` (`measurerFromDoc`),
+  `search.ts`, `images.ts:65/:149`, `svg-raster.ts:64`, plus the four
+  `canvas.constructor` clone sites (`src/core/text-metrics.ts:31,42`,
+  `src/drawing/paint.ts:126`, `src/drawing/pattern.ts:155`) — `@napi-rs/canvas`
+  is a `createCanvas` factory whose `CanvasElement` is not
+  `new`-constructible, and today those sites `catch → undefined`, silently
+  dropping gradients/warp/patterns on the server (all five
+  `import('canvas')` sites are verified, hidden behind
+  `import(/* @vite-ignore */ 'canvas')`).
+- **Render deadline = worker retirement** (drain-then-refund): a paint cannot
+  be aborted mid-`paint()`; a 2 s unit deadline [call] terminates the worker,
+  charges refund only after termination, the unit retries once, then tiles.
+
+### 7.4 Text mode — one mode, decided (plain text + pinned faces)
+
+Glyph runs travel as strings + advances; replay uses server-pinned faces
+whose hashes the client confirmed:
+
+1. **Identity list:** `requiredFaces: { id, hash (SHA-256 of face bytes,
+   96-bit truncated), alias? }` — hashes only; face bytes never ship (§18).
+2. **Bounded acknowledgement:** part of the **READY** message (`missingFaces`),
+   one-time per session; absence of the message means `[]` (fail-closed).
+3. **Match:** hash equality only. A client that cannot hash the pinned bytes
+   (an installed system face) reports it as **missing** — an assertion without
+   a registry is not an assertion (round-7 restatement of round-6's rule).
+4. **Missing/mismatch:** the unit goes to raster (`face-missing` diagnostic);
+   substituted faces are never painted, and the zero-diff fidelity claim is
+   voided only for such units.
+- **Fidelity gates per decided mode:** replay fidelity = recorder→replayer
+  equality at the recorded scale (same backend, same pinned faces) is the
+  zero-diff claim; *renderer fidelity to the local hinted painter* is a
+  published tolerance per script family (CJK/Ligature/BiDi fixtures live in
+  T4).
+
+### 7.5 Asset table and op list
+
+Asset table keyed by content hash: drawn-bitmap snapshots (§7.7), decoded
+scratch surfaces, pattern/gradient wrappers (`setTransform` included),
+pinned-font **hashes** (never bytes). Ops (normative, ~24 as per the round-2
+census): STATE_PUSH/POP; TRANSFORM (setTransform/f64 pairs); STYLE_COLOR;
+STYLE_OBJ (gradient/pattern); STATE_SETUP (dense dword: width/join/cap/
+miter/dash/dashOffset/alpha/composite/smoothing/letterSpacing/direction/
+lang/shadow); PATH_* and PATH_END {FILL,STROKE,FILL_STROKE,CLIP};
+GLYPH_RUN (mode: f64 advances + string; shapes are text mode only — the
+outlines `GLYPH_RUN_OUTLINES` opcode of older drafts is deleted); IMAGE_DRAW
+(asset ref + transform + optional source rect); TILE (inline raster);
+RASTER_BLOCK (final-frame block of a `final-raster` unit or the visible-mark
+overlay on relaxed sessions).
+
+### 7.6 Versioning, tiles, runtime fallback
+
+Negotiation is the §6.2 set intersection; a frame version outside the agreed
+set fails closed. Units the recorder cannot express stream as tiles with a
+per-unit discriminator (§7.1); mixing command and tile units is expected;
+replayed-frame validation failure drops the unit and re-requests once.
+
+### 7.7 The projection rule (P-rule) — normative, one home
+
+> **P-rule.** Every response of a stream session contains only content that
+> belongs to the unit's **final composited image** — no covered text, no
+> clipped-out media, no full z-order history. Protected sessions satisfy it
+> **by default and without configuration**; the only departure is a
+> server-side `authorize` relaxation to `commands` for a specific audited
+> session (§6.1), and the client is not a party to it.
+
+- **`final-raster` (default):** paint whole units to the final frame server-side
+  and ship rasters; occlusion is structural.
+- **`culled-commands` (protected, opt-in; details in appendix §20):** ships
+  commands after a stored per-command occlusion proof; M-rule constraints in
+  §9.4 else downgrade.
+- **`commands` (relaxed sessions):** ordinary command stream; an overlay-mark
+  is removable by a modified replayer — stated plainly, because a relaxed
+  session already trusts the replayer (§13.2/§20).
+- **Stage-1-mandatory semantic occlusion (round-7 fix, agy C3):** because
+  default sessions are `final-raster` and the culling proof is deferred
+  (§20), the §11 semantic join cannot depend on it. During the same visual
+  paint pass that records the unit, the server keeps (a) per-text-run painted
+  **ink bounds** and (b) a conservative **opaque-coverage grid** (alpha≥0.95
+  extents) after each retained draw op; a text run is servable iff **100 % of
+  its recorded ink bounds survive to the final raster** (per-cell, or
+  per-sample at ≥ 2× the run height's resolution). Anything unresolved —
+  including text whose localized region sits inside a graphics state the
+  census did not model — is **withheld** (fail-closed), not shipped as
+  trusted pixels (§11). This check runs on `final-raster` without any culling
+  proof and is implemented once against the `getPaintables` paint surface.
+- **No original media bytes (every projection):** `drawImage` ships the
+  **drawn-bitmap snapshot** (as-painted, OCR-recap free), source-rect
+  cropped (`src/drawing/scene-paint.ts:132–150` crops with `drawImage` source
+  rects), re-encoded metadata-free at the recorded scale, keyed by pixel
+  hash; other scales re-request.
+- **Wire audits inspect transmitted payloads**, not screenshots (§16 T6).
+
+## 8. The client side
+
+### 8.1 The React-free core entry and honest eager gates
+
+- Build `officeview/core` (`src/core-entry.ts`, name [call]) in a dedicated
+  Vite **separate pass** with React externalised. Because
+  `vite.config.ts:59` is `preserveEntrySignatures: 'allow-extension'` and
+  `scripts/eager-budget.ts:16` gzips only `dist/index.js`, the eager gate is
+  defined honestly (round-7 fix, agy I3.3):
+  1. **Transitive-graph budget:** sum gzipped bytes over `dist/index.js`'s
+     static-import closure (the same set `tests/helpers/eager-graph.ts`
+     computes) — ceiling unchanged, 38,720 B.
+  2. **`dist/core.js` purity assert:** zero `react`/`document` imports in its
+     graph; `officeview/core` never imports React beyond erased types.
+  3. **Main-bundle module-map check:** `dist/index.js`'s module map must be
+     **identical** to the pre-branch build (± the branch's own discriminant);
+     eager growth ≤ 16 B gzip recorded as a diff.
+
+### 8.2 Component surfaces
+
+- `<OfficeFile data={ByteSource | StreamSource | Promise<…>}>` (real prop
+  name `data`, `src/components/OfficeFile.tsx:154`): the `HttpSource.kind?:
+  never` guard plus the `readSource`/`openByteStream` typed misuse errors
+  (§6.1) make a stream/wss source incapable of reaching `fetch`.
+- `streamClient?: (source: StreamSource) => StreamClient` — WS factory hook
+  (mirrors `viewerWorker`, `OfficeFile.tsx:63–80`); default is `WebSocket` +
+  hello + heartbeat. `onStreamNotice(diag)` — deduplicated load notices.
+- **`startPresent` stays synchronous** (round-7 fix, agy I3.2): on a remote
+  document the eager `present.ts:184–246` path reads the manifest — slide
+  count, `can.present`, `can.notes` — synchronously, refuses
+  `presenterView: true` when `can.notes` is false (so a non-presenter never
+  gets a blank `window.open`), and only then dispatches to the lazy remote
+  show runner. All `present()` semantics (`presenterView`, gesture
+  ordering) stay in the local-path shape.
+
+### 8.3 The remote document provider (normative shape)
+
+```ts
 RemoteOfficeDoc = {
   kind: 'remote', manifest,
-  async paint(unit, scale: 'fit' | number, dpr, canvas): Promise<void>,
-    // Replays at the unit's recorded scale bucket (the §7.3 rules) or pastes a TILE.
-    // Zoom re-requests the server at the new bucket; the previous resolution
-    // paints until the new one lands (no blur-up beyond the existing fallback).
-  async units(): Promise<UnitSpec[]>,
-  async search(query): Promise<overlay.Hits>,   // §11
-  async copy(range): Promise<string>,           // §11
+  paint(unit, scale: 'fit'|number, dpr, canvas): Promise<void>, // replay or tile paste
+  units(): Promise<UnitSpec[]>,
+  search(query): Promise<HighlightRect[]>; copy(range): Promise<string>;   // §11
   close(): void,
 }
 ```
 
-- Replay is 1:1: the replayer builds the canvas at the recorded scale bucket
-  (server-declared `scalesBuckets`, §6.2) and never re-roots; the visible resolution
-  always names its bucket.
-- **Policy**: the effective stream policy is the manifest's `can.*`
-  **as enforced server-side per op** (§9.3) — there is no protection header in
-  stream mode, because there is no file-download response; the developer's backend
-  is where the policy numbers live (§6.1). The client never widens it.
-- **Visible watermark ownership**: the server baked it; the client **ignores** the
-  host's `watermark` prop for a remote document entirely (§9.4).
-
-### 8.4 Fonts, backends and measurement seams (round-2 fixes)
-
-- `officeview/core` exports the `RegisterFont` seam (`register.ts:9`) and adds a
-  **backend/measure-context factory** in `PaintOptions` for the server:
-  `measureCanvas?: () => CanvasRenderingContext2D` replacing today's hard-coded
-  `import('canvas')` in `measurerFromDoc` (`paint.ts:184–211`) and in the index
-  builder (`search.ts:212–215`), plus a `PaintOptions.devicePixelRatio`
-  (charts read a real DPR at `src/charts/paint.ts:767–768`; the server supplies the
-  bucket instead of document DP). Stage 0 only needs the seam, not the choice
-  (§18 item 1).
-- `registerFont` registration is **process-global in node-canvas** and cannot
-  unregister — pools keep a **per-worker embedded-font budget** (64 MiB [call]) and
-  recycle a worker that exceeds it (paired with the §9.2 deadline retirement).
-- Font faces actually in use per unit are declared server-side per §7.4; Stage 0's
-  matrix records each backend's face resolution behaviour (fallback lists, hints,
-  alternative face selection), published with the Stage 0 table (§16.1).
+Dispatch at `OfficeDoc.tsx:947–962` (remote → `src/stream/remote/` lazily, then
+sheet, then legacy) and state wiring via `OfficeFileState` (§6.2/§10). Replay
+is 1:1 at the recorded bucket; zoom re-requests. The client ignores the host
+watermark prop for a remote doc (the baked mark is authoritative).
 
 ## 9. The server side
 
 ### 9.1 Package layout [call]
 
 ```
-server/
-  package.json          bun workspace member; depends on the root officeview
-                        package (workspace protocol) + the canvas backend chosen
-                        in §18 item 1 (declared as a direct dependency)
+server/  (bun workspace; deps: officeview workspace + @napi-rs/canvas)
   src/
-    ws.ts               the only endpoint: upgrade (origin allowlist + authorize
-                        hook), hello → OVSM handshake (§6.1–6.2), op routing,
-                        backpressure, per-op authZ, typed closes (§10). The
-                        package has no HTTP document route (§6.1) — a `/open`
-                        does not exist; only server-internal WS handshakes.
-    authorize.ts        deployment hook authorize(req) → {viewerId?, role?, policy,
-                        relax?} — relax sets a session's projection, content
-                        policy, visibleMark and forensicMark (§6.1); role 'presenter'
-                        → §12a.5
-    tokens.ts           HS256 claims schema (§6.2), key loading, WS-level renewal
-    audit.ts            sessionId → {viewerId?, ip, startedAt, keyGen, revoked?}
-                        (attribution mapping; retention separate from §9.3)
-    pool.ts             render worker pool + deadline retirement (§9.2)
-    cache.ts            the one canonical cache (§9.3)
-    record.ts           recorder facade, scratch snapshot service (§7.3)
-    projection.ts       protected projection + asset snapshot hashing (§7.7)
-    policy.ts           §6.4 content-policy gate (pre-layout)
-    forensic.ts         §13
-    detection.ts        §13.6 (CLI: server/scripts/detect.ts)
-    xlsxTiles.ts        §12 tile painting via viewport reads
-    limits.ts           §14 numbers
-    config.ts           deployment key/flag loading, fail-closed
-  test/                 (bun test) §16.3
+    ws.ts             the only endpoint: upgrade (origin allowlist + authorize),
+                      hello → manifest state machine (§6.2), op routing,
+                      multiplexed text/binary frames (§7.1), per-op authZ
+    authorize.ts      authorize(req) → {viewerId, role, policy…} (§6.1)
+    tokens.ts         HS256 claims schema, issuance/rotation, jti table
+    sessionTable.ts   sid → {docRef, viewerId, role, effectivePolicy,
+                      activeSocket, jti, startedAt, status}   // I1 fix
+    audit.ts          sid → {viewerId?, ip, startedAt, keyGeneration,
+                      policyId, markSettings} (attribution; §13.4)
+    pool.ts           CanvasBackend render pool + deadline retirement (§9.2)
+    cache.ts          one canonical cache (§9.3)
+    record.ts         recorder facade + scratch snapshot service (§7.3)
+    projection.ts     §7.7 raster/projection + snapshot hashing
+    occlusion.ts      §7.7 Stage-1 occlusion + §12 XLSX analytic occlusion
+    policy.ts         §6.4 pre-layout gate
+    forensic.ts       §13; detection.ts (CLI scripts/detect.ts)
+    xlsxTiles.ts      §12 viewport tiles (renderViewport path, agy I4.1)
+    print.ts          §2 item 9 print jobs (per-session, audited)
+    config.ts         keys/flags, fail-closed
+  test/               (bun test; §16)
 ```
 
-Root `package.json` gains `"workspaces": ["server"]`; `server` runs `bun test` and is
-not published.
+### 9.2 Render pool and `CanvasBackend`
 
-### 9.2 The render pool
+- Pool shape mirrors `WorkerRenderEnv`
+  (`src/worker/office-worker.ts:42–47: createCanvas/toBitmap/parse/paintables`)
+  with `createCanvas` bound to the chosen `@napi-rs/canvas` backend through
+  the **one `CanvasBackend` seam** (covering all five `import('canvas')`
+  sites and all four `canvas.constructor` clone sites verified in §4).
+- Defaults [call]: 1 render worker per 2 vCPU (cap 8), 1 parse worker,
+  parse-once-per-(docRef, contentPolicy, fingerprint), global render
+  reservation 512 MiB per process, per-job decoded budget reserved up front,
+  2 s deadline → drain-then-refund retirement, per-worker font budget 64 MiB.
+- Pass interleaving: `setWatermarkMuted` is a module global
+  (`src/core/watermark.ts:244–249`) until context-scoped, so a worker runs a
+  paint pass **or** an index pass, never interleaved.
+- Per-session outstanding units: 8 (queue 32); rate-limited by §14.
 
-- Same seam shape as `WorkerRenderEnv` (`src/worker/office-worker.ts:42–47`) —
-  `createCanvas/toBitmap/parse/paintables`; `toBitmap` is raster-or-record per job.
-  **Round-2 fix:** the record job is *near-rasterless but not free* — it performs
-  backing-context queries, holds scratch-surface snapshots (§7.3) and shaped text
-  work; its memory is **reserved before allocation** like any other job.
-- [call] defaults: one render worker per 2 vCPU, capped at 8; one parse worker;
-  parse-once-per-hash; **global render reservation `512 MiB` per process** (not per
-  worker); per-job decoded budget reserved up front; a unit deadline of 2 s handled
-  by worker retirement (§7.3), not cooperative yield; per worker: 256 rendered
-  pages or 64 MiB of registered fonts → recycle.
-- **Pass interleaving (round-2 fix):** `setWatermarkMuted` is module-global
-  (`src/core/watermark.ts:249`); until it is context-scoped [call], a worker runs a
-  paint pass **or** an index pass, never interleaved; the scheduler serialises
-  accordingly.
-- Outstanding-unit policy (round-2 fix): at most 8 units in flight per session and a
-  32-unit queue ceiling; further requests wait (backpressure surfaced by the
-  existing progress UI). A request for units beyond the cap is refused with a typed
-  rate message, not silently dropped.
+### 9.3 One canonical cache; session/audit storage (normative; round-7 fix agy I2)
 
-### 9.3 The one canonical cache — and session/audit storage
-
-**Cache key (round-2 fix; single form everywhere):**
+**Cache key (single form everywhere):**
 
 ```
-docRef ⊕ layoutFingerprint ⊕ recorderVersion ⊕ scaleBucket ⊕ contentPolicyId
-       ⊕ viewerMarkId ⊕ projectionMode ⊕ **policyDetails (subkey: the full immutable
-       effective policy — mark kinds and parameters, marks on/off, mark text or
-       viewer fields, notes presenter namespace, and the XLSX per-session
-       `viewStateHash`; §12)** ⊕ **unitId (subkey)**
+docRef ⊕ contentPolicyId ⊕ layoutFingerprint ⊕ recorderVersion ⊕
+scaleBucket ⊕ markSettings ⊕ projectionMode ⊕ (policyDetails: per-session
+view state hash for XLSX 4c) ⊕ unitId (subkey)
 ```
 
-- Per-unit records live here (pre-forensic), each entry holding one unit's
-  commands/raster plus its shared asset table and culling proof — the `unitId`
-  subkey (round-3 fix) makes the value per-unit explicit; the asset table dedups
-  across units by hash inside the document layer of the same key. **Isolation
-  (round 6):** the two `policy*` inputs bind the whole effective policy, so a
-  relaxed and a protected session, a mark-on and a mark-off session, a
-  presenter's and a non-presenter's notes namespace, and two XLSX viewers with
-  different sort/filter state **never share a cache entry** — the §16.2
-  paired-order test proves both fill orders. The notes namespace is its own:
-  a presenter's notes images live under their own asset sidecar
-  (`notes: presenterId`), not the page-asset table, so a non-presenter can
-  never resolve a notes asset by hash reuse.
-- **XLSX tiles** share the same tuple plus `sheetId + tileRect` — no separate key
-  shape (round-2 fix; draft 1 had diverging key formulas).
-- `layoutFingerprint` covers **(officeview version, backend version, canvas font
-  set, locale, parser inputs)** — the §14 byte-determinism claim (draft 1's
-  under-specified wording) is now *always* conditioned on this fingerprint.
-  A mid-session fingerprint mismatch ends the session as a typed
-  `layout-changed` (not a repaint of stale work).
+- Canonical entries hold the **pre-forensic unit surface** (commands or
+  rendered lossless-raster/tiled-RGBA surface) + shared asset table + culling
+  proof — **shared across sessions**, never per-sid pixels.
+- **Per-session mark+encode** happens in a bounded per-session **scratch
+  lease**: ≤ 2 final-raster units concurrently per session, explicitly
+  admitted against the §9.2 512 MiB process reservation before allocation,
+  streamed then released — never a per-sid mutated copy retained in the
+  canonical tier, and never 8 × 64 MiB of unbounded surface. The old
+  "8 MiB session edit tier" is renamed accordingly (I2 fix). Only sessions
+  with forensic+visible marks off share final encoded bytes directly.
+- **Document cache** (parsed doc + projected visibility + text index) is
+  keyed **by `(docRef, contentPolicyId, layoutFingerprint)`** — a relaxed
+  session's full-policy projection and a default session's visible-only one
+  are different entries; nothing leaks across them (fixes the old single-
+  per-docRef wording, which "leaked full content from relaxed to visible").'
+- Text index entries are keyed the same way (they are join outputs of the
+  §6.4 policy projection).
+- Session table: `sid → { docRef, viewerId, role, effectivePolicy,
+  activeSocket, jti, startedAt, status }` (used by resume, §6.2 rule 7).
+- Audit table (survives render sessions): `sid → { viewerId?, ip, startedAt,
+  keyGeneration, policyId, markSettings }`; 90-day default retention [call];
+  never shipped, predicted or logged (§18).
 
-**Session tiers:**
-- **Document cache** (per process): the decoded document, its text index, and the
-  projection-relevant state (e.g. per-image painted-bitmap caches so cross-session
-  hashing is not repeated). Single-parse admission; **nothing from this layer leaks
-  into a session's wire bytes except filtered outputs** (§7.7).
-- **Session edit tier**: the forensic-mutated command frames, bounded (≤ 8 MiB
-  in flight [call]), dropped at session end.
-- **Session table** (run state): `sid → {docRef, ip, startedAt, jti, status}` —
-  lives for the session only, governs resume/revocation, evicts with the session.
-- **Audit table** (round-2 fix, codex 7): the attribution mapping survives
-  session teardown: `sid → {viewerId?, ip, startedAt, keyGeneration, policyId}`,
-  governed by the owner's retention policy (default 90 days [call]); write-once,
-  deleted-on-expiry, **never shipped, predicted or logged** (§19); present so the
-  §13.6 recovery of a `sid` has somewhere to resolve months later.
+### 9.4 Marks: visible + forensic, per session (normative; round-7 fix agy I2.1)
 
-**Tokens and per-op authorisation (round-2 fixes):**
+- **Visible mark** is composited into the final raster server-side
+  (`paintWatermark` machinery, `src/core/watermark.ts`), fixed-text default
+  or viewer identity fields, or off (§2 item 11). Per-session mark
+  settings are part of `markSettings` in the canonical key.
+- **Forensic layer-1 pixel mark** (§13.2) is applied to every raster per
+  session (per-sid perturbation of the *page-keyed* basis) during the
+  session's scratch-lease encode; it **cannot live in the shared canonical
+  tier** and the "one cache entry serves every session" claim of older
+  drafts is **retracted** — the pre-forensic surface is shared, the marked
+  encode is per-session and streamed.
+- Fleet-wide: fixed marks + same policy ⇒ one cache entry for the
+  pre-forensic surface; every encode still goes through the per-session
+  scratch lease.
+- Ordering (one pipeline): paint → (protected) projection/occlusion pass →
+  Layer-2 text shift only on command-unit records with glyph coordinates →
+  visible + Layer-1 mark composite → flatten/encode.
 
-- Token claims are the §6.2 schema; the **socket is validated once and the token is
-  bound to the socket**, with `jti`/`sid`/`docRef`/`exp` re-checked on every op; the
-  `can.*` flags are the server's claim — **the server enforces `can` on every op**
-  (a capability the server set to `false` is refused at the op, never merely
-  hidden in the client UI).
-- A WS URL from the manifest is validated against a per-deployment **allowed-origin
-  allowlist** [call] (default: same host). No open redirect surface into it.
+## 10. Behaviour: open, failure, resume, expiry
 
-### 9.4 Visible watermark (round-2 fix; owner's per-viewer read)
+**(Open)** developer passes source → §6.3 branch: file source keeps today's
+loader; stream source opens WS (`streamClient`), HELLO (§6.2), origin
+allowlist + `authorize` hook, `manifest`, READY (`missingFaces`), unit/notes/
+print requests (§2 item 9 print). Pool renders → projection (§7.7) + marks
+→ frames; client replays 1:1 at the bucket.
 
-- **Default: fixed text, per-session setting (owner decision 2026-11-08, §18
-  item 8).** The developer's `authorize` hook picks the mark per session: fixed
-  text (default), the viewer's name/email/id/time, or off. Viewer identity text
-  comes from the audit table's viewer identity (§9.3) — or a session-derived label
-  when the deployment has none. Either form is rendered in the page
-  raster server-side, in the same machinery as the existing mark
-  (`paintWatermark`, `src/core/watermark.ts` painter + defaults at `:48–57`,
-  header parser `:164`) with merge-style precedence merged server-side
-  (`mergeWatermark` at `src/core/watermark.ts:114`).
-- **Mark form depends on the projection (round-3 fix; one pipeline per projection,
-  ordering fixed end-to-end):**
-  - `final-raster`: paint the document frame, composite the mark into the final
-    raster server-side, then assemble. The mark is pixels — a replayer cannot
-    delete it without corrupting the only content it receives.
-  - plain `commands` (**relaxed sessions only**, §6.1): the mark ships as a
-    last-position, opaque `RASTER_BLOCK` overlay op (asset-table referenced). **Honest, and now
-    stated plainly (round 4): the overlay is removable by a modified replayer —
-    changing its representation from text to bitmap does not prevent dropping one
-    op. Only `final-raster` guarantees the visible mark.** Command projections
-    with an overlay mark are therefore never offered to protected documents.
-  - `culled-commands` (protected sessions; the default projection is
-    `final-raster`, this is the opt-in): the mark must be embedded by the
-    **M-rule** — the mark is protected in **every transmitted content-bearing
-    component**, not merely image assets (round-6 fix): the mark bitmap is
-    composited into every transmitted content raster before framing, and any
-    asset transmitted unmarked is removed from the frame, so there is no
-    separately removable mark op. That includes mixed units: a unit whose live
-    visible text/vector serves through commands **and** whose images arrive as
-    rasters still leaves the vector part unmarked if only images are protected —
-    a modified replayer could then drop the marked rasters and keep the readable
-    unmarked text. So the M-rule holds only for units whose **entire** content
-    surface is transmitted rasters (a full-page raster or a rasterized flattened
-    group); every mixed vector+raster unit with a visible mark answers
-    `final-raster` (round-6 rule; §16.2 pins a mixed page where removing all
-    raster ops leaves readable text). The M-rule pipeline is stage-gated (§17);
-    until its tests are green, `final-raster` is the only protected projection
-    shipped.
-  - the obvious false path — an overlay op as the only mark on a protected
-    command projection — is **forbidden** by the null spot-check of §7.7 (P-rule
-    consistency).
-- **Ordering with the forensic pass (§13.2 pipeline)**, one order for every unit
-  record: (1) document paint with text intact; (2) protected session's culling
-  proof over the command list (skipped on relaxed sessions); (3) forensic
-  text-displacement mutate — the second mark layer, which needs glyph
-  coordinates, so it runs where glyph runs survive, i.e. not on `final-raster`,
-  which carries only the §13.2 layer-1 pixel mark); (4) visible-mark and
-  layer-1 pixel-mark compositing
-  (raster-side on `final-raster`/M-rule units; an overlay op only on plain
-  commands, relaxed sessions only); (5) flatten/rasterise any remaining group, then
-  frame. Nothing before step (3) may have baked pixels where the forensic mutation
-  needs coordinates, and nothing after step (3) may exist as removable mark
-  commands.
-- **Fixed text is the default** (§18 item 8): per-viewer identity is then carried
-  only by the forensic mark (§13), and the audit table stays the attribution record.
-- A fixed mark lets one cache entry serve every session; per-viewer marks key the
-  cache on `viewerMarkId` (§9.3). The **session-mutated frames live only in the
-  §9.3 session edit tier** — the canonical tier holds the pre-mutation record and
-  the culling proof.
-- `X-OfficeView-Watermark` is not sent on manifest answers (the baked mark is
-  authoritative; §8.3).
+**(Failure/refusal/expiry)** typed `StreamSessionError` codes; a HANDSHAKE
+malformed hello fails closed with no allocation beyond a bounded parse; a
+token aging out mid-flow ends with CLOSE `session-expired` unless a `renew`
+lands first (§6.2 rule 6); `revoked` closes once, buffers drop atomically; a
+presentation exits and `ended` resolves; recovery is a developer-driven
+re-open (§2 item 1). Replayer-side unit validation failure drops the
+unit, re-requests once, then shows the missing-unit diagnostic.
 
-## 10. Behaviour detail: open, failure, resume, expiry
+**(Isolation)** per-session caches/keys/marks (§9.3), retiring sockets on
+resume, and per-`contentPolicyId` processing (§6.4) are all covered by §16
+pairs.
 
-**(Open flow — round 5: the developer supplies the source; the branch does the rest)**
+## 11. Search, copy, and semantic text services (normative)
 
-1. Host passes a source: a file source (bytes/Blob/URL, unchanged APIs) or a
-   `StreamSource` (§6.1). The §6.3 branch routes accordingly; file sources keep
-   today's loader untouched.
-2. Stream arm: the client opens the WebSocket to `source.url` (the `streamClient`
-   hook, §8.2) and sends the `hello` (supported recorder versions, `token?` from
-   the source when the deployment uses token auth, or the upgrade's own
-   credentials, §6.2).
-3. Server runs the §9.3 origin allowlist and the §9.1 `authorize` hook → the `OVSM`
-   manifest (§6.2) as the session's first message, or a typed close
-   (`unsupported-version | auth-failed | session-expired | revoked | rate-limited`)
-   mapped to a `StreamSessionError` the loader surfaces as a load-error state
-   (deduplicated, no automatic retry; the viewer is otherwise usable).
-4. Client answers `faces-ack` when the manifest declares `textMode:'text'`, then
-   requests the units it needs (first visible page + next/prev prefetch within the
-   §9.2 outstanding-units cap; scope the viewport budget on XLSX, §12; show plan +
-   layers for a present, §12a).
-5. Pool renders a cold unit → applies the session's projection (§7.7) and the marks
-   → chunks over WS; the client replays 1:1 at the unit's scale bucket.
-
-**(Failure, refusal, expiry)**
-
-- Typed handshake closes (above) surface as load-error states with the
-  server-supplied notice, deduplicated per code.
-- **Expiry mid-session** (round-5 revision): a token that ages out while the
-  session is open is answered at the protocol level — the server either sends a
-  `renew` reply with a fresh token (authorising session continuation in the audit
-  table) or closes with the typed `session-expired`. The client then surfaces the
-  terminal `stream-expired` state; recovery is the **developer re-supplying a
-  stream source** (or their backend refreshing its grants) — there is no
-  manifest-in-bytes renewal path left to classify (§6.3; §21 round-5 note).
-- Revocation: `revoked` close → session `close` exactly once, buffers dropped
-  atomically (never a half-painted unit); a presentation exits and `ended`
-  resolves (§12a.7).
-- **Rendering failure on a unit** → tile fallback (§7.6), never hidden from the
-  diagnostics; replayer-side frame validation failure (header/version/checksum)
-  drops the unit and asks the server to re-send once; second failure → the
-  missing-unit diagnostic, not a plausible paint.
-
-## 11. Search, copy and semantic text services (round-2 merged)
-
-- **Search** (`can.search`): client's query → server op against the **index built
-  server-side in the §7.3 second pass** (existing `createRecordingContext` +
-  `buildTextIndex`, `search.ts:92,315`) — with the visible mark muted
-  (`search.ts:322–334`). The answer is highlight rectangles in the existing
-  `HighlightRect` shape (`src/core/overlay.ts:7`) for the **visible projection**.
-- **Copy** (`can.copy`): a server op for the selected range's *display* text —
-  **visible-band text only** (round-2 rule): logical ranges that carry the whole
-  source even when a band clip hides most of it (`src/core/text-recording.ts:11–14`)
-  are intersectioned against the recorded band before serving; XLSX copy serves
-  the formatted display text for the selected cells, not raw/formula values. The
-  client's local text-selection machinery (`src/core/selection.ts`) is never used
-  for a remote doc: selection is rects from the same index.
-- **A11y/semantic text** (`can.textA11y`): the §15 service, from the same index —
-  subject to the §6.4 policy (vanish runs and hidden content never appear).
-- **The visual/index join (round-3 fix):** the index pass records the *full logical
-  source* (`LogicalTextRange` retains it beyond the clip, `src/core/
-  text-recording.ts:9–16`), so "what was recorded" is not "what is visible". Every
-  semantic answer therefore runs one **join rule** before leaving the server: a
-  text range is servable only if (a) it sits fully inside the unit's painted clip
-  bands, (b) the §7.7 occlusion analysis from the culling proof shows no later op
-  paints over any part of it — on `final-raster` the occlusion is structural in
-  the raster, but final pixels identify neither which logical ranges were covered
-  nor how much of a run remains, so the same conservative withhold applies there
-  equally and by construction), and
-  (c) it is not part of another surface's private text. A range that fails any
-  condition — including *partially* clipped or overpainted runs and partially
-  visible graphemes — is **withheld entirely** from search, copy and a11y, with a
-  per-unit diagnostic count. When in doubt, withhold; tests assert covered and
-  partially-clipped runs for every endpoint (§16.2).
-- **Chart descriptions** (`describe.ts:40–62` reads model categories and numeric
-  series values, not paint): in stream mode they are **visible-projection only**
-  (§6.4): what's painted is available as text; nothing is emitted by reading the
-  model. A Stage 1 test asserts a chart in a stream answer carries categories only
-  when painted and never min/max ranges.
-- Forensic watermark text never appears in search/copy/a11y answers (§13.4 rule).
+- **Join rule (single home):** every semantic answer runs a conservative
+  visible-projection join before release. Stage-1 implementation (round-7
+  fix, agy C3): the server records each `RECORD_TEXT` run's paint-surface
+  **ink bounds plus a conservative opaque-coverage grid** (collected during
+  the same visual paint pass, §7.7 Stage-1 occlusion paragraph). Text is
+  servable iff (a) its range sits fully inside the painted clip band,
+  (b) 100 % of its ink bounds survive the opaque-coverage grid to the final
+  raster (or per-§6.4 a drawing-free patched view), and (c) it is not part
+  of another surface's private text. On **any unresolved or not-computed
+  case** (including `final-raster` where the join composes structurally but
+  the *logical range* is not exactly recoverable from pixels), **withhold** —
+  never approximate. Per-unit diagnostic counting covers withheld ranges.
+- **Search** (`can.search`): server op against the same (joint-projection)
+  index built in the §7.3 second pass with the visible mark muted
+  (`src/core/search.ts:92,315`, mute at `:322–334`); answers are
+  `HighlightRect[]` (`src/core/overlay.ts:7`).
+- **Copy** (`can.copy`): display text of the selected range; XLSX serves
+  formatted display text for selected cells, never values/formulas.
+- **A11y/semantic** (`can.textA11y`): §15, from the same index, subject to
+  §6.4. `can.textA11y` never authorises notes (§12a.5).
+- **Chart text:** visible-projection only (painted names//categories), no
+  model value ranges.
+- **Notes text** never appears in search/copy/a11y answers **unless**
+  `can.notes` **and** presenter proof are both true (§12a.5).
 
 ## 12. XLSX in stream mode
 
-- **Scope**: server-painted **tiles** of the *interactive* sheet viewport plus
-  display-only metadata. This is the owner decision (§2 item 6) and the boundary:
-  the local interactive path is where formulas (`contracts.ts:74–80`), hidden
-  rows/cols geometry (`contracts.ts:668–673`) and raw picture bytes
-  (`SheetDrawings.images` at `contracts.ts:362–366`, `XlsxImage data: Uint8Array`
-  at `types.ts:27`, loaded by an `op:'drawings'` read,
-  `src/worker/viewerRemoteDrawings.ts:1–18`) reach the client — **the stream mode
-  ships none of these**:
-  - Cell content stays server-side; copy/search/a11y are §11 server calls.
-  - SheetLayout is reduced to a paint-facing subset (axis sizes, frozen panes,
-    merged-rect and gridline extents only). **Round-2 honesty note:** the client
-    still *sees the collapsed row/col numbering* of hidden bands — that reveals
-    hidden bands exist (not their content). Stated as an accepted limitation,
-    §20; if the deployment forbids it, the sheet renders without visible numbering.
-  - Static pages: **draft-1's "already paint-only" claim is corrected** — the local
-    path paints every sheet including hidden ones (`paint.ts:427–429`, §4 recon);
-    in stream mode the §6.4 gate filters hidden sheets before layout.
-- **Tiles** [call]: painted on the server pool by `getPaintables`' XLSX bring-up,
-  keyed by the §9.3 canonical key + `sheetId + tileRect`; the tile bitmap is a
-  drawn-bitmap snapshot (§7.7); the **viewport reply is display-only text-free** —
-  a11y/copy/search are server calls on the recorded text index (§11).
-- **Interactions are staged** (§17): 4a static + read-only sheet tiles;
-  4b selection/freeze/sheet-navigation parity (client-side geometry, the server
-  never sees selection except as requested ranges); **4c server-side sort/filter**
-  (owner decision 2026-11-07, §18 item 3).
-- **Server-side sort/filter (4c)**: the server adopts the existing engine surface,
-  `op:'sort'`/`'filter'` (`src/worker/viewerProtocol.ts:31`, command kinds at
-  `src/xlsx/view/contracts.ts:709–710`), running it in the pool against the
-  server-held workbook. Rules:
-  - **View state, not edits.** Sort/filter state is per session and never changes
-    the source document or another viewer's view. The state lives in the session
-    table (§9) and is dropped on session expiry.
-  - **Cache key.** A tile painted under a sort/filter state adds a canonical
-    `viewStateHash` (sort keys + filter criteria, normalised) to the §9.3 key;
-    the unsorted, unfiltered view keeps the plain key so it stays shareable
-    across viewers.
-  - **Filter value lists are display text only, and pass the §11 join** (round-6
-    fix). The values a filter menu offers come from the formatted display text of
-    cells that pass the **same conservative visible-projection rule as
-    search/copy/a11y (§11)** — a cell *covered by an opaque drawing* is not a
-    hidden row, and its display text could still leak; so only cells whose band
-    is inside the paint-facing clip set and not occluded per the §11 join rule
-    contribute values. Formulas, raw cell values, hidden rows/cols, and hidden or
-    veryHidden sheets never contribute values; a value that exists only in a
-    policy-hidden or covered cell is not listed.
-  - **Sort/filter targets are authorized server-side** (round-6 fix). The
-    SortSpec/FilterSpec a client sends
-    (`src/xlsx/view/contracts.ts:709–710` accepts caller-supplied specs;
-    `src/worker/viewerProtocol.ts:31` names operations but does not authorize
-    them) is validated against the **policy-approved view** before the engine
-    runs: every sort key/column and filter range must be inside the view's
-    allowed-column/range set, computed per contentPolicy (§6.4). A target on a
-    hidden sheet/column/row or an out-of-policy range is **refused with a typed
-    error before it can influence reply ordering, counts or tile state** — the
-    disclosure lives in the observable order even when the hidden cell's value
-    never travels.
-  - **Replies carry no cell data.** A sort/filter reply returns new axis geometry
-    (row order and sizes for the paint-facing SheetLayout subset) and invalidates
-    tiles; content arrives only as freshly painted tiles. Row-number labels follow
-    the §20 hidden-band note.
-  - **Rate limits.** Sort/filter ops are a separate rate-limit class in the §14
-    table, because each one re-lays out the sheet.
-  - **Wire audit.** 4c's acceptance adds the §16.2 wire-disclosure suite over sort
-    and filter: a secret planted in a hidden row, a hidden column, a hidden sheet,
-    **a cell covered by an opaque drawing**, **a covered pixel region** and a
-    formula must not appear in any reply, filter value list or tile; **hostile
-    requests** (round-6 fix) sort-by-a-hidden-column, filter-on-a-covered-range
-    and out-of-view targets must be refused server-side with typed errors, their
-    session state unchanged, and their observable order untouched.
+- **Tiles via the viewport pipeline (round-7 fix, agy I4.1):** the server
+  pool opens the sheet through `openImportSession`/`SheetGeometry` and
+  paints tiles with **`renderSheetViewport`** (`src/xlsx/view/renderViewport.ts`)
+  — the paged/resident pipeline — not `getPaintables` (whose XLSX path is a
+  static full-sheet export with `StaticExportLimitError` at
+  `src/render/paint.ts:175`, no viewport, no tile rect). A tile is keyed by
+  the §9.3 canonical key + `sheetId + tileRect` and ships `XLSX_TILE`.
+- **Disclosure boundary (unchanged from earlier rounds + C1 additions):**
+  no formulas (`AuthoritativeCell`, `src/xlsx/view/contracts.ts:74–80`), no
+  hidden rows/cols metadata (`SheetLayout`, `:668–674`), no drawing bytes
+  (`SheetDrawings.images`, `:362–366`); paint-facing layout only; the
+  collapsed row/col numbering limitation persists (§19.4). Hidden sheets are
+  gated pre-layout (§6.4).
+- **Staged interactions:** 4a static + read-only tiles; 4b
+  selection/freeze/navigation parity; 4c server-side sort/filter (owner
+  decision, §2 item 7) — **with the round-7 C1 purge** (§6.4: protected
+  sessions never let `isVisibleSource` flip author-hidden rows; the
+  `authorHidden`/`autoFilterHidden` split applies, `row@hidden` data is
+  purged or masked), **server-side target authorization** (sort keys/filter
+  ranges validated against the policy-approved view before engine-run,
+  refused before order/counts/tiles can move), and **filter values through
+  the §11 join** (values come from display text of cells that pass the
+  full-visibility join; covered/occluded cells don't leak). Pivot/slicer/
+  timeline commands are **refused on protected 4c streams** (§6.4), and
+  PivotCache/Slicer items backed by hidden/veryHidden data are stripped.
+- **Rate classes:** sort/filter ops and print sessions each carry their own
+  §14 class.
+- **Wire audit** covers the §6.4/§12 rows (T8).
 
-## 12a. Presentation mode for streamed decks (owner decisions 2026-11-07)
+## 12a. Presentation mode for streamed decks
 
-`present()` on the `OfficeDoc` / `OfficeFile` handle works for a server-streamed
-PPTX the same way it does for a local one: same `OfficeViewerHandle`,
-`PresentOptions` and `SlideShowSession` API (`src/components/present.ts`), with
-**animations, transitions and speaker notes** (owner decisions, §18 items 4 and 4a).
-The file still never reaches the client: the server does the slide planning and
-drawing, and the client only plays back bitmaps on a timeline.
+`present()` works on a remote document with **animations, transitions and
+Morph**, played back from server-drawn layer bitmaps + a bounded show plan
+(`OVSP`, §12a.2). The file never reaches the client.
 
-### 12a.1 The split: where the local engine already divides
+### 12a.1 The split (verified anchors)
 
-The local engine already separates *what to draw* from *how to move it*:
+Server: parse, content policy (§6.4), planner, layer raster
+(`src/slideshow/render/plan.ts:17–29` `PlanLayer` (with `PptxShape[]`
+**retained server-side only**), `raster.ts:41` `rasterLayer`, Morph match,
+appearance projection §12a.3, marks). Client: scheduler, behaviours, easing,
+masks, transitions, compositor, input, presenter surfaces — the same engine
+code the local player uses, minus any shape/package read.
 
-- the planner splits each slide into layers (`PlanLayer`, `src/slideshow/render/plan.ts:17–29`),
-  per shape, per part (`fill` / `line` / `text`) and per paragraph, word or letter
-  for text builds (`src/slideshow/render/text-split.ts`, `scene.ts:37–45`);
-- each layer is drawn into a bitmap (`rasterLayer`, `src/slideshow/render/raster.ts:41`;
-  `LayerBitmap`, `src/slideshow/types.ts:396–401`);
-- the scheduler and behaviours (`src/slideshow/engine/scheduler.ts`, `behaviours.ts`)
-  move, fade, scale, rotate, recolour and mask those bitmaps through the
-  WebGL2 / Canvas2D compositor (`src/slideshow/render/webgl2.ts`, `canvas2d.ts`,
-  `masks.ts`, `transitions2d.ts`).
+### 12a.2 The show plan (`OVSP`), bounded schema (round-7, agy I6)
 
-Stream mode cuts at that line:
+One per slide, versioned with the §7.1 frame header:
+- `layers[]`: `id, assetId, bounds, z, partTag` — resolved base geometry and
+  per-part splits (`fill/line/text`), no shape data.
+- `steps[]`: order, appearance-action eligibility flags (§12a.3), trigger
+  kinds with **hit-region** rectangles only.
+- `keyframes[]`: `{ t, per-layer delta }` for behaviours the client
+  reproduces; per-paragraph/text-range targets already resolved into layer
+  ids server-side (text builds are a server expansion:
+  `src/slideshow/player/text-builds.ts:57–106` becomes a server pass;
+  `render/scene.ts:37–45`'s per-target text metadata is server-held).
+- `morph[]`: matched layer pairs with start/end plan geometry
+  (`src/slideshow/morph/render.ts:31–65` consumes normalized frame
+  geometry server-side; the local match runs on the server).
+- `transition[]`/`links[]`: kind, direction, duration, sound ref, jumps.
+- **Admission limits** [call]: per slide ≤ 128 layers, ≤ 64 steps,
+  ≤ 512 keyframes; per show, aggregate decoded layer bytes ≤ 128 MiB;
+  every record goes through §9.2 pre-admission on `(session, slide,
+  generation)`; eviction follows §9.3.
+- **Adapters (round-6-carry, round-7 restated):** the client's
+  session pipeline runs package-free (`src/slideshow/player/session.ts:228–232`
+  today reopens the package — the remote adapter takes the show plan instead);
+  the "Next" preview composites planned layers
+  (`src/slideshow/presenter/preview.ts:66,140–141,267–274` today paints from
+  `PptxSlide`); the notes pane consumes server-drawn notes images
+  (`src/slideshow/presenter/PresenterView.tsx:52,315` today eats parsed text);
+  no-package/no-`PptxShape` client prototype is a Stage-0/3c blocker (§16
+  T10). `render/scene.ts:37–45`'s per-target text metadata is server-held.
+- **Refused behaviours:** `cmd` (OLE) dropped with diagnostics; the rest plays.
 
-| Runs on the server | Sent to the client | Runs on the client |
-|---|---|---|
-| parse, content policy (§6.4), planner, layer raster, Morph matching (`src/slideshow/morph/match.ts`), visibility projection (§12a.3), watermarks | per slide: a **show plan** (OVSP, below) and the layer bitmaps it names | scheduler, behaviours, easing, masks, transitions, compositor, input, Presenter View |
+### 12a.3 No hidden content in layers — eligibility on final observable appearance
 
-**Stage-0/3c blocker (round-6 fix): build a no-package, no-`PptxShape` client
-prototype.** The engine's shape reads are real: `player/session.ts:228–232`
-reopens the package (`reReadable(start.source)`); `player/text-builds.ts:57–106,145`
-expands text-build trees and computes per-item base geometry from shapes;
-`render/plan.ts:17–26` retains `PptxShape[]` nodes in `PlanLayer.static/target`;
-`render/scene.ts:37–45` retains per-target text-part metadata on shapes;
-`presenter/preview.ts:66,140–141,267–274` consumes `PptxSlide` and paints
-`paintDirect` for the Next preview; `presenter/PresenterView.tsx:52,315` eats
-parsed notes paragraphs. Morph matching stays on the server, while
-`morph/render.ts:31–65,165` consumes only normalized frame geometry. The client
-prototype must run the scheduler/compositor from the §12a.2 schema **without a
-package, without `PptxShape` and with zero of those reads**; memory tests charge
-the admitted records to the slideshow workspace (§14). Until the prototype runs,
-Stage 3c is blocked.
+A layer can hold content that never appears **observably** — including by
+recolour, opacity or masking, not only geometry (verified:
+`src/slideshow/render/canvas2d.ts:102–107,178–193,345–361,418` recolour/opacity
+apply over retained textures at draw time; behaviour inputs ride separately in
+`src/slideshow/types.ts:118–173`). Rules:
 
-### 12a.2 The show plan (`OVSP`)
-
-One per slide, versioned with the OVSD format version (§7.2), sent over the open
-session's WebSocket:
-
-- **Layers:** id, bounds in slide coordinates, scale bucket, z-order, and the asset
-  id of its bitmap (a drawn bitmap per §7.5; never shapes, text or media bytes).
-- **Timeline:** the parsed animation tree the scheduler already consumes
-  (`CTn`, `BehaviourNode` and friends in `src/slideshow/types.ts:30–182`), with
-  every target rewritten from a shape reference to a layer id. Triggers (on click,
-  after previous, with previous, on shape click) keep their meaning; a shape-click
-  trigger carries a hit region, not the shape.
-- **Transition:** kind, direction, duration and sound reference; the client builds
-  it from the outgoing and incoming slides' composed bitmaps.
-- **Morph:** the server runs the match and sends matched layer pairs with start
-  and end geometry; the client interpolates. Text Morph by word or character uses
-  per-item layers from the server's text split.
-- **Links and action buttons:** jumps inside the deck are kept (target = streamed
-  slide index). External URLs are sent only if the manifest has `can.links`
-  (default off), so a link can't carry data the page doesn't show.
-- **Refused behaviours:** `cmd` behaviours (OLE verbs and similar) are dropped
-  with a diagnostic; the rest of the slide still plays.
-
-- **Bounded normalized schema (round-6 fix; the §16 audit lists its byte shape):**
-  the timing tree is serialized into a **closed, versioned record** with exactly
-  the fields the client scheduler/behaviour/compositor consume —
-  `keyframes[]` (time, per-layer delta), `steps[]` (order, triggers with hit
-  regions only, appearance actions with their §12a.3 eligibility flags),
-  `layers[]` (asset id, bounds, z, part tag), plus transition and morph pair
-  records whose geometry/addressing follows the server's plan. **Everything the
-  local engine's animation composers consumed from parsed shapes — text-build
-  expansion, target resolution, inherited geometry, base-geometry measurement,
-  Morph pairing and part splits — is resolved server-side into per-layer layers
-  and per-step targets; the client consumes per-entity bits only.** Draft 5's
-  "each read becomes a field or moves server-side" is tightened: it does NOT mean
-  serializing the original model under another name — the shape is not sent; its
-  composable outcomes are, per layer.
-- **Admission limits (round-6 fix):** per slide — ≤ `128` layers, ≤ `1,024`
-  keyframes, ≤ `64` steps; per show — ≤ 128 MiB aggregate decoded bytes for
-  layer asset and show-plan records [call]; decoded bytes for each slide surface
-  against a pre-allocated budget, and every message respects the §14 compressed
-  and decoded caps. An over-limit slide surrenders animation — its steps degrade
-  to server-composed keyframes per §12a.3, never original layers with content
-  withheld. Pre-admission, generation/cancellation and eviction follow
-  §9.2/§9.3 (reservations before decode; every step tagged by
-  `(session, slide, generation)` and cancelled cleanly when a slide is left).
-
-**Remote presentation adapters (round-6 fix; the local presenter surfaces are
-component code over local data, so each is re-hosted over the show plan):**
-- **Session adapter:** the local session's package/plan handling
-  (`session.ts:228–232`, plan build) is replaced by a remote session whose
-  inputs are the WS show plan and its admitted layer bitmaps; the engine
-  scheduler/behaviour/transform code is reused unmodified over it.
-- **Preview adapter:** the Next/Preview preview path no longer paints
-  `PptxSlide` (`preview.ts:66,140–141,267–274`) — it composites the plan's
-  server-drawn layer bitmaps for the next checkpoint. For steps outside the
-  §12a.3 proof subset the preview shows the server-composed keyframe image.
-- **Notes adapter:** `PresenterView.tsx:52,315` consumes parsed note text —
-  remote notes arrive as marked images (§12a.5) and that component shows those,
-  with the a11y service (§15) supplying the descriptions for that presenter's
-  session only.
-
-### 12a.3 No hidden content in layers — release eligibility is on final observable appearance (the P-rule for animation; round-6 correction)
-
-A single final image hides everything covered; separate layers don't. A layer can
-hold content that never appears on screen at any point in the show **in any
-observable sense** — and "appears" means appearance, not geometry. The §12a.2
-plan carries the original timing tree and the client re-applies effects; draft 5
-checked only *where* a layer shows, and three things leak straight through
-geometric masking (all verified in the engine the client would run —
-`src/slideshow/render/canvas2d.ts:102–104,178–183,345–356,418` applies recolour
-and opacity to retained source textures at draw time; the behaviour inputs are
-carried separately in `src/slideshow/types.ts:118–173`):
-
-- a `set`/colour effect that turns a layer's text or fill the background colour
-  for its whole active life (black-on-black): the layer ships with its original
-  ink and the effect *hides it on the client* — a modified client that skips the
-  effect reads the secret;
-- a low-opacity image whose unattenuated bitmap discloses far more detail than
-  any rendered frame showed;
-- a mask/motion/Morph whose intermediate states are **samples**, not proofs — a
-  masked band, a blend whose result depends on content below, or a sample gap can
-  expose exactly what the sampled points missed at an unsampled time or during
-  an overlapping transition.
-
-So the server applies the following projection **on observable appearance**:
-
-1. **Release eligibility is defined on the layer's *observable* content:
-   effective appearance** = the rendered look per time including alpha, recolour
-   (per-part colour matrices), masks (wipe/blinds-style parameter animations),
-   Morph-interpolated looks and overlapping layers' compositing. For every build
-   step, at bounded samples inside every motion AND at the step boundary list,
-   compute the rendered page with and without the layer, and diff.
-2. **Never-visible-in-appearance content (not sent).** A layer, or the parts of
-   it, whose content never contributes observable ink at any computed state —
-   by geometry OR by appearance: covered by opaque siblings, cropped away, alpha
-   0, recoloured to the effective background, fully masked — is excluded.
-3. **Partly-observable content is baked before sending.** Where only part of a
-   layer is ever observable, that union mask is applied, and where only part of
-   a layer's *appearance range* is observable (opacity cap, colour clamp), the
-   raster is **re-rastered to its observable appearance envelope** so a modified
-   client cannot skip an effect to see more than the composed show showed. The
-   raster of a recoloured/alpha-animated layer is pinned at its maximal visible
-   exposure, never the content it degrades from.
-4. **Proof domain, enumerated — not sampled-as-proof.** A step plays on the
-   client (draft 5's case) only if the server can prove its every observable
-   appearance is disclosed by what it sends. The proof subset is exactly the set
-   of effects the client engine reproduces deterministically and that the server
-   composes identically: visibility toggles, per-layer motion of an already
-   safe-enveloped raster, transition compositing of safe rasters, and morph
-   geometry over safe rasters. Outside it — recolour/colour animations without
-   baked appearance envelopes, opacity animations not at baked envelopes, mask
-   parametrisations the sampler can't bound completely, blending whose result
-   depends on content below — the step falls back to **server-composed
-   keyframes**: the client cuts or cross-fades between server-drawn final
-   images, with a `step-composited` diagnostic.
-   **Never original layers alongside fallback frames.** A step served from
-   server-composed frames ships no layer bitmaps for the unsafe interval: the
-   mixed disclosure of draft 5 (originals for some layers, keys for the pose)
-   would still leak through the originals. When a slide mixes proof-subset and
-   fallback steps, the client plays the proof steps on composed-safe rasters and
-   switches to server keyframes for the fallback steps' duration.
-5. **Adversarial fixtures (round-6 fix), decoded-asset inspection not screenshot
-   sampling:** a black-secret-text layer recoloured white-on-white for its whole
-   life; a 5 % opacity image; a mask that sweeps over a covered band; a Morph
-   whose interpolated frame briefly reveals covered text; an intermediate-time
-   sample gap between two bounding keyframes; a full-cover frame not sampled at
-   its centre. Each asserts the wire carries no recoverable original ink (or
-   appearance-envelope-relative ink) for the covered interval, and that the
-   fallback path engages with `step-composited`.
-
-Stage 0 measures how often step 4 is hit on the corpus and how much it costs.
-The §16.2 wire audit extends to show plans: a secret placed under an opaque
-never-moving shape, in a cropped-away region, **recoloured to the background,
-in a masked-away band and at an unsampled intermediate time**, and on a hidden
-slide must not appear **in any decoded layer bitmap, keyframe or reconstructed
-frame**.
+1. Compute the layer's **observable appearance envelope** per build step
+   and sampled motion time (rendered look **with and without** the layer,
+   diffed: covering, cropping, alpha 0, recolour-to-background, full mask).
+2. Anything never observable in appearance: **not sent**.
+3. Partly observable: mask to the union and **re-raster at the observable
+   appearance envelope** (the raster cannot contain ink that a modified
+   client could reveal by skipping the effect).
+4. **Proof subset (enumerated):** effects whose every observable state is
+   determined by data the client already has — visibility toggles over
+   safe rasters, transitions composited from safe rasters, motion/Morph
+   of safe rasters **only when either no lower layer had masked/withheld
+   pixels inside the mover's swept-area trajectory, or the swept area is
+   analytically proven at 100 % coverage for all `t`** (round-7 fix, agy
+   I4.3: sampling alone is never the proof — the sample gap *is* the
+   fallback trigger). Everything else — colour/opacity animations whose
+   appearance envelope isn't baked, mask parameterisations the sampler
+   can't bound, blends depending on content below — plays as
+   **server-composed keyframes** (`step-composited`), and **no original
+   layers ship alongside fallback frames for the unsafe interval**.
+5. Wire audit adds colour/opacity/mask/intermediate-time fixtures asserting
+   the transmitted decoded assets carry no recoverable unreleased ink
+   (T5).
 
 ### 12a.4 Watermarks during a show
 
-- The **visible mark** is baked into every layer bitmap and the background at the
-  layer's rest position, and also drawn as a top overlay by the client. A modified
-  client can skip the overlay, but every layer it shows still carries the baked
-  mark. (Moving layers carry their part of the mark with them; that is accepted.)
-- The **forensic mark** is the §13.2 layer-1 primary pixel mark (§18 item 7a) —
-  the spread-spectrum pattern — in every layer bitmap and keyframe, with no
-  glyph coordinates to displace.
-- Both apply on the audience screen and in Presenter View.
+Visible and forensic marks are composited into **every layer bitmap and
+keyframe** exactly once: composited with
+`globalCompositeOperation = 'source-atop'` so transparent padding stays
+alpha-0 (the `rasterLayer` layers are transparent RGBA boxes,
+`src/slideshow/render/raster.ts:95`) and the mark's opacity does **not**
+stack across overlapping layers — where translucent layers overlap
+unacceptably, the keyframe path is used instead. **No client-side second
+overlay** of the same mark on already-marked content (round-7 fix, agy I4.2).
+Presenter notes images carry both marks (§12a.5).
 
-### 12a.5 Speaker notes (owner decision §18 item 4a)
+### 12a.5 Speaker notes
 
-- **Who gets notes.** Only a viewer the host marks as the presenter: the host's
-  `authorize` callback (§9.1) returns `role: 'presenter'`, and only then does the
-  manifest carry `can.notes`. Audience viewers and ordinary readers never get
-  notes. The server enforces `can.notes` on every request, as with every `can.*` flag.
-- **Where they show.** Presenter View only, never the audience surface. The local
-  engine already keeps the two surfaces apart (`src/slideshow/presenter/`).
-- **What is sent.** Notes for each slide are server-drawn images, with both marks,
-  like any other unit. Notes text for screen readers and the presenter's own
-  search comes through the a11y service (§15) on those images, for that viewer
-  only. Comments are still never sent.
-- **Policy.** Notes go through the §6.4 content policy like slide text (so hidden
-  text in notes is dropped) and every notes delivery is recorded in the audit
-  table (§13) with the viewer id. **Authorization is conjunctive across every
-  notes-bearing surface** (round-6 isolation fix): the notes images, the
-  semantic/a11y notes text (§15), search hits inside notes, and any cache lookup
-  that could resolve a notes asset all require the session's **`can.notes` plus
-  presenter-role proof** — checked again after a resume (§6.2 rule 6), and
-  `can.textA11y` alone never authorizes notes. A non-presenter's search, copy or
-  a11y requests never round-trip a notes asset id, so the notes cache namespace
-  cannot be probed.
-- **Limit.** Once a presenter can read the notes they can retype them; the marks
-  trace screenshots, not retyping. Stated in §20.
+Only a viewer with `role: 'presenter'` **and** `can.notes` (both set by
+`authorize`) gets notes; Presenter View only; server-drawn marked images;
+the notes a11y/semantic/search answers re-check `can.notes` conjunctively
+after resume (§6.2 rule 7); every delivery is audited. `can.textA11y`
+alone never grants notes. **Limit:** a presenter can retype the notes;
+marks trace screenshots, not retyping (§19.5).
 
 ### 12a.6 Media
 
-Video and audio are part of a show but the original media bytes are an embedded
-original (§7.5, Never list). So:
+Poster frames by default; optional Stage 3d transcodes (mark-burned,
+metadata-free, via `src/slideshow/media/lease.ts`), never original bytes.
 
-- **Default:** media show their poster frame, a drawn bitmap.
-- **Stage 3d (optional, own gate):** the server transcodes each clip to a fresh
-  stream at a capped resolution with the visible mark burned in and metadata
-  stripped, and plays it through the existing media lease
-  (`src/slideshow/media/lease.ts`). Transcoding is a new server dependency
-  (to verify in Stage 0: ffmpeg licence and Bun process model).
+### 12a.7 Other presentation behaviour
 
-### 12a.7 Other behaviour
+Slide list follows the policy-filtered units (hidden slides not counted);
+resolution is the audience bucket; prefetch (current + 2 next + 1 previous)
+under normal rate limits; gesture-safe start (§8.2's synchronous
+manifest reads); session lifetime per §10 (revocation exits the show).
 
-- **Capability.** The manifest declares `can.present` (§6.2); without it `present()`
-  rejects with `SlideShowError('not-presentable')`.
-- **Slide list.** The session pages through the policy-filtered unit list: hidden
-  slides (`show="0"`) are not in it, and `slideIndex` / `goTo()` count streamed
-  slides only. This differs from local mode on purpose, so the count of hidden
-  slides isn't revealed.
-- **Resolution.** Layers render at the audience screen's size × DPR, rounded to the
-  §8.3 scale bucket, which is in the §9.3 cache key. A screen change re-requests at
-  the new bucket and shows the current bitmaps scaled meanwhile. Scale and zoom
-  behaviours that enlarge a layer above its bucket request a larger bitmap for
-  that layer, capped at `maxUnitPx`.
-- **Prefetch.** The client loads the show plan and layers for the current slide,
-  the next 2 and the previous 1 [call], under the normal unit rate limit (§14);
-  a show is not a bulk-export path. `goTo()` fetches the target first. A slide
-  whose layers haven't arrived shows its composed final image and starts animating
-  when the layers land.
-- **Gesture and fullscreen.** Same synchronous start as local mode: the surface
-  opens inside the gesture and content streams after.
-- **Session lifetime.** Token renewal, revocation and expiry follow §10. On
-  revocation the show exits and `ended` resolves; it never falls back to local
-  rendering.
-- **Errors.** Same `SlideShowErrorCode` set. A slide that fails to stream shows a
-  plain error frame and the session stays alive.
+## 13. Forensic marks
 
-### 12a.8 Acceptance
+### 13.1 Two layers, one decision
 
-- **3b (static show + notes):** Playwright: present a streamed deck, forward, back,
-  `goTo()`; hidden slides never appear and the counter excludes them; Presenter
-  View shows notes only for a `presenter` viewer and never on the audience surface;
-  a non-presenter viewer gets no notes from any request; no PPTX, notes text
-  outside the a11y service or media bytes cross the wire; both marks on every slide
-  and notes image; revocation mid-show exits cleanly.
-- **3c (animation):** the corpus's animated decks play through the stream with
-  pixel-diff against local playback at fixed timeline samples within the §7.4
-  tolerance for the chosen mode; the §12a.3 wire audit is green; the
-  `step-composited` fallback rate is recorded; build steps, transitions and Morph
-  pairs match local mode's step count and order.
-- **3d (media, optional):** transcoded playback carries the burned-in mark; no
-  original media bytes on the wire.
+Layer 1 (primary, §2 item 10) is a **keyed spread-spectrum pixel
+pattern on every unit** (every page, layer bitmap, keyframe, notes image,
+print page). Layer 2 is keyed glyph-advance displacement, an independent
+second layer **only on command-projection units**. Both encode the same
+per-session codeword. Marks off per session ⇒ unverifiable (§6.1).
 
-## 13. Forensic watermark — capacity, retention and collusion (round-2 rewrite)
+### 13.2 Layer-1 algorithm (normative; round-7 redesign, agy C4)
 
-### 13.1 What it is
+Payload: `codeword_40 = token_24 | salt_8 | CRC8_8` (the session token is a
+24-bit monotonic counter from the audit table, never reused; exhaustion
+refuses sessions).
 
-A **per-session tracking layer baked into the recorded commands (or tiles)**
-invisible at reading size: selected words in the page's recorded text are displaced
-sideways by a sub-pixel amount. Recovering the token requires the detector's
-re-render plus the candidate table (§13.6).
+- **Page-keyed tiled basis (fixes the `O(M × pixels)` carrier contradiction):**
+  the carrier positions/sizes are **page-keyed**, not session-keyed:
+  `kBasis = HKDF(kMaster, "basis" | docRef | unitId)` places `N_chips` chips
+  in tiles glued on tiled macroblocks (≥ 2×2 device-pixel cells in a
+  constrained low-mid band, sized for JPEG q70 + 50 % downscale — chip power
+  per cell published by Stage 0 measurements). A **single `O(pixels)`
+  projection per candidate-*independent* carrier** yields per-cell soft
+  LLRs; the session's codeword modulates those chips by a signed
+  `(N_chips, 40)` code — so sessions on the same page differ only in
+  coded chip *signs*, and every candidate's evidence is decodable in one
+  pass.
+- **Soft-decision code:** a `(N_chips ≥ 512, 40)` ECC family (candidate
+  specifications: BCH / polar / short Reed-Muller; concrete choice and
+  code tables are a Stage-0 deliverable) — **not** `3× repetition` + a
+  40-bit Hamming-ball decode, which produced the double-counted bound
+  below.
+- **Detector gating (before any codeword match):** `Z = ⟨r, s⟩ / (σ_r √L)`
+  per candidate; reject unless `Z_best ≥ τ_abs` **and**
+  `Z_best − Z_second ≥ τ_margin`; τ values calibrated so the **empirical
+  false-attribution rate over the full audit-table size stays ≤ 10⁻⁶ per
+  decision**, measured with unmarked-capture batteries (T9) — the old
+  per-candidate binomial printout was not a bound (it double-counted the
+  same 8 CRC parity bits already inside the Hamming ball).
+- **White-clipping handling:** uniform `#FFFFFF` is ~80–95 % of an office
+  page and clips positive mean-zero chips at 255 — the mark embeds with a
+  small **white pedestal / content-adaptive masking** (per-chip pedestal
+  toward 253 on flat regions) or the chip gains zero for the full-white
+  cell, decided at Stage 0 per measurement and recorded with the codec.
+- **ΔE00 bound:** the rendered-page diff must stay within a measured
+  **ΔE00 ceiling** [call: target ≤ 3, real number = a mandatory Stage-0
+  output]; until it is set, no image-only unit ships a mark.
+- **Survival gates:** JPEG q70, 50 % downscale, 25 % crop at §13.6 rates.
+- **Where it enters the pipeline:** composited into the final surface at
+  its resident encode step (final-raster; show layers/keyframes; notes;
+  print units; protected `culled-commands` content rasters under the
+  M-rule). Sessions with forensic off skip it and are recorded as
+  untraceable.
 
-### 13.2 The two mark layers — the codeword they both encode (round-2–4 work, normative for both since round 6)
+**Layer-2 text displacement** (unchanged from the round-4 design, now
+appendix §20): coin flips per eligible word; 1/256-px lattice; decision rule
+in the appendix.
 
-Capacity math draft 1 stated was incoherent (§21). Round 2 sized the codeword to a
-page; round 3 completed it with a decision rule and projection-dependent pipeline
-placement; **round 6 makes the owner-decided primary mark (§18 item 7) normative
-for every unit** and keeps text displacement as the independent second layer:
+### 13.3 Collusion (both layers; round-7 fix, agy C4.4)
 
-- **Layer 1 — primary: the keyed spread-spectrum pixel mark, on every page**
-  (owner decision §18 item 7a). Every unit, every layer bitmap, every
-  server-composed keyframe, every notes image and every print page carries it —
-  image-only units included, so a unit's forensic protection never depends on how
-  much text it has:
-  - **Payload**: the 40-bit codeword below (token + page salt + CRC-8), unchanged.
-  - **Error correction**: the payload chips are encoded at rate 1/3 (each bit
-    triple-replicated and interleaved over the pattern cell sequence) [call], so the
-    decoder tolerates bit errors well beyond any single-region crop.
-  - **Insertion point**: a key-derived pseudo-random cell sequence over the whole
-    page, additive mid-frequency perturbations of the **luminance channel**
-    (amplitude `a` per cell, uniform across a fixed band of spatial frequencies,
-    far from text strokes and edge energies) [call]; parameters fixed by the
-    Stage 0/2 calibration so the **ΔE00 invisibility bound** holds (below).
-  - **Key derivation**: `kPixel = HKDF(kMaster, kCarrier | sid | unitSeed)`
-    (§13.4 law) — per session and per page cell seed, never the master itself.
-  - **Invisibility gate (Stage-0 output that blocks shipment)**: the rendered page
-    diff must stay within a measured **ΔE00 ceiling** [call: target ≤ 3 (JND-ish
-    perceptual invisibility at 96 dpi; the exact number is a Stage-0 deliverable
-    that must be set before any unit ships, and until it is, no image-only unit
-    ships a mark either)]. Stage 0 measures ΔE00 across the corpus at the §16
-    scales; the Stage 2 gates below only run once the ceiling is recorded.
-  - **Survival gates**: JPEG q70, 50 % downscale, 25 % crop at the §13.6 recovery
-    rates (§17 Stage 2); measured, not assumed.
-- **Layer 2 — independent: text displacement** (the round-3/4 machinery below),
-  on text-rich units sent as commands — keep as designed; geometric shifts
-  survive print-and-photograph better than fine pixel patterns (§18 item 7).
-- **Where each layer enters the pipeline (per projection)**: text displacement
-  needs glyph coordinates, so it runs on records that still carry glyph runs —
-  plain `commands` (relaxed sessions only) and protected `culled-commands`
-  **after** the §7.7 culling proof (displacement cannot resurrect culled text;
-  carriers are drawn only from servable, unclipped words of the §11 join). The
-  pixel mark is composited into the final raster / transmitted content rasters /
-  layer bitmaps at their flattening step and never needs coordinates; marks-off
-  sessions (§6.1/§9.4) skip both layers and are recorded as untraceable.
-- **Token allocation** [call]: the 24-bit token is a monotonic counter drawn from
-  the audit table, never reused while its audit row lives (not even after session
-  end); exhaustion refuses new sessions rather than recycling.
-- **Payload per page**: the 24-bit token + **8-bit page salt** (HMAC-derived, used
-  to seed the carrier selection so different pages select different carriers) +
-  **8-bit CRC-8** → a 40-bit codeword.
-- **Page classification (round-4 fix; scoped round 6 to the text layer)**:
-  **carrier-rich** (≥ **40** eligible words), **sparse** (16–39), **none** (< 16).
-  Carrier-rich pages host the whole 40-bit codeword in shifted words alone; sparse
-  pages spool their bits across sibling pages with distance-k interleaving (the
-  detector reassembles and votes across the document set); `none` pages carry **no
-  text layer** — not a mark absence: the primary pixel mark of layer 1 applies to
-  them like every page (round 6 closes the old gap where an image-only page could
-  go unmarked).
-- **Placement**: a carrier word's glyph-run x is displaced by `+δ` or `−δ`
-  (binary), δ calibrated at Stage 0/2 (target < 0.5 CSS pixel). Carrier (and
-  decoy) x values are written on a **1/256-px lattice** [call — round-3 fix, the
-  quantisation now defined here instead of the undefined "§7.3 grid"] so decoder
-  measurement noise is bounded.
-- **Decision rule (round-4 fix — per-candidate distance alone is not an attribution
-  bound)**: decode compares the *observed* carrier bit string against every
-  candidate token's expected codeword for that page salt.
-  1. **Sample integrity, not candidate self-checks**: the observed 40 bits contain
-     the CRC-8 of the token+salt as data, so the detector recomputes the CRC over
-     the *decoded sample's* 32-bit payload and requires it to match the observed
-     CRC field. A candidate's own expected codeword trivially has valid CRC —
-     checking it there proves nothing (round-3 defect).
-  2. Distance threshold: candidate accepted only if its Hamming distance to the
-     observed string is ≤ **6 of 40** [call].
-  3. **Unique winner**: if two or more candidates pass at the minimal distance, or
-     pass within 2 of each other, the page **abstains** — "ambiguous, no token
-     recoverable" — never a tie-break guess.
-  4. **Whole-search bound (the decision target)**: the claimed number is the
-     *false-attribution probability per detection*, targeted ≤ **10⁻⁶ per page
-     decision over the full declared audit-table size** [call]. The per-candidate
-     uniform-random figure — Σ C(40,k) for k≤6 ÷ 2⁴⁰ ≈ 4.18×10⁻⁶, i.e. ≈ 70
-     expected random matches among 2²⁴ nominal candidates — is printed here only
-     as a *raw ingredient*: it demonstrates that the per-candidate binomial is NOT
-     the decision bound, and the CRC-in-sample check, the unique-winner rule and
-     the carrier-selection limits shrink it further. Stage 2 must **measure** the
-     actual whole-search false-attribution rate over the declared table size,
-     including **unmarked-fleet-page tests** (captures from pages that carry no
-     session codeword; every one must abstain) — the per-candidate calculation is
-     never presented as that rate.
+- **Two coordinated holders:** comparing two streams reveals which text
+  positions changed (Layer 2) and, on flat regions, which pixel cells were
+  perturbed (Layer 1 `I_1 − I_2` differencing reveals support) — this
+  bounds what carrier *positions* leak, not the payload. Decoy jitter
+  (Layer 2) narrows the distinguishable set but remains a Stage-2
+  hypothesis to measure.
+- **K-capture averaging/median (Layer 1):** averaging or pixelwise
+  medianing `K = 4–6` session rasters attenuates chip amplitude by ~1/K;
+  with 8-bit sRGB rounding that rounds `±2/K < 0.5` LSB to 0 and collapses
+  the mark on flat regions — stated as a measured bound, with the attack
+  verified at `ΔE00 ≤ 3` in T9 rather than claimed absent.
+- Everything else from the round-2/3 collusion prose is unchanged
+  (audit-table-only attribution; joint high-accuracy measurement per
+  round).
 
-### 13.3 Carrier eligibility and hardening (round-2 fix; merged from claude I7)
+### 13.4 Key law
 
-- **Candidate words** per page are `HMAC(kCarrier, docRef | unitId)`-seeded from the
-  server-side recorded text index, restricted to: word length ≥ 4 grapheme
-  clusters, on the body horizontal baseline, non-whitespace, and ≥ 3 word
-  boundaries from any other carrier.
-- **Decoy jitter** [call]: a second, keyed pseudo-random selection displaces
-  non-carrier candidates by `±δ/2`. **Round-3 honesty:** with a reference or
-  known base position the two amplitudes are distinguishable in principle, so
-  single-session carrier concealment is a **Stage-2 hypothesis to measure** (mixin
-  ratios, discovery rates), never a guarantee restated in product or docs; the
-  protection against single-session readback comes from the carrier selection
-  staying key-private (the §13.4 law), and the §13.5 collusion bound covers the
-  two-stream case.
-### 13.4 Key law (round-2 fixes for both M3 and codex 7)
+`OFFICEVIEW_STREAM_KEY` (32 B, absent ⇒ fail-closed startup) → HKDF:
+`kToken, kDoc, kCarrier, kPixel, kJitter` + a key-generation byte per era.
+Session `docRef` is `HMAC(kDoc, sha256)` truncated; plain file hash never on
+the wire. `sid` is random, never the viewer's identity; the audit table maps
+`sid ⇄ viewerId` (when `authorize` supplied one). Audit and session tables
+are distinct only in retention: audit rows survive process restarts per the
+retention policy (default 90 days [call]).
 
-- **One master, many subkeys** [call] (HKDF over `OFFICEVIEW_STREAM_KEY`, a
-  32-byte key whose absence refuses startup, §9.1):
-  `kToken` (§6.2), `kDoc` (docRef), `kCarrier` + `kJitter` (§13.3), plus a
-  **key generation** byte per deployment era.
-- `docRef` is `HMAC(kDoc, sha256)` (§6.2) — the plain hash is never on the wire.
-- `sid` is random per session, **not** the viewer's identity; the audit table is the
-  only place that binds a `sid` to a person (§9.3), and only when the
-  `authorize` hook supplied one; otherwise it stays a collated-but-anonymous row.
-- Only the **audit table** outlives a render session; the session *run* table
-  still evicts at close (§9.3), so attribution survives teardown through the audit
-  row, not the session row.
+### 13.5 Detection tool and gates
 
-### 13.5 Collusion — stated as a real limitation (round-2 fix)
-
-Draft 1's "collusion between two holders reveals nothing" was false: comparing two
-sessions of the same document *does* reveal which word positions changed, and
-averaging opposite-offset words cancels the signal. With §13.3's decoys the
-distinguishing set shrinks to those that differ across streams, which is still a
-leak — so the honest bound is:
-
-- **Two coordinated holders can estimate the shifted word set**; that reveals which
-  positions are candidates, not the payload bits (decoys sample deltas of both
-  polarities).
-- **The payload is not recoverable from carrier positions alone** across holders
-  without the audit table (a token is only meaningful there).
-- Stage 2 *measures* this (a two-stream diff harness with N colluding readers) and
-  publishes real numbers instead of folklore; whatever the measured bound is,
-  it is written into `docs/validation/streaming.md`.
-
-### 13.6 Detection tool and single-page gate (round-2 fixes)
-
-`server/scripts/detect.ts`:
-
-```
-bun scripts/detect.ts --images page1.png [page2.png …] --key-file ./ov-key.json \
-  --doc <file.docx> [--page N] --ids ids.json   # or the audit-table export
-```
-
-Per image, deterministic — two decoders, one report:
-
-1. Re-derive the **reference frame** through the same pool (§9.3 key; never a
-   screenshot; cache miss renders on demand).
-2. **Pixel-pattern decoder (primary mark, round 6):** register the capture to the
-   reference (a similarity fit tolerant to ≤ 25 % crop, per §18 item 7's survival
-   gate); desynchronise by scanning the keyed cell clock over the surviving page
-   area; correlate each candidate's chip sequence against the luminance residual
-   (band-passed away from text-stroke energies per §13.2's insertion band); the
-   per-candidate score is the chip agreement count over the ECC-protected payload;
-   the §13.2 decision rule (CRC-in-sample, unique winner, abstain on ambiguity)
-   then applies unchanged. Scores from every pixel decoder in a document set are
-   pooled per candidate across pages.
-3. **Word-shift decoder (second layer, text-rich command units only):** coarse
-   alignment, then **per-word normalised cross-correlation** of candidate
-   neighbourhoods (with vs without ±δ); the local argmax gives the per-word
-   displacement sample. Per-page codeword decoding over the word string follows
-   §13.2's decision rule with the §13.3 decoy filter.
-4. **Consensus + confidence:** the two decoders' per-page votes score jointly with
-   declared weights; **a below-threshold combined detection reports "no token
-   recoverable", never a guess**; if the audit table is present and a token
-   resolves, output with the resolve's viewerId, plus the key generation. The
-   whole-search bound (§13.2) applies to the joint decision.
-
-**Stage-2 gates (numbers, not folklore; scoped round 3, extended round 6):**
-≥ **95 %** single-page recovery from a default-zoom screenshot **of a carrier-rich
-page** (§13.2 classification — sparse pages are excluded from this gate and are
-covered by the cross-page reassembly test with its own published rate); ≥ **80 %**
-after JPEG re-compression at quality 70; **image-only gates (primary pixel
-mark, round 6)**: ≥ 90 % single-page recovery on an image-only unit at default
-zoom, ≥ 75 % after JPEG q70 + 50 % downscale, ≥ 70 % after a 25 % crop, at the
-ΔE00 ceiling Stage 0 records; published per-class degradation below that, never
-silent. A mark-off session (§6.1) passes no recovery gate by construction — its
-captures are expected to abstain, and §16.2 tests that.
+`server/scripts/detect.ts` re-derives the reference frame (same pool), aligns
+(pixel + word co-registration) and runs §13.2's gated decode over the audit
+table's candidate list; output either token + viewerId or "no token
+recoverable" (never a guess). Gates (§16, T9): ≥ 95 % single-page recovery on
+default-zoom screenshots of text-rich command units; ≥ 90 % on image-only
+units; ≥ 80 % / ≥ 75 % after JPEG q70, 50 % downscale, 25 % crop;
+**false-attribution ≤ 10⁻⁶ over the declared table size verified by
+simulation + unmarked captures must abstain at 100 %**.
 
 ## 14. Performance, memory and limits
 
-Wire budget [call, to verify in Stage 0 over the corpus]: text-heavy page ≈ tens of
-KB gzip; image-heavy slide adds asset refs only (the **drawn-bitmap snapshots** of
-§7.7, not original files); units the recorder cannot express fall to tiles
-(measured, not assumed). Per-session/per-page caps [call]:
-
-| Limit | Value [call] | Round-2 note |
-|---|---|---|
-| unit pixel size ceiling (`maxUnitPx`) | 8192 (manifest cap + validation) | closes the `2..20000`-vs-4096 mismatch |
-| decoded-image bytes per unit | 64 MiB | *decoded* caps, reserved before allocation — encoded-asset caps do not bound memory (round-2 fix) |
-| inflated command bytes per unit | 8 MiB | reserved before the pool builds, not after |
-| WS frame chunk | 1 MiB | with one in-flight paint per unit backpressure per session |
-| assets per session | 256 MiB total | streamed by hash once |
-| outstanding units per session | 8 (queue 32) | §9.2 backpressure |
-| manifest decoded size | 256 KiB | bounded parse before any allocation (round-3 fix) |
-| unit-body checksum | CRC-32 over the gzip-deflated unit body + a 32-bit sequential frame id | the §10 reassembly/re-send drops a unit whose checksum or sequence mismatches (defining what draft 2 only referenced) |
-| render deadline | 2 s → worker retirement | §7.3; sync paint cannot yield |
-
-Pool / budget split [call]: `512 MiB` reservation is **global per process** (not per
-worker); doc cache 1 GiB, render cache 512 MiB, session tier ≤ 8 MiB in flight.
-
-Rate limits — named keys and numbers, not adjectives (round-3 fix; a per-session
-queue does not bound a fleet of sessions):
-
-| Key | Limit [call] | Burst |
-|---|---|---|
-| `ip` (unauthenticated) | 30 new stream sessions per rolling minute | 8 concurrent connects |
-| `sid` (per session) | 120 WS messages per rolling 10 s | 20 messages/s |
-| `sid` (unit paint requests) | 60 unit requests per rolling minute | in-caps only |
-| `sid` (print requests — per-session `can.print`, §18 item 6) | 10 print jobs per rolling minute | 2 concurrent print renders |
-| `sid` (sort/filter requests, §12 4c) | 30 sort/filter ops per rolling minute | 1 in flight; queued after that |
-| process socket bound | 256 concurrent sockets, 4,096 queued units fleet-wide | new connections delayed, never silently dropped |
-Client [call]: replay cost ≈ today's interactive paints; the loader gains one
-source-kind branch (§6.3); DOM pressure *drops* (a 20 MB DOCX: local mode holds every byte resident, remote
-mode holds at most a couple of unit-sized command buffers).
-
-Determinism is the contract test's foundation, **conditioned**: same doc bytes +
-same `layoutFingerprint` inputs (officeview version, backend version, canvas font
-set, locale, scale bucket) ⇒ byte-identical recording. The recorder reads no clock
-(the optional visible-mark timestamp arrives as a paint parameter, never read
-in-pipe), and never reads `Date.now()`/random from the render path.
+- **Rates** [call]: per IP 30 new sessions/min (8 concurrent connects);
+  per sid 120 WS messages/10s (burst 20/s), 60 unit requests/min, 10 print
+  jobs/min (2 concurrent renders), 30 sort/filter ops/min (1 in flight);
+  process 256 sockets, 4,096 queued units.
+- **Sizes** [call]: `maxUnitPx 8192`; decoded-image ≤ 64 MiB/unit;
+  inflated commands ≤ 8 MiB/unit; WS frame chunks 1 MiB (binary frames per
+  §7.1 header); assets/session 256 MiB; show plans ≤ 128 MiB aggregate
+  decoded (§12a.2); manifest ≤ 256 KiB decoded; render deadline 2 s;
+  outstanding units 8 (queue 32); session scratch lease ≤ 2 final-raster
+  units in flight (§9.3).
+- Client: replay ≈ today's interactive paints; DOM pressure drops (no file
+  buffer).
+- Determinism: same docRef + same layoutFingerprint inputs ⇒ same record;
+  the recorder reads no clock.
 
 ## 15. Accessibility
 
-- **Server text service** (`can.textA11y`) returns text for coordinates from the
-  `RECORD_TEXT` index (§7.3 second pass), joined through the §11 rule — so the
-  offscreen page text carries exactly the text the content policy (§6.4) and the
-  visibility join permit, **which may be less than local mode shows** (covered,
-  clipped and vanish runs are withheld, not disclosed); it holds exact locale/BiDi,
-  not OCR.
-- Visible-mark text never appears in a11y/search/copy (§13.4). The forensic mark is
-  geometric, and the §7.7 projection keeps it in the raster only — **not** in any
-  text answer.
-- Focus, keyboard and page-announcer surfaces are today's OfficeDoc surfaces (§4).
-- `can.textA11y = false` (server policy): the client states
-  **"text unavailable in this viewing mode"** in its existing a11y notice surface
-  rather than pretending.
+Server text service returns text for coordinates from the §7.3 second-pass
+index, subject to the §11 join — so a11y text carries exactly what the
+policy+join permit (possibly less than local). `can.textA11y` never
+authorises notes; `can.notes` re-evaluates per session and after resume.
+Focus/keyboard surfaces unchanged; a disabled service states it once.
 
-## 16. Testing and validation
+## 16. Testing and validation (suite IDs; single home)
 
-### 16.1 Stage 0 gates (round-2's acceptance list, adopted verbatim as the gate)
+- **T1 contract:** corpus record→replay→pixel-diff zero local-backend diff;
+  per-script tolerance table; cross-backend published tolerances.
+- **T2 disclosure:** wire-inspection over transmitted payloads; hidden
+  sheet/painting/`w:vanish`/**hidden shapes (`cNvPr`/`docPr`, through
+  groups)**/notes/comments/covered cells/masked bands/unsampled-times matrix;
+  per-endpoint (search/copy/a11y/filter-values) partial-run and covered-run
+  withholding.
+- **T3 recorder census:** experimental opcode subset closure (per §7.3).
+- **T4 fonts handshake:** `requiredFaces` probes; missing/mismatch → raster
+  fallback; CJK/ligature/BiDi fixtures; scratch-rendered text case.
+- **T5 show plans:** §12a.2 admission limits; no-package/no-shape prototype;
+  appearance/intermediate adversaries; remote presenter adapters; fallback
+  rate reporting.
+- **T6 session/isolation:** handshake state machine incl. version-intersection
+  refusals, wrong-viewer resume, missing `resumeProof`, `renew` race rule,
+  notes recheck after resume; client-relax refusal; paired relaxed/protected
+  sessions over both cache-fill orders (both marks settings) sharing zero
+  entries; per-`contentPolicyId` processing; sort/filter authorized targets,
+  tautology-filter (row-hidden purge) and hidden-slice/pivot-cache refusal.
+- **T7 marks:** ΔE00 ceiling measurement + parameters published; pixel-mark
+  injection/extraction on image-only units; survival batteries (q70/50 %
+  downscale/25 % crop); unmarked-capture abstain batteries; K-capture
+  averaging and 2-capture differencing measured bounds; text-layer
+  round-trips incl. decoy distribution and sparse cross-page spooling.
+- **T8 XLSX:** tile pipeline (no `StaticExportLimitError`), sort/filter
+  authorization, covered-cell filter values, per-session view-state key.
+- **T9 detection:** §13.5 gates incl. joint z-score gating.
+- **T10 lifecycle:** handshake close-code matrix (`4xxx` surfacing),
+  backpressure/cancellation, drain-then-refund retirement, resume/supersede
+  sockets, print job audit.
+- **T11 eager:** transitive-graph budget, `dist/core.js` purity, module-map
+  identity.
+- **T12 perf probing:** 1,000 concurrent unit requests hold caps.
 
-Before any wire implementation is written, the Stage 0 matrix closes these:
+## 17. Staging
 
-1. **Backend matrix** (§18 item 1) — pixel/direct equivalence and resource behaviour.
-2. **Direct-vs-record+replay at multiple scales** — zoom × DPR grid
-   **{0.5, 0.75, 1, 1.25, 1.5, 2, 3} × {DPR 1, 2}**, including **shadows,
-   absolute/setTransform-headed painters, pixel-snap paths, transformed patterns,
-   and scratch-surface drawImage** (the §7.3 census is only true if these
-   reproduce); fractional zoom proves the §8.3 1:1 replay rule.
-3. **Proxy census over the corpus** — the recorded op subset is completed
-   experimentally (round-2's census gate), giving the §7.5 op list final meaning.
-4. **Text-mode fonts handshake probes** (mode decided round-6: text-mode = plain text + pinned server-pinned faces, §18 item 2) — `requiredFaces` hash assertion and missing-face raster fallback, in place of the old outline-vs-extract question (the outlining dependency record lives in §18 item 2's rejection note).
-5. **Per-page carrier count** measurement (§13.2, §14) and the **pixel-mark
-   coding parameters** (cell band, amplitude `a`, ECC rate-1/3, ΔE00 ceiling,
-   §13.2) — with the corpus-measured ΔE00 bound published as a mandatory stage
-   output; **image-only units do not ship a mark until it is set** (round 6).
-6. **Asset-snapshot correctness** — cropped/duotoned images inspectable
-   (§7.7/§16.2), no original byte leakage in any sampled record.
-7. **Session-restore + handshake sizing probe** — reconnect with the `resume: sid`
-   hello restores viewport and visible units and cannot mint a new token without
-   the authorize hook (§9.3); replaces the round-3 CORS gate, whose only purpose
-   (the removed `Accept` negotiation) is gone (round-5 note, §21).
-8. **Eager core-entry split measurement** (§8.1 gates).
-9. **WS transport scaling probe** — 1,000 concurrent unit requests hold the
-   per-process caps (§14).
-10. **No-package, no-`PptxShape` client prototype** (§12a.2/§12a.3; stage-0/3c
-    blocker, finding 6): the scheduler/compositor/presenter prototypes run off a
-    corrupted plan schema only with admitted records, zero shape reads, and
-    workspace-charged memory tests.
-11. **The §12a.3 proof subset + appearance-eligibility prototype** — colour/opacity
-    recolour/mask/Morph adversarial fixtures decode to pre-agreed SVG layer inner
-    appearance bounds (round 6, finding 1) and recorded fallback rates.
-
-### 16.2 Unit tests (vitest officeview; bun test server)
-
-- **Wire inspection boundary tests** (round-2's rule): for each stream-mode answer,
-  decompress all frames/assets/tiles/layer bitmaps/keyframes and assert a **fixture
-  secret string** (repeated in a hidden sheet, a `w:vanish` run, a comment, a note,
-  a covered cell, a masked-away band and an unsampled intermediate-time interval)
-  does not appear — with one deliberate carve-out the answer set distinguishes
-  itself (round-6 fix): a **presenter's** Presenter View notes image legitimately
-  carries the note text; a non-presenter's stream must carry none, and both
-  end-to-end paths are asserted separately (§12a.5/§16.3 tests).
-  Mark tests distinguish **marked default sessions** and explicitly **unmarked or
-  mark-relaxed sessions** (§18 item 8): an unmarked session's captures must abstain
-  under the §13.6 detector (the §13.2 whole-search bound applies, round 6).
-- Recorder fixtures for **each op family**; unknown ctx method ⇒ tile promotion with
-  a diagnostic, never a silent skip (§7.6).
-- **Proxy census** corpus run validates the subset (round-2 gate).
-- Forensic: injection/extraction round-trips on synthetic pages; interleaving across
-  sparse/pure-faces/carrier-poor fixtures; decoy-jitter distribution checks;
-  key-absence fail-closed; the two-stream collusion harness (§13.5) publishes the
-  measured bound.
-- Handshake: a truncated `OVSM` envelope or malformed hello fails closed with a
-  typed close before any allocation (the envelope is now a WS message; the parse
-  gate is bounded, §6.2); `unsupported-version` / `auth-failed` /
-  `session-expired` / `revoked` / `rate-limited` each surface their mapped
-  `StreamSessionError`; **a client-side relax request is refused** (protections are
-  server-side state, §6.1); local file loads remain byte-for-byte unchanged when no
-  stream source is supplied (§6.3).
-- **Per-endpoint visibility tests (round-3 fix):** a partially clipped logical run
-  and a fully covered run are each asserted **absent** from search rects, copy
-  output and a11y text on every format (the §11 join rule), and a partially
-  visible grapheme is withheld — pixel-byte scanning is never the assertion.
-- **Expiry tests for the decided mode (round-6 fix — the round-4 HTTP-shape
-  matrix is retired with the manifest-over-HTTP path it served):** session token
-  expiry as `session-expired` (§6.2/§10), a `renew` before expiry keeping the
-  same `sid` (confirmed by `renew-ack`), and the expired-session developer
-  re-open per §10; plus wrong-viewer resume refusal, incompatible version-set
-  refusal and missing-face-ack raster fallback (finding 7).
-- **Session-isolation pairs (round-6, isolation section):** for relaxed and
-  protected sessions over the same document, both cache-fill orders (protected
-  first, relaxed first) share zero cache entries under differing effective-policy
-  keys (§9.3), each session reads a policy-immutable document copy (§6.4), and
-  no session ever meets another's per-session view hash, notes namespace or
-  mark settings.
-- Tokens/limits/backpressure/cancellation at the §14 numbers; the
-  worker-retirement deadline path with a producer that ignores abort and one that
-  honours it (session ownership retained until work drains, then released).
-- Detection tool: synthetic draws (plain, JPEG q95/90/80/70, upscale 2×, crop
-  5 %, and image-only pages) with published per-case outcomes for both §13.6
-  decoders and abstention on deliberately unmarked captures.
-
-### 16.3 Browser tests (Playwright, Chromium)
-
-- Live against the **in-repo test server** (`server/test/app.ts`) wired by the
-  Playwright harness (the existing `scripts/harness/fixture-server.ts` pattern).
-- The stream source connects → hello → manifest → render (mocked, then against the
-  real WS); the §16.2 pipeline in-browser; typed handshake errors surface as
-  load-error states; print refusal under `no-print`; session expiry mid-view →
-  `session-expired` state and eventually a developer re-open; resume after network
-  drop restores viewport + visible units (§16.1 gate 7).
-- Replayed-unit goldens only (no local baselines).
-
-## 17. Staging with acceptance criteria (round-2 tightened; M4)
-
-Each stage is its own PR; gates per §16; primarily measured, not narrated:
+Each stage a PR; gates by §16 suite IDs; measured, not narrated.
 
 | Stage | Scope | Done when |
 |---|---|---|
-| **0: prototypes** | §16.1 gates, incl. the backend matrix + the projection/§13.2 carrier measurements + the decided text-mode fonts handshake probes + the §12a.2 no-package/no-shape client prototype and ΔE00 ceiling outputs | §16.1 gates 1–11 resolved **with published numbers** in `docs/validation/streaming.md`; §18 items that depend on data are recorded |
-| **1: core stream MVP** | core entry + gate; `OVSD` recorder+replayer; WS session handshake (`hello` → `OVSM`, §6.2) wired from the `OfficeFile` source branch (§6.3); RemoteDoc rendering of DOCX/PPTX/*visible-sheet* XLSX pages; demo Bun server (WS-only, pool, per-viewer visible mark, token + typed handshake errors); typed loader errors | §16.1 all gates green; corpus contract test green under the §7.4 wording for the chosen mode (zero-diff only where that mode allows the claim); Playwright happy path; **stale-version** + typed-error tests pass; eager diff ≤ 16 B gzip (`dist/index.js` module map identical — the branch is the only main-path change, §8.1); **the P-rule projection (§7.7) and the wire-disclosure suite (§16.2) are green before any default-protected stream response ships** — no stream session ships without them (round-3 fix, protection now default for every session, round 5) |
-| **2: governance + forensics** | tokens/sessions, rate limits (§14 table), resume/revocation/TTL, cache tiers, §13 with decoys + detection tool; the M-rule mark-embedding pipeline for protected command output (§9.4) | rate-limit numbers asserted in tests; §13.6 gates measured and recorded (single-page recovery on carrier-rich pages ≥ 95 %; JPEG q70 ≥ 80 %; whole-search false-attribution bound ≤ 10⁻⁶ verified by simulation over the declared audit-table size, plus unmarked-page abstain tests); audit-table retention + revocation + key-rotation tests; per-class (sparse/none-page) fallback gates per §18 item 7; protected `culled-commands` may ship only after its M-rule tests are green (until then `final-raster` is the only protected projection shipped) |
-| **3: server text services** | search/copy/a11y WS ops through overlays; visible-band copy and visible-projection chart text; per-session mark default on; **per-session print (§18 item 6 — default on, audited, pool re-render at print resolution with session marks)** | local feature parity measured by the §11 service vs local query on the same corpus; zero local index building for remote docs; §6.4 policy tests (secrets absent from every service); print runs the §14 print rate class and audit record |
-| **4: XLSX stream mode** | 4a static + sheet tiles; 4b selection/freeze/sheet-nav parity; 4c server-side sort/filter (§12, §18 item 3) | hidden/veryHidden/vanish/token/bytes **never cross the wire** (wire audits); tile p95 render ≤ 120 ms pool-side at §14 budgets on a 500-row × 100-col sheet; selection parity passes against local mode; 4c: sort/filter results match local mode's row order on the corpus, filter value lists exclude policy-hidden values, and the §12 sort/filter wire audit is green |
-| **3b: stream presentation, static + notes** | `present()` for streamed decks with final-state slides; Presenter View with notes for the presenter role (§12a.5) | §12a.8 3b list |
-| **3c: stream presentation, animation** | engine split (§12a.1), bounded OVSP show plans (§12a.2 schema + admission limits + remote session/preview/notes adapters), timeline visibility/appearance projection (§12a.3), builds/transitions/Morph | §12a.8 3c list **plus**: the no-package/no-`PptxShape` client prototype and appearance-eligibility fixtures (§16.1 gates 10–11) are green, and per-slide/per-show admission limits hold in the memory tests |
-| **3d: stream presentation, media (optional)** | transcoded, mark-burned media (§12a.6) | §12a.8 3d list |
+| **0** | T1–T7 batteries, incl. backend confirm (`Skia`), §12a client prototype, ΔE00 ceiling + coding params, fonts handshake probes, appearance-eligibility rate | gates green **with published numbers** in `docs/validation/streaming.md`; any gate failing reports to the owner rather than silently switching choices |
+| **1** | core entry + honest eager gates; recorder + replay; WS handshake (§6.2) + typed closes; RemoteOfficeDoc branch; demo WS-only server (pool, default-protected sessions, marks, per-session print off/on wiring); T1/T2/T6/T11 green | corpus zero local-backend diff; handshake close-code matrix (T6); eager transitive + core purity |
+| **2** | marks + policy per §13, occlusion store, per-session scratch lease; audit table; detection tool; M-rule prototype (decided scope) | T6/T7/T9 green incl. false-attribution ≤ 10⁻⁶ over the declared table; marks-off sessions audit-recorded |
+| **3** | §11 semantic services + print (§2 item 9) + per-session marks; notes presenter surfaces | T2 notes variants; T8 partial; print audit |
+| **3b/3c/3d** | stream presentation per §12a (static+notes; animation; optional media — 3d = §12a.6 transcoded playback) | §12a post-conditions verified in-browser from §16 T5 (see also the notes/3d items above; 3c further blocked on the no-package client prototype, §16 T10) |
+| **4a/4b/4c** | XLSX tiles via the viewport pipeline; selection parity; server sort/filter with the C1 purge + authorization + hostile tests + rate class + pivot/slicer refusal strips | T8 green |
 
-## 18. Open decisions for the owner (round-2 refresh)
+## 18. Boundaries
 
-1. **Canvas backend — decided 2026-11-07: Skia via `@napi-rs/canvas`** for the server
-   pool. node-canvas stays where it is today (the test/golden path) and is not the
-   server backend. Stage 0 still runs the matrix, now to *confirm* the pick rather than
-   choose: pixel parity vs browser canvas, Bun compatibility, font registration scope
-   and licence (to verify in Stage 0). If a gate fails, Stage 0 reports it back to the
-   owner instead of switching backends silently.
-2. **Text mode — decided 2026-11-08: plain text plus fonts (§7.4 (b)).** Glyph runs
-   travel as strings plus advances and replay with server-pinned faces confirmed by
-   the `requiredFaces` handshake; any unit needing a face the client lacks is sent
-   as a raster unit. No shaping/outlining dependency is added. This applies only
-   to command projections; the default `final-raster` projection sends pixels.
-3. **XLSX interactivity depth — decided 2026-11-07: include server-side sort/filter.**
-   It ships as Stage 4c under the §12 rules (per-session view state, display-text
-   filter lists, no cell data in replies, own rate-limit class, wire audit).
-4. **Slideshow in stream mode — decided 2026-11-07: full presentation mode,
-   including animation.** `present()` works for streamed decks with builds,
-   transitions and Morph, played on the client from server-drawn layers and a show
-   plan (§12a, Stages 3b–3c). Media playback is optional Stage 3d (transcoded,
-   never original bytes).
-   - **4a. Speaker notes — decided 2026-11-07: sent to the presenter.** Only to a
-     viewer the host marks `role: 'presenter'`, only in Presenter View, as marked
-     images, recorded in the audit table (§12a.5).
-5. **How documents are marked stream-required — decided 2026-11-08: not the
-   library's decision; the developer chooses by source type** (owner words in §2
-   item 1; round-5 note, §21). No per-document configuration remains: a stream
-   source opens a protected session by default, and the developer's `authorize`
-   hook may relax it per session (§6.1, §7.7).
-6. **Print — decided 2026-11-08: a per-session setting.** The developer's
-   server-side `authorize` hook sets `can.print` for each session (default on);
-   the client can't turn it on. When on, the pool re-renders print units at print
-   resolution through the normal pipeline, with the session's marks, and the
-   browser prints those images. Print requests count against their own rate-limit
-   class (§14) and each print job is recorded in the audit table. Ships in Stage 3.
-7. **Forensic mark form — decided 2026-11-08: (a) the image-domain mark, on every
-   page.** The keyed, low-amplitude pixel pattern (§13.2) is the primary forensic
-   mark for every unit, layer, keyframe, notes image and print page, not only a
-   fallback for pages with little text. Text displacement stays as a **second,
-   independent layer** on text-rich units sent as commands, because geometric
-   shifts survive print-and-photograph better than fine pixel patterns.
-   - **Form of the pattern.** A spread-spectrum pattern: the session codeword
-     (§13.2) with error correction, spread by a key-derived pseudo-random sequence
-     over the whole page, mostly in mid frequencies of the luminance channel.
-     Detection correlates against candidate session keys (§13.6).
-   - **Rejected alternative: a hidden QR code revealed by image processing.** The
-     library is open source, so the reveal method is public: anyone can find and
-     remove the code with the same processing. A QR code also sits in one region
-     (one crop removes it) and its sharp modules are what JPEG and resizing
-     destroy first. The keyed spread pattern carries the same payload with no
-     public reveal and no single region to crop.
-   - **Stage 0/2 gates.** The pattern is invisible at normal viewing (measured
-     ΔE00 bound [call]); survives JPEG q70, 50 % downscale and 25 % crop at the
-     §13.6 recovery rates; and the §13.6 false-attribution bound holds.
-8. **Visible-mark text — decided 2026-11-08: a per-session setting, fixed text by
-   default.** The developer's `authorize` hook chooses the visible mark per session:
-   `{ kind: 'fixed', text }` (the default, e.g. `CONFIDENTIAL`), `{ kind: 'viewer',
-   fields: ('name' | 'email' | 'viewerId' | 'time')[] }` to show the viewer's
-   identity, or off. Per-viewer identity is always carried by the forensic mark
-   (item 7), so a fixed visible mark loses no traceability. Turning both marks off
-   for a session is allowed (§6.1); that session is untraceable and its audit row
-   records it.
-9. **A11y service default — decided 2026-11-07: on.** `can.textA11y` is on by
-   default and any deployment turning it off ships the §15 notice.
+**Always:** developer chooses mode by source type; once a session is open its
+protections are server-side state (no client relaxation); fail-closed on
+unknown op/version/opcode/manifest; provenance on every artefact
+(`docRef ⊕ contentPolicyId ⊕ fingerprint ⊕ scaleBucket ⊕ markSettings ⊕
+projection ⊕ unitId`); wire audits over screenshot-only assertions; honest
+docs language (screenshots are traceable, not preventable).
 
-## 19. Boundaries
+**Ask first:** shipping font geometry for faces the document only embedded
+(outline extraction — moot while text mode is decided plain-text, but kept
+for future layers); persisting sessions beyond process restart; audit-table
+export beyond the operator; serving streams for documents that previously
+came as bytes; retention beyond the owner's written policy.
 
-**Always**
+**Never:** ship document bytes or any member/media/font bookkeeping bytes
+over this protocol in any form (debug frames included; the `server/`
+package has no file route, and the library cannot stop a developer who
+publishes the file elsewhere — stated in §6.1/§19, not claimed away); ship
+original encoded media/metadata-bearing replicas; answer a **protected**
+session without the P-rule; ship hidden content in any payload
+(§6.4/§12a.3/§16 T2 always); log `OFFICEVIEW_STREAM_KEY`, tokens, sids or
+audit rows; pretend DRM; execute client input inside the render pipeline.
 
-- The developer owns the mode by source type (§6.1); once a stream session is
-  open, its protections — the §7.7 P-rule, the §6.4 content policy and the marks —
-  are server-side state applied by default, and no client surface may set or
-  override any of them (only the server-side `authorize` hook may relax projection
-  or content policy, §6.1). Local mode is untouched above the `OfficeFile` branch.
-- Fail closed: unknown opcode, unknown manifest version, unavailable backend,
-  refused unit, unresolvable token → refuse the unit/session; never a
-  plausible-but-wrong paint; never a fallback fetch.
-- Every rendering artefact carries the exact
-  `(docRef, layoutFingerprint, recorderVersion, scaleBucket, policy)` provenance
-  the manifest promised (§9.3).
-- Wire **audits inspect transmitted payloads**; screenshot-only assertions are
-  never the evidence that a boundary holds (§16.2).
-- Honesty in docs: screenshots possible; the module README and validation doc say
-  so verbatim (§20).
+## 19. Honest limits
 
-**Ask first**
+1. **Screenshots/cameras:** traceability, not prevention (§2 item 11);
+   marks-off sessions are untraceable by construction (§6.1).
+2. **Deployment boundary:** the library cannot stop a developer who also
+   publishes the file elsewhere; `server/` has no route (§6.1, §2 item 4).
+3. **ODT/RTF refusal is a deliberate scope limit** until hidden-text
+   filters exist (§6.2).
+4. **Collapsed row/col extents reveal a hidden band exists** (§12);
+   accepted, with a "no numbering" alternative named.
+5. **Presenters can retype notes**; marks trace screenshots (§12a.5).
+6. **The pixel-parity story is deployment-specific** (backend + font set +
+   bucket); §16 T1 measures what the deployment pins; the §7.6 tile path
+   guarantees a wrong pixel never paints as right.
+7. **Pixel-mark collusion has a measured, honest bound** (§13.3): K-capture
+   averaging and 2-stream differencing *do* reduce recoverability on flat
+   regions; the claim is limited to the measured value, not "no attack".
 
-- Shipping **font geometry** derived from a face the document only *embedded*
-  (outline extraction is paint input, not redistribution, but licences differ): when
-  body faces are only runtime-licensed, §7.4's outlining falls back per unit; the
-  document's own embedded faces carry no such question (to verify in Stage 0).
-- Shipping **pinned font data** server-side (§7.4 mode (b)) — same ask first,
-  per face.
-- Persisting sessions beyond a process restart, and any export of the audit table
-  beyond the operator's machine (logs included); making `textMode:'text'` the
-  default.
-- Serving a stream by default (without opt-in) for documents that previously came
-  as bytes.
-- Any change to `sessionTable`/audit retention beyond the owner's written retention.
+## 20. Appendix: command-projection extension (Stage 2+)
 
-**Never**
+The default projection is `final-raster`. The command-projection extension
+ships later, stage-gated, for deployments that want smaller payloads:
 
-- Ship document bytes, or any member/media/font/bookkeeping bytes from them, over
-  this protocol in any form — including debug, internal or diagnostic frames
-  (§7.7). The `server/` package additionally has **no file-download route**
-  (§6.1); the library cannot stop a developer from exposing the file elsewhere,
-  which is exactly why this boundary is stated here and in §20 rather than
-  claimed away.
-- Ship original encoded image/media bytes or metadata-bearing replicas (§7.7).
-- Answer a **protected (default) stream session** **without** the mandatory
-  final-visibility projection (the P-rule, §7.7): covered, clipped-out content
-  and full z-order history never reach the wire — by final-unit rasterisation by
-  default or by a stored culling proof, never by configuration alone.
-- Ship hidden content in any transmitted payload (§6.4, always).
-- Log or emit in telemetry `OFFICEVIEW_STREAM_KEY`, a session token, any `sid`, or
-  any audit-table row beyond what the owner configured (§9.3, §19).
-- Pretend DRM. No copy of "protects against screenshots" in product copy, README,
-  or tests (§20); "screenshot-proof" claims are a docs bug.
-- Execute anything a client posts inside the render pipeline — commands and tokens
-  are the only inputs, and neither is ever treated as content, markup or code.
+- **`culled-commands` (protected, opt-in):** per-command occlusion proof
+  (recorded with the record, never the recorder's opinion); units failing
+  proof downgrade to `final-raster`. The **M-rule** requires **every
+  content-bearing component** of the unit to be a protected transmitted
+  raster (a full-page raster or rasterised flatten group); a unit whose
+  readable content rides commands cannot be guaranteed, so such units
+  answer `final-raster` (round-7 fix, agy Codex-r4-2).
+- **`commands` (relaxed sessions):** ordinary stream; visible mark as a
+  last-position `RASTER_BLOCK` overlay, removable by a modified replayer —
+  stated plainly, because a relaxed session trusts the replayer.
+- **Layer-2 text displacement (normative in the appendix):** candidates per
+  §13 HMAC-seeded (length ≥ 4 grapheme clusters, body baseline,
+  non-whitespace, ≥ 3 word boundaries apart); placements `±δ` on a
+  1/256-px lattice, δ calibrated (target < 0.5 CSS px); decoy jitter `±δ/2`
+  keyed on non-carriers (a Stage-2 measured hypothesis, never claimed as
+  undetectable); decision rule: observed bit string vs each candidate's
+  expected codeword with CRC-8 as a **sample-integrity check over the
+  observed 32-bit payload**, distance threshold and unique-winner or
+  abstain, and a whole-search `≤ 10⁻⁶` false-attribution target calibrated
+  by simulation over the audit-table size.
+- Sparse pages spool codeword bits over sibling pages with distance-k
+  interleaving; `none` pages carry no text layer (the layer-1 pixel mark
+  covers them).
 
-## 20. Honest limits
+## 21. Review history
 
-- **Who keeps the file safe is the developer's backend** (round-5 owner decision):
-  the library cannot stop a host that points a file URL at the same document, or
-  that mirrors a stream to disk, or that exposes the original media elsewhere. This
-  design's guarantee is scoped honestly: the `server/` package ships no
-  file-download route, the stream protocol carries no per-document marking, and
-  every stream session is protected by default — but a developer who also publishes
-  the file has made a deployment choice outside the library's reach (§6.1, §19).
-- **Screenshots, cameras, and determined readers**: any visible pixel can be
-  captured; the forensic watermark's character is *traceability* after
-  unauthorised resharing, not prevention. The promise is precise: a session token
-  survives ordinary recompression and resize on most pages, is recoverable from a
-  single default-zoom page screenshot at the published rate, and the deployment can
-  then act on the audit row. It claims nothing about crop, manual redaction,
-  deep laundering, or two-session collusion beyond the §13.5 bound.
-- **XLSX hidden-band shape leaks**: collapsed row/col extents tell a reader that a
-  hidden band exists. The deployment accepts this shape (§12) or gives up streamed
-  axis numbering — the two options are named, not hidden.
-- **The visible mark's guarantee is projection-specific.** On `final-raster` the
-  mark is inseparable pixels. On any command projection the mark is either an
-  overlay op (**relaxed** sessions — removable by a modified replayer, stated as
-  such, because a relaxed command projection already trusts the replayer) or, on
-  protected `culled-commands`, embedded into content rasters by the §9.4 M-rule
-  and made *stage-gated*; the M-rule additionally requires the unit's **entire**
-  content surface to be transmitted rasters (a mixed unit answers `final-raster`),
-  so a page whose readable text rides commands and whose images ride rasters gets
-  no M-rule guarantee at all — until and unless that pipeline is tested,
-  `final-raster` is the only projection that ships with a mark guarantee for
-  protected documents (round-4 statement, tightened round 6; draft 2–3
-  overclaimed).
-- **The audit table needs a key generation**; rotating the master key invalidates
-  captures, so the detection tool names which generation covered a capture and the
-  rotation is recorded deploy-side (Stage 2). Two deployments sharing a key cannot
-  distinguish their tokens' classes (not a security break; a traceability one).
-- **Single-page documents** can carry the §13.2 codeword only when the page meets
-  the carrier budget; otherwise the honest fallback is the image-domain mark or,
-  if the owner refuses that (§18 item 7), an explicit "this document is not
-  traceable" notice. Better to tell the deployer than to pretend.
-- **Presentations send layers, not one picture.** During an animated show the
-  client holds separate layer bitmaps; a modified client can save them one by one.
-  The §12a.3 projection keeps never-visible content out of them and each carries
-  both marks, so a layer reveals nothing the audience doesn't see at some point,
-  but it is easier to lift a clean picture of one shape than from a flat page.
-- **A fixed visible mark doesn't name the viewer.** With the default fixed text, a
-  photo of the screen names no one on sight; tracing relies on the forensic mark
-  surviving the capture (§13.6 rates).
-- **Watermarks are a per-session choice.** The developer's server can turn the
-  visible mark, the forensic mark or both off for a session (§6.1). A capture from a
-  session without the forensic mark cannot be traced to a viewer; the audit table
-  records that the session was unmarked, so the gap is known, not silent.
-- **Speaker notes can be retyped.** A presenter who can read the notes can copy
-  them by hand; marks trace screenshots of notes, not retyping (§12a.5).
-- **Local mode is untouched by this design**: nothing is gated by stream code, and
-  stream-only code is lazy so the eager graph cannot move it (§8.1's measurements
-  make that a gate rather than a hope).
-- The pixel-parity promise is specific to a (backend, font set, scale bucket)
-  arrangement the deployment pins; §16.1's Stage 0 matrix measures what the
-  owner's deployment actually ships, and §7.6 guarantees a wrong pixel never
-  ships as right.
-
-## 21. Review dispositions (round 1)
-
-Codex 1–11 (its finding 1 is Critical, 2–10 Important, 11 Minor) and claude
-C1–C5, I1–I10, M1–M7. "Fixed" = folded into this draft; "Rejected" = the finding
-was verified and then not accepted, with reason.
-
-| Finding | Disposition |
-|---|---|
-| codex 1 (original assets + reversible painting violate the visible-only boundary) | **Fixed (draft 2), superseded round 3** — draft 2 added drawn-bitmap snapshots, source-rect crops and an optional flattened projection; draft 3 makes the projection mandatory with the P-rule (see round-2 table, codex-r2 1) |
-| codex 2 (XLSX + semantic services lack a common disclosure projection) | **Fixed** — §6.4 content policy + §11 visible-projection rules (chart text, visible-band copy, hidden-sheet exclusion) + §16.2 disclosure tests |
-| codex 3 (one resolution-independent recording cannot preserve transform-dependent paint) | **Fixed** — §7.3/§8.3: record and replay at named scale buckets; §16.1 gate 2 multi-scale matrix incl. shadows/absolute transforms; charts get a PaintOptions DPR seam (§8.4) |
-| codex 4 (context contract omits operations required during paint) | **Fixed** — §7.3 backend-backed facade: measureText via backing ctx, scratch-surface snapshots, wrapper patterns with recorded `setTransform`, `has`-trap fidelity, §16.1 gate 3 census |
-| codex 5 / claude I1 (visual recording vs text indexing conflated) | **Fixed** — §7.3: the recorder does not expose `RECORD_TEXT`; the text index is a separate pass (existing buildTextIndex); painters' branching preserved; agreement tested (§16.2) |
-| codex 6 (round-1; watermark defaults + forensic fallback) — partially related to claude C3/I7, **not** claude I6 (which is the CORS finding) | **Fixed** — §9.4 per-viewer by default; §13.2 per-page codeword + cross-page-sharing; §18 item 7 image-domain fallback; round-3 refinement in the second table (codex-r2 2,3) |
-| codex 7 (collusion + retention claims unsound) | **Fixed** — §9.3 audit table kept separate from session state; §13.5 states the collusion limit and demands measurement; §13.6 includes confidence/abstention; `authorize` hook (§9.1) binds viewer identity where available; retention independent of cache eviction |
-| codex 8 / claude I5 (loader migration + renewal; pullStream push-back) | **Fixed** — §6.3: sniff in `loadOfficeSource` on its existing prefix; typed 406 via a bounded non-OK reader; typed terminal `stream-expired` for non-reopenable sources; one-byte-chunk and truncated-`OVSM` tests |
-| codex 9 (admission/cancellation insufficient) | **Fixed** — §14 table: decoded/inflation reservations before allocation, outstanding-unit/queue caps, worker-retirement deadline semantics; §16.2 probes |
-| codex 10 (wire/auth/cache contract decisions) | **Fixed** — §6.2 normative schema + token claim table; negotiation via `Accept` parameters (no custom header, claude I6); unit-level tile discriminator instead of pre-declared `fallbackTiles`; §9.3 one canonical cache key incl. policy; per-op `can.*` enforcement; framed reassembly rules |
-| codex 11 (misleading citations; qualify contradictions) | **Fixed** — §4/§19 anchors corrected (see M1); §19's byte ban is scoped to protected/stream-required responses; §8.2 names `getPaintables` as the single entry point |
-| claude C1 (hidden content painted today) | **Fixed** — §6.4 policy + §16.2 secret-string-per-fixture tests across pixels/index/copy/a11y/manifest; draft 1's "XLSX no special work" claim withdrawn in §4 |
-| claude C2 (original image bytes on the wire) | **Fixed** — same as codex 1 (merged: drawn-bitmap snapshot, session-scale, metadata-free, pixel-hash key) |
-| claude C3 (forensic capacity math incoherent) | **Fixed** — §13.2 per-page codeword (initially draft 2's cross-page rule; **superseded in round 3** by the carrier-rich/sparse/none classification and the concrete decision rule — see round-2 table, codex-r2 3; threshold corrected round 4 per codex-r3 1) |
-| claude C4 (outlines vs zero-diff gate; "zero dependencies" overclaim) | **Fixed** — §7.4 rewritten: mode (a) with a named shaping lib + outline-rendered reference + tolerance, or mode (b) pinned server fonts with the real zero-diff claim; "no new dependencies" scoped to the library (§3.2/§18 item 2) |
-| claude C5 (device-space-dependent painting) | **Fixed** — same as codex 3 (merged: quantised scale buckets in every request + canonical key; low-res retained during zoom re-request) |
-| claude I1 | **Fixed** — see codex 5 |
-| claude I2 (semantic services exceed what's drawn) | **Fixed** — §6.4 + §11 visible-band text and visible-projection chart descriptions |
-| claude I3 (op subset incomplete; scratch surfaces; pattern setTransform; `has` trap) | **Fixed** — §7.3/§7.5 (subset extended, real backing facade, Stage-0 census; `fillText` maxWidth and `strokeText` included) |
-| claude I4 (backend seam; node-canvas font registration global) | **Fixed** — §8.4 `measureCanvas` factory + per-worker font budget/recycling; §9.2 |
-| claude I5 | **Fixed** — see codex 8 (merged) |
-| claude I6 (custom header forces CORS preflight) | **Fixed** — §6.1 `Accept` media-type parameters only; §16.3 simple-request test |
-| claude I7 (replay can drop the visible mark; shifts detectable from advances) | **Fixed** — §13.3 keyed decoy jitter + quantised coordinates; mark baked into the raster before recording (§9.4), so replay cannot drop it; limits restated (§13.5, §20) |
-| claude I8 (no viewer identity/auth hook/WS token transport; missing "how docs are marked" decision) | **Fixed** — §9.1 `authorize` hook; §9.3 token transport in the hello + origin allowlist; the "how docs are marked" decision was §18 item 5, **superseded round 5** by the source-type owner decision (§2 item 1) |
-| claude I9 (cache keys + precedence contradictions) | **Fixed** — §9.3 single canonical key (incl. DPR/scale bucket, policy, mark) used identically for tiles; §9.4/§8.3 precedence: server-baked mark, `can.*` AND protection header |
-| claude I10 (core entry could change the eager graph) | **Fixed** — §8.1 measured gate (module map unchanged apart from the sniff; ≤ 2 B gzip delta) |
-| claude M1 (wrong citations) | **Fixed** — anchors corrected per the codex audit (§4); the cited `workerProtocol.ts` filename never existed (orchestrator-confirmed round 3; round 2 wrongly "rejected" this): the real symbol is `src/worker/viewerProtocol.ts:30–33` (`VIEWER_COMMAND_KINDS` incl. `'sort'`/`'filter'`; command kinds at `src/xlsx/view/contracts.ts:709–710`), cited correctly in §12; `RECORD_TEXT` is at `src/core/text-recording.ts:2` (citations updated) |
-| claude M2 (format inconsistencies) | **Fixed** — §6.2/§7.1/§7.5: binary OVSM (no `+json`), `gzip` naming everywhere, `TILE` bytes inline (no data URIs), `1..8192` px bound aligned with `maxUnitPx`, f64 coordinates named as the encoding |
-| claude M3 (plain sha256 hash lets a holder confirm a match; one key too many) | **Fixed** — §6.2 `docRef` (HMAC, truncated); §13.4 HKDF subkeys + key generation labelled in the audit table |
-| claude M4 (untestable criteria) | **Fixed** — §14 numbers (rate limits, caps) + §17 done-when gates with concrete values/percentages |
-| claude M5 (version negotiation unclear; redundant recorder header) | **Fixed** — §6.1/§7.6: negotiation via `Accept` parameters; the custom `X-OfficeView-Recorder` header removed |
-| claude M6 (`setWatermarkMuted` is module-global) | **Fixed** — §9.2: workers never interleave a paint pass with an index pass until the mute becomes context-scoped [call] |
-| claude M7 (row/col numbering reveals hidden bands; hidden sheet names) | **Accepted** — hidden/veryHidden sheet *names* are filtered from sheet nav by §6.4; numbered-axis reveal is an accepted limitation stated in §12/§20 with the render-without-numbering alternative offered |
-
-### Round-2 dispositions (codex r2, findings 1–8, draft 3)
-
-| Finding | Status in draft 2 | Disposition in draft 3 |
-|---|---|---|
-| codex-r2 1 (protected projection still optional; group flattening does not establish final visibility) | PARTIAL | **Fixed** — §7.7 rewritten as the mandatory P-rule, stated once: `final-raster` by default (whole-unit final frame, cross-group covers removed by construction) or proof-gated `culled-commands`; per-group flattening removed; §§3.1/3.3/19/16/17 reference the single rule |
-| codex-r2 2 (watermark baking / rasterisation / post-record mutation ordering incoherent) | PARTIAL | **Fixed** — §9.4 defines one pipeline per projection with a fixed ordering (paint → culling proof → forensic mutate → mark composite → flatten); the mark is never mark-recorded-as-commands on protected documents; image-domain mark on `final-raster`; mutated frames live only in the §9.3 session tier; fixed-text override needs §18 item 8 approval |
-| codex-r2 3 (forensic coding incomplete; single-page gate contradictory) | PARTIAL | **Fixed** — §13.2: page classification (carrier-rich ≥ 32 / sparse / none), token allocation (monotonic, never reused), decision rule (per-candidate compare, distance ≤ 6 of 40 + CRC-8, stated false-attribution bound calibrated in Stage 2), single-page gate scoped to carrier-rich pages; §13.3 quantisation defined (1/256-px lattice), decoy indistinguishability demoted to a measured hypothesis |
-| codex-r2 4 (semantic visibility lacks the join; §15 overclaims local parity) | PARTIAL | **Fixed** — §11 visual/index join rule: servable only if fully inside clip bands AND unoccluded per the §7.7 proof; partial graphemes/clipped/covered runs withheld entirely with diagnostics; §15 wording corrected ("may be less than local mode shows"); §16.2 covered/partial tests per endpoint |
-| codex-r2 5 (bytes/Blob renewal cannot refresh credentials; refresh claim absent from schema) | PARTIAL | **Fixed** — §6.3 rule 5 + §10: sources classified renewable (URL/HttpSource/Request) vs terminal (bytes, Blob, Response, ReadableStream); `refresh` claim added to the §6.2 table as optional/renewable-only; bytes/Blob/URL/Response expiry tests added |
-| codex-r2 6 (retirement refunds live allocations; transport limits unspecified; OVSM length/checksum undefined) | PARTIAL | **Fixed** — §7.3 drain-then-refund retirement; §14: rate-limit table with named keys and numbers (ip/session/process bounds), manifest decoded-size cap, CRC-32 + frame-sequence checksum definition, OVSM length named as decoded length with a single compression-semantics flag |
-| codex-r2 7 (fidelity gates contradict the chosen references; protected MVP shipped before boundary suite) | PARTIAL | **Fixed** — §3.1/§7.4: one fidelity gate per text mode (outlines graded vs outline-rendered reference with published tolerance; text mode zero-diff only over the §7.4 face handshake, else per-unit raster fallback); Stage 1 cannot ship a protected response before the P-rule projection + wire-disclosure suite are green (moved from Stage 2) |
-| codex-r2 8 (workerProtocol rebuttal wrong; RECORD_TEXT anchor; `can.semantic` absent; cache key lacks unit identity; disposition pairing) | PARTIAL | **Fixed** — §21 round-1 M1 row corrected to "fixed" (orchestrator-confirmed: `workerProtocol.ts` never existed; `viewerProtocol.ts` cited in §12); `RECORD_TEXT` anchors moved to `text-recording.ts:2`; `can.semantic` became `policy.semantic` in the §6.2 schema; `unitId` subkey added to the §9.3 canonical key; codex-6/claude-I6 pairing re-labelled |
-
-### Round-3 dispositions (codex r3, findings 1–5, draft 4)
-
-| Finding | Status in draft 3 | Disposition in draft 4 |
-|---|---|---|
-| codex-r3 1 (40-bit codeword cannot fit the ≥32-carrier class; attribution rule conflates per-candidate and whole-search bounds) | PARTIAL (R2-3) | **Fixed** — carrier-rich threshold raised to ≥ 40 eligible words (a 40-bit binary codeword needs 40 carriers; 32 could not hold it), sparse 16–39, none < 16; the decision rule now states the whole-search target (false-attribution ≤ 10⁻⁶ per page decision over the full audit table, measured with unmarked-page tests) and prints the per-candidate Σ C(40,k≤6)/2⁴⁰ ≈ 4.18×10⁻⁶ figure only as a raw ingredient, never as the bound; the CRC moved to the *observed sample* (a candidate's own codeword trivially passes), unique-winner abstention added, ambiguity abstains |
-| codex-r3 2 (command projection's overlay mark is separately removable; contradiction with protected culled-commands) | PARTIAL (R2-2) | **Fixed** — §9.4 now states plainly that an overlay mark is removable and only `final-raster` guarantees the visible mark; protected `culled-commands` output must satisfy the M-rule (mark composited into every transmitted content raster, unmarked assets removed) and pure-vector units answer `final-raster`; the M-rule pipeline is stage-gated, so until tested `final-raster` is the only protected projection shipped; §20 records the limit verbatim |
-| codex-r3 3 (face handshake claimed but undefined) | PARTIAL (R2-7) | **Fixed** — §7.4 now defines the concrete protocol: `requiredFaces` identity list (hashes only, no face bytes), a bounded one-time `faces-ack` first-WS-frame message (≤ 128 ids, 2 s window, none-on-no-answer), hash-equality match (version mismatch counts as missing), per-unit raster transition with a `face-missing` diagnostic; the fidelity claim holds per satisfied unit, not document-wide |
-| codex-r3 4 (promises and Requests treated as fetch factories) | PARTIAL (R2-5) | **Fixed** — §6.3/§10: promises classified by their *resolved* value (`Promise<Response>` terminal, matching `stream.ts:368–373`); Request renewable only when bodyless or body-not-consumed; expiry tests extend to `Promise<Response>` and body-bearing Requests |
-| codex-r3 5 (stale wording: §19 "over"; §21 C3 row; §11 final-raster parenthetical) | PARTIAL (R2-4 clarifications) | **Fixed** — §19 now reads "without"; §21's round-1 claude C3 row points to the superseded/round-3/round-4 lineage; §11 clarifies that final pixels do not identify covered logical ranges and the conservative withhold applies equally on `final-raster` |
-
-### Round-5 owner revision (2026-11-08) — not a review finding
-
-The owner replaced §2 item 1 and removed §18 item 5: **the developer chooses the
-mode by source type** ("If a doc is supplied to the viewer, it goes file view. And
-if a stream, websocket, is supplied, go stream mode."). Everything keyed on
-response inspection was removed rather than reworded, and the underlying round-2
-and round-3 findings are retired on their own terms:
-
-- **Removed:** response sniffing in `loadOfficeSource` (the OVSM-over-HTTP path,
-  the bytes/blob arms' `OVSM` checks), the `Accept` media-type negotiation, the
-  406 / `StreamRequiredError` contract, the per-document "stream-required"
-  configuration, the CORS-simple-request gate (and its §16 gate), and the
-  promise/Request renewal-classification text of rounds 3–4 (that problem existed
-  only when an HTTP manifest could be trapped inside a re-read byte value — a
-  dedicated WS source has no such trap; §6.3).
-- **Moved:** the `OVSM` manifest format survives as the **first message on the
-  session's WebSocket** after a client `hello`, with the same normative schema
-  (§6.2, plus `policy.protection` and the `faces-ack` second frame); version and
-  capability negotiation now happen inside the WS handshake, with typed closes
-  (`unsupported-version`, `auth-failed`, `session-expired`, `revoked`,
-  `rate-limited`) replacing the 406 path.
-- **Rewritten:** the P-rule (§7.7) applies to **every stream session by default**
-  (adopting the round-5 proposal, §6.1: final-raster projection, content policy
-  and both marks; the developer's server-side `authorize` hook may relax
-  projection and content policy per session, never from the client, and every
-  relaxation is recorded in the audit table. Round 5 kept marks non-relaxable;
-  the owner overrode that on 2026-11-08 — marks are switchable per session too,
-  §6.1); §19/§20 state the
-  deployment boundary plainly — the library cannot stop a developer who also
-  exposes the file elsewhere.
-- **Verified, not assumed** (round-5 item 6): the branch lives at the `OfficeFile`
-  layer (`OfficeFile.tsx:37–49` load-path signature, `:60` `useOfficeFile`,
-  `:91` route guard; `loadOfficeSource.ts:202,32`; `OfficeDoc.tsx:51` keeps its
-  branch on the `OfficeFile` layer keeps local files byte-for-byte intact and
-  gains no sniff constant (§8.1's eager gate became
-  "`dist/index.js` module map identical, eager within 16 B").
-  **Round-6 correction:** draft 5's "OfficeDoc keeps taking its parsed document
-  with no other change" was wrong — the provider is a discriminated arm on
-  `OfficeDocSource` dispatched inside `OfficeDoc` (§6.3, codex-r4 finding 5);
-  the branch story above stands, "OfficeDoc untouched" did not.
-
-### Round-4 dispositions (codex r4 findings 1–8 + isolation, draft 6)
-
-Code claims re-verified for this round in the worktree: the r4 citation table
-checked out — notably `canvas2d.ts:102–104,178–183,345–356,418` (colour/opacity
-applied to retained textures at draw time), `types.ts:118–173` (behaviour inputs
-travelling separately from geometry), `player/session.ts:228–232`
-(package reopen), `player/text-builds.ts:57–106,145` / `render/plan.ts:17–26` /
-`render/scene.ts:37–45` / `presenter/preview.ts` /
-`presenter/PresenterView.tsx:52,315` (the shape reads the §12a client prototype
-must remove), `OfficeDoc.tsx:48–51,344,672,947–961` + `loadOfficeSource.ts:32`
-(the closed local unions and direct `getPaintables` calls that invalidated
-round 5's "OfficeDoc untouched"), and `contracts.ts:709–710` +
-`viewerProtocol.ts:31` (caller-supplied sort/filter specs without authorization).
-All accurate; no citation was rejected, only draft 5's wording.
-
-| Finding | Status in draft 5 | Disposition in draft 6 |
-|---|---|---|
-| codex-r4 1 (layer projection ≠ disclosure boundary: colour/opacity/“appear-as-white” and unprovable intermediates) | Critical — animation survived, boundary didn't | **Fixed** — §12a.3 rewritten: release eligibility on **final observable appearance** (alpha, recolour, masks, Morph looks, compositing), a maximal-observable-exposure raster for animated layers, an enumerated **proof subset** (deterministic effects the client reproduces server-identically) with everything else as **server-composed frames**, never original layers alongside fallback frames, adversarial appearance/intermediate-time fixtures with decoded-asset inspection; animation itself is untouched (the owner's §18 item 4 stays) |
-| codex-r4 2 (M-rule leaves mixed vector/raster units removable) | PARTIAL (R3-2) | **Fixed** — §9.4/§20: the M-rule demands every content-bearing component protected, so a mixed unit (readable commands + marked rasters) answers `final-raster`; a pinned mixed-page test joins §16.2; mark-off sessions (§18 item 8) unaffected |
-| codex-r4 3 (decided pixel mark not normative in §13; image-only units unmarked) | PARTIAL (R2-7 basis, R3-1 tail) | **Fixed** — §13.2 made two-layer normative: the **spread-spectrum pixel mark on every unit** (payload/ECC rate-1/3, mid-frequency luminance insertion, `kPixel = HKDF(...)`, ΔE00 ceiling as a Stage-0 output that blocks shipment until set, JPEG/downscale/crop gates) is primary for image-only units too; text shifts remain the independent second layer; the §13.6 detector gained the pixel decoder (registration, cell-clock re-sync, crop tolerance, candidate correlation) and joint consensus; §13.2's classification narrows to text-layer scope; §16.1 gate 5 / Stage-2 gates added image-only numbers |
-| codex-r4 4 (filter values bypass the §11 join; sort/filter targets unauthorized) | PARTIAL (R2-4 tail) | **Fixed** — §12: filter values pass the same conservative visible-projection join (covered cells count); sort/filter targets are validated against the policy-approved view (allowed columns/ranges) before engine execution, refused before they can move observable order, counts or tiles; the wire audit covers covered cells and hostile requests |
-| codex-r4 5 ("OfficeDoc untouched"; no provider seam in this code) | PARTIAL (R5 wording) | **Fixed** — §6.3/§8.3: explicit discriminated arm on `OfficeDocSource` (`kind: 'remote'`) dispatched before the local branches; each service maps to a remote-only implementation; eager gate measured; the round-5 §21 note corrected (round-6 correction) and a lazy-remote-provider requirement on the prototype replaced draft 5's "field or move" shorthand |
-| codex-r4 6 (OVSP under-specified; no per-slide admission budgets; **no no-package client prototype**) | PARTIAL (R2-7 presentation tail) | **Fixed** — §12a.2: bounded normalized schema (keyframes, steps, layers, transition/morph records, resolved appearance flags, per-unit geometry), server-side text-build/target/geometry/Morph resolution (never shapes over the wire), per-slide/per-show count and decoded-byte admission limits with pre-admission/generation/cancellation/eviction, **remote session/preview/notes adapters**, and the no-package/no-`PptxShape` client prototype as a Stage 0 and Stage 3c blocker (§16.1 gates 10–11) |
-| codex-r4 7 (handshake fragmentation: frame order, open-set negotiation, token/rebind, registry) | PARTIAL (R2-8 protocol tail) | **Fixed** — §6.2 states the whole handshake as one state machine (bounded 4 KiB hello, message-vs-frame defined, version **set intersection**, preauthorization vs the issued session token with a `renew`/`renew-ack` lifecycle and race rule, authenticated resume bound to the same viewer+policy — sid alone never enough, notes capability rechecked on resume); §7.4 fixes the faces-ack ordering and defines the hash-based **font registry** and unverifiable-faces-are-absent rule |
-| codex-r4 8 (acceptance contradictions with the decided mode) | Minor — PARTIAL (R2-8 fallout) | **Fixed** — §16.2 drops the retired HTTP-manifest expiry matrix and pins the WS-only gates + notes/mark variant splits; §16.1 gate 4 becomes the fonts-handshake probe (mode decided, §18 item 2); §14 gains the print and sort/filter rate classes; §17 Stage 3 lists the print service per §18 item 6 |
-| **Per-session isolation** (canonical ids, processing domain, conjunctive notes auth) | no counter-finding, residual risk | **Fixed** — §9.3 cache key carries the full policy bundle as `policyDetails`; §6.4 processing is per `contentPolicyId` over an immutable source; §16.2 adds paired relaxed/protected cache-fill-order tests in both orders; §12a.5/§11/§15 make notes authorization conjunctive across image/semantic/search/cache endpoints and explicit that `can.textA11y` alone never authorizes notes |
-
-
+All round-by-round review dispositions (codex r1–r4, claude r1, agy r1)
+live in the sibling file `docs/superpowers/specs/2026-11-07-server-streaming-reviews.md`,
+including the round-7 table for this consolidation.
