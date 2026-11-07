@@ -18,7 +18,7 @@
 import { attrs, getChild, type XmlNode } from '../../core/xml'
 import { parseDxf } from '../tableStyles/parseStylesExtras'
 import type { ColorSpec, DxfStyle } from '../tableStyles/model'
-import type { SheetColorContext } from '../sheetColors'
+import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
 import type { CfCellState } from './model'
 
 export interface CfStrictDxf {
@@ -287,4 +287,49 @@ export function parseCfDxf(node: XmlNode, colors: SheetColorContext): CfStrictDx
     writes.add('numFmt')
   }
   return { properties, writes, unsupported }
+}
+
+/** Apply only the composed winning deltas after base/table/pivot/own resolution.
+ * Borders are cell sides, never table-band edges. No input style is mutated. */
+export function resolveCfCellStyle(
+  base: import('../types').XlsxCellStyle | undefined,
+  state: CfCellState,
+  colors: SheetColorContext = {},
+): import('../types').XlsxCellStyle {
+  const out = { ...base, numFmtId: base?.numFmtId ?? 0 }
+  if (base?.borders) out.borders = { ...base.borders }
+  if (base?.borderColors) out.borderColors = { ...base.borderColors }
+  const p = state.properties
+  const color = (v: unknown): string | undefined => {
+    if (typeof v !== 'string') return undefined
+    const parts = v.split(':')
+    return parts[0] === 'theme' ? resolveSheetColor({ theme: parts[1], tint: parts[2] }, colors)
+      : parts[0] === 'indexed' ? resolveSheetColor({ indexed: parts[1] }, colors)
+        : resolveSheetColor({ rgb: v }, colors)
+  }
+  for (const [path, key] of [['font.bold', 'bold'], ['font.italic', 'italic'], ['font.strike', 'strike'],
+    ['font.name', 'fontName'], ['font.size', 'fontSizePt'], ['font.underline', 'underline']] as const) {
+    if (!(path in p)) continue
+    const v = p[path]
+    if (v === null || v === 'none') delete out[key]
+    else Object.assign(out, { [key]: v })
+  }
+  if ('font.color' in p) out.color = color(p['font.color'])
+  if ('fill.pattern' in p || 'fill.fg' in p || 'fill.bg' in p) {
+    // Differential solid fills use bgColor (unlike ordinary cell fills).
+    out.fillColor = p['fill.pattern'] === 'none' || p['fill.pattern'] === null ? undefined : color(p['fill.bg'] ?? p['fill.fg'])
+  }
+  for (const side of ['left', 'right', 'top', 'bottom'] as const) {
+    const path = `border.${side}`
+    if (`${path}.style` in p) {
+      out.borders ??= {}
+      out.borderColors ??= {}
+      const style = p[`${path}.style`]
+      if (style === null || style === 'none') { delete out.borders[side]; delete out.borderColors[side] }
+      else { out.borders[side] = String(style); out.borderColors[side] = color(p[`${path}.color`]) }
+    } else if (`${path}.color` in p) { out.borderColors ??= {}; out.borderColors[side] = color(p[`${path}.color`]) }
+  }
+  if ('numFmt.id' in p) { out.numFmtId = typeof p['numFmt.id'] === 'number' ? p['numFmt.id'] : 0; delete out.formatCode }
+  if ('numFmt.code' in p && typeof p['numFmt.code'] === 'string') out.formatCode = p['numFmt.code']
+  return out
 }
