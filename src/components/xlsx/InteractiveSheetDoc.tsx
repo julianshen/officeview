@@ -1,3 +1,4 @@
+import { collectCfCoverage } from './cfCoverage'
 import { useCanvasColors } from '../canvasColors'
 /**
  * Interactive sheet viewport (plan S5.2; spec §§5.5, 9, 10.1, 11, 12.4), mounted
@@ -443,7 +444,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onMainLedger = props.onMainLedger
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
-  useEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
+  // Unsubscribe in the removing commit, before passive source release emits close.
+  useLayoutEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
   useEffect(() => {
     if (!remote) return
     return remote.subscribeRegionStyleEvictions(sheetId => {
@@ -471,7 +473,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // atomically: the current one stays alive, and keeps painting, until its
   // admitted replacement has committed; only then is it disposed (§10.1).
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
-  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number; cfLiveKey?: string; cfViewportKey?: string } | null>(null)
+  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number; cfLiveKey?: string; cfViewportKey?: string; cfBoxes?: readonly LogicalCellBox[] } | null>(null)
   const [residentDrawingGen, setResidentDrawingGen] = useState(0)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
@@ -936,34 +938,34 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // actual projected panes; the existing asset-swap path invalidates their tiles.
   const cfRules = entry?.sheet.conditionalFormatting
   const cfTextGen = useMemo(() => (!remote && cfRules ? cfRulesVersion(cfRules) : 0), [remote, cfRules])
+  const hasRemoteCf = !!remote && !!activeSheetId && remote.layout(activeSheetId).hasConditionalFormatting === true
   const scopedCf = cfRules ? cfNeedsViewport(entry!.sheet) : false
-  const cfViewport = scopedCf && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
+  const cfViewport = (scopedCf || hasRemoteCf) && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
     const range = tileRangeFor({origin:box,viewport:{width:box.width*scroll.zoom,height:box.height*scroll.zoom},zoom:scroll.zoom,dpr,extent:{width:entry.metrics.cols.totalCss(),height:entry.metrics.rows.totalCss()}},TILE_PREFETCH_RING)
     const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
     return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
   }) } : undefined
-  const cfLiveKey = cfRules ? JSON.stringify([activeSheetId, sheetIds.map(id => source.store(id).stamp.valueGen), entry?.revision, entry?.structureGen, cfTextGen]) : undefined
-  const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, nextWindowKey, cfViewport.boxes]) : undefined
-  const [viewportCf,setViewportCf]=useState<{key:string;batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
+  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed]) : undefined
+  const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
+  const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
   useEffect(()=>{const old=heldViewportCf.current;heldViewportCf.current=viewportCf?.batch;if(old!==heldViewportCf.current)old?.dispose()},[viewportCf])
   useEffect(()=>()=>heldViewportCf.current?.dispose(),[])
   useEffect(()=>{
     if(!cfViewportKey || assets?.cfViewportKey===cfViewportKey && assets?.cfLiveKey===cfLiveKey) { setViewportCf(null); return }
-    if(!cfViewport || !entry || !assets || assets.sheetId!==activeSheetId) { setViewportCf(null); return }
+    if(!cfRules || !entry || !assets || assets.sheetId!==activeSheetId) { setViewportCf(null); return }
     let cancelled=false
     const sheet=entry.sheet
     void ensureConditionalFormatting([sheet]).then(async cf=>{
       const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',viewport:cfViewport})
       if(cancelled){batch?.dispose();return}
-      setViewportCf({key:cfViewportKey,batch})
+      setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:cfViewport?.boxes,batch})
     })
     return()=>{cancelled=true}
     // CF-only work: font/image/chart leases do not depend on scroll position.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[assets,cfViewportKey,doc,chartParent])
-  const currentViewportCf=viewportCf?.key===cfViewportKey ? viewportCf : undefined
-  const cfReady=!cfRules || (assets?.cfLiveKey===cfLiveKey && (!scopedCf || assets?.cfViewportKey===cfViewportKey)) || Boolean(currentViewportCf)
+  const currentViewportCf=viewportCf?.generation===cfLiveKey ? viewportCf : undefined
 
   // ---- Task 9 derived text: one prepared current-generation effective format
   // for the visible source cells (plus the active cell). Find/copy prepare their
@@ -983,19 +985,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       budget,
     })
   }
-  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
+  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer): Promise<EffectiveFormatScope | undefined> => {
     if (!remote || !rects.length || batchSignal.aborted) return undefined
     const identity = remote.identity(sheetId)
+    const structureGen = remote.merges(sheetId).gen
+    const current = () => !batchSignal.aborted && !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen
     const text = await import('../../xlsx/cf/text')
-    if (batchSignal.aborted) return undefined
+    if (!current()) return undefined
     return text.prepareCfWireScope(
       async chunk => {
-        if (batchSignal.aborted) return { result: undefined, release: () => {} }
+        if (!current()) return { result: undefined, release: () => {} }
         const held = remote.acquireCfPreparation(sheetId, chunk, {
-          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen: remote.merges(sheetId).gen, clockGen: 0,
+          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen: 0,
         }, batchSignal)
         // The entry mutates under the loader: always re-read, never narrow.
-        const settled = (): boolean => held.state.state === 'ready' || held.state.state === 'failed'
+        const settled = (): boolean => held.state.state === 'ready' || held.state.state === 'failed' || !current()
         try {
           if (!settled() && !batchSignal.aborted) {
             await new Promise<void>(resolve => {
@@ -1010,7 +1014,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           // States are copied synchronously by the scope builder; the entry is
           // always released here, so the scope never holds provider leases.
           const release = (): void => held.release()
-          if (batchSignal.aborted || remote.identity(sheetId).valueGen !== identity.valueGen || remote.identity(sheetId).viewGen !== identity.viewGen || !settled() || held.state.result?.kind !== 'ready') return { result: undefined, release }
+          if (!current() || !settled() || held.state.result?.kind !== 'ready') return { result: undefined, release }
           return { result: held.state.result, release }
         } catch {
           held.release()
@@ -1018,14 +1022,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         }
       },
       rects,
-      { locale, budget },
+      { locale, budget, current, base, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
-  const residentFrameAssets=!cfRules ? assets?.lease.assets : assets ? {...assets.lease.assets,conditionalFormatting:scopedCf ? (currentViewportCf?.batch ?? (assets.cfViewportKey===cfViewportKey ? assets.lease.assets.conditionalFormatting : undefined)) : (assets.cfLiveKey===cfLiveKey ? assets.lease.assets.conditionalFormatting : undefined)} : undefined
-  const paintedCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
+  const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
+  const residentFrameAssets = !cfRules ? assets?.lease.assets : assets ? {...assets.lease.assets, conditionalFormatting: residentBatch} : undefined
+  useEffect(()=>{
+    if(assets?.cfLiveKey && assets.cfLiveKey!==cfLiveKey) assets.lease.assets.conditionalFormatting?.dispose()
+  },[assets,cfLiveKey])
+  const paintedCf=useRef<string|undefined>(undefined)
   useLayoutEffect(() => {
     if (!remote || !activeSheetId || !remote.layout(activeSheetId).hasConditionalFormatting) return
-    if (remote.takeCfDirtyRects(activeSheetId).length) rendererRef.current?.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    remote.takeCfDirtyRects(activeSheetId) // completed scopes repaint uncached tiles; generation changes invalidate below
   }, [remote, activeSheetId, loadTick])
 
   useEffect(() => {
@@ -1037,11 +1045,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfRules ? {cfStore:source.store(activeSheetId)} : {}), ...(cfViewport ? { cfViewport } : {}) }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
-      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0, cfLiveKey, cfViewportKey })
+      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0, cfLiveKey, cfViewportKey, cfBoxes:cfViewport?.boxes })
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen, cfLiveKey])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
 
   // ---- layers ----
   // Visible source cells for the display text scope: what the grid actually
@@ -1066,7 +1074,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     for (const [a, b] of spans.x) {
       for (const run of entry.metrics.cols.visibleBetween(a, b).runs) cols += run.end - run.start + 1
     }
-    if (count === 0 || cols === 0 || count * cols > CF_PAINT_BATCH_CELLS) return undefined
+    if (count === 0 || cols === 0 || count * cols > CF_PAINT_BATCH_CELLS) return selection.active ? [{r0:selection.active.row,r1:selection.active.row,c0:selection.active.col,c1:selection.active.col}] : undefined
     const cells: { row: number; col: number }[] = []
     for (const [a, b] of spans.y) {
       for (const run of entry.metrics.rows.visibleBetween(a, b).runs) {
@@ -1130,13 +1138,44 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Gate scope consumption by identity: while a replacement preparation is
   // pending, the previous sheet/generation scope must not format new cells.
   const liveCfScope = liveScopeFor(cfText, cfTextKey)
+  type RemotePaintState = { key: string; generation: string; scope?: EffectiveFormatScope; coverage?: ReturnType<typeof collectCfCoverage> }
+  const [remotePaintState, setRemotePaintState] = useState<RemotePaintState | null>(null)
+  const heldRemotePaint = useRef<RemotePaintState | null>(null)
+  useEffect(() => {
+    const old=heldRemotePaint.current; heldRemotePaint.current=remotePaintState
+    if(old!==remotePaintState){old?.scope?.dispose();old?.coverage?.dispose()}
+  },[remotePaintState])
+  useEffect(()=>()=>{heldRemotePaint.current?.scope?.dispose();heldRemotePaint.current?.coverage?.dispose()},[])
+  useEffect(()=>{
+    if(!remote || !hasRemoteCf || !cfViewport || !cfViewportKey || !cfLiveKey || !entry || remote.isClosed){setRemotePaintState(null);return}
+    let cancelled=false
+    const abort=new AbortController(),key=cfViewportKey,generation=cfLiveKey,sheetId=activeSheetId
+    let coverage:ReturnType<typeof collectCfCoverage>|undefined
+    void(async()=>{
+      let scope:EffectiveFormatScope|undefined
+      try {
+        coverage=collectCfCoverage(entry.metrics,cfViewport.boxes,semanticFormatBudget)
+        scope=await prepareRemoteScope(sheetId,coverage.rects,abort.signal,entry.sheet.semantics?.locale??'en-US',semanticFormatBudget,regionStylesFor(entry.sheet))
+        if(!scope) throw new Error('Conditional formatting is unavailable for these tiles; base formatting is shown.')
+      } catch(error) {
+        if(!cancelled)setAnnouncement(error instanceof Error?error.message:'Conditional formatting unavailable; base formatting is shown.')
+      }
+      if(cancelled){scope?.dispose();coverage?.dispose();return}
+      setRemotePaintState({key,generation,scope,coverage})
+    })()
+    return()=>{cancelled=true;abort.abort()}
+    // Coverage changes only on tile-ring, committed view, source or geometry changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[remote,cfViewportKey,cfLiveKey,entry?.regionStyleGen])
+  const currentRemotePaint = remotePaintState?.generation===cfLiveKey && !remote?.isClosed ? remotePaintState : undefined
   const remotePaint = useMemo(() => {
-    if (!remote || !liveCfScope || !activeSheetId || !cfTextKey) return undefined
-    const scope = liveCfScope
-    return { key: cfTextKey, stamp: { owner: remote.identity(activeSheetId).docId, sheetId: activeSheetId, workbookValueGen: remote.identity(activeSheetId).valueGen, cfGen: scope.gen, viewGen: 0, structureGen: 0, clockGen: 0 },
-      layer: { rects: scope.regions ?? [], retainedBytes: 0, styleAt: scope.effectiveStyle }, dispose() {} }
-  }, [remote, liveCfScope, activeSheetId, cfTextKey])
-  const frameAssets = remote && remotePaint && residentFrameAssets ? { ...residentFrameAssets, conditionalFormatting: remotePaint } : residentFrameAssets
+    const scope=currentRemotePaint?.scope
+    if(!remote || !scope || !activeSheetId || !cfLiveKey || remote.isClosed)return undefined
+    const id=remote.identity(activeSheetId)
+    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen:0},
+      layer:scope.paintLayer ?? {rects:scope.regions??[],retainedBytes:0,styleAt:scope.effectiveStyle},dispose(){}}
+  },[remote,currentRemotePaint,liveCfScope,activeSheetId,cfLiveKey])
+  const frameAssets=remote && hasRemoteCf && residentFrameAssets ? {...residentFrameAssets,conditionalFormatting:remotePaint} : residentFrameAssets
 
   const baseRef = useRef<HTMLCanvasElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
@@ -1230,7 +1269,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {
       sheet: entry.sheet, geometry: entry.geometry, ...(sparklineViews ? { sparklineViews } : {}), identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-      assets: frameAssets, ...((!cfReady || (cfTextKey && remote && cfText?.key !== cfTextKey)) ? {cfPending: true} : {}), layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      assets: frameAssets, ...((cfRules && !residentBatch) || (hasRemoteCf && !currentRemotePaint?.scope) ? {cfPending:true} : {}), ...(hasRemoteCf ? {cfCoverage:currentRemotePaint?.coverage?.contains ?? (()=>false)} : scopedCf ? {cfCoverage:(box:LogicalCellBox)=>(currentViewportCf?.boxes??assets?.cfBoxes??[]).some(b=>box.x>=b.x-1e-7&&box.y>=b.y-1e-7&&box.x+box.width<=b.x+b.width+1e-7&&box.y+box.height<=b.y+b.height+1e-7)} : {}), layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
       ...(scroll.frozen ? { frozen: scroll.frozen } : {}),
       // Row-cache proof gates worker requests: tiles the cache already proves
@@ -1354,8 +1393,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
-    if(paintedCf.current!==frameAssets?.conditionalFormatting)renderer.cache.invalidate(key=>key.identity.sheetId===activeSheetId)
-    paintedCf.current=frameAssets?.conditionalFormatting
+    if(paintedCf.current!==cfLiveKey)renderer.cache.invalidate(key=>key.identity.sheetId===activeSheetId)
+    paintedCf.current=cfLiveKey
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
@@ -1380,7 +1419,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, remotePaintState, cfLiveKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)

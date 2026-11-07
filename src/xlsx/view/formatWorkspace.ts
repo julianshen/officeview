@@ -16,6 +16,7 @@ export interface FormatBudget {
  * not retain it past `dispose`. Absence of a scope, or an undefined per-cell
  * answer, always means base formatting (fail closed). */
 export interface EffectiveFormatScope {
+  readonly paintLayer?: import('../tableStyles/regionLayer').RegionStyleLayer
   /** Admitted source-space coverage for blank CF cells in a paged painter. */
   readonly regions?: readonly { minRow: number; maxRow: number; minCol: number; maxCol: number }[]
   /** Live content version the scope was prepared under (cfGen). */

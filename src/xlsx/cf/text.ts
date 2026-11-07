@@ -248,7 +248,7 @@ export async function prepareCfTextScope(
       clockGen: 0,
     }
     const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
-    const colors = request.colors ?? {}
+    const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
     const locale = request.locale ?? 'en-US'
     for (const chunk of modelChunks) {
       if (request.signal.aborted) { service.dispose(); account.close(); return fail() }
@@ -338,11 +338,13 @@ export async function prepareCfWireScope(
     colors?: SheetColorContext
     budget: FormatBudget
     onEmpty?: () => void
+    current?: () => boolean
+    base?: import('../tableStyles/regionLayer').RegionStyleLayer
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
   const chunks = chunkRects(rects)
-  let bytes = DESCRIPTOR_WORKSPACE_BYTES + rects.length * 128
+  let bytes = DESCRIPTOR_WORKSPACE_BYTES + rects.length * 128 + (options.base?.rects.length ?? 0) * 8
   const states = new Map<number, CopiedState>()
   // The initial workspace admission throws like any other refusal so callers
   // can tell a refused preparation apart from an absent one.
@@ -366,7 +368,7 @@ export async function prepareCfWireScope(
     }
   }
   try {
-    const regions = rects.map(r => ({minRow:r.r0,maxRow:r.r1,minCol:r.c0,maxCol:r.c1}))
+    const regions: Array<{minRow:number;maxRow:number;minCol:number;maxCol:number}> = []
     let first = true
     let gen = 0
     for (const chunk of chunks) {
@@ -389,13 +391,14 @@ export async function prepareCfWireScope(
           throw refused('CF wire preparation crossed a definition generation')
         }
         for (const state of result.states) {
-          const occupied = measureCfCellBytes(state)
+          const occupied = measureCfCellBytes(state) + 128
           const next = bytes + occupied
           if (!Number.isSafeInteger(next)) throw refused('CF wire preparation exceeds its admitted batch')
           admitWire(occupied)
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
+          if (Object.keys(properties).length) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
@@ -414,8 +417,13 @@ export async function prepareCfWireScope(
         disposed = true
         options.budget.release(bytes)
       }
-    }, undefined, regions)
-    return scope
+    }, options.current, regions)
+    const paintLayer: import('../tableStyles/regionLayer').RegionStyleLayer = {
+      rects: [...options.base?.rects ?? [], ...regions], retainedBytes: 0,
+      styleAt: (row,col,own,mode) => scope.effectiveStyle(row,col,options.base?.styleAt(row,col,own,mode) ?? own),
+    }
+    if (options.current && !options.current()) { scope.dispose(); return undefined }
+    return { ...scope, paintLayer }
   } catch (error) {
     // Abort converges to no scope (callers detect cancellation on their own
     // signal); admitted-budget refusal propagates for classification.

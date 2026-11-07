@@ -1118,6 +1118,7 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed) return
     this.pivots.close()
     this.closed = true
+    this.notify()
     this.listeners.clear()
     this.sparklineEvictionListeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)

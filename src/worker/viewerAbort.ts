@@ -49,6 +49,7 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
   }
   const facade: SourceStore = {
     get stamp() { return store.stamp },
+    get completeness() { return store.completeness },
     get extent() { return store.extent },
     get valuePolicy() { return store.valuePolicy },
     ...(store.structureGen !== undefined ? { get structureGen() { return store.structureGen } } : {}),

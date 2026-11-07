@@ -21,7 +21,7 @@ it('100 ordinary mounted frames never load or prepare CF', async () => {
     await waitFor(() => expect(frames).toHaveBeenCalled())
     for (let i = 1; i <= 100; i++) {
       const before = frames.mock.calls.length
-      ui.rerender(createElement(Viewer, { doc, onFrame: frames, views: { '1': { revision: i } } }))
+      ui.rerender(createElement(Viewer, { doc, onFrame: frames, views: { '1': { revision: i, filter: i%2 ? {range:{r0:0,r1:0,c0:0,c1:0,headerRows:0,totalsRows:0},columns:new Map()} : null } } }))
       await waitFor(() => expect(frames.mock.calls.length).toBeGreaterThan(before))
     }
     expect(prepare).not.toHaveBeenCalled()

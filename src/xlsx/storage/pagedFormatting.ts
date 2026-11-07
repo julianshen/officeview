@@ -36,11 +36,11 @@ export async function workbookFormattingWithColorContext(workbookRoot: XmlNode, 
   if (themeText !== undefined) {
     try { palette = parseThemeContext(themeText).palette } catch { /* optional theme */ }
   }
-  if (stylesText === undefined) return { formatting: { dateSystem, styles: [] }, colorContext: palette ? { theme: palette } : {}, tableStyleDefs: new Map() }
+  if (stylesText === undefined) return { formatting: { dateSystem, styles: [], ...(palette && Object.keys(palette).length ? { colors: { theme: palette } } : {}) }, colorContext: palette ? { theme: palette } : {}, tableStyleDefs: new Map() }
   const root = parseXml(stylesText)
   const styles = await parseStyles({ xml: async (path: string) => path === 'xl/styles.xml' ? root : undefined } as unknown as OfficePackage, palette)
   const digitWidth = workbookDigitWidth(styles)
-  const formatting: WorkbookFormatting = { dateSystem, styles: styles.xfs.map(xf => resolveXfStyle(styles, xf)), ...(digitWidth !== 7 ? { maxDigitWidthPx: digitWidth } : {}) }
+  const formatting: WorkbookFormatting = { dateSystem, ...(styles.colorContext.indexed?.length || Object.keys(styles.colorContext.theme ?? {}).length ? { colors: styles.colorContext } : {}), styles: styles.xfs.map(xf => resolveXfStyle(styles, xf)), ...(digitWidth !== 7 ? { maxDigitWidthPx: digitWidth } : {}) }
   if (extras === 'auto' && !preferredTableStyleNames.size && !preferredSlicerStyleNames.size && !stylesDefineCustomStyles(stylesText)) {
     return { formatting, colorContext: styles.colorContext, tableStyleDefs: new Map() }
   }

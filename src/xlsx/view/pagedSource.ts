@@ -126,6 +126,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 
+  get completeness() { return this.sheet.state === 'complete' ? 'complete' as const : 'loading' as const }
   get stamp(): SourceStamp { return this.currentStamp }
   private get valueOverlay(): ValueOverlay | undefined { return overlayStates.get(this)?.overlay }
   get structureGen(): number { return overlayStates.get(this)?.structureGen ?? 0 }
@@ -968,7 +969,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         // blank-targeting rules evaluate instead of pending forever. Only an
         // incomplete import withholds as pending.
         if (self.sheet.state !== 'complete') return undefined
-        const used = self.sheet.used
+        const used = self.extent.used
         if (!used) return { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 16383 }
         return { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
       },

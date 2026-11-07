@@ -81,6 +81,7 @@ export function boundedQueryStore(store: SourceStore, budget: number, emitted?: 
   }
   const bounded: SourceStore = {
     get stamp() { return store.stamp },
+    get completeness() { return store.completeness },
     get extent() { if (!fullDomain) return store.extent; const { used: _used, ...extent } = store.extent; return extent },
     get valuePolicy() { return store.valuePolicy },
     readCell: async (at, options) => checked(await store.readCell(at, options), options, true),

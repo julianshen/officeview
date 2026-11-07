@@ -13,7 +13,7 @@ import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
 import { cfExplicitBounds, cfNeedsViewport } from '../cfLoader'
 import { STATIC_SHEET_BUDGET } from '../render'
-import { cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
+import { CfPageFault, cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
 import type { SourceStore } from '../view/contracts'
 import { hostTask } from '../view/scheduler'
 
@@ -87,7 +87,7 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
 export function storeCfSource(store: SourceStore, stamp: CfStamp, memory: CfMemory): CfValueSource {
   return {
     stamp: () => ({ ...stamp, owner: store.stamp.docId, workbookValueGen: store.stamp.valueGen, structureGen: store.structureGen ?? 0 }),
-    bounds: async () => { const used = store.extent.used; return used
+    bounds: async () => { if (store.completeness !== 'complete') return undefined; const used = store.extent.used; return used
       ? { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
       : { firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 } },
     pages: pagedStoreCfPages(store, memory),
@@ -108,6 +108,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
 } = {}): Promise<CfPaintBatch | undefined> {
   const rules = sheet.conditionalFormatting
   if (!rules) return undefined
+  // An importing prefix cannot certify either absence or range statistics.
+  if (options.store && options.store.completeness !== 'complete') return undefined
   let requested = options.request?.sourceRects ?? options.paintRects
   if (rules.rules.length > CF_LIMITS.rules || (requested?.length ?? 0) > CF_LIMITS.rangesPerSheet) return unavailable(sheet)
   let rangeCount = 0, propertyBytes = 0
@@ -258,7 +260,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     }
     return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
       dispose() { if (disposed) return; disposed = true; states.clear(); hold.release() } }
-  } catch { hold.release(); return unavailable(sheet) } finally {
+  } catch (error) { hold.release(); return error instanceof CfPageFault && (error.fault === 'incomplete' || error.fault === 'stale') ? undefined : unavailable(sheet) } finally {
     for (const result of statistics.results.values()) if (result.kind === 'ready') result.value.release()
     statistics.session.dispose()
   }

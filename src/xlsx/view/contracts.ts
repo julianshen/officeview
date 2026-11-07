@@ -251,6 +251,8 @@ export interface RangeCompletion {
  * request's limit and the number of requests are unchanged. queryColumn is
  * bounded by its limit. External custom providers must meet the same contract. */
 export interface SourceStore {
+  /** Whole-sheet completeness; undefined cannot certify statistics bounds. */
+  readonly completeness?: Completeness
   readonly stamp: SourceStamp
   /** Structural generation for geometry-affecting metadata, including overlay merges. */
   readonly structureGen?: number
@@ -807,6 +809,8 @@ export type SourceReadResult =
  * of a paged workbook, published with open so worker-backed cells format like
  * resident ones. Bounded by the styles part's small-part cap. */
 export interface WorkbookFormatting {
+  /** Shared workbook palette, included in the formatting payload's ownership. */
+  colors?: import('../sheetColors').SheetColorContext
   dateSystem: '1900' | '1904'
   styles: readonly XlsxCellStyle[]
   /** The default font's maximum digit width (column-width model); absent: 7px. */
