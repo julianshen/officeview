@@ -124,11 +124,14 @@ function rectArea(rect: SourceRect): number {
 }
 
 /** Exact union area via sweep-line: exact for any rectangle count, with no
- * naive-sum fallback. Cooperative: spends per examined rectangle pair and
- * per slab so large scopes stay interruptible and budgeted. The caller
- * admits the simultaneous workspace (edges, coordinate list, interval
- * arrays, sort scratch) and tracks it in the session cap; this function
- * only sweeps. Returns undefined when the shared budget refuses. */
+ * naive-sum fallback. Cooperative: spends per examined rectangle pair,
+ * sort comparison and interval-merge iteration, and per slab, so large
+ * scopes stay interruptible and budgeted. Comparisons and merges are
+ * counted synchronously per slab and charged before moving on, bounding
+ * the uncharged window to one slab. The caller admits the simultaneous
+ * workspace (edges, coordinate list, interval arrays, sort scratch) and
+ * tracks it in the session cap; this function only sweeps. Returns
+ * undefined when the shared budget refuses. */
 async function sweepUnion(
   rects: readonly SourceRect[],
   spend: SpendState,
@@ -158,16 +161,23 @@ async function sweepUnion(
       if (r.firstCol <= x0 && r.lastCol + 1 >= x1) iv.push([r.firstRow, r.lastRow + 1])
     }
     if (iv.length === 0) continue
-    iv.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    // Sort comparisons and merge iterations are real work at this scale
+    // (hundreds of slabs × hundreds of intervals): count them synchronously
+    // and charge before the next slab, keeping the uncharged window small.
+    let comparisons = 0
+    iv.sort((a, b) => { comparisons++; return a[0] - b[0] || a[1] - b[1] })
     let cs = iv[0]![0]
     let ce = iv[0]![1]
+    let merges = 1
     for (let j = 1; j < iv.length; j++) {
+      merges++
       const s = iv[j]![0]
       const e = iv[j]![1]
       if (s <= ce) { if (e > ce) ce = e }
       else { total += (x1 - x0) * (ce - cs); cs = s; ce = e }
     }
     total += (x1 - x0) * (ce - cs)
+    if (!(await spendUnits(spend, comparisons + merges))) return undefined
   }
   if (!(await flushSpend(spend))) return undefined
   return total
@@ -658,15 +668,16 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     // value generation must never reuse older geometry. Pending (undefined)
     // answers are never stored, so a later complete source at the same
     // generation is re-queried instead of staying pending indefinitely.
-    const getBounds = (
+    // The underlying scan is cooperative (budgeted, abortable, host-yielding).
+    const getBounds = async (
       sheetId: string,
       identity: CfStamp,
       budget: CfWorkBudget,
       signal: AbortSignal,
-    ): SourceRect | undefined => {
+    ): Promise<SourceRect | undefined> => {
       const memoKey = `${sheetId}|${identity.owner}|${identity.structureGen}|${identity.workbookValueGen}`
       if (!boundsMemo.has(memoKey)) {
-        const fresh = source.bounds(sheetId, budget, signal)
+        const fresh = await source.bounds(sheetId, budget, signal)
         if (fresh !== undefined) boundsMemo.set(memoKey, fresh)
         return fresh
       }
@@ -789,12 +800,13 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
           const uspend: SpendState = { pending: 0, signal: controller.signal, budget }
           // Admitted sweep workspace, tracked in the session cap for its
           // lifetime: edges, coordinate list, interval arrays and sort
-          // scratch for the larger of the two union sweeps below.
+          // scratch for one sweep. The clamped set itself lives in the
+          // separate clamp hold below and coexists through both sweeps.
           const countedUnion = async (rects: readonly SourceRect[]): Promise<number | undefined> => {
             // Simultaneous bound from the payload model: a 2n-number edge
-            // set, a 2n-number coordinate list, and up to n interval pairs
-            // alive at the interval-sort boundary, plus headroom.
-            const need = 256 + rects.length * 136
+            // set, a 2n-number coordinate list, up to n interval pairs, and
+            // sort scratch at the interval-sort boundary, plus headroom.
+            const need = 272 + rects.length * 208
             if (!checkCap(need)) return undefined
             const hold = memory.reserve(need)
             if (hold.kind === 'unresolved') return undefined
@@ -806,67 +818,87 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               try { hold.release() } catch { /* release-only path */ }
             }
           }
-          let bounds: SourceRect | undefined
-          let clamped: SourceRect[] = []
-          let clampedSum = 0
-          let declared: number | undefined
-          let span: number | undefined
+          // Clamped rectangles are constructed objects the sweeps and the
+          // scan below read throughout the job: admit them (objects plus
+          // array, with growth headroom) before construction and hold that
+          // charge until the job settles.
+          const clampNeed = 16 + scope.length * 136
+          if (!checkCap(clampNeed)) {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
+          const clampHold = memory.reserve(clampNeed)
+          if (clampHold.kind === 'unresolved') {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
+          workspaces.set(clampHold, clampNeed)
           try {
-            bounds = getBounds(stamp.sheetId, stamp, budget, controller.signal)
-            if (bounds === undefined) {
-              return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
-            }
-            for (const r of scope) {
-              if (!(await spendUnits(uspend, 1))) {
+            let bounds: SourceRect | undefined
+            const clamped: SourceRect[] = []
+            let clampedSum = 0
+            let declared: number | undefined
+            let span: number | undefined
+            try {
+              bounds = await getBounds(stamp.sheetId, stamp, budget, controller.signal)
+              if (bounds === undefined) {
+                return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
+              }
+              for (const r of scope) {
+                if (!(await spendUnits(uspend, 1))) {
+                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                }
+                const c = clampRect(r, bounds)
+                if (c !== undefined) { clamped.push(c); clampedSum += rectArea(c) }
+              }
+              if (!(await flushSpend(uspend))) {
                 return { kind: 'unresolved', reason: 'cf-resource-limit' }
               }
-              const c = clampRect(r, bounds)
-              if (c !== undefined) { clamped.push(c); clampedSum += rectArea(c) }
+              declared = await countedUnion(scope)
+              if (declared === undefined) {
+                return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              }
+              span = await countedUnion(clamped)
+              if (span === undefined) {
+                return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              }
+              if (!(await flushSpend(uspend))) {
+                return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              }
+            } catch (error) {
+              if (isCancel(error) || controller.signal.aborted) throw cancelled()
+              if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              throw error
             }
-            if (!(await flushSpend(uspend))) {
-              return { kind: 'unresolved', reason: 'cf-resource-limit' }
+            if (clamped.length === 0 || span === 0) {
+              const empty: CfRangeStatistics = {
+                scopeKey: key, numericCount: 0, sum: 0, mean: undefined, min: undefined, max: undefined,
+                stddevPop: undefined, sortedAsc: new Float64Array(0), frequencies: new Map(),
+                declaredCells: declared, spanCells: span, storedCells: 0,
+              }
+              if (!checkCap(256)) {
+                return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              }
+              const hold = memory.reserve(256)
+              if (hold.kind === 'unresolved') {
+                return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              }
+              const candidate = hold.adopt(empty, 256)
+              retainedHeld += 256
+              return { kind: 'ready', value: { stats: empty, bytes: 256, candidate } }
             }
-            declared = await countedUnion(scope)
-            if (declared === undefined) {
-              return { kind: 'unresolved', reason: 'cf-resource-limit' }
+            // Overlap exists exactly when the union is smaller than the sum.
+            const needsDedup = span < clampedSum
+            try {
+              return await build(clamped, span, declared, needsDedup, stamp, source, budget, controller.signal, hidden, hiddenRows, key)
+            } catch (error) {
+              if (isCancel(error) || controller.signal.aborted) throw cancelled()
+              if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              throw error
             }
-            span = await countedUnion(clamped)
-            if (span === undefined) {
-              return { kind: 'unresolved', reason: 'cf-resource-limit' }
-            }
-            if (!(await flushSpend(uspend))) {
-              return { kind: 'unresolved', reason: 'cf-resource-limit' }
-            }
-          } catch (error) {
-            if (isCancel(error) || controller.signal.aborted) throw cancelled()
-            if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
-            throw error
-          }
-          if (clamped.length === 0 || span === 0) {
-            const empty: CfRangeStatistics = {
-              scopeKey: key, numericCount: 0, sum: 0, mean: undefined, min: undefined, max: undefined,
-              stddevPop: undefined, sortedAsc: new Float64Array(0), frequencies: new Map(),
-              declaredCells: declared, spanCells: span, storedCells: 0,
-            }
-            if (!checkCap(256)) {
-              return { kind: 'unresolved', reason: 'cf-resource-limit' }
-            }
-            const hold = memory.reserve(256)
-            if (hold.kind === 'unresolved') {
-              return { kind: 'unresolved', reason: 'cf-resource-limit' }
-            }
-            const candidate = hold.adopt(empty, 256)
-            retainedHeld += 256
-            return { kind: 'ready', value: { stats: empty, bytes: 256, candidate } }
-          }
-          // Overlap exists exactly when the union is smaller than the sum.
-          const needsDedup = span < clampedSum
-          try {
-            return await build(clamped, span, declared, needsDedup, stamp, source, budget, controller.signal, hidden, hiddenRows, key)
-          } catch (error) {
-            if (isCancel(error) || controller.signal.aborted) throw cancelled()
-            if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
-            throw error
+          } finally {
+            // The clamped workspace lives through sweeps and the scan that
+            // reads it; release only when the job settles.
+            workspaces.delete(clampHold)
+            try { clampHold.release() } catch { /* release-only path */ }
           }
         })()
         const abort = (): void => {
@@ -932,12 +964,11 @@ export function createResidentCfSource(
     return { kind: 'string', value: cell.value }
   }
   return {
-    bounds: (_id: string, budget?: CfWorkBudget, signal?: AbortSignal): SourceRect | undefined => {
+    bounds: async (_id: string, budget?: CfWorkBudget, signal?: AbortSignal): Promise<SourceRect | undefined> => {
       if (cells.length === 0) return undefined
       // Cooperative bounds scan: every examined cell spends shared work so
-      // cold bounds stay budgeted, and aborts land promptly. Synchronous, so
-      // a yield checkpoint resumes immediately (there is nothing to yield to
-      // in a straight-line scan) while counting, refusal and abort stand.
+      // cold bounds stay budgeted, and cancellation lands at the next host
+      // checkpoint — the loop genuinely awaits the host on yield slices.
       // Served from the memoized session result on repeats, never rescanned.
       let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity
       for (const cell of cells) {
@@ -948,7 +979,11 @@ export function createResidentCfSource(
             if (signal?.aborted) throw cancelled()
             throw new PackageError('resource-limit', 'CF resident bounds exceeded the shared work budget', undefined, 'memory-budget')
           }
-          if (spent === 'yield') budget.resume()
+          if (spent === 'yield') {
+            await hostTask()
+            if (signal?.aborted) throw cancelled()
+            budget.resume()
+          }
         }
         if (cell.row < minRow) minRow = cell.row
         if (cell.row > maxRow) maxRow = cell.row

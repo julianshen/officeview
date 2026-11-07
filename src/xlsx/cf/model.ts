@@ -35,11 +35,12 @@ export interface CfValuePage { readonly rows: Uint32Array; readonly cols: Uint16
 export interface CfValueSource {
   /**
    * Populated extent. Implementations should serve this from existing
-   * metadata where possible; when a scan is required it must spend the
-   * shared budget per examined cell and observe the abort signal, so cold
-   * bounds stay cooperative instead of rescanning silently.
+   * metadata where possible; a scan must be cooperative — spending the
+   * shared budget per examined cell, aborting promptly, and actually
+   * awaiting the host at checkpoints — so cold bounds stay interruptible.
+   * Never rescanned for warm hits (session memoizes per source identity).
    */
-  bounds(sheetId: string, budget?: CfWorkBudget, signal?: AbortSignal): SourceRect | undefined
+  bounds(sheetId: string, budget?: CfWorkBudget, signal?: AbortSignal): Promise<SourceRect | undefined>
   stamp(sheetId: string): CfStamp
   pages(sheetId: string, rects: readonly SourceRect[], budget: CfWorkBudget, signal: AbortSignal): AsyncIterable<CfLease<CfValuePage>>
 }
