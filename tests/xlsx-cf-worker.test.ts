@@ -18,7 +18,7 @@ import {
   type CfCellStateWire,
   type CfSharedDefinition,
 } from '../src/xlsx/view/contracts'
-import { prepareCfRemote, pagedStoreCfPages, cfRulesVersion, type CfPagedReadHost } from '../src/xlsx/view/pagedSource'
+import { prepareCfRemote, pagedStoreCfPages, cfRulesVersion, releaseSharedCfDefinitions, type CfPagedReadHost } from '../src/xlsx/view/pagedSource'
 import { RemoteCfCache, entryMetaBytes, type CfReadHost } from '../src/worker/viewerRemoteCf'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { boundedQueryStore } from '../src/worker/viewerQueryBudget'
@@ -208,6 +208,8 @@ describe('CF remote preparation grants and admission', () => {
     const ready = await prepareCfRemote(cfRequest([rect(0, 0)], st, exact), SHEET, versionedSrc(cells, rules, { visits }), rules, roomy, { budget: frozenBudget })
     expect(ready.kind).toBe('ready')
     expect(visits.n).toBeGreaterThan(0)
+    // The committed share owns the definitions until explicitly released.
+    releaseSharedCfDefinitions(rules)
     expect(roomy.currentBytes).toBe(0)
   })
 
@@ -305,6 +307,8 @@ describe('CF remote preparation grants and admission', () => {
     if (out.kind !== 'ready') throw new Error('expected ready')
     expect(out.definitionsVersion).toBe(cfRulesVersion(oneRule))
     expect(out.stamp.cfGen).toBe(cfRulesVersion(oneRule))
+    // The committed share owns the definitions until explicitly released.
+    releaseSharedCfDefinitions(oneRule)
     expect(memory.currentBytes).toBe(0)
   })
 
@@ -1327,6 +1331,8 @@ describe('CF fix round 1 (review-t7-r1)', () => {
     const source = fakeSource([], { stamp: stamped(oneRule), bounds: { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 16383 } })
     const ready = await prepareCfRemote(cfRequest([rect(0, 0)], stamped(oneRule), 8 * 1024 * 1024), SHEET, source, oneRule, memory, { budget: frozenBudget })
     expect(ready.kind).toBe('ready')
+    // The committed share owns the definitions until explicitly released.
+    releaseSharedCfDefinitions(oneRule)
     expect(memory.currentBytes).toBe(0)
   })
 
@@ -1349,6 +1355,9 @@ describe('CF fix round 1 (review-t7-r1)', () => {
     if (c.kind !== 'ready') throw new Error('expected ready preparation')
     expect(c.definitions).not.toBe(a.definitions)
     expect(a.definitions).toHaveLength(1)
+    // Both committed shares own their definitions until explicitly released.
+    releaseSharedCfDefinitions(oneRule)
+    releaseSharedCfDefinitions(changed)
     expect(memory.currentBytes).toBe(0)
   })
 
@@ -1453,6 +1462,8 @@ describe('CF fix round 2 (review-t7-r2)', () => {
     expect(out.kind).toBe('ready')
     // The peak hold covered the serialized rules, not just a flat allowance.
     expect(memory.peakBytes).toBeGreaterThanOrEqual(8192 * 2)
+    // The committed share owns the definitions until explicitly released.
+    releaseSharedCfDefinitions(longRules)
     expect(memory.currentBytes).toBe(0)
     const escapeRules: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'numFmt.code': 'a"b\\c\x01d'.repeat(1000) }, ['numFmt'])] }
     const est = stamped(escapeRules)
@@ -1460,13 +1471,15 @@ describe('CF fix round 2 (review-t7-r2)', () => {
     const esource = fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: est })
     const eout = await prepareCfRemote(cfRequest([rect(0, 0)], est, 8 * 1024 * 1024), SHEET, esource, escapeRules, ememory, { budget: frozenBudget })
     expect(eout.kind).toBe('ready')
+    releaseSharedCfDefinitions(escapeRules)
     expect(ememory.currentBytes).toBe(0)
   })
 
   it('R2-2d: a ready provider transfers a live outgoing lease to the caller', async () => {
     // No window may exist where the live states sit uncharged: with an
     // outbox the account stays charged after return until the caller
-    // releases; without one the lease ends before return.
+    // releases; a second scope reuses the committed share without a new
+    // lease on its own account.
     const st = stamped(oneRule)
     const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
     const memory = createCfMemory({})
@@ -1476,12 +1489,23 @@ describe('CF fix round 2 (review-t7-r2)', () => {
     expect(out.kind).toBe('ready')
     expect(releases).toHaveLength(1)
     expect(memory.currentBytes).toBeGreaterThan(0)
+    // Draining the outgoing lease keeps the table's own charge; releasing
+    // the share settles everything.
     releases[0]!()
+    expect(memory.currentBytes).toBeGreaterThan(0)
+    releaseSharedCfDefinitions(oneRule)
     expect(memory.currentBytes).toBe(0)
     const plain = createCfMemory({})
-    const unleased = await prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), oneRule, plain, { budget: frozenBudget })
+    const fresh: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'dashed' }, ['fill'])] }
+    const unleased = await prepareCfRemote(cfRequest([rect(0, 0)], stamped(fresh), 8 * 1024 * 1024), SHEET,
+      fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: stamped(fresh) }), fresh, plain, { budget: frozenBudget })
     expect(unleased.kind).toBe('ready')
+    // No outbox: the committed table entry still owns the shared definitions.
+    expect(plain.currentBytes).toBeGreaterThan(0)
+    releaseSharedCfDefinitions(fresh)
     expect(plain.currentBytes).toBe(0)
+    releaseSharedCfDefinitions(oneRule)
+    expect(memory.currentBytes).toBe(0)
   })
 
   it('R2-3: cancellation and build failures release the admitted hold', async () => {
@@ -1598,6 +1622,8 @@ describe('CF fix round 2 (review-t7-r2)', () => {
     expect(ca.definitions).toStrictEqual(cb.definitions)
     expect(ca.states).toHaveLength(1)
     expect(cb.states).toHaveLength(1)
+    // The committed share owns the definitions until explicitly released.
+    releaseSharedCfDefinitions(oneRule)
     expect(memory.currentBytes).toBe(0)
   })
 
@@ -1865,6 +1891,272 @@ describe('CF fix round 2 (review-t7-r2)', () => {
     await flush()
     expect(releases).toHaveLength(1)
     expect(released).toBe(1)
+  })
+})
+
+describe('CF fix round 3 (review-t7-r3)', () => {
+  const identity = (sheetId = SHEET, valueGen = 1): CacheIdentity => ({ docId: 'doc', sheetId, valueGen, fontGen: 0, viewGen: 0 })
+  const cfStamp = (gen = 1, extra: Partial<CfReadStamp> = {}): CfReadStamp => ({
+    owner: 'owner', sheetId: SHEET, workbookValueGen: gen, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 1, ...extra,
+  })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  const wireResult = (over: Partial<CfReadResult> = {}): CfReadResult => ({
+    sheetId: SHEET, stamp: cfStamp(1), kind: 'ready', states: [{ row: 0, col: 0, properties: { 'fill.pattern': 'solid' } }],
+    definitions: [{ id: 'rule-0', version: 7, properties: { 'fill.pattern': 'solid' }, writes: ['fill'] }],
+    definitionsVersion: 7, diagnostics: [], ...over,
+  })
+  const cfReply = (result: CfReadResult, bytes: number, requestId = 'r1', owner: CacheIdentity = identity()): WorkerReply<'read'> => ({
+    commandKind: 'read', requestId, owner, diagnostics: [], replyBytes: bytes, kind: 'complete',
+    result: { kind: 'read', result: { op: 'conditionalFormatting', result } },
+  } as WorkerReply<'read'>)
+  /** Cache host with a ledger-backed main-ledger admission, mirroring the
+   * production wiring (layout pool, per-owner release). */
+  function grantHost(budgetBytes = 1 << 20) {
+    const granted = new Map<string, number>()
+    const ledger = new Map<string | object, number>()
+    const releasedReplies: WorkerReply<'read'>[] = []
+    const changedCalls: { sheetId: string; rects: readonly SourceRect[]; reason?: string }[] = []
+    let n = 0
+    return {
+      granted, ledger, releasedReplies, changedCalls,
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: (requestId: string) => { granted.set(requestId, budgetBytes); ledger.set(`grant:${requestId}`, budgetBytes); return budgetBytes },
+      releaseGrant: (requestId: string) => { granted.delete(requestId); ledger.delete(`grant:${requestId}`) },
+      request: async (command: CommandOf<'read'>) => {
+        const q = command.query as { rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
+        const result = wireResult({ stamp: { ...q.stamp } })
+        const reply = cfReply(result, 1024, command.requestId, command.owner as CacheIdentity)
+        granted.delete(command.requestId)
+        ledger.delete(`grant:${command.requestId}`)
+        ledger.set(reply, 1024)
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { releasedReplies.push(reply); ledger.delete(reply) },
+      admitEntry: (key: string, bytes: number) => { ledger.set(`entry:${key}`, bytes); return () => { ledger.delete(`entry:${key}`) } },
+      changed: (sheetId: string, rects: readonly SourceRect[], reason?: 'updated' | 'evicted' | 'status') => { changedCalls.push({ sheetId, rects, reason }) },
+    }
+  }
+  const longRules = (code: string): CfSheetRules => ({ diagnostics: [], rules: [rule(0, { 'numFmt.code': code }, ['numFmt'])] })
+  const fakeSheetWith = (rules: CfSheetRules | undefined) => ({
+    sheetId: SHEET, name: SHEET, state: 'complete' as const, importedThroughRow: 1048575,
+    metadata: {}, tables: undefined, arrayCells: [], drawingAnchors: { records: [], unresolved: 0 },
+    mergeRects: [], invalidMerges: 0, used: { r0: 0, r1: 0, c0: 0, c1: 0 }, conditionalFormatting: rules,
+  })
+  /** Runs with JSON.stringify hooked: every normalized-rules serialization
+   * records the account bytes held at that moment (the probe pattern), so
+   * tests prove admission precedes serialization and count how often the
+   * version is computed. Always restores the original. */
+  async function withNormalizeProbe<T>(memory: { readonly currentBytes: number }, run: (calls: { held: number; serializedBytes: number }[]) => Promise<T>): Promise<{ result: T; calls: { held: number; serializedBytes: number }[] }> {
+    const calls: { held: number; serializedBytes: number }[] = []
+    const stringify = JSON.stringify
+    JSON.stringify = (function (this: unknown, value: unknown, ...args: unknown[]) {
+      const out = (stringify as (...a: unknown[]) => string).call(this, value, ...args)
+      if (Array.isArray(value) && (value as unknown[]).length > 0 && ((value as { dxf?: unknown }[])[0] as { dxf?: unknown })?.dxf !== undefined) {
+        calls.push({ held: memory.currentBytes, serializedBytes: out.length * 2 })
+      }
+      return out
+    }) as typeof JSON.stringify
+    try {
+      const result = await run(calls)
+      return { result, calls }
+    } finally {
+      JSON.stringify = stringify
+    }
+  }
+
+  it('R3-1: the adapter admits the exact size before its own normalization', async () => {
+    // The adapter's hash walk must be exactly sized like the provider's: an
+    // 8 KiB format code is serialized exactly once, with the hold above the
+    // serialized size — and a tight account refuses before serializing.
+    const { PagedXlsxSheetAdapter } = await import('../src/xlsx/view/pagedSource')
+    const { createCfMemory: makeMemory } = await import('../src/xlsx/cf/limits')
+    const rules = longRules('X'.repeat(8192))
+    const st = stamped(rules)
+    const sourceStamp = { docId: 'doc', sheetId: SHEET, valueGen: 1 }
+    const adapter = new PagedXlsxSheetAdapter(sourceStamp, {} as never, fakeSheetWith(rules) as never, undefined, {}, false)
+    try {
+      const memory = makeMemory({})
+      const { calls } = await withNormalizeProbe(memory, () =>
+        adapter.readConditionalFormatting(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), memory, { budget: frozenBudget }))
+      // Exactly one normalization (adapter computes the version once and the
+      // provider reuses the admitted result), held above the serialized size.
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.serializedBytes).toBeGreaterThan(8192 * 2)
+      expect(calls[0]!.held).toBeGreaterThanOrEqual(calls[0]!.serializedBytes)
+      expect(memory.currentBytes).toBe(0)
+      // A tight account refuses in exact sizing, before any serialization.
+      const tight = makeMemory({ limitBytes: 8000 })
+      const refused = await withNormalizeProbe(tight, () =>
+        adapter.readConditionalFormatting(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), tight, { budget: frozenBudget }))
+      expect(refused.calls).toHaveLength(0)
+      expect(refused.result.kind).toBe('unresolved')
+      expect(tight.currentBytes).toBe(0)
+    } finally {
+      await adapter.release().catch(() => {})
+    }
+  })
+
+  it('R3-2: the session walk is admitted on the shared account', async () => {    // The outgoing measure's traversal workspace must be admitted on the
+    // shared account, not merely capped: the walk reserves and grows there,
+    // and a full pool refuses the walk itself instead of allocating
+    // visited-set/stack storage first and failing only at the charge.
+    const { DocumentSession } = await import('../src/worker/viewerSession')
+    const session = new DocumentSession('d', { sheets: [{ sheetId: SHEET }], store: () => ({}) } as never)
+    try {
+      const owner = (session as unknown as { identity(sheetId: string): { docId: string; sheetId: string; valueGen: number; fontGen: number; viewGen: number } }).identity(SHEET)
+      const query = {
+        op: 'conditionalFormatting' as const,
+        rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }],
+        stamp: { owner: 'o', sheetId: SHEET, workbookValueGen: 1, cfGen: 1, viewGen: 1, structureGen: 1, clockGen: 0 },
+        grantBytes: 1 << 20,
+      }
+      const account = await (session as unknown as { cfAccount(): Promise<import('../src/xlsx/cf/limits').CfMemory> }).cfAccount()
+      let reserves = 0
+      const origReserve = account.reserve.bind(account)
+      account.reserve = ((bytes: number) => { reserves++; return origReserve(bytes) }) as typeof account.reserve
+      try {
+        // Roomy pool: the walk admits its workspace on the shared account.
+        const roomy = await session.read(owner, query, new AbortController().signal)
+        expect(roomy).toMatchObject({ op: 'conditionalFormatting', result: { kind: 'unresolved', reason: 'cf-unavailable' } })
+        expect(reserves).toBeGreaterThan(0)
+        // Full pool: the walk itself is refused, failing closed with no build.
+        const hold = session.memory.charge()
+        expect(hold.set(session.memory.limitBytes)).toBe(true)
+        try {
+          const out = await session.read(owner, query, new AbortController().signal)
+          expect(out).toMatchObject({ op: 'conditionalFormatting', result: { kind: 'unresolved', reason: 'cf-resource-limit' } })
+        } finally {
+          hold.release()
+        }
+      } finally {
+        account.reserve = origReserve
+      }
+    } finally {
+      await session.release().catch(() => {})
+    }
+  })
+
+  it('R3-3: the shared-definition entry owns its bytes until explicit release', async () => {
+    // The table carries its own retained lease: after the outgoing result
+    // lease drains, the account still holds the definitions charge, and only
+    // an explicit release settles it.
+    const { sharedCfDefinitionStats, releaseSharedCfDefinitions } =
+      await import('../src/xlsx/view/pagedSource')
+    const rules: CfSheetRules = { diagnostics: [], rules: [rule(3, { 'fill.pattern': 'solid' }, ['fill'])] }
+    const st = stamped(rules)
+    const mkSource = () => fakeSource([{ row: 0, col: 0, value: nc(5) }], { stamp: st })
+    const memory = createCfMemory({})
+    const releases: Array<() => void> = []
+    const out = await prepareCfRemote(cfRequest([rect(0, 0)], st, 8 * 1024 * 1024), SHEET, mkSource(), rules, memory,
+      { budget: frozenBudget, retainOutgoing: release => { releases.push(release) } })
+    expect(out.kind).toBe('ready')
+    expect(releases).toHaveLength(1)
+    const held = memory.currentBytes
+    expect(held).toBeGreaterThan(0)
+    expect(sharedCfDefinitionStats(rules)).toMatchObject({ charged: true })
+    // Draining the outgoing lease keeps the table charge: bytes drop but
+    // stay above zero, and the entry remains cached.
+    releases[0]!()
+    const retained = memory.currentBytes
+    expect(retained).toBeGreaterThan(0)
+    expect(retained).toBeLessThan(held)
+    expect(sharedCfDefinitionStats(rules)).toBeDefined()
+    releaseSharedCfDefinitions(rules)
+    expect(memory.currentBytes).toBe(0)
+    expect(sharedCfDefinitionStats(rules)).toBeUndefined()
+  })
+
+  it('R3-3: two viewport consumers lease one shared definitions array', async () => {
+    // Version-keyed shared ownership with independent state leases: two
+    // scopes read the identical frozen array; dropping the first keeps the
+    // second live; dropping the last releases the version and settles all.
+    const host = grantHost()
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const a = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    const b = cache.acquire(SHEET, [rect(5, 5)], cfStamp(1))
+    await flush()
+    await flush()
+    expect(a.state.state).toBe('ready')
+    expect(b.state.state).toBe('ready')
+    expect(a.state.result!.definitions).toBe(b.state.result!.definitions)
+    expect(Object.isFrozen(a.state.result!.definitions)).toBe(true)
+    expect(cache.sharedDefinitionVersions).toBe(1)
+    // Drop the first scope: the shared array survives for the second.
+    a.release()
+    cache.invalidate(SHEET, [rect(0, 0)])
+    await flush()
+    expect(cache.sharedDefinitionVersions).toBe(1)
+    expect(cache.get(SHEET, [rect(5, 5)], cfStamp(1)).state).toBe('ready')
+    expect(host.releasedReplies).toHaveLength(1)
+    // Drop the last scope: the version releases and everything settles.
+    b.release()
+    cache.invalidate(SHEET)
+    await flush()
+    expect(cache.sharedDefinitionVersions).toBe(0)
+    expect(cache.retainedBytes).toBe(0)
+    expect(host.releasedReplies).toHaveLength(2)
+    expect(host.ledger.size).toBe(0)
+    cache.close()
+  })
+
+  it('R3-4: a ready cache hit needs no new admission', async () => {
+    // Lookup happens before admission: with the ledger refusing further
+    // reservations, a warm hit still serves the ready entry without a new
+    // admission or request, while a new scope fails closed sending nothing.
+    const requests: CommandOf<'read'>[] = []
+    const ledger = new Map<string | object, number>()
+    let n = 0
+    let permit = true
+    let admissions = 0
+    const host = {
+      identity, loadState: () => ({ completeness: 'complete' as const }),
+      hasConditionalFormatting: () => true,
+      grant: () => 1 << 20,
+      releaseGrant: () => {},
+      request: async (command: CommandOf<'read'>) => {
+        requests.push(command)
+        const q = command.query as { rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
+        const result = wireResult({ stamp: { ...q.stamp } })
+        const reply = cfReply(result, 1024, command.requestId, command.owner as CacheIdentity)
+        ledger.set(reply, 1024)
+        return reply
+      },
+      nextRequestId: () => `r${++n}`,
+      release: (reply: WorkerReply<'read'>) => { ledger.delete(reply) },
+      admitEntry: (key: string, bytes: number) => {
+        if (!permit) return null
+        admissions++
+        ledger.set(`entry:${key}`, bytes)
+        return () => { ledger.delete(`entry:${key}`) }
+      },
+      changed: () => {},
+    }
+    const cache = new RemoteCfCache(host, 1 << 20)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    await flush()
+    expect(held.state.state).toBe('ready')
+    expect(requests).toHaveLength(1)
+    const admitted = admissions
+    expect(admitted).toBeGreaterThan(0)
+    // Freeze the ledger: the warm hit must not admit, request, or churn.
+    permit = false
+    const warm = cache.get(SHEET, [rect(0, 0)], cfStamp(1))
+    expect(warm.state).toBe('ready')
+    expect(warm.result).toBe(held.state.result)
+    expect(requests).toHaveLength(1)
+    expect(admissions).toBe(admitted)
+    // A new scope under pressure fails closed without sending.
+    const cold = cache.get(SHEET, [rect(9, 9)], cfStamp(1))
+    expect(cold.state).toBe('failed')
+    expect(requests).toHaveLength(1)
+    permit = true
+    held.release()
+    cache.invalidate(SHEET)
+    await flush()
+    cache.close()
+    expect(ledger.size).toBe(0)
   })
 })
 

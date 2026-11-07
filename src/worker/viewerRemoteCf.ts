@@ -3,9 +3,11 @@ import type {
   CfReadDiagnostic,
   CfReadResult,
   CfReadStamp,
+  CfSharedDefinition,
   WorkerReply,
 } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
+import { MEASURE_ENTRY_BYTES, MEASURE_FIRST_CHUNK_ENTRIES, measurePayloadBytes } from '../xlsx/view/payloadBytes'
 import type { CommandOf } from './viewerProtocol'
 
 /** The receiver-owned CF budget is an upper bound, not a target: preparations
@@ -66,6 +68,9 @@ interface Entry {
   /** Admitted metadata bytes (key, scope, stamp, shell); the ledger release. */
   meta: number
   releaseEntry?: () => void
+  /** Adopted version whose shared definitions this entry reads; the registry
+   * holds the array while any entry references it. */
+  sharedVersion?: number
   /** A version adoption already consumed one bounded retry on this entry. */
   adopted: boolean
   bytes: number
@@ -112,6 +117,24 @@ function unionRects(rects: readonly SourceRect[]): SourceRect[] {
   return [{ r0, r1, c0, c1 }]
 }
 
+/** Scope equality without building key strings: same length, same
+ * coordinates in order. */
+function sameScopeRects(a: readonly SourceRect[], b: readonly SourceRect[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!, y = b[i]!
+    if (x.r0 !== y.r0 || x.r1 !== y.r1 || x.c0 !== y.c0 || x.c1 !== y.c1) return false
+  }
+  return true
+}
+
+/** Full stamp equality without building key strings. */
+function sameStamp(a: CfReadStamp, b: CfReadStamp): boolean {
+  return a.owner === b.owner && a.sheetId === b.sheetId
+    && a.workbookValueGen === b.workbookValueGen && a.cfGen === b.cfGen
+    && a.viewGen === b.viewGen && a.structureGen === b.structureGen && a.clockGen === b.clockGen
+}
+
 /** Bounded receiver cache for worker CF preparations: one shared in-flight
  * build per key, refcounted entries pinned across definition replacement,
  * LRU eviction under the receiver budget, and deferred affected-tile
@@ -121,6 +144,13 @@ export class RemoteCfCache {
   /** Detached but consumer-held entries: excluded from lookup, included in
    * retained accounting and the entry cap until their last release. */
   private readonly pinned = new Set<Entry>()
+  /** Version-keyed shared definitions: one frozen, ledger-charged array per
+   * definitions version, refcounted across viewport consumers with
+   * independent state leases. The registry owns its bytes through a ledger
+   * admission per version (bounded by live versions); per-entry reply
+   * charges stay conservative on top, so no accounting path under-counts.
+   * Dropping the last referencing entry releases the version. */
+  private readonly sharedDefs = new Map<number, { definitions: readonly CfSharedDefinition[]; refs: number; release: () => void }>()
   private closed = false
   private notifyScheduled = false
   private readonly pendingNotifies = new Map<string, { rects: SourceRect[]; reason: 'updated' | 'evicted' | 'status' }>()
@@ -221,8 +251,20 @@ export class RemoteCfCache {
 
   get retainedEntries(): number { return [...this.entries.values()].filter(e => e.state === 'ready').length + [...this.pinned].filter(e => e.state === 'ready').length }
   get retainedBytes(): number { return [...this.entries.values()].reduce((n, e) => n + e.bytes, 0) + [...this.pinned].reduce((n, e) => n + e.bytes, 0) }
+  /** Test seam: live version-keyed shared definition entries. */
+  get sharedDefinitionVersions(): number { return this.sharedDefs.size }
 
   private entryFor(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp): Entry | undefined {
+    // Warm hits never touch the ledger: compare the bounded scope and stamp
+    // fields directly (no key strings, no copies, no admission) before
+    // allocating anything for a miss.
+    for (const [key, existing] of this.entries) {
+      if (existing.sheetId === sheetId && sameScopeRects(existing.rects, rects) && sameStamp(existing.stamp, stamp)) {
+        this.entries.delete(key)
+        this.entries.set(key, existing)
+        return existing
+      }
+    }
     // Admit variable metadata on the main ledger before allocating the key
     // string, the scope/rect copies or the entry shell. Waiting and failed
     // entries keep exactly this charge until the entry drops. The admission
@@ -289,10 +331,64 @@ export class RemoteCfCache {
     this.entries.set(entry.key, entry)
   }
 
+  /** Deep-freezes a cloned definition array: the structured-clone boundary
+   * thaws what the worker froze, so the registry restores immutability at
+   * every level before sharing. */
+  private static freezeShared(definitions: readonly CfSharedDefinition[]): readonly CfSharedDefinition[] {
+    for (const definition of definitions) {
+      if (definition.properties && typeof definition.properties === 'object') Object.freeze(definition.properties)
+      if (definition.writes && typeof (definition.writes as unknown[]).length === 'number') Object.freeze(definition.writes)
+      Object.freeze(definition)
+    }
+    return Object.freeze([...definitions])
+  }
+
+  /** Shares the reply's definitions by version: returns the shared array
+   * (adopting it on first use with a ledger admission), or undefined to
+   * keep the entry's own array when sharing is unavailable. */
+  private shareDefinitions(version: number, definitions: readonly CfSharedDefinition[], replyBytes: number): readonly CfSharedDefinition[] | undefined {
+    const existing = this.sharedDefs.get(version)
+    if (existing) {
+      existing.refs++
+      return existing.definitions
+    }
+    // Bound the walk by the reply the definitions arrived in: they cannot
+    // exceed it. The walker's first chunk is admitted even for tiny replies;
+    // the ledger charge that follows is the exact walked size.
+    const cap = Math.max(replyBytes, MEASURE_FIRST_CHUNK_ENTRIES * MEASURE_ENTRY_BYTES)
+    let workspace = 0
+    const walked = measurePayloadBytes(definitions, extra => {
+      workspace += extra
+      return workspace <= cap
+    })
+    if (walked === undefined) return undefined
+    const release = this.host.admitEntry(`cf-defs:${version}`, walked)
+    if (!release) return undefined
+    const shared = RemoteCfCache.freezeShared(definitions)
+    this.sharedDefs.set(version, { definitions: shared, refs: 1, release })
+    return shared
+  }
+
+  /** Ends one entry's shared-definitions reference; the last release drops
+   * the version and settles its ledger charge. */
+  private unshare(entry: Entry): void {
+    if (entry.sharedVersion === undefined) return
+    const version = entry.sharedVersion
+    entry.sharedVersion = undefined
+    const shared = this.sharedDefs.get(version)
+    if (!shared) return
+    shared.refs--
+    if (shared.refs <= 0) {
+      this.sharedDefs.delete(version)
+      try { shared.release() } catch { /* release-only path */ }
+    }
+  }
+
   private drop(entry: Entry): void {
     if (entry.dropped) return
     entry.dropped = true
     this.pinned.delete(entry)
+    this.unshare(entry)
     entry.seq++
     entry.controller?.abort()
     entry.controller = undefined
@@ -310,6 +406,7 @@ export class RemoteCfCache {
     entry.seq++
     entry.controller?.abort()
     entry.controller = undefined
+    this.unshare(entry)
     if (entry.releaseReply) {
       const release = entry.releaseReply
       entry.releaseReply = undefined
@@ -536,7 +633,14 @@ export class RemoteCfCache {
       }
       entry.reply = out
       entry.releaseReply = releaseOnce
-      entry.result = result
+      // Version-keyed shared ownership: consumers with the same definitions
+      // version read one frozen array (leased once across viewports) while
+      // their states stay independent per entry. The entry keeps its own
+      // reply charge on top, so sharing never under-counts.
+      if (entry.sharedVersion !== undefined) this.unshare(entry)
+      const shared = this.shareDefinitions(result.definitionsVersion, result.definitions, out.replyBytes ?? 0)
+      entry.result = shared === undefined ? result : { ...result, definitions: shared }
+      if (shared !== undefined) entry.sharedVersion = result.definitionsVersion
       entry.bytes = bytes
       entry.diagnostics = [...result.diagnostics]
       entry.pendingSheetIds = undefined

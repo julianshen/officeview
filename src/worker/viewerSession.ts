@@ -3305,11 +3305,15 @@ export class DocumentSession {
             raw = work
             void work.then(() => { drained = true }, () => { drained = true })
             const payload = await work
-            // Bounded walk (no unbounded traversal scratch); the pool charge
-            // is skipped when a provider lease already owns the bytes, so the
-            // same payload is never admitted twice.
-            const { measureBoundedPayload, CF_LIMITS } = await import('../xlsx/cf/limits')
-            const outgoing = measureBoundedPayload(payload, CF_LIMITS.scratchBytes)
+            // The outgoing walk is admitted on the shared account (grown
+            // incrementally as the traversal needs workspace), not merely
+            // capped: a pool at its hard limit refuses the walk itself
+            // instead of allocating visited-set/stack storage first. The pool
+            // charge below is skipped when a provider lease already owns the
+            // bytes, so the same payload is never admitted twice.
+            const cfLimits = await import('../xlsx/cf/limits')
+            const account = await this.cfAccount()
+            const outgoing = cfLimits.measureCfWalkedBytes(payload, account)
             if (outgoing === undefined || (outgoings.length === 0 && !charge.set(outgoing))) {
               releaseOutgoings()
               result = {

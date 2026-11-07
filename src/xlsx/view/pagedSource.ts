@@ -916,20 +916,51 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     this.sharedDefRules = liveRules
     // Admit the hash walk before normalizing rule content: even the adapter's
     // generation hash is construction, so a starved account refuses before
-    // any rule value is read.
+    // any rule value is read. Sizing is exact (lengths plus escape counts),
+    // like the provider's: a flat per-key allowance cannot bound strings or
+    // JSON escaping. The hold stays live across the provider call below, and
+    // the admitted normalization travels with it so the version is computed
+    // once per preparation instead of twice. One finally unwinds the hold on
+    // every path out (idempotent on release).
     const hashBound = cfMetadataBound(liveRules, 0)
-    const hashHold = hashBound === undefined ? undefined : account.reserve(hashBound)
-    if (!hashHold || hashHold.kind !== 'reserved') {
+    if (hashBound === undefined) {
+      return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting scope exceeds the bounded preparation area.'), requiredBytes: undefined }
+    }
+    const hashHold = account.reserve(hashBound)
+    if (hashHold.kind !== 'reserved') {
       return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
     }
-    let liveCfGen: number
     try {
-      liveCfGen = liveRules && liveRules.rules.length > 0 ? versionCfRules(normalizeCfRules(liveRules.rules)) : versionCfRules('[]')
-    } catch {
-      return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
-    } finally {
-      try { hashHold.release() } catch { /* release-only path */ }
-    }
+      let liveCfGen: number
+      let admitted: CfRemotePrepareOptions['admittedRules']
+      if (liveRules && liveRules.rules.length > 0) {
+        let exact: number | undefined
+        try {
+          exact = cfNormalizedBytes(liveRules.rules)
+        } catch {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
+        }
+        if (exact === undefined) {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting definitions exceed the bounded preparation area.'), requiredBytes: undefined }
+        }
+        const grownTarget = hashBound + exact
+        if (!Number.isSafeInteger(grownTarget) || !hashHold.grow(grownTarget)) {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+        }
+        let normalized: string
+        try {
+          normalized = normalizeCfRules(liveRules.rules)
+        } catch {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
+        }
+        if (normalized.length * 2 > exact) {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+        }
+        liveCfGen = versionCfRules(normalized)
+        admitted = { rules: liveRules, normalized, version: liveCfGen }
+      } else {
+        liveCfGen = versionCfRules('[]')
+      }
     const source: CfValueSource = {
       bounds: async (_id: string) => {
         // A complete sheet with no used extent is still readable: the service
@@ -955,8 +986,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         clockGen: request.stamp.clockGen,
       }),
       pages: this.cfPages(request, account, options?.signal),
+      }
+      return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account,
+        admitted === undefined ? options : { ...options, admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } })
+    } finally {
+      try { hashHold.release() } catch { /* release-only path */ }
     }
-    return prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, options)
   }
 
   /** CfValueSource over this sheet's paged rows: 64-cell pages admitted
@@ -1597,34 +1632,43 @@ function cfMetadataBound(rules: CfSheetRules | undefined, rectCount: number): nu
   return bound
 }
 
-/** Cross-scope shared definitions: one frozen array per live rule set and
- * version, so distinct viewport scopes with unchanged rules reuse the same
- * definitions instead of rebuilding (and recharging) them per scope. The
- * table is identity-only (WeakMap, so replaced rule sets drop with their
- * sheet metadata); the bytes stay charged through the result leases that
- * reference the array (R2-2d), never through the table itself. Entries are
- * committed only on a successful preparation — refusals and withholds never
+/** Cross-scope shared definitions: one frozen, charged array per live rule set
+ * and version, so distinct viewport scopes with unchanged rules reuse the
+ * same definitions instead of rebuilding (and recharging) them per scope.
+ * The table entry owns its bytes through an explicit retained lease on the
+ * shared account (admitted at commit); result leases charge the full reply
+ * through post/drain, so the array is transiently double-counted while both
+ * are live — conservative, never under-counted. Entries are committed only
+ * on a fully admitted successful preparation — refusals and withholds never
  * populate the table — and the adapter releases an entry when its rules are
- * replaced or the store is released. */
-const sharedCfDefinitions = new WeakMap<object, { version: number; definitions: readonly CfSharedDefinition[]; hits: number }>()
+ * replaced or the store is released. WeakMap keys bound lifetime to the live
+ * rules objects; explicit release ends the charge deterministically. */
+const sharedCfDefinitions = new WeakMap<object, { version: number; definitions: readonly CfSharedDefinition[]; hits: number; lease?: CfLease<readonly CfSharedDefinition[]> }>()
 function lookupSharedCfDefinitions(rules: CfSheetRules, version: number): readonly CfSharedDefinition[] | undefined {
   const cached = sharedCfDefinitions.get(rules)
   if (!cached || cached.version !== version) return undefined
   cached.hits++
   return cached.definitions
 }
-function commitSharedCfDefinitions(rules: CfSheetRules, version: number, definitions: readonly CfSharedDefinition[]): void {
-  sharedCfDefinitions.set(rules, { version, definitions, hits: 1 })
+function commitSharedCfDefinitions(rules: CfSheetRules, version: number, definitions: readonly CfSharedDefinition[], lease: CfLease<readonly CfSharedDefinition[]> | undefined): void {
+  sharedCfDefinitions.set(rules, { version, definitions, hits: 1, ...(lease === undefined ? {} : { lease }) })
 }
-/** Drops the shared-definition entry for replaced or released rules; live
- * result leases keep governing the bytes until their own release. */
+/** Drops the shared-definition entry for replaced or released rules, ending
+ * its charge; live result leases keep governing the result bytes until
+ * their own release. */
 export function releaseSharedCfDefinitions(rules: object): void {
-  sharedCfDefinitions.delete(rules)
+  const cached = sharedCfDefinitions.get(rules)
+  if (cached) {
+    sharedCfDefinitions.delete(rules)
+    if (cached.lease) {
+      try { cached.lease.release() } catch { /* release-only path */ }
+    }
+  }
 }
 /** Test seam: identity-sharing lifecycle of one live rule set. */
-export function sharedCfDefinitionStats(rules: object): { version: number; hits: number } | undefined {
+export function sharedCfDefinitionStats(rules: object): { version: number; hits: number; charged: boolean } | undefined {
   const cached = sharedCfDefinitions.get(rules)
-  return cached ? { version: cached.version, hits: cached.hits } : undefined
+  return cached ? { version: cached.version, hits: cached.hits, charged: cached.lease !== undefined } : undefined
 }
 /** Deep-freezes a definition array: the outer array, each definition, its
  * properties and its writes. Shared arrays must be immutable at every
@@ -1661,6 +1705,11 @@ export interface CfRemotePrepareOptions {
   /** Receives the release of the live outgoing lease adopted on the shared
    * account: the caller holds it through post and releases after drain. */
   readonly retainOutgoing?: (release: () => void) => void
+  /** Caller-admitted normalization: the adapter computed the version once
+   * under its own hold (kept live across this call). The provider verifies
+   * rules identity plus the content hash — both without reading rule values
+   * — and skips its own sizing and serialization when they verify. */
+  readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
 }
 export async function prepareCfRemote(
   request: CfReadRequest,
@@ -1734,12 +1783,21 @@ export async function prepareCfRemote(
   if (working.kind !== 'reserved') {
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
   }
+  // A caller-admitted normalization arrives verified, not trusted: the rules
+  // object must be identical and the content hash must match the admitted
+  // string — both checks read no rule values. A mismatch falls back to the
+  // provider's own admitted sizing and serialization below.
+  const admittedInput = options?.admittedRules
+  const admitted = admittedInput !== undefined && admittedInput.rules === rules
+    && versionCfRules(admittedInput.normalized) === admittedInput.version
+    ? admittedInput : undefined
   // Phase 2: exact serialization size by reading values (lengths and escape
   // counts only — no copies) inside the phase-1 hold, then grow the hold to
   // cover the build before serializing anything. A flat per-key allowance
-  // cannot bound strings or JSON escaping; measuring first does.
+  // cannot bound strings or JSON escaping; measuring first does. Skipped
+  // when the caller admitted and verified the normalization above.
   let exactRules = 0
-  if (rules && rules.rules.length > 0) {
+  if (!admitted && rules && rules.rules.length > 0) {
     try {
       const sized = cfNormalizedBytes(rules.rules)
       if (sized === undefined) {
@@ -1760,11 +1818,14 @@ export async function prepareCfRemote(
   // Rules content hash is the worker's authority for definitions identity
   // (cfGen 0 means "unknown, adopt live" for cold starts). A known-but-wrong
   // version is withheld with the live stamp so the caller re-requests current
-  // definitions instead of painting stale ones. Normalization runs once,
-  // inside the grown hold, with a byte-exact backstop: a sizer/stringify
-  // mismatch refuses here rather than building on a lie.
+  // definitions instead of painting stale ones. Normalization runs at most
+  // once per preparation — here, or once in the admitting caller — inside an
+  // admitted hold, with a byte-exact backstop: a sizer/stringify mismatch
+  // refuses here rather than building on a lie.
   let version: number
-  if (rules && rules.rules.length > 0) {
+  if (admitted) {
+    version = admitted.version
+  } else if (rules && rules.rules.length > 0) {
     let normalized: string
     try {
       normalized = normalizeCfRules(rules.rules)
@@ -2013,10 +2074,6 @@ export async function prepareCfRemote(
       sheetId, stamp: liveStamp, kind: 'ready', states, definitions,
       definitionsVersion: version, diagnostics: omitted,
     }
-    // Commit the shared-definition entry only for fresh builds on a
-    // successful preparation: lookups already counted their hit, and
-    // refusals and withholds above never populate the table.
-    if (builtFresh) commitSharedCfDefinitions(rules, version, definitions)
     // Transfer live outgoing ownership: adopt the wire result on the shared
     // account instead of refunding before return, so no window exists where
     // the live states sit uncharged. The caller holds the lease through post
@@ -2030,6 +2087,26 @@ export async function prepareCfRemote(
       adopted = working.adopt(result, wireBytes + envelopeBytes)
     } catch {
       return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory.'), requiredBytes: undefined }
+    }
+    // Publish only after all admission succeeds: the shared-definition entry
+    // is committed here — with its own charged lease on the shared account —
+    // never on a refusal or withhold path above. Lookups already counted
+    // their hit; only fresh builds commit. If the definition charge cannot
+    // be admitted the table stays empty (sharing skipped, result unaffected).
+    if (builtFresh) {
+      const defsBytes = limitsModule.measureCfWalkedBytes(definitions, memory)
+      let defsLease: CfLease<readonly CfSharedDefinition[]> | undefined
+      if (defsBytes !== undefined) {
+        const defsHold = memory.reserve(defsBytes)
+        if (defsHold.kind === 'reserved') {
+          try {
+            defsLease = defsHold.adopt(definitions, defsBytes)
+          } catch {
+            try { defsHold.release() } catch { /* release-only path */ }
+          }
+        }
+      }
+      commitSharedCfDefinitions(rules, version, definitions, defsLease)
     }
     // Adopting moves construction to retained; the finally below becomes a
     // no-op for the working hold while the outgoing lease stays live.
