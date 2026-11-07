@@ -90,6 +90,9 @@ export class SheetImageCache {
 export interface SheetAssetsOptions extends PaintOptions {
   /** Sheet whose pictures are leased (default 0). */
   sheetIndex?: number
+  /** Visible source rectangles for CF, including blank cells. Absent: static grid. */
+  cfPaintRects?: readonly import('../../xlsx/cf/model').SourceRect[]
+  cfViewport?: { metrics: import('../../xlsx/view/contracts').SheetMetrics; boxes: readonly import('../../xlsx/view/contracts').LogicalCellBox[] }
   profile?: ProfileId
   /** Shared by every lease of one viewer; a private cache is created otherwise. */
   imageCache?: SheetImageCache
@@ -251,7 +254,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       if (sheet && sheetHasRegionStyles(sheet)) await ensureTableStyleEngine([sheet])
       if (sheet?.conditionalFormatting) {
         const cf = await ensureConditionalFormatting([sheet])
-        conditionalFormatting = await cf?.prepareCfPaint(sheet)
+        conditionalFormatting = await cf?.prepareCfPaint(sheet, { memory: cf.paintMemoryFor(options.chartOwner ?? doc, options.chartParent), valuePolicy: doc.valuePolicy ?? 'engine', paintRects: options.cfPaintRects, viewport: options.cfViewport })
       }
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
@@ -338,7 +341,7 @@ export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOp
     const units: Paintable[] = []
     for (let sheetIndex = 0; sheetIndex < doc.sheets.length; sheetIndex++) {
       if (!permitted()) throw denied()
-      const held = await assetLoader(doc, { ...lease, sheetIndex })
+      const held = await assetLoader(doc, { ...lease, sheetIndex, cfPaintRects: undefined, cfViewport: undefined })
       leases.push(held)
       if (!permitted()) throw denied()
       units.push(sheetPaintable(doc.sheets[sheetIndex], held.assets, watermark))

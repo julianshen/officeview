@@ -207,7 +207,7 @@ it('coarse gridline resolution preserves a CF fill over an own fill', async () =
 it('oversized paged rectangle requests refuse before copying caller arrays', async () => {
   const { prepareCfPaint } = await import('../src/xlsx/cf/render')
   let reads = 0
-  const sourceRects = new Proxy(Array.from({ length: 257 }, () => ({ firstRow: 1, lastRow: 1, firstCol: 1, lastCol: 1 })), {
+  const sourceRects = new Proxy(Array.from({ length: 16385 }, () => ({ firstRow: 1, lastRow: 1, firstCol: 1, lastCol: 1 })), {
     get(target, key, receiver) { if (typeof key === 'string' && /^\d+$/.test(key)) reads++; return Reflect.get(target, key, receiver) },
   })
   const batch = await prepareCfPaint(cfSheet(), { request: { sourceRects, signal: new AbortController().signal, grantBytes: 8 * 1024 ** 2,

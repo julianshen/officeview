@@ -1,3 +1,4 @@
+import { cfExplicitBounds } from '../cfLoader'
 /**
  * Paged importer (S1.2, design note §4.4). Kept out of importSession.ts so the
  * eager bundle (which imports the limits and ImportRefusal from there) never
@@ -524,6 +525,11 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
             sheet.conditionalFormatting = owner.value
           } finally { capture.dispose(); ledger.drainQueue() }
         }
+      }
+      const cfBounds = cfExplicitBounds(sheet)
+      if (cfBounds) {
+        const used = sheet.used
+        sheet.used = used ? { r0: Math.min(used.r0, cfBounds.r0), r1: Math.max(used.r1, cfBounds.r1), c0: Math.min(used.c0, cfBounds.c0), c1: Math.max(used.c1, cfBounds.c1) } : cfBounds
       }
       compressedRead += entry.compressedSize
       // Declared worksheet filters, then tables through the worksheet's own rels (parse.ts order).

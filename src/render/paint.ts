@@ -421,7 +421,7 @@ export function getPaintables(
         await ensureSparklinePainter(doc.sheets)
         await ensureTableStyleEngine(doc.sheets)
         const cf = await ensureConditionalFormatting(doc.sheets)
-        if (cf) { const memory = cf.createPaintMemory(); for (const sheet of doc.sheets) cfBatches.push(await cf.prepareCfPaint(sheet, { memory })) }
+        if (cf) { const memory = cf.paintMemoryFor(doc, options?.chartParent); for (const sheet of doc.sheets) cfBatches.push(await cf.prepareCfPaint(sheet, { memory, valuePolicy: doc.valuePolicy ?? 'engine' })) }
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))

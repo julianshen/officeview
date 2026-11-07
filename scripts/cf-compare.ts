@@ -16,6 +16,9 @@ import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { getPaintables } from '../src/render/paint'
+import { computeMetrics } from '../src/xlsx/render'
+import type { XlsxDocument } from '../src/xlsx/types'
+import { parseRangeA1 } from './cf-refs/verify'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { verifyCfCase } from './cf-refs/verify'
@@ -34,6 +37,27 @@ import {
 } from './sparkline-compare'
 
 export { COMPARE_SCALE, CSS_PX_PER_PT, STRONG_DELTA, SUPPORTED_PX_PER_PT, crop, diffFrames, loadFrame, withinTolerance }
+
+/** Actual print rasterization is 2x; reference-density conversion happens only
+ * after painting. Crop at the declared source range, not implicitly at A1. */
+export async function paintCfCapture(doc: XlsxDocument, sheetIndex: number, range: string, mode: CfCompareMode, pxPerPt: number, width: number, height: number) {
+  const rect = parseRangeA1(range)
+  if (!rect) throw new Error('Invalid CF capture range')
+  const units = await getPaintables(doc)
+  try {
+    const unit = units[sheetIndex]
+    if (!unit || unit.refusal?.length) throw new Error('CF static render refused: ' + JSON.stringify(unit?.refusal))
+    const metrics = computeMetrics(doc.sheets[sheetIndex]!)
+    const x = metrics.colWidthsPx.slice(0, rect.minCol).reduce((a, b) => a + b, 0)
+    const y = metrics.rowHeightsPx.slice(0, rect.minRow).reduce((a, b) => a + b, 0)
+    const density = pxPerPt / CSS_PX_PER_PT, scale = mode === 'print' ? PRINT_SCALE : density
+    const full = createCanvas(Math.max(1, Math.round(unit.spec.widthPx * scale)), Math.max(1, Math.round(unit.spec.heightPx * scale)))
+    const ctx = full.getContext('2d'); ctx.scale(scale, scale); unit.paint(ctx as unknown as CanvasRenderingContext2D)
+    const result = createCanvas(width, height)
+    result.getContext('2d').drawImage(full, x * scale, y * scale, width * scale / density, height * scale / density, 0, 0, width, height)
+    return result
+  } finally { units.dispose() }
+}
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const PRINT_SCALE = 2
@@ -78,7 +102,7 @@ export async function compareCfCase(
   }
 
   const appearance = mode === 'print' ? 'printer' : 'screen'
-  const cap = c.captures.find(x => x.appearance === appearance) ?? c.captures[0]
+  const cap = c.captures.find(x => x.appearance === appearance)
   if (!cap) {
     return { id: c.id, mode, outcome: 'fail', reason: `No ${appearance} capture configured for ${c.id}` }
   }
@@ -106,16 +130,10 @@ export async function compareCfCase(
     id: c.id, mode, outcome: 'implementation-pending', reason: 'Browser viewport comparison is verified by Task 11',
   }
   const refFrame = await loadFrame(resolve(rootDir, cap.pngPath))
-  const units = await getPaintables(doc)
-  const unit = units[doc.sheets.indexOf(sheet)]!
-  const scale = Number(sidecar.pxPerPt) / CSS_PX_PER_PT
-  const canvas = createCanvas(Math.max(1, Math.round(unit.spec.widthPx * scale)), Math.max(1, Math.round(unit.spec.heightPx * scale)))
-  const ctx = canvas.getContext('2d')
-  ctx.scale(scale, scale)
-  try { unit.paint(ctx as unknown as CanvasRenderingContext2D) } finally { units.dispose() }
-  const fullData = ctx.getImageData(0, 0, canvas.width, canvas.height).data as unknown as Uint8ClampedArray
-  const oursFull: Frame = { width: canvas.width, height: canvas.height, data: fullData }
-  const oursCropped = crop(oursFull, 0, 0, refFrame.width, refFrame.height)
+  let canvas: ReturnType<typeof createCanvas>
+  try { canvas = await paintCfCapture(doc, doc.sheets.indexOf(sheet), c.range, mode, Number(sidecar.pxPerPt), refFrame.width, refFrame.height) }
+  catch (error) { return { id: c.id, mode, outcome: 'fail', reason: error instanceof Error ? error.message : String(error) } }
+  const oursCropped: Frame = { width: canvas.width, height: canvas.height, data: canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data as unknown as Uint8ClampedArray }
 
   const tol = resolvePixelTolerance(c, refFrame.width, refFrame.height)
   const diff = diffFrames(refFrame, oursCropped)

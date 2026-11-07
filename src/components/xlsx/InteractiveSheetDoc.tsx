@@ -475,20 +475,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // its pictures are leased like resident ones once it does.
   const activeDrawings = remote && activeSheetId ? remote.drawings(activeSheetId) : null
   const activeSparklines = remote && activeSheetId && remote.layout(activeSheetId).hasSparklines ? remote.sparklines(activeSheetId) : null
-  useEffect(() => {
-    if (!activeSheetId) return
-    let cancelled = false
-    const sheetIndex = sheetIds.indexOf(activeSheetId)
-    let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
-    if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
-    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent }).then(next => {
-      if (cancelled) { next.dispose(); return }
-      if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
-      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0 })
-    })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -930,6 +916,25 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     rerender()
   }
   const selection: GridSelection = entry ? session.get(activeSheetId).selection : emptyGridSelection()
+
+  // No CF sheet: only the optional-field check. CF blank coverage follows the
+  // actual projected panes; the existing asset-swap path invalidates their tiles.
+  const cfViewport = entry?.sheet.conditionalFormatting && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport) } : undefined
+  const cfViewportKey = cfViewport ? JSON.stringify([nextWindowKey, cfViewport.boxes]) : undefined
+  useEffect(() => {
+    if (!activeSheetId) return
+    let cancelled = false
+    const sheetIndex = sheetIds.indexOf(activeSheetId)
+    let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
+    if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
+    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfViewport ? { cfViewport } : {}) }).then(next => {
+      if (cancelled) { next.dispose(); return }
+      if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
+      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0 })
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen, cfViewportKey])
 
   // ---- layers ----
   const baseRef = useRef<HTMLCanvasElement | null>(null)
@@ -2086,7 +2091,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(rows !== sheet.rows ? { rows } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
     }) } : doc
     try { pages = await loader(printed, {
-      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
+      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, assetLoader: loadAssets, allowed: () => allowPrintRef.current,
     }) } catch (error) {
       if (token === printToken.current && allowPrintRef.current) setAnnouncement(error instanceof Error ? error.message : 'Print unavailable; try again.')
       return

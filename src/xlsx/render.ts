@@ -322,6 +322,18 @@ function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom
   return { right: Math.max(0, extent.right), bottom: Math.max(0, extent.bottom) }
 }
 
+/** CF may constrain a new raster extent, never an unchanged legacy grid. */
+function cfExpandsGrid(sheet: XlsxSheet, maxRow: number, maxCol: number): boolean {
+  let row = 0, col = 0
+  for (const r of sheet.rows) { row = Math.max(row, r.index); for (const c of r.cells) { row = Math.max(row, cellSourceRow(r, c)); col = Math.max(col, c.col) } }
+  for (const m of sheet.mergeRanges ?? []) if (validMerge(m)) { row = Math.max(row, m.maxRow); col = Math.max(col, m.maxCol) }
+  for (const r of regionStylesFor(sheet)?.rects ?? []) { row = Math.max(row, Math.min(MAX_GRID_ROWS - 1, r.maxRow)); col = Math.max(col, Math.min(MAX_GRID_COLS - 1, r.maxCol)) }
+  const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), col)
+  if (declared <= col + MAX_DECLARED_COL_SLACK) col = declared
+  for (const [r, cs] of sheet.resolvedSparklines ?? []) { row = Math.max(row, r); for (const c of cs.keys()) col = Math.max(col, c) }
+  return maxRow > row || maxCol > col
+}
+
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   const merges = (sheet.mergeRanges ?? []).filter(validMerge)
   const cfBounds = cfExplicitBounds(sheet)
@@ -402,7 +414,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     code: 'table-style-region-clipped',
     message: `${clippedStyleRegions.length} resolved table style region(s) extend beyond the static grid and were clipped to ${MAX_GRID_ROWS} rows by ${MAX_GRID_COLS} columns`,
   })
-  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras(cfBounds ? rasterLimits(gridWidth, gridHeight) : []) }
+  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras(cfBounds && cfExpandsGrid(sheet, maxRow, maxCol) ? rasterLimits(gridWidth, gridHeight) : []) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
   // The retained bitmap stays clamped (parse-time coverage reporting relies on
@@ -764,7 +776,33 @@ export function regionStyledCell(regionStyles: RegionStyleLayer | undefined, cel
   const resolvedStyle = regionStyles?.styleAt(cell.row, cell.col, cell.style) ?? cell.style
   return resolvedStyle === cell.style ? cell : { ...cell, style: resolvedStyle }
 }
-export function renderSheet(
+/** CF static/print surfaces are constructed in bounded windows. Each window
+ * strokes complete source paths and clips only at the destination canvas. */
+export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, metrics?: GridMetrics, watermark?: WatermarkOptions | ResolvedWatermark, prepared?: RenderSheetAssets, viewport?: SheetViewport): void {
+  if (!prepared?.conditionalFormatting) return renderSheetPart(sheet, ctx, metrics, watermark, prepared, viewport)
+  const m = metrics ?? computeMetrics(sheet)
+  const limits = staticAdmission(sheet, m, viewport)
+  if (limits.length) throw new StaticExportLimitError(limits)
+  if (m.rowHeightsPx.length * m.colWidthsPx.length <= 256) return renderSheetPart(sheet, ctx, m, watermark, prepared, viewport)
+  const xs = prefixSums(m.colWidthsPx), ys = prefixSums(m.rowHeightsPx)
+  const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
+  for (let r = 0; r < m.rowHeightsPx.length; r += 8) {
+    const y = Math.max(vp.y, ys[r]), bottom = Math.min(vp.y + vp.height, r + 8 >= m.rowHeightsPx.length ? Math.max(m.heightPx, vp.y + vp.height) : ys[r + 8])
+    if (bottom <= y) continue
+    for (let c = 0; c < m.colWidthsPx.length; c += 8) {
+      const x = Math.max(vp.x, xs[c]), right = Math.min(vp.x + vp.width, c + 8 >= m.colWidthsPx.length ? Math.max(m.widthPx, vp.x + vp.width) : xs[c + 8])
+      if (right <= x) continue
+      ctx.save()
+      try {
+        ctx.beginPath(); ctx.rect(x - vp.x, y - vp.y, right - x, bottom - y); ctx.clip()
+        ctx.translate(x - vp.x, y - vp.y)
+        renderSheetPart(sheet, ctx, m, watermark, prepared, { x, y, width: right - x, height: bottom - y })
+      } finally { ctx.restore() }
+    }
+  }
+}
+
+function renderSheetPart(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
   metrics?: GridMetrics,
@@ -1061,7 +1099,7 @@ function syntheticRegionRows(
  * an axis where data continues. Nothing uncovered is ever drawn over A1. */
 function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
   const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
-  if (!viewport) return [...coverage, ...requestedRasterLimits(m), ...(cfExplicitBounds(sheet) ? rasterLimits(m.widthPx, m.heightPx) : [])]
+  if (!viewport) return [...coverage, ...requestedRasterLimits(m), ...(cfExplicitBounds(sheet) && cfExpandsGrid(sheet, m.rowHeightsPx.length - 1, m.colWidthsPx.length - 1) ? rasterLimits(m.widthPx, m.heightPx) : [])]
   const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
   const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
   // Merges the grid truncates are laid out at their true extent (mergeEdges), so

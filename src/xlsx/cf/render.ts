@@ -1,13 +1,17 @@
 /** Async CF preparation; painters only consume admitted source-space snapshots. */
+import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService } from './service'
-import { CF_LIMITS, createCfMemory, createCfWorkBudget, type CfMemory } from './limits'
+import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory } from './limits'
 import { resolveCfCellStyle } from './dxf'
-import type { CfLease, CfLiteral, CfPrepared, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
+import type { CfCellState, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
 import type { XlsxSheet } from '../types'
 import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
+import { isValueUnavailable, type ValuePolicy } from '../view/values'
+import { cfExplicitBounds } from '../cfLoader'
+import { STATIC_SHEET_BUDGET } from '../render'
 import { hostTask } from '../view/scheduler'
 
 export interface CfPaintBatch {
@@ -18,20 +22,30 @@ export interface CfPaintBatch {
 }
 /** No inferred values: cached formula errors stay errors; missing formula
  * values refuse rather than masquerading as blanks. */
-function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemory): CfValueSource {
+function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemory, policy: ValuePolicy): CfValueSource {
+  let bounds: SourceRect | undefined, ordered = true
   return {
     stamp: () => stamp,
     async bounds(_id, budget, signal) {
+      if (bounds) return bounds
+      let previousRow = -1
       let firstRow = 1048576, lastRow = -1, firstCol = 16384, lastCol = -1
-      for (const row of sheet.rows) for (const cell of row.cells) {
+      for (const row of sheet.rows) {
+        if (!Number.isSafeInteger(row.index) || row.index < previousRow) ordered = false
+        previousRow = row.index
+        const rowWork = budget?.spend(1)
+        if (rowWork === 'refused') throw new Error('CF work limit')
+        if (rowWork === 'yield') { await hostTask(); budget?.resume() }
+        for (const cell of row.cells) {
         if (signal?.aborted) throw new Error('CF cancelled')
         const work = budget?.spend(1)
         if (work === 'refused') throw new Error('CF work limit')
         if (work === 'yield') { await hostTask(); budget?.resume() }
         const r = cellSourceRow(row, cell)
+        if (r !== row.index) ordered = false
         firstRow = Math.min(firstRow, r); lastRow = Math.max(lastRow, r); firstCol = Math.min(firstCol, cell.col); lastCol = Math.max(lastCol, cell.col)
-      }
-      return lastRow < 0 ? { firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 } : { firstRow, lastRow, firstCol, lastCol }
+      } }
+      return bounds = lastRow < 0 ? { firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 } : { firstRow, lastRow, firstCol, lastCol }
     },
     async *pages(_id, rects, budget, signal) {
       // One-cell borrowed-value pages avoid copying strings or indexing the
@@ -40,87 +54,179 @@ function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemory): CfV
       if (hold.kind !== 'reserved') throw new Error('CF page admission')
       try {
         const rows = new Uint32Array(1), cols = new Uint16Array(1)
-        for (const row of sheet.rows) for (const cell of row.cells) {
+        let begin = 0, end = sheet.rows.length
+        if (ordered && bounds && rects.length) {
+          const first = Math.min(...rects.map(r => r.firstRow)), last = Math.max(...rects.map(r => r.lastRow))
+          const lower = (value: number) => { let a = 0, b = sheet.rows.length; while (a < b) { const m = (a + b) >>> 1; if (sheet.rows[m]!.index < value) a = m + 1; else b = m }; return a }
+          begin = lower(first); end = lower(last + 1)
+        }
+        for (let ri = begin; ri < end; ri++) { const row = sheet.rows[ri]!; for (const cell of row.cells) {
           if (signal.aborted) throw new Error('CF cancelled')
           const work = budget.spend(1)
           if (work === 'refused') throw new Error('CF work limit')
           if (work === 'yield') { await hostTask(); budget.resume() }
           const r = cellSourceRow(row, cell)
           if (!rects.some(b => r >= b.firstRow && r <= b.lastRow && cell.col >= b.firstCol && cell.col <= b.lastCol)) continue
-          if (cell.formula && (cell.hasCachedValue === false || cell.value === null)) throw new Error('CF unavailable formula value')
+          if (isValueUnavailable(cell, policy)) throw new Error('CF unavailable formula value')
           const v = cell.value
           const value: CfLiteral = cell.valueIsError ? { kind: 'error', value: String(v) } : v === null ? { kind: 'blank' }
             : typeof v === 'number' ? { kind: 'number', value: v } : typeof v === 'boolean' ? { kind: 'boolean', value: v } : { kind: 'string', value: v }
           rows[0] = r; cols[0] = cell.col
           yield { value: { rows, cols, values: [value] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } }
-        }
+        } }
       } finally { hold.release() }
     },
   }
 }
-/** Shared by resident assets and async paged callers. Callers pass the exact
- * viewport source rectangles/stamp/source for paged preparation. */
+/** One diagnostic surface for initial and late refusals, with the sheet cap. */
+function unavailable(sheet: XlsxSheet): undefined {
+  const ds = sheet.diagnostics ??= []
+  if (ds.length < CF_LIMITS.diagnostics && !ds.some(d => d.feature === 'cf-paint-unavailable')) ds.push({ kind: 'unsupported', feature: 'cf-paint-unavailable', message: 'Conditional formatting could not be prepared within the admitted batch; base formatting is shown.' })
+  return undefined
+}
+/** Shared by resident assets and paged callers. paintRects scopes whole-axis
+ * rules to the visible/printed source coordinates, including unstored blanks. */
 export async function prepareCfPaint(sheet: XlsxSheet, options: {
-  memory?: CfMemory; request?: CfPrepareRequest; source?: CfValueSource; evidence?: CfEvidenceGate
+  memory?: CfMemory; request?: CfPrepareRequest; source?: CfValueSource; evidence?: CfEvidenceGate;
+  paintRects?: readonly SourceRect[]; valuePolicy?: ValuePolicy;
+  viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] }
 } = {}): Promise<CfPaintBatch | undefined> {
   const rules = sheet.conditionalFormatting
-  if (!rules || rules.rules.length > CF_LIMITS.rules || (options.request?.sourceRects.length ?? 0) > CF_LIMITS.rangesPerRule) return undefined
-  let rangeCount = 0
+  if (!rules) return undefined
+  let requested = options.request?.sourceRects ?? options.paintRects
+  if (rules.rules.length > CF_LIMITS.rules || (requested?.length ?? 0) > CF_LIMITS.rangesPerSheet) return unavailable(sheet)
+  let rangeCount = 0, propertyBytes = 0
   for (const rule of rules.rules) {
-    if (rule.ranges.length > CF_LIMITS.rangesPerRule || (rangeCount += rule.ranges.length) > CF_LIMITS.rangesPerSheet) return undefined
+    if (rule.ranges.length > CF_LIMITS.rangesPerRule || (rangeCount += rule.ranges.length) > CF_LIMITS.rangesPerSheet) return unavailable(sheet)
+    for (const key in rule.dxf) { const v = rule.dxf[key]; propertyBytes += 192 + key.length * 4 + (typeof v === 'string' ? v.length * 2 : 16) }
+    for (const key of rule.writes) propertyBytes += 128 + key.length * 4
   }
   const memory = options.memory ?? createCfMemory()
-  const hold = memory.reserve(1024 + Math.max(rangeCount, options.request?.sourceRects.length ?? 0) * 192)
-  if (hold.kind !== 'reserved') return undefined
+  const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0, options.viewport ? CF_LIMITS.preparedCells : 0) * 512)
+  if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
-  const service = createCfService(rules, memory, { evidence })
-  let lease: CfLease<CfPrepared> | undefined
+  const stamp = options.request?.stamp ?? { owner: 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const signal = options.request?.signal ?? new AbortController().signal
+  const source = options.source ?? residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached')
+  let budget = createCfWorkBudget({ signal }), units = 0
+  const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
   try {
-    const stamp = options.request?.stamp ?? { owner: 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
-    const source = options.source ?? residentSource(sheet, stamp, memory)
+    if (options.viewport) {
+      const visible: SourceRect[] = [], { metrics, boxes } = options.viewport
+      let cells = 0
+      for (const box of boxes) {
+        const rows = metrics.rows.visibleBetween(box.y, box.y + box.height), cols = metrics.cols.visibleBetween(box.x, box.x + box.width)
+        cells += rows.count * cols.count
+        if (cells > CF_LIMITS.preparedCells) throw new Error('CF viewport limit')
+        for (const rr of rows.runs) for (let r = rr.start; r <= rr.end; r++) for (const cc of cols.runs) {
+          const source = metrics.order.displayToSource(r)
+          visible.push({ firstRow: source, lastRow: source, firstCol: cc.start, lastCol: cc.end })
+        }
+      }
+      requested = visible
+    }
     const rects: SourceRect[] = []
-    if (options.request) rects.push(...options.request.sourceRects)
+    if (requested) rects.push(...requested)
     else {
-      const fullAxis = rules.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))
-      const bounds = fullAxis ? await source.bounds(stamp.sheetId, createCfWorkBudget(), new AbortController().signal) : undefined
+      // computeMetrics includes merges, declarations and finite CF extents. Open
+      // tails do not enlarge it; their coverage is clipped to this paint region.
+      const finite = cfExplicitBounds(sheet)
+      let bottom = finite?.r1 ?? 0, right = finite?.c1 ?? 0
+      // Bounds only, not a second geometry construction outside its account.
+      // Include visible empty metadata, merges, region styles and drawing anchors.
+      if (rules.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))) {
+        for (const row of sheet.rows) { await work(); bottom = Math.max(bottom, row.index); for (const cell of row.cells) { await work(); bottom = Math.max(bottom, cellSourceRow(row, cell)); right = Math.max(right, cell.col) } }
+        for (const m of sheet.mergeRanges ?? []) { await work(); bottom = Math.max(bottom, m.maxRow); right = Math.max(right, m.maxCol) }
+        for (const r of regionStylesFor(sheet)?.rects ?? []) { await work(); bottom = Math.max(bottom, r.maxRow); right = Math.max(right, r.maxCol) }
+        for (const [row, cols] of sheet.resolvedSparklines ?? []) { bottom = Math.max(bottom, row); for (const col of cols.keys()) { await work(); right = Math.max(right, col) } }
+        const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), right)
+        if (declared <= right + 64) right = declared
+        if (sheet.drawings?.length) { bottom = Math.max(bottom, sheet.drawingMarkers?.maxRow ?? 0); right = Math.max(right, sheet.drawingMarkers?.maxCol ?? 0) }
+        bottom = Math.min(bottom, STATIC_SHEET_BUDGET.maxGridRows - 1); right = Math.min(right, STATIC_SHEET_BUDGET.maxGridCols - 1)
+      }
       for (const rule of rules.rules) for (const r of rule.ranges) {
-        // Whole-axis declarations are scoped to populated content.
-        const firstRow = r.firstRow, firstCol = r.firstCol
-        const lastRow = r.firstRow === 0 && r.lastRow === 1048575 ? bounds?.lastRow ?? 0 : r.lastRow
-        const lastCol = r.firstCol === 0 && r.lastCol === 16383 ? bounds?.lastCol ?? 0 : r.lastCol
-        if (!rects.some(q => q.firstRow === firstRow && q.lastRow === lastRow && q.firstCol === firstCol && q.lastCol === lastCol)) rects.push({ firstRow, lastRow, firstCol, lastCol })
-        if (rects.length > CF_LIMITS.rangesPerRule) throw new Error('CF range limit')
+        const lastRow = r.lastRow === 1048575 ? bottom : r.lastRow
+        const lastCol = r.lastCol === 16383 ? right : r.lastCol
+        if (lastRow >= r.firstRow && lastCol >= r.firstCol) rects.push({ ...r, lastRow, lastCol })
       }
     }
-    let cells = 0
-    for (const r of rects) {
-      cells += (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1)
-      if (!Number.isSafeInteger(cells) || cells < 0 || cells > CF_LIMITS.preparedCells) throw new Error('CF cell limit')
-    }
-    // Shared preparation and paint scratch have separate ownership. Covers
-    // transient styles, synthetic cell records and gridline masks before paint.
-    if (!hold.grow(hold.bytes + cells * 2048)) throw new Error('CF paint admission')
-    lease = await service.prepareCf(options.request ?? { stamp, sourceRects: rects, signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+    for (const r of rects) if (![r.firstRow, r.lastRow, r.firstCol, r.lastCol].every(Number.isSafeInteger) || r.firstRow < 0 || r.lastRow > 1048575 || r.firstCol < 0 || r.lastCol > 16383 || r.lastRow < r.firstRow || r.lastCol < r.firstCol) throw new Error('CF rectangle')
     const base = regionStylesFor(sheet)
+    const colors = { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
+    const states = new Map<number, CfCellState>()
+    // Split the union into disjoint row slabs and merged column intervals. No
+    // full-sheet cell set, and overlapping rules never multiply cell admission.
+    const edges = [...new Set(rects.flatMap(r => [r.firstRow, r.lastRow + 1]))].sort((a, b) => a - b)
+    const maxCells = Math.max(1, Math.min(256, Math.floor((1024 * 1024 - rules.rules.length * 640 - 2208) / (512 + propertyBytes))))
+    const paintCells = options.viewport || options.request ? Math.min(CF_LIMITS.preparedCells, rects.reduce((n, r) => n + (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1), 0)) : 256
+    if (!hold.grow(hold.bytes + paintCells * 2048)) throw new Error('CF paint workspace')
+    let heldBytes = hold.bytes
+    for (let e = 0; e + 1 < edges.length; e++) {
+      const intervals: Array<[number, number]> = []
+      for (const r of rects) { await work(); if (r.firstRow <= edges[e]! && r.lastRow >= edges[e]!) intervals.push([r.firstCol, r.lastCol]) }
+      intervals.sort((a, b) => a[0] - b[0])
+      const merged: Array<[number, number]> = []
+      for (const [a, b] of intervals) { const last = merged.at(-1); if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b); else merged.push([a, b]) }
+      for (let row = edges[e]!; row < edges[e + 1]!; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
+        await work()
+        const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
+        const service = createCfService(rules, memory, { evidence })
+        try {
+          const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
+          try {
+            for (let c = rect.firstCol; c <= rect.lastCol; c++) {
+              const result = lease.value.at(row, c)
+              if (result.kind !== 'ready' || !Object.keys(result.value.properties).length) continue
+              const measured = measureCfPayload(result.value, memory)
+              if (measured.kind !== 'ready' || !hold.grow(heldBytes + measured.value + 160)) throw new Error('CF retained paint admission')
+              heldBytes += measured.value + 160
+              // Ownership overlaps the service lease until the batch is drained.
+              states.set(row * 16384 + c, result.value)
+            }
+          } finally { lease.release() }
+        } finally { service.dispose(); budget = createCfWorkBudget({ signal }) }
+      }
+    }
+    let disposed = false
     const layer: RegionStyleLayer = {
-      retainedBytes: hold.bytes + lease.bytes,
+      retainedBytes: hold.bytes,
       rects: [...base?.rects ?? [], ...rects.map(r => ({ minRow: r.firstRow, maxRow: r.lastRow, minCol: r.firstCol, maxCol: r.lastCol }))],
       styleAt(row, col, own, mode) {
         const style = base?.styleAt(row, col, own, mode) ?? own
         const merge = sheet.mergeRanges?.find(m => row >= m.minRow && row <= m.maxRow && col >= m.minCol && col <= m.maxCol)
         if (merge && !evidence.allows('stage1-blank-merge-order', 'layout:merge-hidden-endpoint')) return style
-        const state = lease?.value.at(row, col)
-        return state?.kind === 'ready' ? resolveCfCellStyle(style, state.value) : style
+        const state = !disposed && sameCfStamp(source.stamp(stamp.sheetId), stamp) && states.get(row * 16384 + col)
+        return state ? resolveCfCellStyle(style, state, colors) : style
       },
     }
-    let disposed = false
-    return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer, dispose() { if (disposed) return; disposed = true; lease?.release(); lease = undefined; service.dispose(); hold.release() } }
-  } catch {
-    lease?.release(); service.dispose(); hold.release()
-    const diagnostics = (sheet.diagnostics ??= [])
-    if (!diagnostics.some(d => d.feature === 'cf-paint-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'cf-paint-unavailable', message: 'Conditional formatting could not be prepared within the admitted batch; base formatting is shown.' })
-    return undefined
-  }
+    return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
+      dispose() { if (disposed) return; disposed = true; states.clear(); hold.release() } }
+  } catch { hold.release(); return unavailable(sheet) }
 }
 
 export { createCfMemory as createPaintMemory } from './limits'
+
+/** One facet per receiving document and parent. Parent admission precedes every
+ * local allocation, including overlapping viewport and print leases. */
+const memories = new WeakMap<object, Map<object | undefined, CfMemory>>()
+export function paintMemoryFor(owner: object, parent?: import('../../charts/workspace').ChartParentLedger): CfMemory {
+  let map = memories.get(owner)
+  if (!map) memories.set(owner, map = new Map())
+  let memory = map.get(parent)
+  if (!memory) {
+    memory = createCfMemory({ context: parent ? {
+      limitBytes: CF_LIMITS.workbookMetadataBytes, canReserve: () => true, owns: () => false,
+      reserve() {
+        let bytes = 0
+        return { owner: 'cf-paint', get bytes() { return bytes },
+          trySet(next) { if (next > bytes && !parent.reserve(next - bytes, 'cf-paint')) return false; if (next < bytes) parent.release('cf-paint', bytes - next); bytes = next; return true },
+          charge(next) { if (!this.trySet(bytes + next)) throw new Error('CF parent admission') },
+          release() { parent.release('cf-paint', bytes); bytes = 0 },
+          adopt() { throw new Error('CF ownership is held by its paint lease') },
+        }
+      },
+    } : undefined })
+    map.set(parent, memory)
+  }
+  return memory
+}

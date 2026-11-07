@@ -545,6 +545,8 @@ describe('CF oracle verifier', () => {
     const cmpRes = await compareCfCase(baseCase, 'static', { rootDir: dir })
     expect(cmpRes.outcome).not.toBe('implementation-pending')
     expect(cmpRes.diff).toBeDefined()
+    const print = await compareCfCase(baseCase, 'print', { rootDir: dir })
+    expect(print).toMatchObject({ outcome: 'fail', reason: expect.stringContaining('No printer capture') })
   })
 
   it('verifies all Stage 1 manifest cases have valid structural markers and honest status', () => {
