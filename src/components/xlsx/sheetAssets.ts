@@ -88,6 +88,8 @@ export class SheetImageCache {
 }
 
 export interface SheetAssetsOptions extends PaintOptions {
+  /** Live committed values, including overlays; static exports use their document. */
+  cfStore?: import('../../xlsx/view/contracts').SourceStore
   /** Sheet whose pictures are leased (default 0). */
   sheetIndex?: number
   /** Visible source rectangles for CF, including blank cells. Absent: static grid. */
@@ -254,7 +256,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       if (sheet && sheetHasRegionStyles(sheet)) await ensureTableStyleEngine([sheet])
       if (sheet?.conditionalFormatting) {
         const cf = await ensureConditionalFormatting([sheet])
-        conditionalFormatting = await cf?.prepareCfPaint(sheet, { memory: cf.paintMemoryFor(options.chartOwner ?? doc, options.chartParent), valuePolicy: doc.valuePolicy ?? 'engine', paintRects: options.cfPaintRects, viewport: options.cfViewport })
+        conditionalFormatting = await cf?.prepareCfPaint(sheet, { store: options.cfStore, memory: cf.paintMemoryFor(options.chartOwner ?? doc, options.chartParent), valuePolicy: doc.valuePolicy ?? 'engine', paintRects: options.cfPaintRects, viewport: options.cfViewport })
       }
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.

@@ -3,14 +3,14 @@ import type { CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes } from './service'
 import { resolveCfCellStyle } from './dxf'
-import { residentSource } from './render'
+import { residentSource, storeCfSource } from './render'
 import { cfRuntimeEvidence } from './predicates'
 import { cfRulesVersion } from '../view/pagedSource'
 import type { EffectiveFormatScope, FormatBudget } from '../view/formatWorkspace'
 import type { AllocationContext, AllocationReservation } from '../view/allocationAccount'
 import type { SheetColorContext } from '../sheetColors'
 import type { ValuePolicy } from '../view/values'
-import type { CfReadResult } from '../view/contracts'
+import type { SourceStore, CfReadResult } from '../view/contracts'
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
@@ -28,6 +28,7 @@ export interface CfTextScopeRequest {
   readonly colors?: SheetColorContext
   readonly valuePolicy?: ValuePolicy
   readonly workbookValueGen?: number
+  readonly store?: SourceStore
 }
 
 /** Fixed admitted descriptor workspace per scope with a charged budget. */
@@ -160,14 +161,17 @@ function assembleScope(
   locale: string,
   bytes: number,
   release: () => void,
+  current: () => boolean = () => true,
+  regions?: EffectiveFormatScope['regions'],
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
   let disposed = false
   return {
     gen,
     bytes,
+    regions,
     effectiveStyle: (row, col, base) => {
-      if (disposed) return base
+      if (disposed || !current()) return base
       const state = states.get(row * 16384 + col)
       if (!state) return base
       // Surviving winning properties apply even when other aspects are
@@ -176,7 +180,7 @@ function assembleScope(
       return resolveCfCellStyle(base, { properties: state.properties }, colors)
     },
     describe: (row, col) => {
-      if (disposed) return undefined
+      if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
       if (!state) return undefined
       if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined) return undefined
@@ -235,15 +239,15 @@ export async function prepareCfTextScope(
   try {
     const gen = cfRulesVersion(rules)
     const stamp: CfStamp = {
-      owner: 'cf-text',
+      owner: request.store?.stamp.docId ?? 'cf-text',
       sheetId: sheet.sheetId ?? sheet.name,
-      workbookValueGen: request.workbookValueGen ?? 0,
+      workbookValueGen: request.store?.stamp.valueGen ?? request.workbookValueGen ?? 0,
       cfGen: gen,
       viewGen: 0,
-      structureGen: 0,
+      structureGen: request.store?.structureGen ?? 0,
       clockGen: 0,
     }
-    const source = residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
+    const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
     const colors = request.colors ?? {}
     const locale = request.locale ?? 'en-US'
     for (const chunk of modelChunks) {
@@ -297,7 +301,7 @@ export async function prepareCfTextScope(
         disposed = true
         request.budget.release(bytes)
       }
-    })
+    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen)
     if (request.signal.aborted) {
       scope.dispose()
       return undefined
@@ -338,7 +342,7 @@ export async function prepareCfWireScope(
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
   const chunks = chunkRects(rects)
-  let bytes = DESCRIPTOR_WORKSPACE_BYTES
+  let bytes = DESCRIPTOR_WORKSPACE_BYTES + rects.length * 128
   const states = new Map<number, CopiedState>()
   // The initial workspace admission throws like any other refusal so callers
   // can tell a refused preparation apart from an absent one.
@@ -362,6 +366,7 @@ export async function prepareCfWireScope(
     }
   }
   try {
+    const regions = rects.map(r => ({minRow:r.r0,maxRow:r.r1,minCol:r.c0,maxCol:r.c1}))
     let first = true
     let gen = 0
     for (const chunk of chunks) {
@@ -409,7 +414,7 @@ export async function prepareCfWireScope(
         disposed = true
         options.budget.release(bytes)
       }
-    })
+    }, undefined, regions)
     return scope
   } catch (error) {
     // Abort converges to no scope (callers detect cancellation on their own

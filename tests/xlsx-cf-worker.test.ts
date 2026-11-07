@@ -593,6 +593,23 @@ describe('CF remote cache (viewerRemoteCf)', () => {
   }
   const flush = () => new Promise(r => setTimeout(r, 0))
 
+  it('late pinned preparation cannot publish after explicit invalidation', async () => {
+    const host = testHost()
+    const respond = host.respond
+    let resume!: () => void
+    const gate = new Promise<void>(resolve => { resume = resolve })
+    host.respond = async (command, signal) => { await gate; return respond(command, signal) }
+    const cache = new RemoteCfCache(host)
+    const held = cache.acquire(SHEET, [rect(0, 0)], cfStamp(1))
+    cache.invalidate(SHEET)
+    resume()
+    await flush(); await flush()
+    expect(held.state.state).not.toBe('ready')
+    expect(held.state.result).toBeUndefined()
+    held.release(); cache.close()
+    expect(cache.retainedBytes).toBe(0)
+  })
+
   it('loads once for two viewport consumers and releases once', async () => {
     const host = testHost()
     const cache = new RemoteCfCache(host, 1 << 20)

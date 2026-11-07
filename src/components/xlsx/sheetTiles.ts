@@ -47,6 +47,8 @@ export interface SheetFrame {
   zoom: number
   dpr: number
   extent: { width: number; height: number }
+  /** Base-only paint while CF recomputes; never retain it as a completed tile. */
+  cfPending?: boolean
   assets?: RenderSheetAssets
   layoutCache: LayoutCache
   /** Repaint memory admitted per record at construction (spec §§5.6, 12.4). */
@@ -295,7 +297,7 @@ export class SheetTileRenderer {
 
   private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean; notice?: string } {
     const key = this.key(frame, col, row)
-    const cached = this.cache.get(key) as CanvasTile | undefined
+    const cached = frame.cfPending ? undefined : this.cache.get(key) as CanvasTile | undefined
     const cost = cached?.cost
     // A cached tile counts its detail work against this frame; one that no longer
     // fits is repainted against what is left (coarse past the budget).
@@ -378,7 +380,7 @@ export class SheetTileRenderer {
       if (ctx) { try { paintPending(ctx, box, pending, frame.colors) } catch (error) { if (!(error instanceof LayoutAdmissionError)) throw error } }
       return { surface, retained: false }
     }
-    if (work.resourceNotice) return { surface, retained: false }
+    if (work.resourceNotice || frame.cfPending) return { surface, retained: false }
     // A tile made coarse only because earlier tiles spent the frame budget is not
     // the tile's own content: present it, but never cache it.
     if (kind === 'coarse' && !full) return { surface, retained: false }

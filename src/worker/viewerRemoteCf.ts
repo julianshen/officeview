@@ -539,7 +539,7 @@ export class RemoteCfCache {
     }
     try {
       const out = await pending
-      if (this.closed || entry.seq !== seq) {
+      if (this.closed || entry.detached || entry.seq !== seq) {
         if (typeof out === 'object') this.host.release(out)
         return
       }

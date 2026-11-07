@@ -13,6 +13,8 @@ import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
 import { cfExplicitBounds, cfNeedsViewport } from '../cfLoader'
 import { STATIC_SHEET_BUDGET } from '../render'
+import { cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
+import type { SourceStore } from '../view/contracts'
 import { hostTask } from '../view/scheduler'
 
 export interface CfPaintBatch {
@@ -80,6 +82,17 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
     },
   }
 }
+/** Read the committed store, including pivot overlays. A borrowed snapshot stops
+ * painting synchronously when its source commits, before any async replacement. */
+export function storeCfSource(store: SourceStore, stamp: CfStamp, memory: CfMemory): CfValueSource {
+  return {
+    stamp: () => ({ ...stamp, owner: store.stamp.docId, workbookValueGen: store.stamp.valueGen, structureGen: store.structureGen ?? 0 }),
+    bounds: async () => { const used = store.extent.used; return used
+      ? { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
+      : { firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 } },
+    pages: pagedStoreCfPages(store, memory),
+  }
+}
 /** One diagnostic surface for initial and late refusals, with the sheet cap. */
 function unavailable(sheet: XlsxSheet): undefined {
   const ds = sheet.diagnostics ??= []
@@ -89,7 +102,7 @@ function unavailable(sheet: XlsxSheet): undefined {
 /** Shared by resident assets and paged callers. paintRects scopes whole-axis
  * rules to the visible/printed source coordinates, including unstored blanks. */
 export async function prepareCfPaint(sheet: XlsxSheet, options: {
-  memory?: CfMemory; request?: CfPrepareRequest; source?: CfValueSource; evidence?: CfEvidenceGate;
+  store?: SourceStore; memory?: CfMemory; request?: CfPrepareRequest; source?: CfValueSource; evidence?: CfEvidenceGate;
   paintRects?: readonly SourceRect[]; valuePolicy?: ValuePolicy;
   viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] }
 } = {}): Promise<CfPaintBatch | undefined> {
@@ -107,9 +120,9 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0) * 512)
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
-  const stamp = options.request?.stamp ?? { owner: 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const stamp = options.request?.stamp ?? { owner: options.store?.stamp.docId ?? 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: options.store?.stamp.valueGen ?? 0, cfGen: options.store ? cfRulesVersion(rules) : 1, viewGen: 0, structureGen: options.store?.structureGen ?? 0, clockGen: 0 }
   const signal = options.request?.signal ?? new AbortController().signal
-  const source = options.source ?? residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached')
+  const source = options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached'))
   const budget = createCfWorkBudget({ signal })
   const statistics: CfPaintStatistics = { session: createCfStatistics(memory), stamp, results: new Map() }
   let units = 0
