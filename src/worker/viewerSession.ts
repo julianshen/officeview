@@ -63,7 +63,7 @@ import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset 
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { OwnedRects, uniqueRectList } from '../xlsx/view/rectIndex'
-import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
+import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, versionCfRules, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
@@ -76,7 +76,7 @@ import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
 import { accountQueryBytes, boundedQueryStore, queryWorkspaceRefusal, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import type { FormatAllocation } from '../xlsx/formula/format'
-import type { FormatBudget } from '../xlsx/view/formatWorkspace'
+import type { EffectiveFormatScope, FormatBudget } from '../xlsx/view/formatWorkspace'
 import type { PivotCacheDefinition, PivotTableDefinition } from '../xlsx/pivots/model'
 import type { RecordLimits, RecordResult } from '../xlsx/pivots/engine/records'
 import type { CellReader } from '../xlsx/pivots/engine/faithful'
@@ -270,8 +270,9 @@ export interface WorkbookSource {
   /** S5.4: style table and date system of a source whose cells carry style ids only. */
   formatting?(): WorkbookFormatting
   /** The canonical logical display text, without materializing cell layouts. `region` resolves a styled
-   * table/pivot region over the cell's own style, as the viewer paints it (worker Find). */
-  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation, region?: RegionStyleResolver): string
+   * table/pivot region over the cell's own style, as the viewer paints it (worker Find). `scope`
+   * applies a prepared current-generation CF effective format last (Task 9). */
+  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation, region?: RegionStyleResolver, scope?: EffectiveFormatScope): string
   release(): Promise<void>
 }
 
@@ -2463,6 +2464,8 @@ export class DocumentSession {
       ensureComplete: (rect, options) => store.ensureComplete(rect, options),
       release: () => store.release(),
       queryColumn: (request, options) => session.pagedColumn(store, request, options),
+      // Task 9 worker find prepares CF text scopes through the same wrapper.
+      ...(store.readConditionalFormatting ? { readConditionalFormatting: (request, memory, options) => store.readConditionalFormatting!(request, memory, options) } : {}),
     }
     return prepared
   }
@@ -2990,6 +2993,10 @@ export class DocumentSession {
         if (!current.charge.set(current.bytes)) { this.stopSearch(current); return this.refusal(current.bytes) }
         const sheets: FindSheetInput[] = []
         const regions = new Map<string, RegionStyleResolver>()
+        // Stores behind the bounded search wrapper, for per-batch CF preparation.
+        const textStores = new Map<string, { store: SourceStore; valueGen: number }>()
+        // One bounded CF probe per sheet per search: no-CF sheets never pay per-page.
+        const cfPresence = new Map<string, boolean>()
         for (const { sheetId } of this.source.sheets) {
           if (query.sheetIds && !query.sheetIds.includes(sheetId)) continue
           // Importing sheets remain searchable. A nonblocking structural probe
@@ -3011,12 +3018,14 @@ export class DocumentSession {
           const region = await this.findRegionStyles(sheetId, current, signal)
           if (current.stopped || signal.aborted) return { kind: 'cancelled' }
           if (region) regions.set(sheetId, region)
+          const bounded = boundedQueryStore(store, budget / 2, bytes => {
+            current.emittedBytes += bytes
+            if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
+          }, 20_000, true, true, this.memory, this.queryYield)
+          textStores.set(sheetId, { store: bounded, valueGen: view.identity.valueGen })
           sheets.push({ sheetId, identity: view.identity, order: view.order, visibility,
             isColumnVisible: col => geometry.cols.size(col) > 0,
-            store: boundedQueryStore(store, budget / 2, bytes => {
-              current.emittedBytes += bytes
-              if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
-            }, 20_000, true, true, this.memory, this.queryYield),
+            store: bounded,
           })
         }
         current.engine = new WorkbookFind({ owner, sheets }, query, {
@@ -3047,7 +3056,33 @@ export class DocumentSession {
               current.charge.set(current.bytes)
             },
           },
-          ...(this.source.displayText ? { textOf: (cell, id, allocation) => this.source.displayText!(cell, id, allocation, regions.get(id)) } : {}),
+          ...(this.source.displayText ? {
+            textOf: (cell, id, allocation, scope) => this.source.displayText!(cell, id, allocation, regions.get(id), scope),
+            // Bounded current-generation CF formats for one scan batch (Task 9).
+            // Presence is probed once per sheet per search; any other failure
+            // keeps base text, never another cell's result.
+            prepareScope: async (sheetId, range, batchSignal) => {
+              if (cfPresence.get(sheetId) === false) return undefined
+              const entry = textStores.get(sheetId)
+              if (!entry?.store.readConditionalFormatting) { cfPresence.set(sheetId, false); return undefined }
+              try {
+                const text = await import('../xlsx/cf/text')
+                const result = await entry.store.readConditionalFormatting({
+                  rects: [{ r0: range.r0, r1: range.r1, c0: range.c0, c1: range.c1 }],
+                  stamp: { owner: this.docId, sheetId, workbookValueGen: entry.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                  grantBytes: text.CF_TEXT_SCOPE_GRANT_BYTES,
+                }, await this.cfAccount(), { signal: batchSignal })
+                if (result.kind !== 'ready' || result.definitionsVersion === versionCfRules('[]')) {
+                  cfPresence.set(sheetId, false)
+                  return undefined
+                }
+                cfPresence.set(sheetId, true)
+                return text.cfTextScopeFromWire(result, {})
+              } catch {
+                return undefined
+              }
+            },
+          } : {}),
         })
       }
       if (signal.aborted) { this.stopSearch(current); return { kind: 'cancelled' } }

@@ -1,4 +1,5 @@
 import type { FormatAllocation } from '../formula/format'
+import type { XlsxCellStyle } from '../types'
 
 /** The calling operation's aggregate budget, never a per-cell allowance. */
 export interface FormatBudget {
@@ -7,6 +8,21 @@ export interface FormatBudget {
   retain?(targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic'): void
   /** Ends a retained target's charge now: its owner dropped it (no GC wait). */
   settle?(target: object): void
+}
+
+/** One prepared current-generation effective format for a source batch (Task 9).
+ * Implementations live in lazy modules; eager consumers only call these methods.
+ * `describe` returns borrowed text owned (and charged) by the scope: callers must
+ * not retain it past `dispose`. Absence of a scope, or an undefined per-cell
+ * answer, always means base formatting (fail closed). */
+export interface EffectiveFormatScope {
+  /** Live content version the scope was prepared under (cfGen). */
+  readonly gen: number
+  /** Current-generation effective style, or the base when CF does not win. */
+  effectiveStyle(row: number, col: number, base: XlsxCellStyle | undefined): XlsxCellStyle | undefined
+  /** Localized winning-state descriptor, or undefined when nothing applies. */
+  describe?(row: number, col: number): { key: string; text: string } | undefined
+  dispose(): void
 }
 
 /** Keep builders charged through the synchronous consumer of their output. */

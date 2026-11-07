@@ -23,7 +23,8 @@ export interface CfPaintBatch {
 }
 /** No inferred values: cached formula errors stay errors; missing formula
  * values refuse rather than masquerading as blanks. */
-function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemory, policy: ValuePolicy): CfValueSource {
+/** Task 9 reuses the borrowed-value resident source for per-batch text scopes. */
+export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemory, policy: ValuePolicy): CfValueSource {
   let bounds: SourceRect | undefined, ordered = true
   return {
     stamp: () => stamp,

@@ -2592,11 +2592,12 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     formatting: () => workbook.formatting,
     // A styled table/pivot region resolves over the cell's own style, as the viewer paints it (worker Find).
-    displayText: (cell, _sheetId, allocation, region) => {
+    displayText: (cell, _sheetId, allocation, region, scope) => {
       const own = workbook.formatting.styles[cell.styleIndex]
       const overlayStyle = storeFor(_sheetId).overlayStyle({ row: cell.row, col: cell.col })
       const style = overlayStyle === null ? undefined : overlayStyle ?? own
-      return cellDisplayText(displaySheet, { value: cell.value, style: region?.styleAt(cell.row, cell.col, style, 'screen') ?? style }, allocation)
+      const regional = region?.styleAt(cell.row, cell.col, style, 'screen') ?? style
+      return cellDisplayText(displaySheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, regional) ?? regional }, allocation)
     },
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },

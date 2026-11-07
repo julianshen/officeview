@@ -1,9 +1,10 @@
 import type { AuthoritativeCell, CacheIdentity, GridSelection, ProfileId, RowOrder, RowVisibility, SourceStore } from './contracts'
-import { cellId, validateSourceRect } from './coordinates'
+import { cellId, validateSourceRect, type SourceRect } from './coordinates'
 import { rowSetIntervals, sameIdentity, sameStamp } from '../../worker/viewerSession'
 import { MAIN_THREAD_BUDGETS } from './tileCache'
 import { copyText, type CopyOutcome } from '../../core/clipboard'
 import type { FormatAllocation } from '../formula/format'
+import type { EffectiveFormatScope } from './formatWorkspace'
 
 export const CLIPBOARD_BYTES = 8 * 1024 * 1024
 /** Per-operation ceiling, D=24 MiB / M=12 MiB; incremental caller admission
@@ -24,7 +25,11 @@ export interface CopyInput {
   signal: AbortSignal
   /** Canonical production formatting admits construction through the context.
    * Legacy callbacks keep their API and own any unobserved construction. */
-  format?: (cell: AuthoritativeCell, allocation?: FormatAllocation) => string
+  format?: (cell: AuthoritativeCell, allocation?: FormatAllocation, scope?: EffectiveFormatScope) => string
+  /** Bounded preparation of one copy batch's current-generation effective formats
+   * (Task 9). The engine prepares per 256-cell block and disposes in a finally;
+   * returning undefined (or omitting the hook) keeps base formatting. */
+  prepareScope?: (range: SourceRect, signal: AbortSignal) => Promise<EffectiveFormatScope | undefined>
   onPending?: () => void
   /** Peak output buffers plus compact projection, independent of the row count. */
   sessionBudgetBytes?: number
@@ -230,7 +235,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
   })
 }
-async function read(input: CopyInput, row: number, col: number, memory: CopyMemory): Promise<{ text: string; owned: number }> {
+async function read(input: CopyInput, row: number, col: number, memory: CopyMemory, scope?: EffectiveFormatScope): Promise<{ text: string; owned: number }> {
   const at = { row, col }, options = { stamp: input.owner, signal: input.signal }
   let completeCoverage = false
   for (;;) {
@@ -275,7 +280,7 @@ async function read(input: CopyInput, row: number, col: number, memory: CopyMemo
     }
     const value = result.cell.value
     if (!input.format && typeof value !== 'string') allocation.allocate(64)
-    const text = input.format ? input.format(result.cell, allocation) : String(value ?? '')
+    const text = input.format ? input.format(result.cell, allocation, scope) : String(value ?? '')
     // Legacy callbacks may ignore the context; their owned result is charged on
     // return. Production uses the canonical guarded formatter before allocation.
     flushRelease()
@@ -293,6 +298,18 @@ function escapedUnits(text: string): number {
     if (ch === '"' || ch === '\t' || ch === '\r' || ch === '\n') quote = true
   }
   return quote ? text.length + quotes + 2 : text.length
+}
+/** Bounded current-generation formats for one copy block. An aborted signal
+ * cancels the copy; any other preparation failure keeps base text. */
+async function prepareCopyScope(input: CopyInput, range: SourceRect): Promise<EffectiveFormatScope | undefined> {
+  try {
+    return await abortable(input.prepareScope!(range, input.signal), input.signal)
+  } catch {
+    // A block whose formats cannot be prepared still copies: base text, never
+    // another cell's result. Abort stays an abort.
+    if (input.signal.aborted) throw new CopyFailure('cancelled', 'Copy cancelled.')
+    return undefined
+  }
 }
 export async function serializeSelection(input: CopyInput): Promise<CopyResult> {
   const memory = new CopyMemory(input)
@@ -329,29 +346,45 @@ export async function serializeSelection(input: CopyInput): Promise<CopyResult> 
       for (let offset = 0; offset < cells; offset += BATCH_CELLS) {
         check(input)
         const n = Math.min(BATCH_CELLS, cells - offset)
-        const values: { text: string; owned: number }[] = []
+        // One bounded CF preparation per block: source rows come from the display
+        // order (which may permute), so the range is measured, never assumed.
+        let firstRow = Infinity, lastRow = -Infinity, firstCol = Infinity, lastCol = -Infinity
         for (let i = 0; i < n; i++) {
           const index = offset + i, rank = block.rows.lo + Math.floor(index / width)
-          const row = input.order.displayToSource(input.visibility.select(rank)!)
-          const col = input.columns.select(block.cols.lo + index % width)!
-          // Reference slot plus owned value record, before read can format.
-          memory.add(32); slots += 32
-          const value = await read(input, row, col, memory)
-          formatted += value.owned
-          if (value.text.length * 2 + units * 2 > CLIPBOARD_BYTES) throw limit()
-          values.push(value)
+          const row = input.order.displayToSource(input.visibility.select(rank)!), col = input.columns.select(block.cols.lo + index % width)!
+          if (row < firstRow) firstRow = row
+          if (row > lastRow) lastRow = row
+          if (col < firstCol) firstCol = col
+          if (col > lastCol) lastCol = col
         }
-        check(input)
-        for (let i = 0; i < n; i++) {
-          const index = offset + i
-          if (index) append(index % width ? '\t' : '\n')
-          append(values[i].text, true)
-          const owned = values[i].owned
-          values[i].text = ''; values[i].owned = 0
-          formatted -= owned
-          reserve()
+        const scope = input.prepareScope ? await prepareCopyScope(input, { r0: firstRow, r1: lastRow, c0: firstCol, c1: lastCol }) : undefined
+        try {
+          const values: { text: string; owned: number }[] = []
+          for (let i = 0; i < n; i++) {
+            const index = offset + i, rank = block.rows.lo + Math.floor(index / width)
+            const row = input.order.displayToSource(input.visibility.select(rank)!)
+            const col = input.columns.select(block.cols.lo + index % width)!
+            // Reference slot plus owned value record, before read can format.
+            memory.add(32); slots += 32
+            const value = await read(input, row, col, memory, scope)
+            formatted += value.owned
+            if (value.text.length * 2 + units * 2 > CLIPBOARD_BYTES) throw limit()
+            values.push(value)
+          }
+          check(input)
+          for (let i = 0; i < n; i++) {
+            const index = offset + i
+            if (index) append(index % width ? '\t' : '\n')
+            append(values[i].text, true)
+            const owned = values[i].owned
+            values[i].text = ''; values[i].owned = 0
+            formatted -= owned
+            reserve()
+          }
+          values.length = 0
+        } finally {
+          scope?.dispose()
         }
-        values.length = 0
         slots = 0
         reserve()
         if (++batches % 16 === 0) await abortable(new Promise<void>(resolve => setTimeout(resolve, 0)), input.signal)

@@ -843,8 +843,12 @@ export class RemoteWorkbook implements WorkbookSource {
     }, error => {
       // A grant is refunded only when the command provably never left: a
       // disposed client may still have its reply in flight (a closed
-      // workbook's ledger keeps that harmless overstatement).
-      if (grant ? error instanceof ViewerNotSentError : reservation) this.mainLedger.release('replies', (grant ?? reservation)!)
+      // workbook's ledger keeps that harmless overstatement). A closed
+      // workbook can never settle (its port is detached), so its grants are
+      // always safe to refund: abandoning an in-flight granted read at close
+      // must not strand the receiver grant (Task 9 display/copy scopes race
+      // close exactly this way on plain sheets).
+      if (grant ? error instanceof ViewerNotSentError || this.closed : reservation) this.mainLedger.release('replies', (grant ?? reservation)!)
       return CLOSED
     })
     if (!signal) return sent.finally(() => unsubscribe?.())
