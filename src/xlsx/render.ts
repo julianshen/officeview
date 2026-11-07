@@ -323,7 +323,7 @@ function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom
 }
 
 /** CF may constrain a new raster extent, never an unchanged legacy grid. */
-function cfExpandsGrid(sheet: XlsxSheet, maxRow: number, maxCol: number): boolean {
+function cfExpansion(sheet: XlsxSheet, maxRow: number, maxCol: number) {
   let row = 0, col = 0
   for (const r of sheet.rows) { row = Math.max(row, r.index); for (const c of r.cells) { row = Math.max(row, cellSourceRow(r, c)); col = Math.max(col, c.col) } }
   for (const m of sheet.mergeRanges ?? []) if (validMerge(m)) { row = Math.max(row, m.maxRow); col = Math.max(col, m.maxCol) }
@@ -331,7 +331,14 @@ function cfExpandsGrid(sheet: XlsxSheet, maxRow: number, maxCol: number): boolea
   const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), col)
   if (declared <= col + MAX_DECLARED_COL_SLACK) col = declared
   for (const [r, cs] of sheet.resolvedSparklines ?? []) { row = Math.max(row, r); for (const c of cs.keys()) col = Math.max(col, c) }
-  return maxRow > row || maxCol > col
+  return { rows: maxRow > row, cols: maxCol > col }
+}
+
+function cfRasterLimits(sheet: XlsxSheet, row: number, col: number, width: number, height: number): StaticExportLimit[] {
+  const expanded = cfExpansion(sheet, row, col)
+  return rasterLimits(width, height).filter(limit => limit.resource === 'raster-bytes'
+    ? expanded.rows || expanded.cols
+    : (expanded.rows && height > MAX_RASTER_SIDE) || (expanded.cols && width > MAX_RASTER_SIDE))
 }
 
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
@@ -414,7 +421,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     code: 'table-style-region-clipped',
     message: `${clippedStyleRegions.length} resolved table style region(s) extend beyond the static grid and were clipped to ${MAX_GRID_ROWS} rows by ${MAX_GRID_COLS} columns`,
   })
-  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras(cfBounds && cfExpandsGrid(sheet, maxRow, maxCol) ? rasterLimits(gridWidth, gridHeight) : []) }
+  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras(cfBounds ? cfRasterLimits(sheet, maxRow, maxCol, gridWidth, gridHeight) : []) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
   // The retained bitmap stays clamped (parse-time coverage reporting relies on
@@ -776,33 +783,7 @@ export function regionStyledCell(regionStyles: RegionStyleLayer | undefined, cel
   const resolvedStyle = regionStyles?.styleAt(cell.row, cell.col, cell.style) ?? cell.style
   return resolvedStyle === cell.style ? cell : { ...cell, style: resolvedStyle }
 }
-/** CF static/print surfaces are constructed in bounded windows. Each window
- * strokes complete source paths and clips only at the destination canvas. */
-export function renderSheet(sheet: XlsxSheet, ctx: CanvasRenderingContext2D, metrics?: GridMetrics, watermark?: WatermarkOptions | ResolvedWatermark, prepared?: RenderSheetAssets, viewport?: SheetViewport): void {
-  if (!prepared?.conditionalFormatting) return renderSheetPart(sheet, ctx, metrics, watermark, prepared, viewport)
-  const m = metrics ?? computeMetrics(sheet)
-  const limits = staticAdmission(sheet, m, viewport)
-  if (limits.length) throw new StaticExportLimitError(limits)
-  if (m.rowHeightsPx.length * m.colWidthsPx.length <= 256) return renderSheetPart(sheet, ctx, m, watermark, prepared, viewport)
-  const xs = prefixSums(m.colWidthsPx), ys = prefixSums(m.rowHeightsPx)
-  const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
-  for (let r = 0; r < m.rowHeightsPx.length; r += 8) {
-    const y = Math.max(vp.y, ys[r]), bottom = Math.min(vp.y + vp.height, r + 8 >= m.rowHeightsPx.length ? Math.max(m.heightPx, vp.y + vp.height) : ys[r + 8])
-    if (bottom <= y) continue
-    for (let c = 0; c < m.colWidthsPx.length; c += 8) {
-      const x = Math.max(vp.x, xs[c]), right = Math.min(vp.x + vp.width, c + 8 >= m.colWidthsPx.length ? Math.max(m.widthPx, vp.x + vp.width) : xs[c + 8])
-      if (right <= x) continue
-      ctx.save()
-      try {
-        ctx.beginPath(); ctx.rect(x - vp.x, y - vp.y, right - x, bottom - y); ctx.clip()
-        ctx.translate(x - vp.x, y - vp.y)
-        renderSheetPart(sheet, ctx, m, watermark, prepared, { x, y, width: right - x, height: bottom - y })
-      } finally { ctx.restore() }
-    }
-  }
-}
-
-function renderSheetPart(
+export function renderSheet(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
   metrics?: GridMetrics,
@@ -862,7 +843,21 @@ function renderSheetPart(
   let paintRows: readonly XlsxRow[] = sheet.rows
   // Styled empty table cells are real paint surfaces. Add them only where no
   // source cell exists, and only where this request paints (see syntheticRegionRows).
-  if (regionStyles) paintRows = syntheticRegionRows(sheet.rows, regionStyles, ranges, colX, rowY, edges, vp)
+  if (regionStyles && !prepared?.conditionalFormatting) paintRows = syntheticRegionRows(sheet.rows, regionStyles, ranges, colX, rowY, edges, vp)
+  // Blank surfaces stream one at a time. They do not require tile clips or
+  // replaying watermark/drawings. Recreate their small layout for each paint phase.
+  const blankLayouts = function* () {
+    if (!prepared?.conditionalFormatting || !regionStyles) return
+    for (const cell of cfBlankCells(sheet, regionStyles, colX, rowY, edges, vp)) {
+      if (merges.covers(cell.row, cell.col)) continue
+      const merge = merges.anchorAt(cell.row, cell.col), x = colX[cell.col], y = rowY[cell.row]
+      const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[cell.col]
+      const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[cell.row]
+      if (w <= 0 || h <= 0 || !intersects(x,y,w,h)) continue
+      yield layoutCellBody(ctx, sheet, cell, x, y, w, h, measured, NO_OVERFLOW)
+    }
+  }
+  for (const layout of blankLayouts()) paintCellLayout(ctx, layout, extent, 'fill')
   for (const row of paintRows) {
     // A malformed row may name many source rows. Partition once so occupancy
     // construction never rescans the container for each source row.
@@ -924,6 +919,7 @@ function renderSheetPart(
       if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
     }
   }
+  for (const layout of blankLayouts()) paintCellLayout(ctx, layout, extent, 'content')
   for (const layout of laidOut) {
     const border = paintCellLayout(ctx, layout, extent, 'content')
     if (border) paintBorders.push(border)
@@ -969,6 +965,7 @@ function renderSheetPart(
   ctx.stroke()
   if (region) paintCoveredLines(ctx, region.covered)
   // Explicit formatting wins over both gridlines and neighboring cell fills.
+  for (const layout of blankLayouts()) paintCellLayout(ctx, layout, extent, 'content')?.()
   for (const paint of paintBorders) paint()
   // Page mode and export draw the pivot buttons Excel prints (§7.10).
   if (sheet.pivotRegions?.length || sheet.pivotTables?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
@@ -976,8 +973,43 @@ function renderSheetPart(
   } finally { ctx.restore() }
 }
 
+/** Each iteration retains one row occupancy set and one blank record, never
+ * an area-sized synthetic row/cell/layout collection. */
+function* cfBlankCells(sheet: XlsxSheet, styles: RegionStyleLayer, colX: readonly number[], rowY: readonly number[], edges: {row(n: number): number; col(n: number): number}, vp: SheetViewport): Generator<XlsxCell> {
+  let ordered = true, previous = -1
+  for (const row of sheet.rows) { if (row.index < previous || row.cells.some(c => cellSourceRow(row,c) !== row.index)) ordered = false; previous = row.index }
+  let cursor = 0
+  let first = rowY.length, last = -1
+  for (const rect of styles.rects) { first = Math.min(first, rect.minRow); last = Math.max(last, rect.maxRow) }
+  for (let r = Math.max(0, first); r <= last && r + 1 < rowY.length; r++) {
+    const rowVisible = rowY[r + 1] > vp.y && rowY[r] < vp.y + vp.height
+    const anchorVisible = (c: number) => sheet.mergeRanges?.some(m => m.minRow === r && m.minCol === c && edges.row(m.maxRow+1)>vp.y && rowY[r]<vp.y+vp.height && edges.col(m.maxCol+1)>vp.x && colX[c]<vp.x+vp.width)
+    if (!rowVisible && !sheet.mergeRanges?.some(m => m.minRow === r && edges.row(m.maxRow+1)>vp.y && rowY[r]<vp.y+vp.height)) continue
+    const intervals: Array<[number, number]> = []
+    for (const rect of styles.rects) if (r >= rect.minRow && r <= rect.maxRow) intervals.push([Math.max(0, rect.minCol), Math.min(colX.length - 2, rect.maxCol)])
+    if (!intervals.length) continue
+    intervals.sort((a,b)=>a[0]-b[0])
+    const occupied = new Set<number>()
+    if (ordered) {
+      while (cursor < sheet.rows.length && sheet.rows[cursor].index < r) cursor++
+      for (let i=cursor; i<sheet.rows.length && sheet.rows[i].index===r; i++) for (const c of sheet.rows[i].cells) occupied.add(c.col)
+    } else for (const row of sheet.rows) for (const c of row.cells) if (cellSourceRow(row,c)===r) occupied.add(c.col)
+    let end = -1
+    for (const [from,to] of intervals) {
+    const start = Math.max(from, end + 1); end = Math.max(end, to)
+    for (let c=start;c<=to;c++) {
+      if (occupied.has(c) || !((rowVisible && colX[c+1]>vp.x && colX[c]<vp.x+vp.width) || anchorVisible(c))) continue
+      const style=styles.styleAt(r,c,undefined)
+      if (!style || (!style.fillColor && !Object.keys(style.borders??{}).length)) continue
+      syntheticCellWork.created++
+      syntheticCellWork.live++; syntheticCellWork.peakLive=Math.max(syntheticCellWork.peakLive,syntheticCellWork.live)
+      try { yield {ref:'',row:r,col:c,value:null,styleIndex:0,style} } finally { syntheticCellWork.live-- }
+    } }
+  }
+}
+
 /** @internal Work done by syntheticRegionRows, for allocation-bound tests only. */
-export const syntheticCellWork = { created: 0, rowsCopied: 0 }
+export const syntheticCellWork = { created: 0, rowsCopied: 0, live: 0, peakLive: 0 }
 
 /** The bands [starts[i], starts[i + 1]) of i in [0, n) that meet the open interval
  * (from, to), as an inclusive index range (first > last when none do). `starts`
@@ -1099,7 +1131,7 @@ function syntheticRegionRows(
  * an axis where data continues. Nothing uncovered is ever drawn over A1. */
 function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
   const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
-  if (!viewport) return [...coverage, ...requestedRasterLimits(m), ...(cfExplicitBounds(sheet) && cfExpandsGrid(sheet, m.rowHeightsPx.length - 1, m.colWidthsPx.length - 1) ? rasterLimits(m.widthPx, m.heightPx) : [])]
+  if (!viewport) return [...coverage, ...requestedRasterLimits(m), ...(cfExplicitBounds(sheet) ? cfRasterLimits(sheet, m.rowHeightsPx.length - 1, m.colWidthsPx.length - 1, m.widthPx, m.heightPx) : [])]
   const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
   const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
   // Merges the grid truncates are laid out at their true extent (mergeEdges), so

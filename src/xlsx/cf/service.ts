@@ -6,7 +6,7 @@ import { resolveCfCellStyle } from './dxf'
 import { CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
-import { createCfStatistics, type CfRangeStatistics } from './statistics'
+import { createCfStatistics, type CfRangeStatistics, type CfStatisticsSession } from './statistics'
 const quota = () => new PackageError('resource-limit', 'CF preparation exceeds its admitted batch')
 const cancel = () => new PackageError('cancelled', 'CF preparation cancelled or superseded')
 const blank: CfLiteral = Object.freeze({ kind: 'blank' })
@@ -21,14 +21,23 @@ function statistical(rule: CfRule) {
   return d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
 }
 
+/** A caller-owned, single-generation statistics lease set. The caller admits
+ * the rule-index framing, releases ready results, then disposes the session. */
+export interface CfPaintStatistics {
+  session: CfStatisticsSession
+  stamp: import('./model').CfStamp
+  results: Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>
+}
+
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
-  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget } = {}) {
+  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statistics?: CfPaintStatistics } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
     if (account !== memory) throw quota()
+    if (options.statistics && !sameCfStamp(options.statistics.stamp, request.stamp)) throw cancel()
     cache.activate(request.stamp) // invalidate old paint even if the new request refuses
     if (request.signal.aborted) throw cancel()
     if (!Number.isSafeInteger(request.grantBytes) || request.grantBytes < 256 || request.sourceRects.length > CF_LIMITS.rangesPerRule) throw quota()
@@ -58,8 +67,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
         const hold = memory.reserve(bound)
         if (hold.kind !== 'reserved') throw quota()
         const budget = options.budget?.() ?? createCfWorkBudget({ signal })
-        const statistics = createCfStatistics(memory)
-        const stats = new Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>()
+        const statistics = options.statistics?.session ?? createCfStatistics(memory)
+        const stats = options.statistics?.results ?? new Map<CfRule, CfOutcome<CfLease<CfRangeStatistics>>>()
         const leases: CfLease<CfRangeStatistics>[] = []
         let adopted = false
         const work = async (units = 1) => {
@@ -107,10 +116,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           }
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
           if (await source.bounds(stamp.sheetId, budget, signal) === undefined) return snapshot('cf-pending-data')
-          for (const rule of ordered) if (statistical(rule)) {
+          for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
             const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, budget, { signal })
             stats.set(rule, out!)
-            if (out?.kind === 'ready') leases.push(out.value)
+            if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
           }
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
             const textBytes = value.kind === 'string' ? 256 + value.value.length * 8 : 0
@@ -161,7 +170,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           return snapshot()
         } finally {
           for (const lease of leases) lease.release()
-          statistics.dispose()
+          if (!options.statistics) statistics.dispose()
           if (!adopted) hold.release()
         }
       })

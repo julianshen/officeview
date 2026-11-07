@@ -37,3 +37,31 @@ it('mounted CF assets receive projected blank coverage beyond the stored rows', 
   const ui = render(<InteractiveSheetDoc doc={{ sheets: [sheet] }} assetLoader={assetLoader} />)
   try { await waitFor(() => expect(fill).toBe('FF00FF00'), FIRST_PAINT_WAIT); expect(parentSeen).toBe(true) } finally { ui.unmount() }
 })
+it('one-pixel scrolling does not reload fonts/images or reprepare finite CF', FIRST_PAINT_TEST, async () => {
+  const { fireEvent } = await import('@testing-library/react')
+  const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')
+  const sheet: XlsxSheet = { name:'CF',sheetId:'1',rows:[{index:999,cells:[{row:999,col:20,ref:'U1000',value:1,styleIndex:0}]}],cols:[],merges:[],mergeRanges:[],conditionalFormatting:{diagnostics:[],rules:[{id:0,priority:1,documentOrder:0,stopIfTrue:false,ranges:[{firstRow:0,lastRow:19,firstCol:0,lastCol:7}],writes:new Set(['fill']),dxf:{'fill.bg':'FF00FF00'},definition:{kind:'predicate',type:'containsBlanks',dialect:'base',formulas:[]}}]}}
+  const load=vi.fn(prepareSheetAssets),ui=render(<InteractiveSheetDoc doc={{sheets:[sheet]}} assetLoader={load}/>);
+  try { await waitFor(()=>expect(load).toHaveBeenCalledTimes(1),FIRST_PAINT_WAIT); await act(async()=>{await new Promise(r=>setTimeout(r,100))}); const scroller=ui.getByTestId('officeview-sheet-scroller'); await act(async()=>{scroller.scrollTop=1;fireEvent.scroll(scroller);await new Promise(r=>setTimeout(r,100))}); expect(load).toHaveBeenCalledTimes(1) } finally {ui.unmount()}
+})
+it('open-axis CF covers the tile ring and blocks cache publication during a scoped refresh', FIRST_PAINT_TEST, async () => {
+  const { fireEvent } = await import('@testing-library/react')
+  const { prepareSheetAssets } = await import('../src/components/xlsx/sheetAssets')
+  const module = await import('../src/xlsx/cf/render')
+  const sheet: XlsxSheet = { name:'CF',sheetId:'1',rows:[{index:999,cells:[{row:999,col:20,ref:'U1000',value:1,styleIndex:0}]}],cols:[],merges:[],mergeRanges:[],conditionalFormatting:{diagnostics:[],rules:[{id:0,priority:1,documentOrder:0,stopIfTrue:false,ranges:[{firstRow:0,lastRow:1048575,firstCol:1,lastCol:1}],writes:new Set(['fill']),dxf:{'fill.bg':'FF00FF00'},definition:{kind:'predicate',type:'containsBlanks',dialect:'base',formulas:[]}}]}}
+  const real=module.prepareCfPaint;let release!:()=>void;const gate=new Promise<void>(r=>release=r);let latest: Awaited<ReturnType<typeof real>>
+  const prepare=vi.spyOn(module,'prepareCfPaint').mockImplementation(async(...args)=>{if(prepare.mock.calls.length>1)await gate;return latest=await real(...args)})
+  const put=vi.spyOn(TileCache.prototype,'put'),load=vi.fn(prepareSheetAssets),ui=render(<InteractiveSheetDoc doc={{sheets:[sheet]}} assetLoader={load}/>);
+  try {
+    await waitFor(()=>expect(put).toHaveBeenCalled(),FIRST_PAINT_WAIT)
+    // Outside the pane, inside its first 512-device-pixel tile/ring.
+    expect(latest?.layer.styleAt(40,1,undefined)?.fillColor).toBe('FF00FF00')
+    const scroller=ui.getByTestId('officeview-sheet-scroller')
+    await act(async()=>{scroller.scrollTop=1;fireEvent.scroll(scroller);await new Promise(r=>setTimeout(r,100))});expect(prepare).toHaveBeenCalledTimes(1)
+    const before=put.mock.calls.length
+    await act(async()=>{scroller.scrollTop=600;fireEvent.scroll(scroller);await new Promise(r=>setTimeout(r,100))})
+    await waitFor(()=>expect(prepare).toHaveBeenCalledTimes(2),FIRST_PAINT_WAIT);expect(load).toHaveBeenCalledTimes(1);expect(put.mock.calls.length).toBe(before)
+    await act(async()=>release());await waitFor(()=>expect(put.mock.calls.length).toBeGreaterThan(before),FIRST_PAINT_WAIT)
+    expect(latest?.layer.styleAt(60,1,undefined)?.fillColor).toBe('FF00FF00')
+  } finally {release();ui.unmount()}
+})

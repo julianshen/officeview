@@ -1,7 +1,8 @@
 /** Async CF preparation; painters only consume admitted source-space snapshots. */
+import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
-import { createCfService } from './service'
+import { createCfService, type CfPaintStatistics } from './service'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory } from './limits'
 import { resolveCfCellStyle } from './dxf'
 import type { CfCellState, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
@@ -102,25 +103,33 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     for (const key of rule.writes) propertyBytes += 128 + key.length * 4
   }
   const memory = options.memory ?? createCfMemory()
-  const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0, options.viewport ? CF_LIMITS.preparedCells : 0) * 512)
+  const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0) * 512)
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
   const stamp = options.request?.stamp ?? { owner: 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
   const signal = options.request?.signal ?? new AbortController().signal
   const source = options.source ?? residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached')
-  let budget = createCfWorkBudget({ signal }), units = 0
+  const budget = createCfWorkBudget({ signal })
+  const statistics: CfPaintStatistics = { session: createCfStatistics(memory), stamp, results: new Map() }
+  let units = 0
   const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
   try {
-    if (options.viewport) {
+    if (options.viewport && rules.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))) {
       const visible: SourceRect[] = [], { metrics, boxes } = options.viewport
-      let cells = 0
       for (const box of boxes) {
         const rows = metrics.rows.visibleBetween(box.y, box.y + box.height), cols = metrics.cols.visibleBetween(box.x, box.x + box.width)
-        cells += rows.count * cols.count
-        if (cells > CF_LIMITS.preparedCells) throw new Error('CF viewport limit')
+
         for (const rr of rows.runs) for (let r = rr.start; r <= rr.end; r++) for (const cc of cols.runs) {
           const source = metrics.order.displayToSource(r)
-          visible.push({ firstRow: source, lastRow: source, firstCol: cc.start, lastCol: cc.end })
+          for (const rule of rules.rules) for (const range of rule.ranges) {
+            await work()
+            if (source < range.firstRow || source > range.lastRow) continue
+            const firstCol = Math.max(cc.start, range.firstCol), lastCol = Math.min(cc.end, range.lastCol)
+            if (firstCol > lastCol) continue
+            if (visible.length >= CF_LIMITS.rangesPerSheet) throw new Error('CF viewport ranges')
+            if (!hold.grow(hold.bytes + 512)) throw new Error('CF viewport framing')
+            visible.push({ firstRow: source, lastRow: source, firstCol, lastCol })
+          }
         }
       }
       requested = visible
@@ -170,7 +179,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       for (let row = edges[e]!; row < edges[e + 1]!; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
         await work()
         const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
-        const service = createCfService(rules, memory, { evidence })
+        const service = createCfService(rules, memory, { evidence, budget: () => budget, statistics })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {
@@ -184,7 +193,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
               states.set(row * 16384 + c, result.value)
             }
           } finally { lease.release() }
-        } finally { service.dispose(); budget = createCfWorkBudget({ signal }) }
+        } finally { service.dispose() }
       }
     }
     let disposed = false
@@ -201,7 +210,10 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     }
     return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
       dispose() { if (disposed) return; disposed = true; states.clear(); hold.release() } }
-  } catch { hold.release(); return unavailable(sheet) }
+  } catch { hold.release(); return unavailable(sheet) } finally {
+    for (const result of statistics.results.values()) if (result.kind === 'ready') result.value.release()
+    statistics.session.dispose()
+  }
 }
 
 export { createCfMemory as createPaintMemory } from './limits'

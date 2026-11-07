@@ -103,13 +103,14 @@ it('static sparse paint constructs bounded surfaces while reaching the last blan
   s.conditionalFormatting.rules[0] = { ...r, ranges: [{ firstRow: 0, lastRow: 500, firstCol: 0, lastCol: 9 }], definition: { kind: 'predicate', type: 'containsBlanks', dialect: 'base', formulas: [] } }
   const p = await getPaintables({ sheets: [s] })
   try {
-    const ctx = createCanvas(p[0].spec.widthPx, p[0].spec.heightPx).getContext('2d'), fill = ctx.fillRect.bind(ctx)
-    let last = syntheticCellWork.created, peak = 0
-    ctx.fillRect = (...a: Parameters<typeof fill>) => { if (ctx.fillStyle === '#ffffff') { peak = Math.max(peak, syntheticCellWork.created - last); last = syntheticCellWork.created }; fill(...a) }
+    const ctx = createCanvas(p[0].spec.widthPx, p[0].spec.heightPx).getContext('2d')
+    syntheticCellWork.peakLive = 0
     p[0].paint(ctx as unknown as CanvasRenderingContext2D)
-    peak = Math.max(peak, syntheticCellWork.created - last)
     expect([...ctx.getImageData(9 * 64 + 5, 500 * 20 + 5, 1, 1).data]).toEqual([0, 255, 0, 255])
-    expect(peak).toBeLessThanOrEqual(256)
+    // Actual concurrent blank records, independent of background-fill/tile count.
+    expect(syntheticCellWork.peakLive).toBeGreaterThan(0)
+    expect(syntheticCellWork.peakLive).toBeLessThanOrEqual(256)
+    expect(syntheticCellWork.live).toBe(0)
   } finally { p.dispose() }
 })
 it('an out-of-order empty row cannot hide a later populated value', async () => {

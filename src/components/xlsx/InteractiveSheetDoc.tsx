@@ -103,7 +103,8 @@ import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/fr
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { tileLogicalBox } from '../../xlsx/view/tileCache'
+import { ensureConditionalFormatting } from '../../xlsx/cfLoader'
+import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
 import { invalidateRegionStyles, regionStylesFor } from '../../xlsx/tableStyleLoader'
@@ -456,7 +457,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // atomically: the current one stays alive, and keeps painting, until its
   // admitted replacement has committed; only then is it disposed (§10.1).
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
-  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number } | null>(null)
+  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number; cfViewportKey?: string } | null>(null)
   const [residentDrawingGen, setResidentDrawingGen] = useState(0)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
@@ -919,8 +920,35 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // No CF sheet: only the optional-field check. CF blank coverage follows the
   // actual projected panes; the existing asset-swap path invalidates their tiles.
-  const cfViewport = entry?.sheet.conditionalFormatting && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport) } : undefined
+  const scopedCf = entry?.sheet.conditionalFormatting?.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))
+  const cfViewport = scopedCf && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
+    const range = tileRangeFor({origin:box,viewport:{width:box.width*scroll.zoom,height:box.height*scroll.zoom},zoom:scroll.zoom,dpr,extent:{width:entry.metrics.cols.totalCss(),height:entry.metrics.rows.totalCss()}},TILE_PREFETCH_RING)
+    const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
+    return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
+  }) } : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([nextWindowKey, cfViewport.boxes]) : undefined
+  const [viewportCf,setViewportCf]=useState<{key:string;batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
+  const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
+  useEffect(()=>{const old=heldViewportCf.current;heldViewportCf.current=viewportCf?.batch;if(old!==heldViewportCf.current)old?.dispose()},[viewportCf])
+  useEffect(()=>()=>heldViewportCf.current?.dispose(),[])
+  useEffect(()=>{
+    if(!cfViewportKey || assets?.cfViewportKey===cfViewportKey) { setViewportCf(null); return }
+    if(!cfViewport || !entry || !assets || assets.sheetId!==activeSheetId) return
+    let cancelled=false
+    const sheet=entry.sheet
+    void ensureConditionalFormatting([sheet]).then(async cf=>{
+      const batch=await cf?.prepareCfPaint(sheet,{memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',viewport:cfViewport})
+      if(cancelled){batch?.dispose();return}
+      setViewportCf({key:cfViewportKey,batch})
+    })
+    return()=>{cancelled=true}
+    // CF-only work: font/image/chart leases do not depend on scroll position.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[assets,cfViewportKey,doc,chartParent])
+  const currentViewportCf=viewportCf?.key===cfViewportKey ? viewportCf : undefined
+  const cfReady=!scopedCf || assets?.cfViewportKey===cfViewportKey || Boolean(currentViewportCf)
+  const frameAssets=currentViewportCf && assets ? {...assets.lease.assets,conditionalFormatting:currentViewportCf.batch} : assets?.lease.assets
+  const paintedCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
   useEffect(() => {
     if (!activeSheetId) return
     let cancelled = false
@@ -930,11 +958,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfViewport ? { cfViewport } : {}) }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
-      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0 })
+      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0, cfViewportKey })
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen, cfViewportKey])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
 
   // ---- layers ----
   const baseRef = useRef<HTMLCanvasElement | null>(null)
@@ -1029,7 +1057,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {
       sheet: entry.sheet, geometry: entry.geometry, ...(sparklineViews ? { sparklineViews } : {}), identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-      assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      assets: frameAssets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
       ...(scroll.frozen ? { frozen: scroll.frozen } : {}),
       // Row-cache proof gates worker requests: tiles the cache already proves
@@ -1095,7 +1123,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // has joined that generation's asset lease. Keep host invalidations queued
     // until then; otherwise an unavailable-painter tile would be cached blank.
     const sparklineAssetsReady = !hasActiveWorkerSparklines || assets?.sparklineGen === (activeSparklines?.gen ?? 0)
-    if (!assets || assets.sheetId !== activeSheetId || !sparklineAssetsReady) {
+    if (!assets || assets.sheetId !== activeSheetId || !sparklineAssetsReady || !cfReady) {
       // The active sheet's lease is pending: present a declared loading state, never
       // another sheet's (or an unleased) raster. The pool is re-admitted for the
       // current surfaces (releasing tiles that no longer fit) before any sizing.
@@ -1153,6 +1181,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    if(paintedCf.current!==frameAssets?.conditionalFormatting)renderer.cache.invalidate(key=>key.identity.sheetId===activeSheetId)
+    paintedCf.current=frameAssets?.conditionalFormatting
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
@@ -1177,7 +1207,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
