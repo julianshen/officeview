@@ -3189,6 +3189,36 @@ export class DocumentSession {
         } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }
+      case 'conditionalFormatting': {
+        // The provider manages its own CF account (roomy workspace bounded by
+        // session caps) and releases everything before returning plain
+        // clone-safe data, so the session holds no charge across the await;
+        // the grant gates the wire reply and the kernel charges the posted reply.
+        if (!Number.isSafeInteger(query.grantBytes) || query.grantBytes <= 0) {
+          result = {
+            op: 'conditionalFormatting',
+            result: {
+              sheetId: owner.sheetId, stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+              kind: 'unresolved', reason: 'cf-resource-limit', states: [], definitions: [], definitionsVersion: 0,
+              diagnostics: [{ kind: 'resource-limit' as const, feature: 'cf-grant-required', message: 'Conditional formatting transfer requires a receiver grant' }],
+            },
+          }
+        } else {
+          const payload = await store.readConditionalFormatting?.(
+            { rects: query.rects, stamp: query.stamp, grantBytes: query.grantBytes },
+            undefined,
+            { signal },
+          ) ?? {
+            sheetId: owner.sheetId,
+            stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+            kind: 'unresolved' as const, reason: 'cf-unavailable',
+            states: [], definitions: [], definitionsVersion: 0,
+            diagnostics: [{ kind: 'unsupported' as const, feature: 'cf-unavailable', message: 'This source cannot resolve conditional formatting.' }],
+          }
+          result = { op: 'conditionalFormatting', result: payload }
+        }
+        break
+      }
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break
       case 'rows': result = { op: 'rows', page: await store.readRows(query.range, query.cursor, options) }; break
       case 'structural': result = { op: 'structural', result: await store.queryStructural(query.rect, options) }; break

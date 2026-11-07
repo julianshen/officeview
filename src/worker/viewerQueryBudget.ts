@@ -122,5 +122,6 @@ export function boundedQueryStore(store: SourceStore, budget: number, emitted?: 
   if (store.readSparklines) bounded.readSparklines = (...args) => store.readSparklines!(...args)
   if (store.readRegionStyles) bounded.readRegionStyles = (...args) => store.readRegionStyles!(...args)
   if (store.readPivotDisplay) bounded.readPivotDisplay = (...args) => store.readPivotDisplay!(...args)
+  if (store.readConditionalFormatting) bounded.readConditionalFormatting = (...args) => store.readConditionalFormatting!(...args)
   return bounded
 }
