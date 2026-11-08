@@ -58,6 +58,10 @@ import { mainFormatBudget } from './mainFormatBudget'
 import type { EffectiveFormatScope, FormatBudget } from '../../xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { detectProfile } from '../../xlsx/storage/importSession'
+
+function localDaySerial(now = new Date()): number {
+  return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000)
+}
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
@@ -476,6 +480,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number; cfLiveKey?: string; cfViewportKey?: string; cfBoxes?: readonly LogicalCellBox[] } | null>(null)
   const [residentDrawingGen, setResidentDrawingGen] = useState(0)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
+  // Ruling M2: Advance clockGen and invalidate cfLiveKey across local midnight
+  const [clockGen, setClockGen] = useState(() => localDaySerial())
+  useEffect(() => {
+    const now = new Date()
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 50)
+    const delay = Math.max(1000, nextMidnight.getTime() - now.getTime())
+    const timer = setTimeout(() => {
+      setClockGen(localDaySerial())
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [clockGen])
   const loadAssets = props.assetLoader ?? prepareSheetAssets
   // Transferred chart models are charged to this viewer's live main-thread budget (spec 6.4), like its drawings.
   const chartParent = useMemo(() => mainChartParent(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]), [mainLedger, budgetProfile])
@@ -945,7 +960,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
     return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
   }) } : undefined
-  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed]) : undefined
+  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen]) : undefined
   const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
@@ -1006,7 +1021,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       async chunk => {
         if (!current()) return { result: undefined, release: () => {} }
         const stamp = {
-          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen: 0,
+          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen,
         }
         let held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
         // A failed entry never reloads on its own, so a churn-time refusal
@@ -1271,7 +1286,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const scope=currentRemotePaint?.scope
     if(!remote || !scope || !activeSheetId || !cfLiveKey || remote.isClosed)return undefined
     const id=remote.identity(activeSheetId)
-    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen:0},
+    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen},
       layer:scope.paintLayer ?? {rects:scope.regions??[],retainedBytes:0,styleAt:scope.effectiveStyle},dispose(){}}
   },[remote,currentRemotePaint,liveCfScope,activeSheetId,cfLiveKey])
   const frameAssets=remote && hasRemoteCf && residentFrameAssets ? {...residentFrameAssets,conditionalFormatting:remotePaint} : residentFrameAssets

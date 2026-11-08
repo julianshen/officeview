@@ -1,6 +1,6 @@
 /**
- * Derived verified conditional formatting capabilities for Stage 1.
- * Derivation source: tests/fixtures/xlsx-cf/manifest.json via scripts/cf-refs/audit.ts.
+ * Verified conditional formatting capabilities for Stage 1.
+ * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
  * Checked by tests/xlsx-cf-stage1.test.ts.
  */
 export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([

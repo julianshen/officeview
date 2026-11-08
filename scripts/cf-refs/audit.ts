@@ -685,6 +685,21 @@ async function main(): Promise<void> {
   const outDir = args.includes('--out') ? resolve(args[args.indexOf('--out') + 1]!) : undefined
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
   const report = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
+  if (args.includes('--write')) {
+    const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+    const content = `/**
+ * Verified conditional formatting capabilities for Stage 1.
+ * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
+ * Checked by tests/xlsx-cf-stage1.test.ts.
+ */
+export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
+${verified.map(id => `  '${id}',`).join('\n')}
+])
+`
+    writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
+    // eslint-disable-next-line no-console
+    console.log(`wrote ${verified.length} verified capabilities to src/xlsx/cf/verifiedCapabilities.ts`)
+  }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
   // eslint-disable-next-line no-console

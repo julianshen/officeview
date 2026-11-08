@@ -2,6 +2,7 @@
 import type { XmlNode } from '../core/xml'
 import { attrs, getChildren } from '../core/xml'
 import type { XlsxSheet } from './types'
+import type { CfRule } from './cf/model'
 type CfFoundation = typeof import('./cf/limits')
 let pending: Promise<CfFoundation> | undefined
 export function preloadCf(): Promise<CfFoundation> {
@@ -89,5 +90,16 @@ export function cfNeedsViewport(sheet: Pick<XlsxSheet, 'conditionalFormatting'>)
     span += (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1)
     if (span > CF_PAINT_BATCH_CELLS) return true
   }
+  return false
+}
+
+/**
+ * Typed check for whether a rule definition can potentially match blank cells (M4).
+ * Centralized next to cfExplicitBounds without dynamic casting.
+ */
+export function canRuleMatchBlanks(rule: Pick<CfRule, 'definition'>): boolean {
+  const def = rule.definition
+  if (def.kind === 'predicate') return def.type === 'containsBlanks'
+  if (def.kind === 'unresolved') return def.type === 'expression'
   return false
 }

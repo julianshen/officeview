@@ -35,18 +35,16 @@ function refToRowCol(ref: string): { row: number; col: number } {
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
 
-  // Explicit allowlist of Stage 2 (formula/expression) and Stage 3 (dataBar/colorScale)
-  // deferred rules, and harness table-style background:
-  const STAGE2_OR_HARNESS = new Set([
-    'stage1-blanks-errors:D2', // divergent ISBLANK(D2) formula (Stage 2)
-    'stage1-blanks-errors:G6', // divergent NOT(ISBLANK(G2)) formula (Stage 2)
-    'stage1-blanks-errors:J8', // divergent ISNA(J2) formula (Stage 2)
-    'stage1-blanks-errors:M6', // divergent NOT(ISNA(M2)) formula (Stage 2)
-    'stage1-priority-composition:F2', // Stage 3 dataBar blue fill (Stage 1 bold font matches)
+  // Explicit allowlist of Stage 5 (formulas/expressions) and Stage 2/3 (dataBar/colorScale)
+  // deferred rules, and harness table-style background (Ruling M3):
+  const STAGE5_OR_DEFERRED_WITHHELD = new Set([
+    'stage1-blanks-errors:D2', // divergent ISBLANK(D2) formula (Stage 5)
+    'stage1-blanks-errors:G6', // divergent NOT(ISBLANK(G2)) formula (Stage 5)
+    'stage1-blanks-errors:J8', // divergent ISNA(J2) formula (Stage 5)
+    'stage1-blanks-errors:M6', // divergent NOT(ISNA(M2)) formula (Stage 5)
     'stage1-priority-composition:F5', // Stage 3 colorScale fill (Stage 1 withholds)
-    'stage1-priority-composition:G2', // MOD(25,2)=1 expression rule (Stage 2)
-    'stage1-priority-composition:G3', // MOD(14,2)=0 expression rule (Stage 2)
-    'stage1-dxf-layering:D4', // CF does not match; style returned is base table band
+    'stage1-priority-composition:G2', // MOD(25,2)=1 expression rule (Stage 5)
+    'stage1-priority-composition:G3', // MOD(14,2)=0 expression rule (Stage 5)
   ])
 
   it('runs production pipeline on all 12 measured Stage 1 cases with zero unexpected mismatches', async () => {
@@ -69,11 +67,27 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       for (const exp of c.expected?.cells ?? []) {
         checkedCells++
         const cellKey = `${c.id}:${exp.ref}`
-        if (STAGE2_OR_HARNESS.has(cellKey)) continue
 
         const { row, col } = refToRowCol(exp.ref)
         const st = paint.layer.styleAt(row, col, undefined)
         const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
+
+        // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
+        // as withheld rather than skipped silently:
+        if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
+          expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
+          continue
+        }
+        if (cellKey === 'stage1-priority-composition:F2') {
+          // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
+          expect(st?.bold, `${cellKey} bold`).toBe(true)
+          continue
+        }
+        if (cellKey === 'stage1-dxf-layering:D4') {
+          // CF does not match; style returned is base table band (50 <= 100)
+          expect(st?.fillColor, `${cellKey} table band`).toBe('FFC1E5F5')
+          continue
+        }
 
         if (exp.matched) {
           expect(gotMatched, `${cellKey} should match CF (${exp.note ?? ''})`).toBe(true)

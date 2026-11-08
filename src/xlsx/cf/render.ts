@@ -136,7 +136,15 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const hold = memory.reserve(2048 + Math.max(rangeCount, requested?.length ?? 0) * 512)
   if (hold.kind !== 'reserved') return unavailable(sheet)
   const evidence = options.evidence ?? cfRuntimeEvidence
-  const stamp = options.request?.stamp ?? { owner: options.store?.stamp.docId ?? 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: options.store?.stamp.valueGen ?? 0, cfGen: options.store ? cfRulesVersion(rules) : 1, viewGen: 0, structureGen: options.store?.structureGen ?? 0, clockGen: 0 }
+  const stamp = options.request?.stamp ?? {
+    owner: options.store?.stamp.docId ?? 'static',
+    sheetId: sheet.sheetId ?? sheet.name,
+    workbookValueGen: options.store?.stamp.valueGen ?? 0,
+    cfGen: options.store ? cfRulesVersion(rules) : 1,
+    viewGen: 0,
+    structureGen: options.store?.structureGen ?? 0,
+    clockGen: options.dateContext?.clockSerial ? Math.floor(options.dateContext.clockSerial) : 0,
+  }
   const signal = options.request?.signal ?? new AbortController().signal
   const source = options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached'))
   const hiddenRows: SourceRect[] = []

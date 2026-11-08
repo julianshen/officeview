@@ -256,8 +256,8 @@ function evaluateTop(
   if (settled.kind !== 'ready') return settled
   const st = settled.value
   if (st.numericCount === 0) return { kind: 'no-match' }
-  // Ruling I7: ECMA-376 Part 1 §18.3.1.10 specifies top10 percent rank. Math.ceil((count * rank) / 100)
-  // ensures at least 1 cell is included when count > 0 and rank > 0.
+  // Ruling I7: ECMA does not specify percent rounding. Math.ceil((count * rank) / 100)
+  // is inferred from the Excel UI preset and unverified beyond 5 values.
   const need = percent ? Math.ceil((st.numericCount * rank) / 100) : Math.min(rank, st.numericCount)
   if (need <= 0) return { kind: 'no-match' }
   const cutoff = bottom ? st.sortedAsc[need - 1]! : st.sortedAsc[st.numericCount - need]!

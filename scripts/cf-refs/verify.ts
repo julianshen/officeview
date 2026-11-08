@@ -987,7 +987,7 @@ export function observeCellsFromCapture(
       let transitions = 0
       for (let x = ix0; x < ix1; x++) {
         // Skip Excel's top-left error indicator triangle (e.g. number stored as text)
-        if (x - box.x0 <= 5 && y - box.y0 <= 5 && (x - box.x0) + (y - box.y0) <= 6) {
+        if (x - box.x0 <= 6 && y - box.y0 <= 6 && (x - box.x0) + (y - box.y0) <= 7) {
           continue
         }
         const idx = (y * png.width + x) * 4
@@ -1030,6 +1030,9 @@ export function observeCellsFromCapture(
     let cMaxY = 0
     for (let cy = ciy0; cy < ciy1; cy++) {
       for (let cx = cix0; cx < cix1; cx++) {
+        if (cx - ctrlBox.x0 <= 6 && cy - ctrlBox.y0 <= 6 && (cx - ctrlBox.x0) + (cy - ctrlBox.y0) <= 7) {
+          continue
+        }
         const idx = (cy * png.width + cx) * 4
         const pr = png.data[idx]
         const pg = png.data[idx + 1]
