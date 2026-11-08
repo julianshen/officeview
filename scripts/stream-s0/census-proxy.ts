@@ -79,7 +79,7 @@ export interface CensusProxy {
 }
 
 
-function methodShape(name: string, target: CanvasRenderingContext2D, args: IArguments): string {
+function methodShape(name: string, target: Rec, args: IArguments): string {
   const values = Array.from(args as ArrayLike<unknown>)
   if (name === 'drawImage') {
     const first = values[0] as { constructor?: { name?: string }; width?: unknown } | undefined
@@ -115,6 +115,7 @@ const valueTag = (v: unknown): string => {
   return typeof v === 'object' || typeof v === 'function' ? ctor?.name ?? typeof v : typeof v
 }
 
+type Rec = Record<string, any>
 export function wrapCensus(ctx: CanvasRenderingContext2D): CensusProxy {
   const fontStringsForRes = new Set<string>()
   const methods: Record<string, number> = {}
@@ -130,16 +131,6 @@ export function wrapCensus(ctx: CanvasRenderingContext2D): CensusProxy {
     if (!inSubset && !notInSubset.includes(key)) notInSubset.push(key)
   }
 
-  const countingWrapper = (method: string, base: unknown): unknown => {
-    if (!isFn2(base)) return base
-    return (...args: unknown[]) => {
-      const key = `${method}/${args.length}`
-      methods[key] = (methods[key] ?? 0) + 1
-      if (!(WRAPPER_SUBSET.methods as ReadonlySet<string>).has(method) && !notInSubset.includes(key)) notInSubset.push(key)
-      const out = base(...args)
-      return out
-    }
-  }
   function isFn2(v: unknown): v is (...args: unknown[]) => unknown {
     return typeof v === 'function'
   }
@@ -148,10 +139,10 @@ export function wrapCensus(ctx: CanvasRenderingContext2D): CensusProxy {
     get(target, prop) {
       if (prop === RECORD_TEXT) return
       const name = String(prop)
-      const value = (target as Rec)[prop]
+      const value = (target as Rec)[String(prop)]
       if (isFn2(value)) {
         return (...args: unknown[]) => {
-          let key = methodShape(name, target, args as IArguments)
+          let key = methodShape(name, target, args as unknown as IArguments)
           if (name === 'createPattern') createPatternSeen.value = true
           if (name === 'drawImage' && key.includes('source=canvas')) drawImageCanvasSourceSeen.value = true
           if (name === 'setTransform' || name === 'transform') setTransformSeen.value = true
@@ -178,7 +169,7 @@ export function wrapCensus(ctx: CanvasRenderingContext2D): CensusProxy {
                   const inWrapper = (WRAPPER_SUBSET.methods as ReadonlySet<string>).has(p)
                   const inSubset = (RECORDED_SUBSET.methods as ReadonlySet<string>).has(wname)
                   if (!(inWrapper || inSubset) && !notInSubset.includes(key)) notInSubset.push(key)
-                  return fn.apply(w, args as never)
+                  return fn.apply(w, args)
                 }
               }
               return (w as Rec)[p]
@@ -189,7 +180,7 @@ export function wrapCensus(ctx: CanvasRenderingContext2D): CensusProxy {
       // Direct read: Reflect.get with a proxy receiver makes native canvas
       // getters throw "Illegal invocation" (the round-6 text-index recorder
       // hit the same trap and resolved it with direct target reads).
-      return (target as Rec)[prop]
+      return (target as Rec)[String(prop)]
     },
     has(target, prop) {
       return Reflect.has(target as object, prop)
@@ -211,7 +202,7 @@ export function wrapCensus(ctx: CanvasRenderingContext2D): CensusProxy {
       // Round-9: the face-resolution census needs every distinct font string —
       // the `.font` sample list must not be capped (round-10 F2 note).
       if (name === 'font' && typeof value === 'string' && value.length > 0) fontStringsForRes.add(value)
-      ;(target as Rec)[prop as string] = value
+      ;(target as Rec)[String(prop)] = value
       return true
     },
   }) as unknown as CanvasRenderingContext2D

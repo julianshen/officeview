@@ -22,7 +22,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { createCanvas } from 'canvas'
 import { loadOfficeFile } from '../../src/components/OfficeFile'
-import { getPaintables, type Paintable, type PaintableArray, type PaintOptions } from '../../src/render/paint'
+import { getPaintables, type Paintable, type PaintOptions } from '../../src/render/paint'
 
 export type CorpusKind = 'docx' | 'xlsx' | 'pptx'
 
@@ -115,7 +115,7 @@ export async function loadUnits(file: CorpusFile, opts?: PaintOptions): Promise<
   const paintables = await getPaintables(doc, paintOpts)
   // Keep the lease alive as long as any paint closure remains reachable;
   // each unit closes over this array so `dispose` releases it.
-  const units: HeadlessUnits = paintables.map((paintable: Paintable, index: number) => ({
+  const units = paintables.map((paintable: Paintable, index: number) => ({
     index,
     widthPx: paintable.spec.widthPx,
     heightPx: paintable.spec.heightPx,
@@ -142,7 +142,7 @@ export async function loadUnits(file: CorpusFile, opts?: PaintOptions): Promise<
       configurable: true,
     })
   }
-  return units
+  return units as unknown as HeadlessUnits
 }
 
 /**

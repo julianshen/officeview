@@ -6,7 +6,7 @@
  * loading the full corpus — the full corpus battery runs in
  * `scripts/stream-s0/t1-backend.ts` (background run; see the .done file).
  */
-import { readFileSync } from 'node:fs'
+// removed
 import { describe, expect, it } from 'vitest'
 import { createCanvas } from 'canvas'
 import * as napiCanvas from '@napi-rs/canvas'
@@ -20,7 +20,6 @@ import { collectRenderResults, diffBitmaps } from '../../scripts/stream-s0/t1-ba
 // report DIFFERENT backends, and a known text page really differs.
 const napiRun = process.env.S0_BACKEND === 'napi'
 
-const blackBitmap = (w: number, h: number): Bitmap => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) })
 const solidBitmap = (w: number, h: number, r: number, g: number, b: number): Bitmap => {
   const data = new Uint8ClampedArray(w * h * 4)
   for (let i = 0; i < data.length; i += 4) {
@@ -79,7 +78,7 @@ describe('T1 machinery (injected units, no corpus)', () => {
   it('diff of identical bitmaps is zero', () => {
     const a = solidBitmap(8, 8, 255, 0, 0)
     const b = solidBitmap(8, 8, 255, 0, 0)
-    const d = diffBitmaps(a, b)
+    const d = diffBitmaps(a, b)!
     expect(d.pixelsDiffering).toBe(0)
     expect(d.fracDiffering).toBe(0)
     expect(d.maxChannelDelta).toBe(0)
@@ -89,7 +88,7 @@ describe('T1 machinery (injected units, no corpus)', () => {
   it('diff of differing bitmaps records both frac and p99', () => {
     const a = solidBitmap(10, 10, 255, 0, 0)
     const b = solidBitmap(10, 10, 240, 0, 20)
-    const d = diffBitmaps(a, b)
+    const d = diffBitmaps(a, b)!
     expect(d.pixelsDiffering).toBe(100)
     expect(d.maxChannelDelta).toBe(20)
     expect(d.p99ChannelDelta).toBeGreaterThan(0)

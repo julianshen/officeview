@@ -66,7 +66,7 @@ export class AdmissionModel {
     return 'refused'
   }
 
-  complete(id: string, bytes: number, sessionId: string): void {
+  complete(_id: string, bytes: number, sessionId: string): void {
     const s = this.sess(sessionId)
     // drain: if queued, promote one
     if (s.outstanding > 0) {

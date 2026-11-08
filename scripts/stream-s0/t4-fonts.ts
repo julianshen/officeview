@@ -212,7 +212,7 @@ console.log(JSON.stringify(out))
   const raw = execFileSync('node', ['--input-type=module', '--eval', nodeChildScript, probeJson], { encoding: 'utf8', timeout: 10_000 })
   const nodeWidths = JSON.parse(raw.trim().split(/\r?\n/).at(-1)!) as Record<string, number>
   const fixtureProbe = FIXTURE_PROBES.map(({ label, text }) => {
-    const ctx = createCanvas(128, 64).getContext('2d') as CanvasRenderingContext2D
+    const ctx = createCanvas(128, 64).getContext('2d') as unknown as CanvasRenderingContext2D
     ctx.font = '24px sans-serif'
     const widthNapi = ctx.measureText(text).width
     const widthNode = nodeWidths[label] ?? 0

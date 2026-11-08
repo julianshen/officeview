@@ -14,7 +14,6 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { expect, it } from 'vitest'
 import { deobfuscateOdttf } from '../../src/core/fonts/docx'
-import { listCorpus, type CorpusFile } from '../../scripts/stream-s0/corpus'
 import { hash96, fontFamilies, requiredFaces } from '../../scripts/stream-s0/t4-fonts'
 
 const literBytes = (): Uint8Array => new Uint8Array(readFileSync(new URL('../fixtures/fonts/Liter-Regular.ttf', import.meta.url)))

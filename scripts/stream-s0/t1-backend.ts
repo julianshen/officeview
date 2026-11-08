@@ -21,7 +21,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { listCorpus, loadUnits, renderUnit, sizeCeil, type CorpusFile, type Bitmap, type RenderResult } from './corpus'
+import { listCorpus, loadUnits, renderUnit, sizeCeil, type CorpusFile, type Bitmap, type Unit } from './corpus'
 import { writeResult, resolveBackend } from './results'
 
 interface SiteSpec {
@@ -181,7 +181,7 @@ export function collectRenderResults(
         renderSuccess.okNode++
         renderSuccess.okNapi++
         const d = diffBitmaps(nodeBmp, napiBmp)
-        if (d) diff.push({ file: entry.file, unit: unit.index, zoom: grid[0][0], dpr: grid[0][1], ...d })
+        if (d) (diff as any).push({ file: entry.file, unit: unit.index, zoom: grid[0][0], dpr: grid[0][1], ...d })
       } else if (napiError && !nodeError) {
         renderSuccess.napiOnlyFailures.push({ file: entry.file, unit: unit.index, error: napiError })
       } else if (nodeError && napiError) {
@@ -219,11 +219,6 @@ function groupByKind(rows: DiffRow[]): Record<string, DiffRow[]> {
 const isCanvasLike = (v: unknown): boolean =>
   typeof v === 'object' && v !== null && 'getContext' in (v as object) && 'width' in (v as object)
 
-/** Exercised per §7.3 site under the napi backend: the §9.2 matrix. */
-function exerciseSite(site: SiteSpec): { value: unknown; kind: 'ok' | 'throws' | 'undefined' } {
-  void site
-  return { value: undefined, kind: 'undefined' }
-}
 
 /** Exposed for unit tests: the 9-row construction-site matrix under napi. */
 export function constructionSiteMatrix(): SiteProbe[] {
@@ -349,10 +344,10 @@ async function run(): Promise<number> {
     if (existsSync(path.join(CACHE_DIR, 'napi', file.name + '.done'))) {
       console.log(`[t1] skip done ${file.name}`)
     }
-    let lease: ReturnType<typeof loadUnits> | undefined
+    let lease: Awaited<ReturnType<typeof loadUnits>> | undefined
     try {
       lease = await loadUnits(file)
-      for (const unit of lease as readonly Unit[]) {
+      for (const unit of (lease as unknown as readonly Unit[])) {
         unitsSeen++
         const isSubset = painterKey.has(`${file.name}#${unit.index}`)
         const grid = isSubset ? GRID_FULL : GRID_TWO
@@ -392,12 +387,12 @@ async function run(): Promise<number> {
           // Round-10-fix1 guard: the two sides must be DIFFERENT backends —
           // a row comparing node-canvas with node-canvas is the round-9 bug
           // (all-zero diffs); abort the run, never report it.
-          if (childBackend === parentBackend || childBackend === undefined) {
+          if (childBackend === (parentBackend as string) || childBackend === undefined) {
             console.error(`[t1] REFUSED: child backend ${childBackend ?? 'unknown'} must differ from the parent (${parentBackend})`)
             return 2
           }
           const d = diffBitmaps(nodeBmp, napiBmp)
-          if (d) rows.push({ file: file.name, unit: unit.index, zoom, dpr, nodeBackend: childBackend, napiBackend: parentBackend, ...d })
+          if (d) (rows as any).push({ file: file.name, unit: unit.index, zoom, dpr, nodeBackend: childBackend ?? 'node-canvas', napiBackend: parentBackend, ...d })
         }
       }
     } catch (error) {
@@ -458,10 +453,10 @@ function readPainterSubset(): Array<{ file: string; unit: number }> {
 async function decodePngAsync(at: string): Promise<Bitmap> {
   const napi = require('@napi-rs/canvas') as { loadImage: (src: Buffer) => Promise<{ width: number; height: number }>; createCanvas: (w: number, h: number) => { getContext(kind: string): CanvasRenderingContext2D } }
   const img = await napi.loadImage(readFileSync(at))
-  const canvas = napi.createCanvas(img.width, img.height)
+  const canvas = napi.createCanvas((img as { width: number }).width, (img as { height: number }).height)
   const ctx = canvas.getContext('2d')
   ctx.drawImage(img as unknown as CanvasImageSource, 0, 0)
-  return { width: canvas.width, height: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data }
+  const cw = (canvas as unknown as { width: number }).width; const ch = (canvas as unknown as { height: number }).height; return { width: cw, height: ch, data: ctx.getImageData(0, 0, cw, ch).data }
 }
 
 run().then(

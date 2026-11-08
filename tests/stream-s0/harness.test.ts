@@ -34,7 +34,7 @@ process.env.S0_RESULTS_DIR = join(tmpdir(), 'stream-s0-results', 'task1-harness'
 // specifically to exercise the resolved-module runtime, not the static one.
 const napiRun = process.env.S0_BACKEND === 'napi'
 it.runIf(napiRun)('napi alias routes the dynamic canvas import to the shim (round-10 fix 2)', async () => {
-  const mod = (await import('canvas')) as {
+  const mod = (await import('canvas')) as unknown as {
     STREAM_S0_BACKEND?: string
     createCanvas: (w: number, h: number) => unknown
     loadImage: unknown
@@ -43,6 +43,7 @@ it.runIf(napiRun)('napi alias routes the dynamic canvas import to the shim (roun
     GlobalFonts: unknown
     ImageData: unknown
     createImageData?: unknown
+    Canvas?: unknown
   }
   // The napi shim's dynamic `import('canvas')` proves the alias reached the
   // compiler: the module carries the shim's own marker export.
@@ -50,7 +51,7 @@ it.runIf(napiRun)('napi alias routes the dynamic canvas import to the shim (roun
   expect(typeof mod.createCanvas).toBe('function')
   expect(typeof mod.loadImage).toBe('function')
   expect(typeof mod.registerFont).toBe('function')
-  expect(mod.Canvas).toBeTruthy()
+  expect((mod as { Canvas?: unknown }).Canvas).toBeTruthy()
   expect(mod.Image).toBeTruthy()
 })
 it.runIf(!napiRun)('plain run resolves the real canvas package to the node-canvas backend (round-10 fix 3)', async () => {
@@ -161,10 +162,6 @@ function probePreloadScript(): void {
   expect(stdout).toContain('@napi-rs/canvas')
 }
 
-function tmpResultsDir(): string {
-  return process.env.S0_RESULTS_DIR ?? join(tmpdir(), 'stream-s0-results', 'task1-harness')
-}
-
 /** Preload round-trip, gated on the bun runtime being the test runner. */
 it('bun runners route bun scripts through the napi preload (round-10 fix 3)', () => {
   probePreloadScript()
@@ -190,15 +187,15 @@ it.skipIf(corpusFiles.length === 0)('renderUnit scales 2× exactly', async () =>
     expect('skipped' in atHalf).toBe(false)
     const atQuarter = await renderUnit(unit, 0.25)
     const b1 = atHalf, b2 = atQuarter as typeof atHalf
-    expect(Math.abs(b1.width - 2 * b2.width)).toBeLessThanOrEqual(1)
-    expect(Math.abs(b1.height - 2 * b2.height)).toBeLessThanOrEqual(1)
+    expect(Math.abs((b1 as any).width - 2 * (b2 as any).width)).toBeLessThanOrEqual(1)
+    expect(Math.abs((b1 as any).height - 2 * (b2 as any).height)).toBeLessThanOrEqual(1)
     return
   }
-  expect(Math.abs(at2.width - 2 * at1.width)).toBeLessThanOrEqual(1)
-  expect(Math.abs(at2.height - 2 * at1.height)).toBeLessThanOrEqual(1)
+  expect(Math.abs((at2 as any).width - 2 * (at1 as any).width)).toBeLessThanOrEqual(1)
+  expect(Math.abs((at2 as any).height - 2 * (at1 as any).height)).toBeLessThanOrEqual(1)
   // Round-10 finding 7: the RGBA readback is dense (w×h×4), and the page
   // carries non-white ink so the harness cannot hide a blank renderer.
-  const bytes = at2.width * at2.height * 4
+  const bytes = (at2 as any).width * (at2 as any).height * 4
   expect(at2.data.length).toBe(bytes)
   let nonWhite = 0
   for (let i = 0; i < at2.data.length; i += 4) {

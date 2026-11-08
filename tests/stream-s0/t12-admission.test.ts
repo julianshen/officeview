@@ -28,7 +28,6 @@ describe('T12 admission', () => {
     for (let i = 0; i < 7; i++) m.request('s', 1000)
     // now queued
     m.request('s', 1000)
-    const reservedBefore = m.peak().reserved
     // complete an outstanding job: promotes queued, reserved stays (drain-then-refund: charge kept until drain)
     m.complete('y', 1000, 's')
     // reserved should not drop below (promoted keeps charge); completed count increments
