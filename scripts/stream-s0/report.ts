@@ -23,7 +23,7 @@ export const GATES: ReadonlyArray<{ id: string; file: string; title: string; tar
   { id: 'T3', file: 't3', title: 'Recorder census', target: 'notInSubset empty',
     headline: (d) => `${d.unitsSeen} units, ${Object.keys(d.methods ?? {}).length} methods, notInSubset ${len(d.notInSubset)}` },
   { id: 'T4', file: 't4', title: 'Font probes', target: 'reported',
-    headline: (d) => `${pct(d.totals?.rasterFallbackRate)} of units would raster (${d.totals?.unitsThatWouldRaster}/${d.totals?.unitsTotal}); ${d.totals?.unverifiable}/${d.totals?.faces} faces unverifiable` },
+    headline: (d) => `${pct(d.totals?.rasterFallbackRate)} of units would raster (${d.totals?.unitsThatWouldRaster}/${d.totals?.unitsTotal}); ${d.totals?.unverifiable}/${d.totals?.faces} faces unverifiable; with the pinned open pack ${pct(d.totals?.rasterFallbackRateWithPack)} (${d.totals?.unitsThatWouldRasterWithPack}/${d.totals?.unitsTotal})` },
   { id: 'T5', file: 't5', title: 'Show-plan client prototype', target: 'package-free client; static slides ≤ 0.1 % diff',
     headline: (d) => `eligibility ${pct(d.eligibilityRate)} (${d.proofSubset}/${d.steps}); static ${d.staticSlides} slides, ${d.staticFailures} failures` },
   { id: 'T7', file: 't7', title: 'Layer-1 mark codec + ΔE00', target: 'page ΔE00 max ≤ 3',
@@ -46,11 +46,24 @@ function pct(v: unknown): string { return typeof v === 'number' ? `${(v * 100).t
 function num(v: unknown, digits = 2): string { return typeof v === 'number' ? v.toFixed(digits) : '—' }
 function mib(v: unknown): string { return typeof v === 'number' ? `${(v / 2 ** 20).toFixed(1)} MiB` : '—' }
 
+/** Non-gate result files the report also reads. */
+export const SUPPLEMENTS = ['image-heavy', 't9-image-heavy'] as const
+
+/** Owner rulings on RED gates (spec §2 item 14, draft 12). */
+export const RULINGS: Record<string, string> = {
+  T2: 'expected baseline — the six drawn constructs are the confirmed §6.4 server strip list, the strip fails closed on unrecognised hidden flags, and zero hidden ink on the stream path gates Stage 1',
+  T11: 'fix, keep the ceiling — move the `src/index.ts:43` worker re-export to a subpath entry as the first Stage-1 item (§8.1)',
+}
+
 export function loadResults(dir: string): Map<string, Json | undefined> {
   const out = new Map<string, Json | undefined>()
   for (const g of GATES) {
     const p = join(dir, `${g.file}.json`)
     out.set(g.id, existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) as Json : undefined)
+  }
+  for (const extra of SUPPLEMENTS) {
+    const p = join(dir, `${extra}.json`)
+    out.set(extra, existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) as Json : undefined)
   }
   return out
 }
@@ -74,7 +87,8 @@ const SCOPE_CALLS = `1. **T11** — Stage 0 runs the §8.1 gate scripts against 
 
 const DECISIONS = `- **Keyed non-linear mark message** (spec §13.2, commit 391616b6): a Stage-0 review showed a K = 5 median of colluders framed an innocent token under the linear BCH/CRC map (innocent Z 9.19–9.40). Now \`msg_40 = HMAC(kMsg, keyGen | codeword_40)[:40]\`, and ≥ 2 candidates over τ ⇒ \`collusion-suspected\` (names no one). Measured innocent Z after the fix: −0.06.
 - **"25 % crop" = 25 % removed from each axis** (≈ 44 % of the area) (spec §13.5, commit 8420b855).
-- **T7 ΔE00 choice gates on page max**, not p95 — marks cover < 1 % of a real page, so p95 is ~0 (plan, commit 767e26ec).`
+- **T7 ΔE00 choice gates on page max**, not p95 — marks cover < 1 % of a real page, so p95 is ~0 (plan, commit 767e26ec).
+- **Stage-0 rulings (spec draft 12, §2 item 14):** T2 strip list confirmed + fail-closed rule (§6.4); T11 fixed by a worker subpath entry, ceiling kept (§8.1); a pinned open font pack of metric-compatible faces (§7.4 rule 6); DOCX top-up and hand-certified image-heavy units with a T9 supplement run.`
 
 export function renderReport(results: Map<string, Json | undefined>): string {
   const rows = gateRows(results)
@@ -87,7 +101,7 @@ export function renderReport(results: Map<string, Json | undefined>): string {
   for (const r of rows) lines.push(`| ${r.id} ${r.title} | **${r.status}** | ${r.headline} | ${r.target} |`)
   lines.push('', '## RED gates — owner decision needed', '')
   if (red.length === 0) lines.push('None.')
-  for (const r of red) lines.push(`- **${r.id} ${r.title}: ${r.status}** — ${r.headline} (target: ${r.target}).`)
+  for (const r of red) lines.push(`- **${r.id} ${r.title}: ${r.status}** — ${r.headline} (target: ${r.target}).${RULINGS[r.id] ? ` **Owner ruling:** ${RULINGS[r.id]}.` : ''}`)
   lines.push('', '## Owner decisions taken during Stage 0', '', DECISIONS)
   lines.push('', '## Stage-0 scope calls', '', SCOPE_CALLS)
   if (t1) {
@@ -97,7 +111,10 @@ export function renderReport(results: Map<string, Json | undefined>): string {
   if (t3) lines.push('', `## T3 census`, '', `notInSubset: ${len(t3.notInSubset) === 0 ? 'empty — the §7.3/§7.5 recorded subset covers every op the corpus paints' : JSON.stringify(t3.notInSubset)}. Files that failed to load: ${(t3.unitsFailed ?? []).map((f: Json) => f.file).join(', ') || 'none'}.`)
   if (t4) {
     lines.push('', '## T4 fonts — families that force raster fallback', '')
-    lines.push((t4.familiesCausingRaster ?? []).map((f: Json) => `${f.family} (${f.count})`).join(', '))
+    lines.push(`Without a pack (counts are files): ${(t4.familiesCausingRaster ?? []).map((f: Json) => `${f.family} (${f.count})`).join(', ')}.`)
+    if (t4.familiesCausingRasterWithPack) {
+      lines.push('', `With the pinned open pack (${(t4.pinnedPack ?? []).map((p: Json) => `${p.family} → ${p.file}`).join(', ')}): raster rate ${pct(t4.totals?.rasterFallbackRateWithPack)}; remaining causes ${(t4.familiesCausingRasterWithPack ?? []).map((f: Json) => `${f.family} (${f.count})`).join(', ')}. No metric-compatible open face exists for those.`)
+    }
   }
   if (t2) {
     lines.push('', '## T2 hidden content drawn by today\'s renderer (the §6.4 strip list)', '', '| fixture | status | model paths |', '|---|---|---|')
@@ -110,6 +127,21 @@ export function renderReport(results: Map<string, Json | undefined>): string {
     lines.push('', `Calibration: τ_abs ${num(t9.tau?.abs)} / τ_margin ${num(t9.tau?.margin)} at M = ${t9.candidateCount}; τ at M = 2²⁴ ≈ ${num(t9.tau24)}. ${t9.fullScoredDecisions} full null decisions, ${t9.falseCount} false attributions (one-sided 95 % upper bound ${t9.zeroFalse95Upper}; 1e-6 rests on the fitted tail and union bound, not on observation).`)
     lines.push('', '## T9 collusion', '', '| attack | colluder named | collusion-suspected | innocent named | none |', '|---|---|---|---|---|')
     for (const c of t9.collusion ?? []) lines.push(`| ${c.attack} | ${c.colluder} | ${c.suspected} | ${c.innocent} | ${c.none} |`)
+  }
+  const ih = results.get('image-heavy'); const t9ih = results.get('t9-image-heavy')
+  if (ih) {
+    lines.push('', '## Corpus top-up and image-heavy certification', '')
+    lines.push(`Gates T1–T9 above ran on the original 46-file corpus. The top-up adds 6 POI DOCX files and 5 POI decks (\`scripts/fetch-corpus.ts\`). Image-heavy = image pixel share ≥ ${pct(ih.threshold?.imageShare)} (paint with vs without \`drawImage\`) **and** texture ≥ ${pct(ih.threshold?.textureShare)} (8×8 blocks with luma σ ≥ ${ih.threshold?.blockLumaStd}). ${len(ih.certified)} of ${len(ih.units)} units certified (minimum 5) — ${ih.status}. The 11 LibreOffice slides that are 70–100 % image all fail the texture test (flat backgrounds).`)
+  }
+  if (t9ih) {
+    lines.push('', `## T9 supplement — image-heavy and DOCX top-up units (τ from the full run, not recalibrated)`, '', `Units: ${(t9ih.units?.imageHeavy ?? []).length} image-heavy (${(t9ih.units?.imageHeavy ?? []).join(', ')}) + ${(t9ih.units?.docxTopup ?? []).length} DOCX (${(t9ih.units?.docxTopup ?? []).join(', ')}), bringing T9's DOCX units to 15. Status ${t9ih.status}.`, '', '| attack | image-heavy | DOCX top-up | target | status |', '|---|---|---|---|---|')
+    const byClass = (cls: string, attack: string) => (t9ih.survivalByClass ?? []).find((c: Json) => c.class === cls)?.rows?.find((r: Json) => r.attack === attack)
+    for (const r of t9ih.survival ?? []) {
+      const a = byClass('image-heavy', r.attack); const b = byClass('docx-topup', r.attack)
+      lines.push(`| ${r.attack} | ${a ? `${a.correct}/${a.total} (${pct(a.rate)})` : '—'} | ${b ? `${b.correct}/${b.total} (${pct(b.rate)})` : '—'} | ${r.target == null ? '—' : pct(r.target)} | ${r.status} |`)
+    }
+    lines.push('', '| collusion | colluder named | collusion-suspected | innocent named | none |', '|---|---|---|---|---|')
+    for (const c of t9ih.collusion ?? []) lines.push(`| ${c.attack} | ${c.colluder} | ${c.suspected} | ${c.innocent} | ${c.none} |`)
   }
   if (t11) lines.push('', '## T11 note', '', `\`dist/index.js\` statically imports ${(t11.perChunk ?? []).map((c: Json) => `\`${c.file}\` (${c.gzipBytes} B)`).join(', ')}. Today's \`eager-budget.ts\` measures index.js alone (${t11.indexOnlyGzipBytes} B ≤ 38,720). §8.1 gate 1 as written (the whole static closure) is ${t11.transitiveGzipBytes} B — the gap pre-dates this branch.`)
   lines.push('')
