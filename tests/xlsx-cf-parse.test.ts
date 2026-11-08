@@ -135,7 +135,7 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ type: 'expression' })
   })
 
-  it('evaluates text, blank and error predicates only for absent or canonical formulas', () => {
+  it('evaluates text, blank and error predicates only for canonical formulas (refuses absent and standalone x14)', () => {
     // One element per rule, mirroring the measured fixtures: each canonical
     // formula references its own sqref anchor (top-left cell).
     const el = (sqref: string, inner: string) => `<conditionalFormatting sqref="${sqref}">${inner}</conditionalFormatting>`
@@ -151,7 +151,8 @@ describe('CF rule parsing: all 18 types', () => {
     )
     expect(value.unresolvedSheet).toBeUndefined()
     expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'ab' })
-    expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'ab' })
+    // Ruling C3: Absent formula evaluates to cf-unsupported-rule
+    expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 3).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 4).definition).toMatchObject({ kind: 'text', type: 'beginsWith', needle: 'ab' })
     expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ kind: 'predicate', type: 'containsBlanks' })
@@ -169,7 +170,7 @@ describe('CF rule parsing: all 18 types', () => {
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'text', type: 'containsText', needle: 'a"b' })
   })
 
-  it('accepts canonical x14 blank/error rules and refuses activePresent on top10', () => {
+  it('refuses standalone x14 blank/error rules and refuses activePresent on top10', () => {
     const { value } = parse(
       `<extLst><ext uri="${CF_EXT}"><x14:conditionalFormattings>` +
         `<x14:conditionalFormatting><xm:sqref>B2:B3</xm:sqref>` +
@@ -178,7 +179,8 @@ describe('CF rule parsing: all 18 types', () => {
         `</x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`,
     )
     expect(value.unresolvedSheet).toBeUndefined()
-    expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'predicate', type: 'containsBlanks' })
+    // Ruling C3: Standalone x14 blank/error rule is unsupported
+    expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
   })
 

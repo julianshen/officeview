@@ -212,16 +212,11 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(r, { row: 1, col: 1 }, blank, undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
     expect(evaluatePredicate(r, { row: 1, col: 1 }, str(''), undefined, allowGate)).toMatchObject({ kind: 'ready', value: true })
     expect(evaluatePredicate(r, { row: 1, col: 1 }, num(0), undefined, allowGate)).toMatchObject({ kind: 'no-match' })
-    // Absent-formula blanks evaluate directly per manifest rows C2/C6/F2/F6.
+    // Ruling C3: Absent-formula blanks refuse as cf-unsupported-rule (Excel paints nothing on absent-formula rules).
     const absent = parsedDefinition('<cfRule type="containsBlanks" priority="1"/>', 'B2')
-    expect(absent).toMatchObject({ kind: 'predicate', type: 'containsBlanks' })
-    const ra = rule(absent, [rect(1, 1, 1, 1)])
-    expect(evaluatePredicate(ra, { row: 1, col: 1 }, blank, undefined, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    expect(evaluatePredicate(ra, { row: 1, col: 1 }, num(0), undefined, denyGate)).toMatchObject({ kind: 'no-match' })
+    expect(absent).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     const absentNot = parsedDefinition('<cfRule type="notContainsBlanks" priority="1"/>', 'B2')
-    const rn = rule(absentNot, [rect(1, 1, 1, 1)])
-    expect(evaluatePredicate(rn, { row: 1, col: 1 }, blank, undefined, denyGate)).toMatchObject({ kind: 'no-match' })
-    expect(evaluatePredicate(rn, { row: 1, col: 1 }, num(0), undefined, denyGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(absentNot).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
   })
 
   it('case-insensitive text matching is gated on its evidence variant', () => {

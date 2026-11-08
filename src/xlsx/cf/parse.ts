@@ -751,7 +751,9 @@ function buildRuleBody(
         return invalid(priority, true, `text rule "${type}" is missing its search needle`)
       }
       if (inputs.hasForeignFormula) return finishUnresolved('cf-unsupported-rule', withDxf())
-      if (inputs.formulas.length === 0 || canonicalTextFormula(type, needle, inputs.formulas, anchor)) {
+      // Ruling C3: Absent-formula and standalone x14 text rules never match in Excel.
+      // Only base-dialect rules with canonical formula match.
+      if (inputs.origin.dialect === 'base' && canonicalTextFormula(type, needle, inputs.formulas, anchor)) {
         return finishResolved({ kind: 'text', type: type as (typeof TEXT_RULE_TYPES)[number], needle })
       }
       return finishUnresolved('cf-unsupported-rule', withDxf())
@@ -761,7 +763,9 @@ function buildRuleBody(
     case 'containsErrors':
     case 'notContainsErrors': {
       if (inputs.hasForeignFormula) return finishUnresolved('cf-unsupported-rule', withDxf())
-      if (inputs.formulas.length === 0 || canonicalBlankFormula(type, inputs.formulas, anchor)) {
+      // Ruling C3: Absent-formula and standalone x14 blank/error rules never match in Excel.
+      // Only base-dialect rules with canonical formula match.
+      if (inputs.origin.dialect === 'base' && canonicalBlankFormula(type, inputs.formulas, anchor)) {
         return finishResolved({ kind: 'predicate', type: type as (typeof BLANK_ERROR_TYPES)[number] })
       }
       return finishUnresolved('cf-unsupported-rule', withDxf())
