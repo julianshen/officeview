@@ -163,7 +163,7 @@ it('CF sqref on A1:A5000 on a 3-row sheet does not extend extent or prepare 5000
       ],
     },
   }
-  const store = new ObjectXlsxSheetAdapter({ docId: 'doc1', valueGen: 1 }, sheet, [], 262144)
+  const store = new ObjectXlsxSheetAdapter({ docId: 'doc1', sheetId: 'Sheet1', valueGen: 1 }, sheet, [], 262144)
   expect(store.extent.used).toEqual({ r0: 0, r1: 2, c0: 0, c1: 0 })
   const paint = await prepareCfPaint(sheet)
   expect(paint).toBeDefined()

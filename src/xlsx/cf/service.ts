@@ -55,7 +55,7 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
-  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions } = {}) {
+  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -148,7 +148,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 if (value.kind === 'string') await work(value.value.length + 1)
                 const preparedStats = stats.get(rule)
                 outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
-                  : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence))
+                  : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
               }
               // The pure compositor implements the candidate ordering contract; enabling
               // multi-positive precedence in production still requires its oracle.

@@ -12,17 +12,25 @@
  * additionally passes through the evidence gate and stays unresolved until
  * `stage1-blanks-errors` is measured.
  */
-import type { CfLiteral, CfOperator, CfOutcome, CfRule } from './model'
+import type { CfLiteral, CfOperator, CfOutcome, CfRule, CfTimePeriod } from './model'
 import { hasEvidence } from './evidence'
 import { cfValueKey, type CfRangeStatistics } from './statistics'
+import { decodeSerial, epochToSerial, weekdayOf } from '../formula/serial'
 
 /** Evidence gate: production reads the reviewed allowlist; tests inject fakes. */
 export interface CfEvidenceGate {
-  allows(id: string, variant: string): boolean
+  allows(id: string, variant?: string): boolean
 }
 
 export const cfRuntimeEvidence: CfEvidenceGate = {
   allows: (id, variant) => hasEvidence(id, variant),
+}
+
+export interface CfDateContext {
+  readonly dateSystem?: '1900' | '1904'
+  readonly timeZone?: string
+  readonly epochNowMs?: number
+  readonly clockSerial?: number
 }
 
 export interface CfSourceAddress {
@@ -305,6 +313,98 @@ function evaluateDuplicates(
   return matched ? { kind: 'ready', value: true } : { kind: 'no-match' }
 }
 
+function evaluateTimePeriod(
+  period: CfTimePeriod,
+  value: CfLiteral,
+  evidence: CfEvidenceGate,
+  context?: CfDateContext,
+): CfOutcome<boolean> {
+  const system = context?.dateSystem ?? '1900'
+  const capId = system === '1904' && evidence.allows(`timePeriod:1904-${period}`)
+    ? `timePeriod:1904-${period}`
+    : `timePeriod:${period}`
+  if (!evidence.allows(capId)) return unmeasured()
+
+  if (value.kind !== 'number' || !Number.isFinite(value.value)) return { kind: 'no-match' }
+  const cellDay = Math.floor(value.value)
+  if (cellDay < 0 && system === '1900') return { kind: 'no-match' }
+
+  let todaySerial: number
+  if (context?.clockSerial !== undefined && Number.isFinite(context.clockSerial)) {
+    todaySerial = Math.floor(context.clockSerial)
+  } else {
+    const epochNowMs = context?.epochNowMs ?? Date.now()
+    const timeZone = context?.timeZone ?? 'UTC'
+    const s = epochToSerial(epochNowMs, timeZone, system)
+    if (typeof s !== 'number' || !Number.isFinite(s)) return unmeasured()
+    todaySerial = Math.floor(s)
+  }
+
+  let matched = false
+  switch (period) {
+    case 'today':
+      matched = cellDay === todaySerial
+      break
+    case 'yesterday':
+      matched = cellDay === todaySerial - 1
+      break
+    case 'tomorrow':
+      matched = cellDay === todaySerial + 1
+      break
+    case 'last7Days':
+      matched = cellDay <= todaySerial && cellDay >= todaySerial - 6
+      break
+    case 'thisWeek': {
+      const w = weekdayOf(todaySerial, 1, system)
+      if (typeof w !== 'number' || !Number.isFinite(w)) return unmeasured()
+      const sun = todaySerial - (w - 1)
+      matched = cellDay >= sun && cellDay <= sun + 6
+      break
+    }
+    case 'lastWeek': {
+      const w = weekdayOf(todaySerial, 1, system)
+      if (typeof w !== 'number' || !Number.isFinite(w)) return unmeasured()
+      const sun = todaySerial - (w - 1) - 7
+      matched = cellDay >= sun && cellDay <= sun + 6
+      break
+    }
+    case 'nextWeek': {
+      const w = weekdayOf(todaySerial, 1, system)
+      if (typeof w !== 'number' || !Number.isFinite(w)) return unmeasured()
+      const sun = todaySerial - (w - 1) + 7
+      matched = cellDay >= sun && cellDay <= sun + 6
+      break
+    }
+    case 'thisMonth': {
+      const cellDec = decodeSerial(cellDay, system)
+      const todayDec = decodeSerial(todaySerial, system)
+      if ('kind' in cellDec || 'kind' in todayDec) return unmeasured()
+      matched = cellDec.civil.month === todayDec.civil.month && cellDec.civil.year === todayDec.civil.year
+      break
+    }
+    case 'lastMonth': {
+      const cellDec = decodeSerial(cellDay, system)
+      const todayDec = decodeSerial(todaySerial, system)
+      if ('kind' in cellDec || 'kind' in todayDec) return unmeasured()
+      const targetMonth = todayDec.civil.month === 1 ? 12 : todayDec.civil.month - 1
+      const targetYear = todayDec.civil.month === 1 ? todayDec.civil.year - 1 : todayDec.civil.year
+      matched = cellDec.civil.month === targetMonth && cellDec.civil.year === targetYear
+      break
+    }
+    case 'nextMonth': {
+      const cellDec = decodeSerial(cellDay, system)
+      const todayDec = decodeSerial(todaySerial, system)
+      if ('kind' in cellDec || 'kind' in todayDec) return unmeasured()
+      const targetMonth = todayDec.civil.month === 12 ? 1 : todayDec.civil.month + 1
+      const targetYear = todayDec.civil.month === 12 ? todayDec.civil.year + 1 : todayDec.civil.year
+      matched = cellDec.civil.month === targetMonth && cellDec.civil.year === targetYear
+      break
+    }
+  }
+
+  return matched ? { kind: 'ready', value: true } : { kind: 'no-match' }
+}
+
 /**
  * Decide one rule on one cell. `stats` carries the prepared range statistics
  * for rules that need them (top10/aboveAverage/duplicateValues/uniqueValues);
@@ -317,6 +417,7 @@ export function evaluatePredicate(
   value: CfLiteral,
   stats: CfRangeStatistics | undefined,
   evidence: CfEvidenceGate,
+  dateContext?: CfDateContext,
 ): CfOutcome<boolean> {
   if (!inRanges(sourceAddress.row, sourceAddress.col, rule)) return { kind: 'no-match' }
   const definition = rule.definition
@@ -348,8 +449,7 @@ export function evaluatePredicate(
       }
       break
     case 'timePeriod':
-      // The clock that decides today is unmeasured: no wall-clock reads.
-      return unmeasured()
+      return evaluateTimePeriod(definition.period, value, evidence, dateContext)
     case 'top10': {
       // No manifest rows pin multi-rectangle ranking: always withheld.
       if (rule.ranges.length !== 1) return unmeasured()

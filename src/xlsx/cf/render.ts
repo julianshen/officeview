@@ -11,7 +11,7 @@ import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
-import { cfExplicitBounds, cfNeedsViewport } from '../cfLoader'
+import { cfNeedsViewport } from '../cfLoader'
 import { STATIC_SHEET_BUDGET } from '../render'
 import { CfPageFault, cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
 import type { SourceStore } from '../view/contracts'
@@ -139,7 +139,7 @@ const sheetStatsSessions = new WeakMap<object, { session: import('./statistics')
  * rules to the visible/printed source coordinates, including unstored blanks. */
 export async function prepareCfPaint(sheet: XlsxSheet, options: {
   store?: SourceStore; memory?: CfMemory; request?: CfPrepareRequest; source?: CfValueSource; evidence?: CfEvidenceGate;
-  paintRects?: readonly SourceRect[]; valuePolicy?: ValuePolicy;
+  paintRects?: readonly SourceRect[]; valuePolicy?: ValuePolicy; dateContext?: import('./predicates').CfDateContext;
   viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] }
 } = {}): Promise<CfPaintBatch | undefined> {
   const rules = sheet.conditionalFormatting
@@ -177,6 +177,11 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     sheetStatsSessions.set(sheet, retainedStats)
   }
   const statistics: CfPaintStatistics = { session: retainedStats.session, stamp, results: new Map() }
+  const dateContext = options.dateContext ?? (sheet.semantics ? {
+    dateSystem: sheet.semantics.dateSystem,
+    timeZone: sheet.semantics.timeZone,
+    epochNowMs: sheet.semantics.epochNowMs,
+  } : undefined)
   let units = 0
   const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
   try {
@@ -284,7 +289,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         // Ruling I4: Per-batch work budget so static sheets (e.g. 3000x20) do not exhaust
         // the 1M whole-sheet limit. If a batch exceeds the budget, refusal is per-range.
         const batchBudget = createCfWorkBudget({ signal })
-        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statistics, statisticsOptions })
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statistics, statisticsOptions, dateContext })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {

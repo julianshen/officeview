@@ -293,13 +293,54 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(notErr, at, blank, undefined, denyGate).kind).toBe('unresolved')
   })
 
-  it('timePeriod stays unresolved without a measured clock', () => {
+  it('evaluates all ten timePeriod operators against clock context', () => {
     const at = { row: 0, col: 0 }
-    const today = rule({ kind: 'timePeriod', period: 'today' })
-    for (const value of [num(45000), str('2024-01-01'), blank] as CfLiteral[]) {
-      const outcome = evaluatePredicate(today, at, value, undefined, allowGate)
-      expect(outcome).toMatchObject({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+    const D = 46332 // 2026-11-06 (Friday)
+    const ctx = { clockSerial: D, dateSystem: '1900' as const }
+
+    const periods: Array<{ period: import('../src/xlsx/cf/model').CfTimePeriod; pos: number[]; neg: number[] }> = [
+      { period: 'today', pos: [D, D + 0.5, D + 0.999], neg: [D - 1, D + 1] },
+      { period: 'yesterday', pos: [D - 1, D - 1 + 0.25], neg: [D, D - 2] },
+      { period: 'tomorrow', pos: [D + 1, D + 1 + 0.75], neg: [D, D + 2] },
+      { period: 'last7Days', pos: [D, D - 6, D - 3], neg: [D - 7, D + 1] },
+      { period: 'thisWeek', pos: [D, 46327, 46333], neg: [46326, 46334] },
+      { period: 'lastWeek', pos: [D - 7, 46320, 46326], neg: [46319, 46327] },
+      { period: 'nextWeek', pos: [D + 7, 46334, 46340], neg: [46333, 46341] },
+      { period: 'thisMonth', pos: [D, 46330, 46355], neg: [46301, 46362] },
+      { period: 'lastMonth', pos: [46301, 46326], neg: [D, 46362] },
+      { period: 'nextMonth', pos: [46362, 46380], neg: [D, 46301] },
+    ]
+
+    for (const { period, pos, neg } of periods) {
+      const r = rule({ kind: 'timePeriod', period })
+      for (const val of pos) {
+        const out = evaluatePredicate(r, at, num(val), undefined, allowGate, ctx)
+        expect(out, `${period} on ${val}`).toEqual({ kind: 'ready', value: true })
+      }
+      for (const val of neg) {
+        const out = evaluatePredicate(r, at, num(val), undefined, allowGate, ctx)
+        expect(out, `${period} on ${val}`).toEqual({ kind: 'no-match' })
+      }
+      // Non-numbers fail match
+      for (const val of [str('2026-11-06'), blank, err('#VALUE!')] as CfLiteral[]) {
+        const out = evaluatePredicate(r, at, val, undefined, allowGate, ctx)
+        expect(out).toEqual({ kind: 'no-match' })
+      }
     }
+
+    // 1904 date system variant
+    const D1904 = 44870
+    const ctx1904 = { clockSerial: D1904, dateSystem: '1904' as const }
+    const today1904 = rule({ kind: 'timePeriod', period: 'today' })
+    expect(evaluatePredicate(today1904, at, num(D1904), undefined, allowGate, ctx1904)).toEqual({ kind: 'ready', value: true })
+    expect(evaluatePredicate(today1904, at, num(D1904 - 1), undefined, allowGate, ctx1904)).toEqual({ kind: 'no-match' })
+
+    // Denied gate refuses
+    const denyTimeGate: CfEvidenceGate = { allows: () => false }
+    expect(evaluatePredicate(today1904, at, num(D1904), undefined, denyTimeGate, ctx1904)).toEqual({
+      kind: 'unresolved',
+      reason: 'cf-unmeasured-capability',
+    })
   })
 
   it('top10 ranks the manifest set with ties included', () => {
