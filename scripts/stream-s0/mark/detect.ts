@@ -2,7 +2,7 @@ import { checkBitmap, type Bitmap, type Chip, type MarkParams } from './types'
 import { checkParams } from './params'
 import { pedestalFor, referenceCell } from './embed'
 import { lum, register, type Registration } from './register'
-export type Decision = { kind: 'attributed'; index: number; z: number; margin: number } | { kind: 'none'; zBest: number } | { kind: 'abstain'; reason: 'flat' }
+export type Decision = { kind: 'collusion-suspected'; indices: number[]; zs: number[] } | { kind: 'attributed'; index: number; z: number; margin: number } | { kind: 'none'; zBest: number } | { kind: 'abstain'; reason: 'flat' }
 /** Immutable handle; privately owned contiguous M×512 signs. */
 export interface CandidateMatrix { readonly count: number; readonly bytes: number }
 const matrices = new WeakMap<CandidateMatrix, Int8Array>()
@@ -72,7 +72,15 @@ export function scoreCapture(capture: Bitmap, reference: Bitmap, chips: Chip[], 
 export function detect(capture: Bitmap, reference: Bitmap, chips: Chip[], candidates: CandidateInput, params: MarkParams, tau: { abs: number; margin: number }): Decision {
   if (!Number.isFinite(tau.abs) || !Number.isFinite(tau.margin) || tau.abs < 0 || tau.margin < 0) throw new Error('Invalid decision thresholds')
   const result = scoreCapture(capture, reference, chips, candidates, params)
+  return decideScores(result, tau)
+}
+/** Same full-decision rule used for calibration and detection. */
+export function decideScores(result: Scores, tau: { abs: number; margin: number }): Decision {
+  if (!Number.isFinite(tau.abs) || !Number.isFinite(tau.margin) || tau.abs < 0 || tau.margin < 0) throw new Error('Invalid decision thresholds')
   if (result.flat) return { kind: 'abstain', reason: 'flat' }
+  const indices: number[] = [], zs: number[] = []
+  for (let i=0;i<result.scores.length;i++) if(result.scores[i]! >= tau.abs) { indices.push(i); zs.push(result.scores[i]!) }
+  if(indices.length >= 2) return {kind:'collusion-suspected',indices,zs}
   let best = -Infinity, second = -Infinity, index = -1
   for (let m = 0; m < result.scores.length; m++) { const z = result.scores[m]!; if (z > best) { second = best; best = z; index = m } else if (z > second) second = z }
   if (index >= 0 && best >= tau.abs && best - second >= tau.margin) return { kind: 'attributed', index, z: best, margin: best - second }
