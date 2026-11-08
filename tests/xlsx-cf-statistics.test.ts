@@ -678,14 +678,17 @@ describe('CF statistics preparation', () => {
     expect(stats.size).toBe(0)
   })
 
-  it('cfValueKey separates kinds and folds text case', () => {
+  it('cfValueKey separates kinds, equates numeric text and empty strings per Excel oracle (N1)', () => {
     expect(cfValueKey({ kind: 'number', value: 1 })).toBe(cfValueKey({ kind: 'number', value: 1 }))
-    expect(cfValueKey({ kind: 'number', value: 1 })).not.toBe(cfValueKey({ kind: 'string', value: '1' }))
+    // Under N1, text "1" equates to numeric 1 per Excel oracle
+    expect(cfValueKey({ kind: 'number', value: 1 })).toBe(cfValueKey({ kind: 'string', value: '1' }))
+    expect(cfValueKey({ kind: 'number', value: 1 })).not.toBe(cfValueKey({ kind: 'string', value: '2' }))
     expect(cfValueKey({ kind: 'string', value: 'A' })).toBe(cfValueKey({ kind: 'string', value: 'a' }))
     expect(cfValueKey({ kind: 'string', value: 'a' })).not.toBe(cfValueKey({ kind: 'string', value: 'á' }))
     expect(cfValueKey({ kind: 'boolean', value: true })).not.toBe(cfValueKey({ kind: 'number', value: 1 }))
-    expect(cfValueKey({ kind: 'blank' })).toBeUndefined()
-    expect(cfValueKey({ kind: 'error', value: '#N/A' })).toBeUndefined()
+    // Empty strings equate to blanks per Excel oracle
+    expect(cfValueKey({ kind: 'string', value: '' })).toBe(cfValueKey({ kind: 'blank' }))
+    expect(cfValueKey({ kind: 'error', value: '#N/A' })).toBe('e:#N/A')
   })
 
   it('aborting after the first scope unwinds unreturned leases', async () => {

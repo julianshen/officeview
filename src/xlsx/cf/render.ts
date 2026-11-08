@@ -139,7 +139,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const stamp = options.request?.stamp ?? { owner: options.store?.stamp.docId ?? 'static', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: options.store?.stamp.valueGen ?? 0, cfGen: options.store ? cfRulesVersion(rules) : 1, viewGen: 0, structureGen: options.store?.structureGen ?? 0, clockGen: 0 }
   const signal = options.request?.signal ?? new AbortController().signal
   const source = options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached'))
-  const budget = createCfWorkBudget({ signal })
   const hiddenRows: SourceRect[] = []
   for (const r of sheet.rows) {
     if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
@@ -150,7 +149,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   let retainedStats = sheetStatsSessions.get(sheet)
   if (!retainedStats || retainedStats.key !== currentStatsKey) {
     if (retainedStats) retainedStats.session.dispose()
-    const session = createCfStatistics(memory, { maxEntries: 64 })
+    const session = createCfStatistics(memory, { maxEntries: 64, retainEntries: true })
     retainedStats = { session, key: currentStatsKey }
     sheetStatsSessions.set(sheet, retainedStats)
   }
@@ -262,7 +261,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const paintCells = options.viewport || options.request ? Math.min(CF_LIMITS.preparedCells, rects.reduce((n, r) => n + (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1), 0)) : 256
     if (!hold.grow(hold.bytes + paintCells * 2048)) throw new Error('CF paint workspace')
     let heldBytes = hold.bytes
-    let hadWorkLimit = false
     for (let e = 0; e < (scoped ? rects.length : edges.length - 1); e++) {
       const firstRow = scoped ? rects[e].firstRow : edges[e], endRow = scoped ? rects[e].lastRow + 1 : edges[e + 1]
       const intervals: Array<[number, number]> = []
@@ -294,7 +292,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
           } finally { lease.release() }
         } catch (error) {
           if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF cancelled' || error.message === 'CF paint work' || (error as any).name === 'PackageError' || error.message.includes('resource-limit'))) {
-            hadWorkLimit = true
             // Ruling I4: Refusal is per-range, not the whole sheet
             continue
           }

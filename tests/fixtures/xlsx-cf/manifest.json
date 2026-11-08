@@ -3004,9 +3004,14 @@
         "positiveRefs": [
           "B2",
           "B3",
+          "B4",
           "B5",
           "B6",
+          "B9",
+          "B10",
+          "B11",
           "C7",
+          "C8",
           "D3",
           "F2",
           "H3",
@@ -3016,6 +3021,8 @@
         "negativeRefs": [
           "B12",
           "C2",
+          "C4",
+          "C11",
           "D2",
           "I3",
           "I4"
@@ -3040,6 +3047,15 @@
             "note": "numeric 1 duplicated"
           },
           {
+            "ref": "B4",
+            "controlRef": "B16",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "text \"1\" duplicates numeric 1 in Excel"
+          },
+          {
             "ref": "B5",
             "controlRef": "B17",
             "matched": true,
@@ -3058,6 +3074,33 @@
             "note": "\"a\" duplicates \"A\""
           },
           {
+            "ref": "B9",
+            "controlRef": "B21",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "repeated #N/A duplicates in Excel"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "B22",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "repeated #N/A duplicates in Excel"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B23",
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "empty string duplicates blank cell in Excel"
+          },
+          {
             "ref": "B12",
             "controlRef": "B24",
             "matched": false,
@@ -3070,12 +3113,32 @@
             "note": "duplicated 1 does not match uniqueValues"
           },
           {
+            "ref": "C4",
+            "controlRef": "C16",
+            "matched": false,
+            "note": "text \"1\" is not unique because numeric 1 exists"
+          },
+          {
             "ref": "C7",
             "controlRef": "C19",
             "matched": true,
             "fillRgb": "FFC6EFCE",
             "fontRgb": "FF006100",
             "note": "\"á\" is unique"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C20",
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "\" a \" is unique"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "C23",
+            "matched": false,
+            "note": "empty string is not unique because blank exists"
           },
           {
             "ref": "D2",

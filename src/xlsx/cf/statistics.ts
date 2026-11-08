@@ -32,15 +32,24 @@ import type { XlsxCell } from '../types'
 import type { CfMemory, CfWorkBudget } from './limits'
 import { CF_LIMITS } from './limits'
 
-/** Stable, type-tagged frequency key. Blanks and errors are never counted. */
+/** Stable, type-tagged frequency key. Blanks and errors are never counted in numeric stats. */
 export function cfValueKey(value: CfLiteral): string | undefined {
   switch (value.kind) {
     case 'number': return `n:${value.value}`
-    case 'string': return `s:${value.value.toLowerCase()}`
+    case 'string': {
+      if (value.value === '') return 's:'
+      const trimmed = value.value.trim()
+      if (trimmed !== '') {
+        const num = Number(trimmed)
+        if (Number.isFinite(num) && String(num) === trimmed) {
+          return `n:${num}`
+        }
+      }
+      return `s:${value.value.toLowerCase()}`
+    }
     case 'boolean': return `b:${value.value ? 1 : 0}`
-    case 'blank':
-    case 'error':
-      return undefined
+    case 'blank': return 's:'
+    case 'error': return `e:${value.value}`
   }
 }
 
@@ -359,8 +368,9 @@ type BuiltOutcome =
   | { kind: 'ready'; value: { stats: CfRangeStatistics; bytes: number; candidate: CfLease<CfRangeStatistics> } }
   | { kind: 'unresolved'; reason: string; pendingSheetIds?: readonly string[] }
 
-export function createCfStatistics(memory: CfMemory, options: { maxEntries?: number } = {}): CfStatisticsSession {
+export function createCfStatistics(memory: CfMemory, options: { maxEntries?: number; retainEntries?: boolean } = {}): CfStatisticsSession {
   const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES
+  const retainEntries = options.retainEntries ?? false
   const sessionCap = CF_LIMITS.statisticsBytes
   const cache = new Map<string, CacheEntry>()
   const inflight = new Map<string, InflightJob>()
@@ -414,9 +424,13 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       if (settled) return
       settled = true
       entry.refs--
-      if (entry.refs <= 0 && !cache.has(key)) {
-        try { entry.lease.release() } catch { /* release-only path */ }
-        trackRelease(entry.bytes)
+      if (entry.refs <= 0) {
+        if (!retainEntries) {
+          dropEntry(key, entry)
+        } else if (!cache.has(key)) {
+          try { entry.lease.release() } catch { /* release-only path */ }
+          trackRelease(entry.bytes)
+        }
       }
     }
     const lease: CfLease<CfRangeStatistics> = {
@@ -487,6 +501,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       let max = -Infinity
       let hasErrors = false
       let stored = 0
+      let storedBlanks = 0
       const spend: SpendState = { pending: 0, signal, budget }
       const ensureCapacity = async (needed: number): Promise<boolean> => {
         if (needed <= values.length) return true
@@ -556,6 +571,23 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                 }
               } else if (value.kind === 'error') {
                 hasErrors = true
+                const errLen = value.value.length
+                if (!growHold(64 + errLen * 2 + 16)) {
+                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                }
+                const k = cfValueKey(value)!
+                const prior = frequencies.get(k)
+                if (prior === undefined) {
+                  if (!growHold(64)) {
+                    return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                  }
+                  frequencies.set(k, 1)
+                } else {
+                  frequencies.set(k, prior + 1)
+                }
+                if (!(await spendUnits(spend, 2))) {
+                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                }
               }
 
               // Overlap dedup covers stored positions and numeric arrays so
@@ -570,7 +602,10 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               }
               // Distinct, non-excluded stored cells (blanks included).
               stored++
-              if (value.kind === 'blank') continue
+              if (value.kind === 'blank') {
+                storedBlanks++
+                continue
+              }
               if (value.kind === 'number') {
                 if (!(await ensureCapacity(numericCount + 1))) {
                   return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -592,6 +627,15 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         }
       }
       if (signal.aborted) throw cancelled()
+      const totalBlanks = storedBlanks + Math.max(0, spanCells - stored)
+      if (totalBlanks > 0) {
+        if (!frequencies.has('s:')) {
+          if (!growHold(64)) {
+            return { kind: 'unresolved', reason: 'cf-resource-limit' }
+          }
+        }
+        frequencies.set('s:', (frequencies.get('s:') ?? 0) + totalBlanks)
+      }
       if (!(await flushSpend(spend))) {
         return { kind: 'unresolved', reason: 'cf-resource-limit' }
       }

@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest'
+import type { XlsxRow, XlsxCell, XlsxSheet } from '../src/xlsx/types'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { createResidentCfSource } from '../src/xlsx/cf/statistics'
 import type { CfPrepared, CfStamp, CfSheetRules, CfValueSource } from '../src/xlsx/cf/model'
@@ -255,7 +256,7 @@ it('a 3000x20 sheet with one rule keeps its CF without whole-sheet refusal (I4)'
   }
   const batch = await prepareCfPaint(sheet)
   expect(batch).toBeDefined()
-  expect(sheet.diagnostics?.some(d => d.feature === 'cf-paint-unavailable')).not.toBe(true)
+  expect(sheet.diagnostics?.some((d: any) => d.feature === 'cf-paint-unavailable')).not.toBe(true)
   expect(batch?.layer.styleAt(0, 6, undefined)?.fillColor).toBe('FF00FF00')
   batch?.dispose()
 })

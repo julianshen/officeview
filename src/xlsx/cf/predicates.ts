@@ -310,8 +310,8 @@ function evaluateDuplicates(
   stats: CfRangeStatistics | undefined,
   evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
-  // Blank and error cells are never flagged, per the staged hypothesis.
-  if (value.kind === 'blank' || value.kind === 'error') return { kind: 'no-match' }
+  // Blank cells are never flagged, per the staged hypothesis.
+  if (value.kind === 'blank') return { kind: 'no-match' }
   // Text equivalence (case folding): withhold text cells without evidence.
   if (value.kind === 'string') {
     const allowed = unique
