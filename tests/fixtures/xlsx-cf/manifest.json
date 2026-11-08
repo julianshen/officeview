@@ -1426,9 +1426,9 @@
       "clockRequirement": {
         "dateSystem": "1900",
         "requiredTimeZone": "Asia/Taipei",
-        "anchorLocalDate": "2026-11-06",
-        "anchorSerial": 46332,
-        "staleSavedTodaySerial": 46327,
+        "anchorLocalDate": "2026-11-09",
+        "anchorSerial": 46335,
+        "staleSavedTodaySerial": 46330,
         "staleCacheCellRef": "B15",
         "localTodayCellRef": "B4",
         "utcTodayCellRef": "B3"
@@ -1600,9 +1600,9 @@
         }
       ],
       "expected": {
-        "inputSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
-        "savedSha256": "fdcf7af5ce1077ea27832ce5d465633740541fbfe91ffb0e7239d3c26877eeb0",
-        "provenance": "seed-hypothesis",
+        "inputSha256": "8c4191877c1e31f9d32bfe277609e90ae12dc07259b9947edacf75092251dd29",
+        "savedSha256": "2fab2a977bd5e163e859c7cbdf912d1e2e9e9965818fe5422ff950d1fa92ccc8",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B4",
           "B5",
@@ -1809,11 +1809,10 @@
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.png",
           "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json",
-          "pngSha256": "5735c901b6f9e5af33fe48bce477d9d061763f81f02c2ae76b748466690c2946"
+          "pngSha256": "80435d47172b3a4c959682567d84606b9f0a0ec9873edd1d21ab24bb5fa036c3"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (clock-fixture-expired): Clock fixture anchorLocalDate=2026-11-06 (serial 46332) does not match capture local date 2026-11-09 (excelTodaySerial=46335); regenerate with --refresh-clock-date",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -1821,10 +1820,10 @@
       },
       "resavedByExcel": true,
       "resaveReceipt": {
-        "resavedAt": "2026-11-08T18:10:00.851Z",
+        "resavedAt": "2026-11-08T18:15:14.369Z",
         "excelVersion": "16.114",
-        "inputSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
-        "savedSha256": "fdcf7af5ce1077ea27832ce5d465633740541fbfe91ffb0e7239d3c26877eeb0",
+        "inputSha256": "8c4191877c1e31f9d32bfe277609e90ae12dc07259b9947edacf75092251dd29",
+        "savedSha256": "2fab2a977bd5e163e859c7cbdf912d1e2e9e9965818fe5422ff950d1fa92ccc8",
         "openedRepairFree": true
       }
     },
@@ -1842,9 +1841,9 @@
       "clockRequirement": {
         "dateSystem": "1904",
         "requiredTimeZone": "Asia/Taipei",
-        "anchorLocalDate": "2026-11-06",
-        "anchorSerial": 44870,
-        "staleSavedTodaySerial": 44865,
+        "anchorLocalDate": "2026-11-09",
+        "anchorSerial": 44873,
+        "staleSavedTodaySerial": 44868,
         "staleCacheCellRef": "B7",
         "localTodayCellRef": "B3",
         "utcTodayCellRef": "B2"
@@ -1934,9 +1933,9 @@
         }
       ],
       "expected": {
-        "inputSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
-        "savedSha256": "94bb86bc2c4280beaa727bf025ec93c2cda895dc33096f71bb5e085b122f0b4c",
-        "provenance": "seed-hypothesis",
+        "inputSha256": "7d6839769cf97c419b990ff1e255fbabcf57856ee276b1153fe98bb2376dcb3d",
+        "savedSha256": "05969c1e75bbd6480adf6bb05284dd2feca530b75be641113dd7cddd479176c3",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B3",
           "B4",
@@ -2051,11 +2050,10 @@
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.png",
           "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json",
-          "pngSha256": "00d83ccfd075d56325e1224be3b55920f36e13dad4affcedb18a316e664c6ab5"
+          "pngSha256": "c50494bd9baa33071ae66b4e53c2a58d36547de615c7e928129695cd9bd4f65f"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (clock-fixture-expired): Clock fixture anchorLocalDate=2026-11-06 (serial 44870) does not match capture local date 2026-11-09 (excelTodaySerial=44873); regenerate with --refresh-clock-date",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2063,10 +2061,10 @@
       },
       "resavedByExcel": true,
       "resaveReceipt": {
-        "resavedAt": "2026-11-08T18:10:05.713Z",
+        "resavedAt": "2026-11-08T18:15:18.911Z",
         "excelVersion": "16.114",
-        "inputSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
-        "savedSha256": "94bb86bc2c4280beaa727bf025ec93c2cda895dc33096f71bb5e085b122f0b4c",
+        "inputSha256": "7d6839769cf97c419b990ff1e255fbabcf57856ee276b1153fe98bb2376dcb3d",
+        "savedSha256": "05969c1e75bbd6480adf6bb05284dd2feca530b75be641113dd7cddd479176c3",
         "openedRepairFree": true
       }
     },
