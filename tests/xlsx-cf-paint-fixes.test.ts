@@ -94,12 +94,14 @@ it('paged import exposes the same explicit Z5 used extent as the resident source
   try {
     expect((await session.done).kind).toBe('complete')
     expect(source.store('1')!.extent.used).toEqual(resident.store('1')!.extent.used)
-    expect(source.store('1')!.extent.used).toMatchObject({ r1: 4, c1: 25 })
+    expect(source.store('1')!.extent.used).toMatchObject({ r1: 0, c1: 7 })
   } finally { await source.release(); await resident.release() }
 })
 it('static sparse paint constructs bounded surfaces while reaching the last blank', async () => {
   const { syntheticCellWork } = await import('../src/xlsx/render')
   const s = sheet(), r = s.conditionalFormatting.rules[0]
+  s.cols = [{ min: 0, max: 9 }]
+  s.rows.push({ index: 500, cells: [] })
   s.conditionalFormatting.rules[0] = { ...r, ranges: [{ firstRow: 0, lastRow: 500, firstCol: 0, lastCol: 9 }], definition: { kind: 'predicate', type: 'containsBlanks', dialect: 'base', formulas: [] } }
   const p = await getPaintables({ sheets: [s] })
   try {

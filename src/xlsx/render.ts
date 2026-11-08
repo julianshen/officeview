@@ -273,8 +273,7 @@ function validMerge(r: XlsxMergeRange): boolean {
  * this check the renderer drew cells at `rowY[row] ?? 0` / `colX[col] ?? 0`, i.e.
  * over A1, and clipped merges to the bitmap edge. */
 function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): StaticExportLimit[] {
-  const cf = cfExplicitBounds(sheet)
-  let maxRow = cf?.r1 ?? -1, maxCol = cf?.c1 ?? -1
+  let maxRow = -1, maxCol = -1
   for (const row of sheet.rows) {
     for (const cell of row.cells) {
       const source = cellSourceRow(row, cell)
@@ -353,11 +352,8 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     for (const col of columns.keys()) if (isValidCoordinate(row, col)) dataMaxCol = Math.max(dataMaxCol, col)
   }
   const cfBounds = cfExplicitBounds(sheet)
-  const canMatchBlanks = sheet.conditionalFormatting?.rules.some(r =>
-    (r.definition as any).type === 'containsBlanks' || (r.definition as any).type === 'expression'
-  )
   let maxCol = dataMaxCol
-  if (cfBounds && (canMatchBlanks || dataMaxCol === 0)) {
+  if (cfBounds && sheet.rows.length === 0) {
     maxCol = Math.max(maxCol, cfBounds.c1)
   }
   // Real spreadsheets declare column formatting far wider than the used range
@@ -400,7 +396,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     }
   }
   let maxRow = dataMaxRow
-  if (cfBounds && (canMatchBlanks || dataMaxRow === 0)) {
+  if (cfBounds && sheet.rows.length === 0) {
     maxRow = Math.max(maxRow, cfBounds.r1)
   }
   const nRows = Math.min(Math.max(maxRow + 1, drawing ? (sheet.drawingMarkers?.maxRow ?? 0) + 1 : 1), MAX_GRID_ROWS)

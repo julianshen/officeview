@@ -243,9 +243,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       // computeMetrics includes merges, declarations and finite CF extents (bounded by I3). Open
       // tails do not enlarge it; their coverage is clipped to this paint region.
       const finite = cfExplicitBounds(sheet)
-      const canMatchBlanks = rules.rules.some(r => (r.definition as any).type === 'containsBlanks' || (r.definition as any).type === 'expression')
-      let bottom = finite && (canMatchBlanks || sheet.rows.length === 0) ? finite.r1 : 0
-      let right = finite && (canMatchBlanks || sheet.rows.length === 0) ? finite.c1 : 0
+      let bottom = finite && sheet.rows.length === 0 ? finite.r1 : 0
+      let right = finite && sheet.rows.length === 0 ? finite.c1 : 0
       for (const row of sheet.rows) {
         await work(); bottom = Math.max(bottom, row.index)
         for (const cell of row.cells) {
@@ -272,8 +271,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       if (aggregateRuleWork > CF_LIMITS.workUnits) return unavailable(sheet)
 
       for (const rule of rules.rules) for (const r of rule.ranges) {
-        const lastRow = r.lastRow === 1048575 ? bottom : (canMatchBlanks ? r.lastRow : Math.min(r.lastRow, bottom))
-        const lastCol = r.lastCol === 16383 ? right : (canMatchBlanks ? r.lastCol : Math.min(r.lastCol, right))
+        const lastRow = Math.min(r.lastRow, bottom)
+        const lastCol = r.lastCol === 16383 ? right : Math.min(r.lastCol, STATIC_SHEET_BUDGET.maxGridCols - 1)
         if (lastRow >= r.firstRow && lastCol >= r.firstCol) rects.push({ ...r, lastRow, lastCol })
       }
     }

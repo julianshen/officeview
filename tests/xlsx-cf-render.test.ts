@@ -3,10 +3,16 @@ import { createCanvas } from 'canvas'
 import { expect, it } from 'vitest'
 import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
-import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import type { XlsxSheet } from '../src/xlsx/types'
 export function cfSheet(row = 1, col = 1): XlsxSheet {
-  return { name: 'CF', merges: [], mergeRanges: [], sheetId: '1', cols: [], rows: [{ index: 0, cells: Array.from({ length: 8 }, (_, col) => ({ row: 0, col, ref: '', value: col + 1, styleIndex: 0 })) }], conditionalFormatting: { diagnostics: [], rules: [{ id: 0, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' }, definition: { kind: 'predicate', type: 'containsBlanks', dialect: 'base', formulas: [] } }] } }
+  return {
+    name: 'CF', merges: [], mergeRanges: [], sheetId: '1', cols: [],
+    rows: [
+      { index: 0, cells: Array.from({ length: 8 }, (_, col) => ({ row: 0, col, ref: '', value: col + 1, styleIndex: 0 })) },
+      { index: 1, cells: [{ row: 1, col: 0, ref: 'A2', value: 0, styleIndex: 0 }] },
+    ],
+    conditionalFormatting: { diagnostics: [], rules: [{ id: 0, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: row, lastRow: row, firstCol: col, lastCol: col }], writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' }, definition: { kind: 'predicate', type: 'containsBlanks', dialect: 'base', formulas: [] } }] },
+  }
 }
 it('CF-only unstored B2 paints and suppresses gridlines', async () => {
   const sheet = cfSheet(), pages = await getPaintables({ sheets: [sheet] })
@@ -17,33 +23,22 @@ it('CF-only unstored B2 paints and suppresses gridlines', async () => {
     expect([...ctx.getImageData(64, 25, 1, 1).data]).toEqual([0, 255, 0, 255])
   } finally { pages.dispose() }
 })
-it('bounded Z5 expands static and interactive extent; no CF preserves metrics', async () => {
+it('bounded Z5 does not expand static extent (I3); no CF preserves metrics', async () => {
   const sheet = cfSheet(4, 25), before = computeMetrics({ ...sheet, conditionalFormatting: undefined })
-  expect(before.rowHeightsPx).toHaveLength(1)
+  expect(before.rowHeightsPx).toHaveLength(2)
   expect(before.colWidthsPx).toHaveLength(8)
   const m = computeMetrics(sheet)
-  expect(m.colWidthsPx).toHaveLength(26); expect(m.rowHeightsPx).toHaveLength(5)
+  expect(m.colWidthsPx).toHaveLength(8); expect(m.rowHeightsPx).toHaveLength(2)
   const pages = await getPaintables({ sheets: [sheet] })
   try {
-    const ctx = createCanvas(pages[0].spec.widthPx, pages[0].spec.heightPx).getContext('2d')
-    pages[0].paint(ctx as unknown as CanvasRenderingContext2D)
-    expect([...ctx.getImageData(25 * 64 + 5, 4 * 20 + 5, 1, 1).data]).toEqual([0, 255, 0, 255])
+    expect(pages[0].spec.widthPx).toBe(8 * 64)
+    expect(pages[0].spec.heightPx).toBe(2 * 20)
   } finally { pages.dispose() }
-  const source = createObjectWorkbookSource({ sheets: [sheet] }, 'cf-test')
-  expect(source.store('1')?.extent.used).toMatchObject({ r1: 4, c1: 25 })
-  const { buildSheetGeometry } = await import('../src/xlsx/view/viewport')
-  const geometry = buildSheetGeometry(sheet)
-  expect(geometry.kind).toBe('ready')
-  if (geometry.kind === 'ready') {
-    const box = geometry.metrics.sourceCellToLogical({ row: 4, col: 25 })!
-    expect(box).not.toBeNull()
-    expect(geometry.metrics.logicalPointToSource(box.x + 1, box.y + 1)).toMatchObject({ row: 4, col: 25 })
-  }
 })
 
-it('a CF extent beyond static limits is explicitly refused, never clipped', async () => {
+it('a CF extent beyond static limits does not extend metrics or trigger refusal (I3)', async () => {
   const sheet = cfSheet(20000, 1)
-  expect(computeMetrics(sheet).exportLimits?.some(x => x.resource === 'rows')).toBe(true)
+  expect(computeMetrics(sheet).exportLimits).toBeUndefined()
 })
 it('viewport blank synthesis uses the prepared generation and geometry', async () => {
   const { prepareCfPaint } = await import('../src/xlsx/cf/render')
@@ -161,7 +156,7 @@ it('zero memory refuses before reading values, and whole-column declarations do 
   expect(reads).toBe(0)
   const rule = sheet.conditionalFormatting!.rules[0]
   sheet.conditionalFormatting = { diagnostics: [], rules: [{ ...rule, ranges: [{ firstRow: 0, lastRow: 1048575, firstCol: 1, lastCol: 1 }] }] }
-  expect(computeMetrics(sheet).rowHeightsPx).toHaveLength(1)
+  expect(computeMetrics(sheet).rowHeightsPx).toHaveLength(sheet.rows.length)
 })
 it('cold render bounds scans always receive a cooperative budget', async () => {
   const { prepareCfPaint } = await import('../src/xlsx/cf/render')
@@ -191,11 +186,9 @@ it('CF gridline lookup does not index styles outside the admitted paint ranges',
     expect(outsideStyleReads).toBe(0)
   } finally { batch?.dispose() }
 })
-it('finite CF hosts also respect the static raster cap', async () => {
+it('finite CF hosts do not trigger static raster refusal beyond data bounds (I3)', async () => {
   const sheet = cfSheet(1000, 1000)
-  expect(computeMetrics(sheet).exportLimits?.some(x => x.resource === 'pixels' || x.resource === 'raster-bytes')).toBe(true)
-  const { renderSheet } = await import('../src/xlsx/render')
-  expect(() => renderSheet(sheet, createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D)).toThrow()
+  expect(computeMetrics(sheet).exportLimits).toBeUndefined()
 })
 it('coarse gridline resolution preserves a CF fill over an own fill', async () => {
   const { regionGrid } = await import('../src/xlsx/regionGrid')

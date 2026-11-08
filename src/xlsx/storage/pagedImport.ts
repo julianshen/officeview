@@ -527,14 +527,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         }
       }
       const cfBounds = cfExplicitBounds(sheet)
-      if (cfBounds) {
-        const canMatchBlanks = sheet.conditionalFormatting?.rules.some(r =>
-          (r.definition as any).type === 'containsBlanks' || (r.definition as any).type === 'expression'
-        )
-        const used = sheet.used
-        if (canMatchBlanks || !used) {
-          sheet.used = used ? { r0: Math.min(used.r0, cfBounds.r0), r1: Math.max(used.r1, cfBounds.r1), c0: Math.min(used.c0, cfBounds.c0), c1: Math.max(used.c1, cfBounds.c1) } : cfBounds
-        }
+      if (cfBounds && !sheet.used) {
+        sheet.used = cfBounds
       }
       compressedRead += entry.compressedSize
       // Declared worksheet filters, then tables through the worksheet's own rels (parse.ts order).

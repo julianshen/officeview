@@ -169,6 +169,23 @@ it('CF sqref on A1:A5000 on a 3-row sheet does not extend extent or prepare 5000
   expect(paint).toBeDefined()
   expect(paint!.layer.rects).toEqual([{ minRow: 0, maxRow: 2, minCol: 0, maxCol: 0 }])
   paint!.dispose()
+
+  const { computeMetrics } = await import('../src/xlsx/render')
+  const { getPaintables } = await import('../src/render/paint')
+
+  const m = computeMetrics(sheet)
+  expect(m.exportLimits).toBeUndefined()
+  const pages = await getPaintables({ sheets: [sheet] })
+  expect(pages[0].spec.heightPx).toBeLessThan(1000)
+  expect(pages[0].spec).not.toEqual({ widthPx: 480, heightPx: 96 })
+
+  // Also verify blank-matching rules never extend static extent or trigger refusal
+  sheet.conditionalFormatting.rules[0].definition = { kind: 'predicate', type: 'containsBlanks', dialect: 'base', formulas: [] }
+  const mBlank = computeMetrics(sheet)
+  expect(mBlank.exportLimits).toBeUndefined()
+  const pagesBlank = await getPaintables({ sheets: [sheet] })
+  expect(pagesBlank[0].spec.heightPx).toBeLessThan(1000)
+  expect(pagesBlank[0].spec).not.toEqual({ widthPx: 480, heightPx: 96 })
 })
 
 it('range statistics are cached across preparations (I5)', async () => {
