@@ -1,4 +1,4 @@
-import type { CanvasBackend, CanvasLike } from '../core/canvas-backend'
+import type { CanvasBackend, CanvasLike, ImageLike } from '../core/canvas-backend'
 import { Opcode, OpReader, type Asset, type Op, type Matrix } from './ops'
 
 export class ReplayError extends Error {
@@ -26,7 +26,7 @@ function gradient(ctx: CanvasRenderingContext2D, a: Extract<Asset, { type: 'line
 export async function replayUnit(
   ctx: CanvasRenderingContext2D,
   unit: { ops: Uint8Array; assets: ReadonlyMap<number, Asset> },
-  backend: Pick<CanvasBackend, 'createCanvas'> | { createCanvas(w: number, h: number): Promise<CanvasLike> },
+  backend: Pick<CanvasBackend, 'createCanvas' | 'imageFromPixels'>,
 ): Promise<void> {
   try {
     const ops = [...new OpReader(unit.ops)]
@@ -39,7 +39,7 @@ export async function replayUnit(
         if (bitmapOnly && original.type !== 'bitmap') return fail(`Wrong asset type ${id}`)
         switch (original.type) {
           case 'bitmap':
-            if (!Number.isInteger(original.w) || !Number.isInteger(original.h) || original.w <= 0 || original.h <= 0 || !(original.rgba instanceof Uint8Array) || original.w * original.h * 4 !== original.rgba.length) return fail(`Invalid bitmap ${id}`)
+            if (!['image', 'canvas'].includes(original.source) || !Number.isInteger(original.w) || !Number.isInteger(original.h) || original.w <= 0 || original.h <= 0 || !(original.rgba instanceof Uint8Array) || original.w * original.h * 4 !== original.rgba.length) return fail(`Invalid bitmap ${id}`)
             a = { ...original, rgba: original.rgba.slice() }; break
           case 'linear': case 'radial':
             if (!finite(original.x0, original.y0, original.x1, original.y1) || (original.type === 'radial' && (!finite(original.r0, original.r1) || original.r0 < 0 || original.r1 < 0))) return fail(`Invalid gradient ${id}`)
@@ -60,21 +60,25 @@ export async function replayUnit(
     }
     // Entire stream/reference validation is synchronous, before the first await.
     for (const op of ops) {
+      if (op.code === Opcode.TRANSFORM && !finite(...op.matrix)) fail('Nonfinite transform')
+      if (op.code === Opcode.GLYPH_RUN && (!finite(op.x, op.y) || (op.maxWidth !== undefined && (!Number.isFinite(op.maxWidth) || op.maxWidth < 0)))) fail('Invalid text coordinates')
+      if (op.code === Opcode.STATE_SETUP && op.fields.lineDash?.some(n => !Number.isFinite(n) || n < 0)) fail('Invalid dash')
+      if (op.code === Opcode.PATH && (!finite(...op.args) || (op.radii && !finite(...op.radii)))) fail('Nonfinite path')
       if (op.code === Opcode.IMAGE_DRAW) requireAsset(op.assetId, true)
       if (op.code === Opcode.STYLE_OBJ) requireAsset(op.assetId, false)
       if (op.code === Opcode.PATH && typeof ctx[pathMethods[op.sub]] !== 'function') fail(`Unsupported path ${pathMethods[op.sub]}`)
       if (op.code === Opcode.PATH && ((op.sub === 5 && op.args[2] < 0) || (op.sub === 6 && op.args[4] < 0) || (op.sub === 7 && (op.args[2] < 0 || op.args[3] < 0)) || (op.sub === 9 && op.radii!.some(r => r < 0)))) fail('Negative path radius')
       if (op.code === Opcode.TILE) op.rgba = op.rgba.slice()
     }
-    const bitmaps = new Map<number, CanvasLike>(), tiles = new Map<Op, CanvasLike>(), patterns = new Map<number, CanvasPattern>()
-    const makeBitmap = async (w: number, h: number, rgba: Uint8Array) => {
-      const canvas = await backend.createCanvas(w, h), c = canvas.getContext('2d')
+    const bitmaps = new Map<number, CanvasLike | ImageLike>(), tiles = new Map<Op, CanvasLike>(), patterns = new Map<number, CanvasPattern>()
+    const makeBitmap = (w: number, h: number, rgba: Uint8Array) => {
+      const canvas = backend.createCanvas(w, h), c = canvas.getContext('2d')
       if (!c) return fail('Bitmap context unavailable')
       const image = c.createImageData(w, h); image.data.set(rgba); c.putImageData(image, 0, 0)
       return canvas
     }
-    for (const [id, asset] of assets) if (asset.type === 'bitmap') bitmaps.set(id, await makeBitmap(asset.w, asset.h, asset.rgba))
-    for (const op of ops) if (op.code === Opcode.TILE && op.w && op.h) tiles.set(op, await makeBitmap(op.w, op.h, op.rgba))
+    for (const [id, asset] of assets) if (asset.type === 'bitmap') bitmaps.set(id, asset.source === 'image' ? await backend.imageFromPixels(asset.w, asset.h, asset.rgba) : makeBitmap(asset.w, asset.h, asset.rgba))
+    for (const op of ops) if (op.code === Opcode.TILE && op.w && op.h) tiles.set(op, makeBitmap(op.w, op.h, op.rgba))
     for (const [id, asset] of assets) if (asset.type === 'pattern') {
       const pattern = ctx.createPattern(bitmaps.get(asset.bitmap)! as unknown as CanvasImageSource, asset.repetition)
       if (!pattern) fail(`Pattern unavailable ${id}`)

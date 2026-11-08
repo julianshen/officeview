@@ -16,6 +16,7 @@ import { rasteriseSvg } from '../../src/slideshow/render/svg-raster'
 const calls: string[] = []
 const counting: CanvasBackend = {
   name: 'counting-node-canvas',
+  async imageFromPixels(w, h, rgba) { const c = createCanvas(w, h), ctx = c.getContext('2d'), data = ctx.createImageData(w, h); data.data.set(rgba); ctx.putImageData(data, 0, 0); return await loadImage(c.toBuffer('image/png')) as unknown as ImageLike },
   createCanvas(w, h) { calls.push('createCanvas'); return createCanvas(w, h) as unknown as CanvasLike },
   async decodeImage(bytes) { calls.push('decodeImage'); return await loadImage(Buffer.from(bytes)) as unknown as ImageLike },
   async rasteriseSvg(bytes) { calls.push('rasteriseSvg'); return await loadImage(Buffer.from(bytes)) as unknown as ImageLike },

@@ -93,6 +93,8 @@
 
 ### Task 4: Recorder facade
 
+Deferred: source-rect cropping of snapshots — §7.7 P-rule applies to protected sessions, which ship `final-raster`; commands are relaxed-session only in Stage 1. The recorder retains the whole source for nine-argument `drawImage` until source-edge filtering parity is proven.
+
 **Files:** Create `src/stream/record/recorder.ts`; Test `tests/stream/recorder.test.ts` (napi config: `vitest.stream-s0-napi.config.ts` alias; add `tests/stream/**` to its `include`).
 
 **Interfaces:**

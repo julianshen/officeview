@@ -7,15 +7,13 @@
   ],
   "totals": {
     "captures": 519,
-    "zero": 336,
-    "diff": 114,
-    "tile": 68,
-    "error": 1,
-    "skipped": 0
+    "zero": 481,
+    "diff": 37,
+    "tile": 0,
+    "error": 0,
+    "skipped": 1
   },
-  "tileReasons": {
-    "drawImage": 68
-  },
+  "tileReasons": {},
   "rows": [
     {
       "id": "lo-airplane-transition.pptx#0",
@@ -24,7 +22,7 @@
       "differing": 0,
       "opCount": 90,
       "assets": 0,
-      "opBytes": 1271,
+      "opBytes": 1280,
       "backingDiffers": 0
     },
     {
@@ -34,7 +32,7 @@
       "differing": 0,
       "opCount": 90,
       "assets": 0,
-      "opBytes": 1271,
+      "opBytes": 1280,
       "backingDiffers": 0
     },
     {
@@ -44,7 +42,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 954,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
@@ -54,21 +52,27 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 954,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
       "id": "lo-bnc591147.pptx#1",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
       "id": "lo-bnc591147.pptx#1",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
@@ -78,7 +82,7 @@
       "differing": 0,
       "opCount": 298,
       "assets": 0,
-      "opBytes": 4061,
+      "opBytes": 4265,
       "backingDiffers": 0
     },
     {
@@ -88,21 +92,27 @@
       "differing": 0,
       "opCount": 289,
       "assets": 0,
-      "opBytes": 3719,
+      "opBytes": 3923,
       "backingDiffers": 0
     },
     {
       "id": "lo-narration.pptx#0",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
       "id": "lo-narration.pptx#0",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
@@ -112,7 +122,7 @@
       "differing": 0,
       "opCount": 579,
       "assets": 0,
-      "opBytes": 9785,
+      "opBytes": 9758,
       "backingDiffers": 0
     },
     {
@@ -122,7 +132,7 @@
       "differing": 0,
       "opCount": 571,
       "assets": 0,
-      "opBytes": 9609,
+      "opBytes": 9582,
       "backingDiffers": 0
     },
     {
@@ -132,7 +142,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 986,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
@@ -142,7 +152,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 986,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
@@ -152,7 +162,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 986,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
@@ -162,7 +172,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 986,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
@@ -172,7 +182,7 @@
       "differing": 0,
       "opCount": 87,
       "assets": 1,
-      "opBytes": 1287,
+      "opBytes": 1299,
       "backingDiffers": 0
     },
     {
@@ -182,7 +192,7 @@
       "differing": 0,
       "opCount": 87,
       "assets": 1,
-      "opBytes": 1287,
+      "opBytes": 1299,
       "backingDiffers": 0
     },
     {
@@ -192,7 +202,7 @@
       "differing": 0,
       "opCount": 87,
       "assets": 1,
-      "opBytes": 1287,
+      "opBytes": 1299,
       "backingDiffers": 0
     },
     {
@@ -202,7 +212,7 @@
       "differing": 0,
       "opCount": 87,
       "assets": 1,
-      "opBytes": 1287,
+      "opBytes": 1299,
       "backingDiffers": 0
     },
     {
@@ -212,7 +222,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 986,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
@@ -222,27 +232,27 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 986,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf104788.pptx#5",
       "scale": 1,
-      "status": "diff",
-      "differing": 88,
-      "opCount": 611,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 593,
       "assets": 5,
-      "opBytes": 11415,
+      "opBytes": 10853,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf104788.pptx#5",
       "scale": 2,
       "status": "diff",
-      "differing": 185,
-      "opCount": 622,
+      "differing": 6,
+      "opCount": 604,
       "assets": 5,
-      "opBytes": 11777,
+      "opBytes": 11215,
       "backingDiffers": 0
     },
     {
@@ -252,7 +262,7 @@
       "differing": 0,
       "opCount": 140,
       "assets": 0,
-      "opBytes": 2079,
+      "opBytes": 2131,
       "backingDiffers": 0
     },
     {
@@ -262,7 +272,7 @@
       "differing": 0,
       "opCount": 140,
       "assets": 0,
-      "opBytes": 2079,
+      "opBytes": 2131,
       "backingDiffers": 0
     },
     {
@@ -270,9 +280,9 @@
       "scale": 1,
       "status": "zero",
       "differing": 0,
-      "opCount": 95,
+      "opCount": 92,
       "assets": 1,
-      "opBytes": 1462,
+      "opBytes": 1356,
       "backingDiffers": 0
     },
     {
@@ -280,9 +290,9 @@
       "scale": 2,
       "status": "zero",
       "differing": 0,
-      "opCount": 95,
+      "opCount": 92,
       "assets": 1,
-      "opBytes": 1462,
+      "opBytes": 1356,
       "backingDiffers": 0
     },
     {
@@ -292,7 +302,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2572,
+      "opBytes": 2581,
       "backingDiffers": 0
     },
     {
@@ -302,7 +312,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2572,
+      "opBytes": 2581,
       "backingDiffers": 0
     },
     {
@@ -312,7 +322,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2574,
+      "opBytes": 2583,
       "backingDiffers": 0
     },
     {
@@ -322,7 +332,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2574,
+      "opBytes": 2583,
       "backingDiffers": 0
     },
     {
@@ -332,7 +342,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2572,
+      "opBytes": 2581,
       "backingDiffers": 0
     },
     {
@@ -342,7 +352,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2572,
+      "opBytes": 2581,
       "backingDiffers": 0
     },
     {
@@ -372,7 +382,7 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2570,
+      "opBytes": 2579,
       "backingDiffers": 0
     },
     {
@@ -382,21 +392,27 @@
       "differing": 0,
       "opCount": 128,
       "assets": 0,
-      "opBytes": 2570,
+      "opBytes": 2579,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf123684.pptx#0",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 331,
+      "assets": 7,
+      "opBytes": 5557,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf123684.pptx#0",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 331,
+      "assets": 7,
+      "opBytes": 5557,
       "backingDiffers": 0
     },
     {
@@ -406,7 +422,7 @@
       "differing": 0,
       "opCount": 105,
       "assets": 0,
-      "opBytes": 1563,
+      "opBytes": 1572,
       "backingDiffers": 0
     },
     {
@@ -416,7 +432,7 @@
       "differing": 0,
       "opCount": 105,
       "assets": 0,
-      "opBytes": 1563,
+      "opBytes": 1572,
       "backingDiffers": 0
     },
     {
@@ -426,7 +442,7 @@
       "differing": 0,
       "opCount": 105,
       "assets": 0,
-      "opBytes": 1563,
+      "opBytes": 1572,
       "backingDiffers": 0
     },
     {
@@ -436,7 +452,7 @@
       "differing": 0,
       "opCount": 105,
       "assets": 0,
-      "opBytes": 1563,
+      "opBytes": 1572,
       "backingDiffers": 0
     },
     {
@@ -446,7 +462,7 @@
       "differing": 0,
       "opCount": 300,
       "assets": 1,
-      "opBytes": 5529,
+      "opBytes": 5507,
       "backingDiffers": 0
     },
     {
@@ -456,7 +472,7 @@
       "differing": 0,
       "opCount": 296,
       "assets": 1,
-      "opBytes": 5441,
+      "opBytes": 5419,
       "backingDiffers": 0
     },
     {
@@ -482,29 +498,41 @@
     {
       "id": "lo-tdf149588_transparentSolidFill.pptx#0",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "diff",
+      "differing": 5,
+      "opCount": 6651,
+      "assets": 6,
+      "opBytes": 92790,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf149588_transparentSolidFill.pptx#0",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "diff",
+      "differing": 19,
+      "opCount": 6651,
+      "assets": 6,
+      "opBytes": 92790,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf156808.pptx#0",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
       "id": "lo-tdf156808.pptx#0",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 998,
       "backingDiffers": 0
     },
     {
@@ -514,7 +542,7 @@
       "differing": 0,
       "opCount": 87,
       "assets": 0,
-      "opBytes": 1335,
+      "opBytes": 1366,
       "backingDiffers": 0
     },
     {
@@ -524,7 +552,7 @@
       "differing": 0,
       "opCount": 87,
       "assets": 0,
-      "opBytes": 1335,
+      "opBytes": 1366,
       "backingDiffers": 0
     },
     {
@@ -534,7 +562,7 @@
       "differing": 0,
       "opCount": 83,
       "assets": 0,
-      "opBytes": 1255,
+      "opBytes": 1264,
       "backingDiffers": 0
     },
     {
@@ -544,7 +572,7 @@
       "differing": 0,
       "opCount": 83,
       "assets": 0,
-      "opBytes": 1255,
+      "opBytes": 1264,
       "backingDiffers": 0
     },
     {
@@ -552,9 +580,9 @@
       "scale": 1,
       "status": "zero",
       "differing": 0,
-      "opCount": 620,
+      "opCount": 614,
       "assets": 1,
-      "opBytes": 11103,
+      "opBytes": 10894,
       "backingDiffers": 0
     },
     {
@@ -562,19 +590,19 @@
       "scale": 2,
       "status": "zero",
       "differing": 0,
-      "opCount": 620,
+      "opCount": 614,
       "assets": 1,
-      "opBytes": 11103,
+      "opBytes": 10894,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#0",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 264,
       "assets": 1,
-      "opBytes": 4157,
+      "opBytes": 4148,
       "backingDiffers": 0
     },
     {
@@ -584,17 +612,17 @@
       "differing": 0,
       "opCount": 264,
       "assets": 1,
-      "opBytes": 4157,
+      "opBytes": 4148,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#1",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 797,
       "assets": 1,
-      "opBytes": 12340,
+      "opBytes": 12322,
       "backingDiffers": 0
     },
     {
@@ -604,14 +632,14 @@
       "differing": 0,
       "opCount": 797,
       "assets": 1,
-      "opBytes": 12340,
+      "opBytes": 12322,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#2",
       "scale": 1,
-      "status": "diff",
-      "differing": 100567,
+      "status": "zero",
+      "differing": 0,
       "opCount": 82,
       "assets": 2,
       "opBytes": 1287,
@@ -630,11 +658,11 @@
     {
       "id": "poi-2411-Performance_Up.pptx#3",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 251,
       "assets": 1,
-      "opBytes": 4064,
+      "opBytes": 4055,
       "backingDiffers": 0
     },
     {
@@ -644,31 +672,37 @@
       "differing": 0,
       "opCount": 251,
       "assets": 1,
-      "opBytes": 4064,
+      "opBytes": 4055,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#4",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 82,
+      "assets": 2,
+      "opBytes": 1287,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#4",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 82,
+      "assets": 2,
+      "opBytes": 1287,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#5",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 182,
       "assets": 1,
-      "opBytes": 2878,
+      "opBytes": 2872,
       "backingDiffers": 0
     },
     {
@@ -678,17 +712,17 @@
       "differing": 0,
       "opCount": 182,
       "assets": 1,
-      "opBytes": 2878,
+      "opBytes": 2872,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#6",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 491,
       "assets": 1,
-      "opBytes": 8232,
+      "opBytes": 8193,
       "backingDiffers": 0
     },
     {
@@ -698,17 +732,17 @@
       "differing": 0,
       "opCount": 491,
       "assets": 1,
-      "opBytes": 8232,
+      "opBytes": 8193,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#7",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 383,
       "assets": 1,
-      "opBytes": 6388,
+      "opBytes": 6343,
       "backingDiffers": 0
     },
     {
@@ -718,17 +752,17 @@
       "differing": 0,
       "opCount": 383,
       "assets": 1,
-      "opBytes": 6388,
+      "opBytes": 6343,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#8",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 347,
       "assets": 1,
-      "opBytes": 5742,
+      "opBytes": 5715,
       "backingDiffers": 0
     },
     {
@@ -738,17 +772,17 @@
       "differing": 0,
       "opCount": 347,
       "assets": 1,
-      "opBytes": 5742,
+      "opBytes": 5715,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#9",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 149,
       "assets": 2,
-      "opBytes": 2364,
+      "opBytes": 2361,
       "backingDiffers": 0
     },
     {
@@ -758,17 +792,17 @@
       "differing": 0,
       "opCount": 149,
       "assets": 2,
-      "opBytes": 2364,
+      "opBytes": 2361,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#10",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 257,
       "assets": 1,
-      "opBytes": 4222,
+      "opBytes": 4195,
       "backingDiffers": 0
     },
     {
@@ -778,17 +812,17 @@
       "differing": 0,
       "opCount": 257,
       "assets": 1,
-      "opBytes": 4222,
+      "opBytes": 4195,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#11",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 177,
       "assets": 2,
-      "opBytes": 2681,
+      "opBytes": 2696,
       "backingDiffers": 0
     },
     {
@@ -798,17 +832,17 @@
       "differing": 0,
       "opCount": 170,
       "assets": 2,
-      "opBytes": 2555,
+      "opBytes": 2570,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#12",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 310,
       "assets": 2,
-      "opBytes": 5044,
+      "opBytes": 5017,
       "backingDiffers": 0
     },
     {
@@ -818,17 +852,17 @@
       "differing": 0,
       "opCount": 310,
       "assets": 2,
-      "opBytes": 5044,
+      "opBytes": 5017,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#13",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 279,
       "assets": 2,
-      "opBytes": 4523,
+      "opBytes": 4502,
       "backingDiffers": 0
     },
     {
@@ -838,17 +872,17 @@
       "differing": 0,
       "opCount": 279,
       "assets": 2,
-      "opBytes": 4523,
+      "opBytes": 4502,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#14",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 299,
       "assets": 1,
-      "opBytes": 4927,
+      "opBytes": 4894,
       "backingDiffers": 0
     },
     {
@@ -858,17 +892,17 @@
       "differing": 0,
       "opCount": 299,
       "assets": 1,
-      "opBytes": 4927,
+      "opBytes": 4894,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#15",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 464,
       "assets": 1,
-      "opBytes": 7852,
+      "opBytes": 7819,
       "backingDiffers": 0
     },
     {
@@ -878,17 +912,17 @@
       "differing": 0,
       "opCount": 464,
       "assets": 1,
-      "opBytes": 7852,
+      "opBytes": 7819,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#16",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 2307,
       "assets": 1,
-      "opBytes": 32469,
+      "opBytes": 32679,
       "backingDiffers": 0
     },
     {
@@ -898,17 +932,17 @@
       "differing": 0,
       "opCount": 2307,
       "assets": 1,
-      "opBytes": 32469,
+      "opBytes": 32679,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#17",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 668,
       "assets": 1,
-      "opBytes": 11237,
+      "opBytes": 11192,
       "backingDiffers": 0
     },
     {
@@ -918,17 +952,17 @@
       "differing": 0,
       "opCount": 668,
       "assets": 1,
-      "opBytes": 11237,
+      "opBytes": 11192,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#18",
       "scale": 1,
-      "status": "diff",
-      "differing": 100239,
+      "status": "zero",
+      "differing": 0,
       "opCount": 164,
       "assets": 2,
-      "opBytes": 2618,
+      "opBytes": 2615,
       "backingDiffers": 0
     },
     {
@@ -938,17 +972,17 @@
       "differing": 0,
       "opCount": 164,
       "assets": 2,
-      "opBytes": 2618,
+      "opBytes": 2615,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#19",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 263,
       "assets": 1,
-      "opBytes": 4285,
+      "opBytes": 4270,
       "backingDiffers": 0
     },
     {
@@ -958,17 +992,17 @@
       "differing": 0,
       "opCount": 263,
       "assets": 1,
-      "opBytes": 4285,
+      "opBytes": 4270,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#20",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 422,
       "assets": 1,
-      "opBytes": 7089,
+      "opBytes": 7050,
       "backingDiffers": 0
     },
     {
@@ -978,17 +1012,17 @@
       "differing": 0,
       "opCount": 422,
       "assets": 1,
-      "opBytes": 7089,
+      "opBytes": 7050,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#21",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 365,
       "assets": 1,
-      "opBytes": 6264,
+      "opBytes": 6231,
       "backingDiffers": 0
     },
     {
@@ -998,17 +1032,17 @@
       "differing": 0,
       "opCount": 365,
       "assets": 1,
-      "opBytes": 6264,
+      "opBytes": 6231,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#22",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 411,
       "assets": 1,
-      "opBytes": 6804,
+      "opBytes": 6777,
       "backingDiffers": 0
     },
     {
@@ -1018,17 +1052,17 @@
       "differing": 0,
       "opCount": 411,
       "assets": 1,
-      "opBytes": 6804,
+      "opBytes": 6777,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#23",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 548,
       "assets": 1,
-      "opBytes": 9208,
+      "opBytes": 9172,
       "backingDiffers": 0
     },
     {
@@ -1038,17 +1072,17 @@
       "differing": 0,
       "opCount": 548,
       "assets": 1,
-      "opBytes": 9208,
+      "opBytes": 9172,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#24",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 533,
       "assets": 1,
-      "opBytes": 8953,
+      "opBytes": 8908,
       "backingDiffers": 0
     },
     {
@@ -1058,17 +1092,17 @@
       "differing": 0,
       "opCount": 533,
       "assets": 1,
-      "opBytes": 8953,
+      "opBytes": 8908,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#25",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 701,
       "assets": 1,
-      "opBytes": 11809,
+      "opBytes": 11764,
       "backingDiffers": 0
     },
     {
@@ -1078,17 +1112,17 @@
       "differing": 0,
       "opCount": 701,
       "assets": 1,
-      "opBytes": 11809,
+      "opBytes": 11764,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#26",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 701,
       "assets": 1,
-      "opBytes": 11869,
+      "opBytes": 11818,
       "backingDiffers": 0
     },
     {
@@ -1098,17 +1132,17 @@
       "differing": 0,
       "opCount": 701,
       "assets": 1,
-      "opBytes": 11869,
+      "opBytes": 11818,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#27",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 138,
       "assets": 2,
-      "opBytes": 2110,
+      "opBytes": 2119,
       "backingDiffers": 0
     },
     {
@@ -1118,17 +1152,17 @@
       "differing": 0,
       "opCount": 131,
       "assets": 2,
-      "opBytes": 1984,
+      "opBytes": 1993,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#28",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 305,
       "assets": 1,
-      "opBytes": 5022,
+      "opBytes": 5001,
       "backingDiffers": 0
     },
     {
@@ -1138,17 +1172,17 @@
       "differing": 0,
       "opCount": 305,
       "assets": 1,
-      "opBytes": 5022,
+      "opBytes": 5001,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#29",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 605,
       "assets": 1,
-      "opBytes": 10225,
+      "opBytes": 10174,
       "backingDiffers": 0
     },
     {
@@ -1158,17 +1192,17 @@
       "differing": 0,
       "opCount": 605,
       "assets": 1,
-      "opBytes": 10225,
+      "opBytes": 10174,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#30",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 512,
       "assets": 1,
-      "opBytes": 8560,
+      "opBytes": 8533,
       "backingDiffers": 0
     },
     {
@@ -1178,17 +1212,17 @@
       "differing": 0,
       "opCount": 512,
       "assets": 1,
-      "opBytes": 8560,
+      "opBytes": 8533,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#31",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 692,
       "assets": 1,
-      "opBytes": 11673,
+      "opBytes": 11634,
       "backingDiffers": 0
     },
     {
@@ -1198,17 +1232,17 @@
       "differing": 0,
       "opCount": 692,
       "assets": 1,
-      "opBytes": 11673,
+      "opBytes": 11634,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#32",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 854,
       "assets": 1,
-      "opBytes": 13694,
+      "opBytes": 13628,
       "backingDiffers": 0
     },
     {
@@ -1218,17 +1252,17 @@
       "differing": 0,
       "opCount": 854,
       "assets": 1,
-      "opBytes": 13694,
+      "opBytes": 13628,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#33",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 395,
       "assets": 1,
-      "opBytes": 6533,
+      "opBytes": 6512,
       "backingDiffers": 0
     },
     {
@@ -1238,17 +1272,17 @@
       "differing": 0,
       "opCount": 395,
       "assets": 1,
-      "opBytes": 6533,
+      "opBytes": 6512,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#34",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 584,
       "assets": 1,
-      "opBytes": 9790,
+      "opBytes": 9757,
       "backingDiffers": 0
     },
     {
@@ -1258,17 +1292,17 @@
       "differing": 0,
       "opCount": 584,
       "assets": 1,
-      "opBytes": 9790,
+      "opBytes": 9757,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#35",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 728,
       "assets": 1,
-      "opBytes": 12434,
+      "opBytes": 12377,
       "backingDiffers": 0
     },
     {
@@ -1278,17 +1312,17 @@
       "differing": 0,
       "opCount": 728,
       "assets": 1,
-      "opBytes": 12434,
+      "opBytes": 12377,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#36",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 575,
       "assets": 1,
-      "opBytes": 9701,
+      "opBytes": 9650,
       "backingDiffers": 0
     },
     {
@@ -1298,17 +1332,17 @@
       "differing": 0,
       "opCount": 575,
       "assets": 1,
-      "opBytes": 9701,
+      "opBytes": 9650,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#37",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 536,
       "assets": 1,
-      "opBytes": 9003,
+      "opBytes": 8964,
       "backingDiffers": 0
     },
     {
@@ -1318,17 +1352,17 @@
       "differing": 0,
       "opCount": 536,
       "assets": 1,
-      "opBytes": 9003,
+      "opBytes": 8964,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#38",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 434,
       "assets": 1,
-      "opBytes": 7276,
+      "opBytes": 7243,
       "backingDiffers": 0
     },
     {
@@ -1338,17 +1372,17 @@
       "differing": 0,
       "opCount": 434,
       "assets": 1,
-      "opBytes": 7276,
+      "opBytes": 7243,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#39",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 743,
       "assets": 1,
-      "opBytes": 14042,
+      "opBytes": 14009,
       "backingDiffers": 0
     },
     {
@@ -1358,17 +1392,17 @@
       "differing": 0,
       "opCount": 743,
       "assets": 1,
-      "opBytes": 14042,
+      "opBytes": 14009,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#40",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 350,
       "assets": 1,
-      "opBytes": 5768,
+      "opBytes": 5747,
       "backingDiffers": 0
     },
     {
@@ -1378,17 +1412,17 @@
       "differing": 0,
       "opCount": 350,
       "assets": 1,
-      "opBytes": 5768,
+      "opBytes": 5747,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#41",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 587,
       "assets": 1,
-      "opBytes": 10969,
+      "opBytes": 10936,
       "backingDiffers": 0
     },
     {
@@ -1398,17 +1432,17 @@
       "differing": 0,
       "opCount": 587,
       "assets": 1,
-      "opBytes": 10969,
+      "opBytes": 10936,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#42",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 335,
       "assets": 1,
-      "opBytes": 5513,
+      "opBytes": 5492,
       "backingDiffers": 0
     },
     {
@@ -1418,17 +1452,17 @@
       "differing": 0,
       "opCount": 335,
       "assets": 1,
-      "opBytes": 5513,
+      "opBytes": 5492,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#43",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 107,
       "assets": 1,
-      "opBytes": 1592,
+      "opBytes": 1589,
       "backingDiffers": 0
     },
     {
@@ -1438,17 +1472,17 @@
       "differing": 0,
       "opCount": 107,
       "assets": 1,
-      "opBytes": 1592,
+      "opBytes": 1589,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#44",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 410,
       "assets": 1,
-      "opBytes": 6807,
+      "opBytes": 6783,
       "backingDiffers": 0
     },
     {
@@ -1458,17 +1492,17 @@
       "differing": 0,
       "opCount": 410,
       "assets": 1,
-      "opBytes": 6807,
+      "opBytes": 6783,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#45",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 137,
       "assets": 1,
-      "opBytes": 2159,
+      "opBytes": 2153,
       "backingDiffers": 0
     },
     {
@@ -1478,17 +1512,17 @@
       "differing": 0,
       "opCount": 137,
       "assets": 1,
-      "opBytes": 2159,
+      "opBytes": 2153,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#46",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 122,
       "assets": 1,
-      "opBytes": 1848,
+      "opBytes": 1845,
       "backingDiffers": 0
     },
     {
@@ -1498,17 +1532,17 @@
       "differing": 0,
       "opCount": 122,
       "assets": 1,
-      "opBytes": 1848,
+      "opBytes": 1845,
       "backingDiffers": 0
     },
     {
       "id": "poi-2411-Performance_Up.pptx#47",
       "scale": 1,
-      "status": "diff",
-      "differing": 101204,
+      "status": "zero",
+      "differing": 0,
       "opCount": 1667,
       "assets": 1,
-      "opBytes": 29554,
+      "opBytes": 29461,
       "backingDiffers": 0
     },
     {
@@ -1518,7 +1552,7 @@
       "differing": 0,
       "opCount": 1667,
       "assets": 1,
-      "opBytes": 29554,
+      "opBytes": 29461,
       "backingDiffers": 0
     },
     {
@@ -1664,29 +1698,41 @@
     {
       "id": "poi-60810.pptx#0",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1051,
+      "assets": 1,
+      "opBytes": 17706,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#0",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1051,
+      "assets": 1,
+      "opBytes": 17706,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#1",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2851,
+      "assets": 1,
+      "opBytes": 50161,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#1",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2851,
+      "assets": 1,
+      "opBytes": 50161,
       "backingDiffers": 0
     },
     {
@@ -1696,7 +1742,7 @@
       "differing": 0,
       "opCount": 1340,
       "assets": 0,
-      "opBytes": 23226,
+      "opBytes": 23217,
       "backingDiffers": 0
     },
     {
@@ -1706,7 +1752,7 @@
       "differing": 0,
       "opCount": 1340,
       "assets": 0,
-      "opBytes": 23226,
+      "opBytes": 23217,
       "backingDiffers": 0
     },
     {
@@ -1716,7 +1762,7 @@
       "differing": 0,
       "opCount": 1496,
       "assets": 0,
-      "opBytes": 26918,
+      "opBytes": 26861,
       "backingDiffers": 0
     },
     {
@@ -1726,343 +1772,487 @@
       "differing": 0,
       "opCount": 1496,
       "assets": 0,
-      "opBytes": 26918,
+      "opBytes": 26861,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#4",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2926,
+      "assets": 1,
+      "opBytes": 51574,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#4",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2926,
+      "assets": 1,
+      "opBytes": 51574,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#5",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2916,
+      "assets": 1,
+      "opBytes": 51407,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#5",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2916,
+      "assets": 1,
+      "opBytes": 51407,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#6",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1756,
+      "assets": 1,
+      "opBytes": 30222,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#6",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1756,
+      "assets": 1,
+      "opBytes": 30222,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#7",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 4181,
+      "assets": 1,
+      "opBytes": 68564,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#7",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 4132,
+      "assets": 1,
+      "opBytes": 67682,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#8",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2920,
+      "assets": 1,
+      "opBytes": 47750,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#8",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2920,
+      "assets": 1,
+      "opBytes": 47750,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#9",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2473,
+      "assets": 1,
+      "opBytes": 43356,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#9",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2473,
+      "assets": 1,
+      "opBytes": 43356,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#10",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4815,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#10",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4815,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#11",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2212,
+      "assets": 1,
+      "opBytes": 38372,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#11",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2212,
+      "assets": 1,
+      "opBytes": 38372,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#12",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3798,
+      "assets": 1,
+      "opBytes": 69434,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#12",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3798,
+      "assets": 1,
+      "opBytes": 69434,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#13",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 207,
+      "assets": 3,
+      "opBytes": 3234,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#13",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 207,
+      "assets": 3,
+      "opBytes": 3234,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#14",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2425,
+      "assets": 1,
+      "opBytes": 43402,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#14",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2425,
+      "assets": 1,
+      "opBytes": 43402,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#15",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2401,
+      "assets": 1,
+      "opBytes": 42230,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#15",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2401,
+      "assets": 1,
+      "opBytes": 42230,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#16",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1981,
+      "assets": 1,
+      "opBytes": 32151,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#16",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1981,
+      "assets": 1,
+      "opBytes": 32151,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#17",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "diff",
+      "differing": 13996,
+      "opCount": 37249,
+      "assets": 1,
+      "opBytes": 643654,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#17",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "diff",
+      "differing": 36784,
+      "opCount": 37249,
+      "assets": 1,
+      "opBytes": 643654,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#18",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2617,
+      "assets": 1,
+      "opBytes": 46067,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#18",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2617,
+      "assets": 1,
+      "opBytes": 46067,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#19",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1894,
+      "assets": 1,
+      "opBytes": 31298,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#19",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1894,
+      "assets": 1,
+      "opBytes": 31298,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#20",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 139,
+      "assets": 1,
+      "opBytes": 2078,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#20",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 139,
+      "assets": 1,
+      "opBytes": 2078,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#21",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "diff",
+      "differing": 1985,
+      "opCount": 11826,
+      "assets": 1,
+      "opBytes": 192960,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#21",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "diff",
+      "differing": 1372,
+      "opCount": 11826,
+      "assets": 1,
+      "opBytes": 192960,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#22",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 189,
+      "assets": 3,
+      "opBytes": 3015,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#22",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 189,
+      "assets": 3,
+      "opBytes": 3015,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#23",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 226,
+      "assets": 4,
+      "opBytes": 3556,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#23",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 226,
+      "assets": 4,
+      "opBytes": 3556,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#24",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4815,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#24",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4815,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#25",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 376,
+      "assets": 4,
+      "opBytes": 6612,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#25",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 376,
+      "assets": 4,
+      "opBytes": 6612,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#26",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2905,
+      "assets": 1,
+      "opBytes": 51994,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#26",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2905,
+      "assets": 1,
+      "opBytes": 51994,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#27",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1008,
+      "assets": 2,
+      "opBytes": 16071,
       "backingDiffers": 0
     },
     {
       "id": "poi-60810.pptx#27",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1008,
+      "assets": 2,
+      "opBytes": 16071,
       "backingDiffers": 0
     },
     {
@@ -2132,7 +2322,7 @@
       "differing": 0,
       "opCount": 398,
       "assets": 1,
-      "opBytes": 6950,
+      "opBytes": 6935,
       "backingDiffers": 0
     },
     {
@@ -2142,7 +2332,7 @@
       "differing": 0,
       "opCount": 398,
       "assets": 1,
-      "opBytes": 6950,
+      "opBytes": 6935,
       "backingDiffers": 0
     },
     {
@@ -2152,7 +2342,7 @@
       "differing": 0,
       "opCount": 405,
       "assets": 1,
-      "opBytes": 6623,
+      "opBytes": 6618,
       "backingDiffers": 0
     },
     {
@@ -2162,7 +2352,7 @@
       "differing": 0,
       "opCount": 405,
       "assets": 1,
-      "opBytes": 6623,
+      "opBytes": 6618,
       "backingDiffers": 0
     },
     {
@@ -2172,7 +2362,7 @@
       "differing": 0,
       "opCount": 1329,
       "assets": 1,
-      "opBytes": 21880,
+      "opBytes": 21821,
       "backingDiffers": 0
     },
     {
@@ -2182,7 +2372,7 @@
       "differing": 0,
       "opCount": 1329,
       "assets": 1,
-      "opBytes": 21880,
+      "opBytes": 21821,
       "backingDiffers": 0
     },
     {
@@ -2192,7 +2382,7 @@
       "differing": 0,
       "opCount": 663,
       "assets": 1,
-      "opBytes": 10996,
+      "opBytes": 10976,
       "backingDiffers": 0
     },
     {
@@ -2202,7 +2392,7 @@
       "differing": 0,
       "opCount": 663,
       "assets": 1,
-      "opBytes": 10996,
+      "opBytes": 10976,
       "backingDiffers": 0
     },
     {
@@ -2212,7 +2402,7 @@
       "differing": 0,
       "opCount": 952,
       "assets": 1,
-      "opBytes": 13823,
+      "opBytes": 13791,
       "backingDiffers": 0
     },
     {
@@ -2222,7 +2412,7 @@
       "differing": 0,
       "opCount": 952,
       "assets": 1,
-      "opBytes": 13823,
+      "opBytes": 13791,
       "backingDiffers": 0
     },
     {
@@ -2232,7 +2422,7 @@
       "differing": 0,
       "opCount": 2232,
       "assets": 1,
-      "opBytes": 37590,
+      "opBytes": 37540,
       "backingDiffers": 0
     },
     {
@@ -2242,7 +2432,7 @@
       "differing": 0,
       "opCount": 2232,
       "assets": 1,
-      "opBytes": 37590,
+      "opBytes": 37540,
       "backingDiffers": 0
     },
     {
@@ -2252,7 +2442,7 @@
       "differing": 0,
       "opCount": 1636,
       "assets": 1,
-      "opBytes": 25817,
+      "opBytes": 25758,
       "backingDiffers": 0
     },
     {
@@ -2262,7 +2452,7 @@
       "differing": 0,
       "opCount": 1636,
       "assets": 1,
-      "opBytes": 25817,
+      "opBytes": 25758,
       "backingDiffers": 0
     },
     {
@@ -2272,7 +2462,7 @@
       "differing": 0,
       "opCount": 942,
       "assets": 1,
-      "opBytes": 14830,
+      "opBytes": 14807,
       "backingDiffers": 0
     },
     {
@@ -2282,7 +2472,7 @@
       "differing": 0,
       "opCount": 942,
       "assets": 1,
-      "opBytes": 14830,
+      "opBytes": 14807,
       "backingDiffers": 0
     },
     {
@@ -2292,7 +2482,7 @@
       "differing": 0,
       "opCount": 148,
       "assets": 2,
-      "opBytes": 2236,
+      "opBytes": 2233,
       "backingDiffers": 0
     },
     {
@@ -2302,17 +2492,17 @@
       "differing": 0,
       "opCount": 148,
       "assets": 2,
-      "opBytes": 2236,
+      "opBytes": 2233,
       "backingDiffers": 0
     },
     {
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#0",
       "scale": 1,
-      "status": "diff",
-      "differing": 21834,
+      "status": "zero",
+      "differing": 0,
       "opCount": 593,
       "assets": 3,
-      "opBytes": 9896,
+      "opBytes": 9878,
       "backingDiffers": 0
     },
     {
@@ -2322,7 +2512,7 @@
       "differing": 0,
       "opCount": 593,
       "assets": 3,
-      "opBytes": 9896,
+      "opBytes": 9878,
       "backingDiffers": 0
     },
     {
@@ -2352,7 +2542,7 @@
       "differing": 0,
       "opCount": 1023,
       "assets": 0,
-      "opBytes": 17825,
+      "opBytes": 17804,
       "backingDiffers": 0
     },
     {
@@ -2362,7 +2552,7 @@
       "differing": 0,
       "opCount": 1023,
       "assets": 0,
-      "opBytes": 17825,
+      "opBytes": 17804,
       "backingDiffers": 0
     },
     {
@@ -2372,7 +2562,7 @@
       "differing": 0,
       "opCount": 117,
       "assets": 1,
-      "opBytes": 1839,
+      "opBytes": 1848,
       "backingDiffers": 0
     },
     {
@@ -2382,7 +2572,7 @@
       "differing": 0,
       "opCount": 117,
       "assets": 1,
-      "opBytes": 1839,
+      "opBytes": 1848,
       "backingDiffers": 0
     },
     {
@@ -2392,7 +2582,7 @@
       "differing": 0,
       "opCount": 1548,
       "assets": 0,
-      "opBytes": 26884,
+      "opBytes": 26878,
       "backingDiffers": 0
     },
     {
@@ -2402,7 +2592,7 @@
       "differing": 0,
       "opCount": 1548,
       "assets": 0,
-      "opBytes": 26884,
+      "opBytes": 26878,
       "backingDiffers": 0
     },
     {
@@ -2412,7 +2602,7 @@
       "differing": 0,
       "opCount": 227,
       "assets": 0,
-      "opBytes": 3583,
+      "opBytes": 3586,
       "backingDiffers": 0
     },
     {
@@ -2422,7 +2612,7 @@
       "differing": 0,
       "opCount": 227,
       "assets": 0,
-      "opBytes": 3583,
+      "opBytes": 3586,
       "backingDiffers": 0
     },
     {
@@ -2452,7 +2642,7 @@
       "differing": 0,
       "opCount": 914,
       "assets": 2,
-      "opBytes": 15195,
+      "opBytes": 15186,
       "backingDiffers": 0
     },
     {
@@ -2462,7 +2652,7 @@
       "differing": 0,
       "opCount": 914,
       "assets": 2,
-      "opBytes": 15195,
+      "opBytes": 15186,
       "backingDiffers": 0
     },
     {
@@ -2472,7 +2662,7 @@
       "differing": 0,
       "opCount": 702,
       "assets": 0,
-      "opBytes": 12499,
+      "opBytes": 12463,
       "backingDiffers": 0
     },
     {
@@ -2482,7 +2672,7 @@
       "differing": 0,
       "opCount": 702,
       "assets": 0,
-      "opBytes": 12499,
+      "opBytes": 12463,
       "backingDiffers": 0
     },
     {
@@ -2492,7 +2682,7 @@
       "differing": 0,
       "opCount": 182,
       "assets": 0,
-      "opBytes": 2871,
+      "opBytes": 2874,
       "backingDiffers": 0
     },
     {
@@ -2502,7 +2692,7 @@
       "differing": 0,
       "opCount": 182,
       "assets": 0,
-      "opBytes": 2871,
+      "opBytes": 2874,
       "backingDiffers": 0
     },
     {
@@ -2512,7 +2702,7 @@
       "differing": 0,
       "opCount": 567,
       "assets": 0,
-      "opBytes": 10170,
+      "opBytes": 10140,
       "backingDiffers": 0
     },
     {
@@ -2522,7 +2712,7 @@
       "differing": 0,
       "opCount": 567,
       "assets": 0,
-      "opBytes": 10170,
+      "opBytes": 10140,
       "backingDiffers": 0
     },
     {
@@ -2532,7 +2722,7 @@
       "differing": 0,
       "opCount": 1062,
       "assets": 3,
-      "opBytes": 18365,
+      "opBytes": 18350,
       "backingDiffers": 0
     },
     {
@@ -2542,7 +2732,7 @@
       "differing": 0,
       "opCount": 1062,
       "assets": 3,
-      "opBytes": 18365,
+      "opBytes": 18350,
       "backingDiffers": 0
     },
     {
@@ -2552,7 +2742,7 @@
       "differing": 0,
       "opCount": 987,
       "assets": 0,
-      "opBytes": 17714,
+      "opBytes": 17672,
       "backingDiffers": 0
     },
     {
@@ -2562,21 +2752,27 @@
       "differing": 0,
       "opCount": 987,
       "assets": 0,
-      "opBytes": 17714,
+      "opBytes": 17672,
       "backingDiffers": 0
     },
     {
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#13",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 898,
+      "assets": 1,
+      "opBytes": 17071,
       "backingDiffers": 0
     },
     {
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#13",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 898,
+      "assets": 1,
+      "opBytes": 17071,
       "backingDiffers": 0
     },
     {
@@ -2586,7 +2782,7 @@
       "differing": 0,
       "opCount": 589,
       "assets": 1,
-      "opBytes": 9804,
+      "opBytes": 9801,
       "backingDiffers": 0
     },
     {
@@ -2596,7 +2792,7 @@
       "differing": 0,
       "opCount": 589,
       "assets": 1,
-      "opBytes": 9804,
+      "opBytes": 9801,
       "backingDiffers": 0
     },
     {
@@ -2606,7 +2802,7 @@
       "differing": 0,
       "opCount": 188,
       "assets": 0,
-      "opBytes": 2939,
+      "opBytes": 2945,
       "backingDiffers": 0
     },
     {
@@ -2616,17 +2812,17 @@
       "differing": 0,
       "opCount": 188,
       "assets": 0,
-      "opBytes": 2939,
+      "opBytes": 2945,
       "backingDiffers": 0
     },
     {
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#16",
       "scale": 1,
-      "status": "diff",
-      "differing": 12455,
+      "status": "zero",
+      "differing": 0,
       "opCount": 680,
       "assets": 4,
-      "opBytes": 11411,
+      "opBytes": 11384,
       "backingDiffers": 0
     },
     {
@@ -2636,7 +2832,7 @@
       "differing": 0,
       "opCount": 680,
       "assets": 4,
-      "opBytes": 11411,
+      "opBytes": 11384,
       "backingDiffers": 0
     },
     {
@@ -2646,7 +2842,7 @@
       "differing": 0,
       "opCount": 760,
       "assets": 1,
-      "opBytes": 12682,
+      "opBytes": 12670,
       "backingDiffers": 0
     },
     {
@@ -2656,7 +2852,7 @@
       "differing": 0,
       "opCount": 760,
       "assets": 1,
-      "opBytes": 12682,
+      "opBytes": 12670,
       "backingDiffers": 0
     },
     {
@@ -2666,7 +2862,7 @@
       "differing": 0,
       "opCount": 468,
       "assets": 0,
-      "opBytes": 7945,
+      "opBytes": 7939,
       "backingDiffers": 0
     },
     {
@@ -2676,7 +2872,7 @@
       "differing": 0,
       "opCount": 468,
       "assets": 0,
-      "opBytes": 7945,
+      "opBytes": 7939,
       "backingDiffers": 0
     },
     {
@@ -2686,7 +2882,7 @@
       "differing": 0,
       "opCount": 312,
       "assets": 0,
-      "opBytes": 4878,
+      "opBytes": 4884,
       "backingDiffers": 0
     },
     {
@@ -2696,17 +2892,17 @@
       "differing": 0,
       "opCount": 312,
       "assets": 0,
-      "opBytes": 4878,
+      "opBytes": 4884,
       "backingDiffers": 0
     },
     {
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#20",
       "scale": 1,
-      "status": "diff",
-      "differing": 41901,
+      "status": "zero",
+      "differing": 0,
       "opCount": 477,
       "assets": 2,
-      "opBytes": 8178,
+      "opBytes": 8226,
       "backingDiffers": 0
     },
     {
@@ -2716,7 +2912,7 @@
       "differing": 0,
       "opCount": 469,
       "assets": 2,
-      "opBytes": 7870,
+      "opBytes": 7918,
       "backingDiffers": 0
     },
     {
@@ -2726,7 +2922,7 @@
       "differing": 0,
       "opCount": 273,
       "assets": 3,
-      "opBytes": 5024,
+      "opBytes": 5056,
       "backingDiffers": 0
     },
     {
@@ -2736,7 +2932,7 @@
       "differing": 0,
       "opCount": 259,
       "assets": 3,
-      "opBytes": 4404,
+      "opBytes": 4436,
       "backingDiffers": 0
     },
     {
@@ -2763,10 +2959,10 @@
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#23",
       "scale": 1,
       "status": "diff",
-      "differing": 257289,
+      "differing": 298,
       "opCount": 2017,
       "assets": 3,
-      "opBytes": 34154,
+      "opBytes": 34145,
       "backingDiffers": 0
     },
     {
@@ -2776,17 +2972,17 @@
       "differing": 556,
       "opCount": 2017,
       "assets": 3,
-      "opBytes": 34154,
+      "opBytes": 34145,
       "backingDiffers": 0
     },
     {
       "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#24",
       "scale": 1,
-      "status": "diff",
-      "differing": 22447,
+      "status": "zero",
+      "differing": 0,
       "opCount": 256,
       "assets": 1,
-      "opBytes": 4106,
+      "opBytes": 4115,
       "backingDiffers": 0
     },
     {
@@ -2796,7 +2992,7 @@
       "differing": 0,
       "opCount": 256,
       "assets": 1,
-      "opBytes": 4106,
+      "opBytes": 4115,
       "backingDiffers": 0
     },
     {
@@ -2806,7 +3002,7 @@
       "differing": 0,
       "opCount": 482,
       "assets": 2,
-      "opBytes": 8275,
+      "opBytes": 8263,
       "backingDiffers": 0
     },
     {
@@ -2816,7 +3012,7 @@
       "differing": 0,
       "opCount": 482,
       "assets": 2,
-      "opBytes": 8275,
+      "opBytes": 8263,
       "backingDiffers": 0
     },
     {
@@ -2826,7 +3022,7 @@
       "differing": 0,
       "opCount": 477,
       "assets": 0,
-      "opBytes": 8019,
+      "opBytes": 7995,
       "backingDiffers": 0
     },
     {
@@ -2836,7 +3032,7 @@
       "differing": 0,
       "opCount": 477,
       "assets": 0,
-      "opBytes": 8019,
+      "opBytes": 7995,
       "backingDiffers": 0
     },
     {
@@ -2846,7 +3042,7 @@
       "differing": 0,
       "opCount": 218,
       "assets": 0,
-      "opBytes": 3407,
+      "opBytes": 3413,
       "backingDiffers": 0
     },
     {
@@ -2856,7 +3052,7 @@
       "differing": 0,
       "opCount": 218,
       "assets": 0,
-      "opBytes": 3407,
+      "opBytes": 3413,
       "backingDiffers": 0
     },
     {
@@ -2866,7 +3062,7 @@
       "differing": 0,
       "opCount": 1728,
       "assets": 0,
-      "opBytes": 30103,
+      "opBytes": 30076,
       "backingDiffers": 0
     },
     {
@@ -2876,7 +3072,7 @@
       "differing": 0,
       "opCount": 1728,
       "assets": 0,
-      "opBytes": 30103,
+      "opBytes": 30076,
       "backingDiffers": 0
     },
     {
@@ -2886,7 +3082,7 @@
       "differing": 0,
       "opCount": 1126,
       "assets": 1,
-      "opBytes": 19342,
+      "opBytes": 19321,
       "backingDiffers": 0
     },
     {
@@ -2896,7 +3092,7 @@
       "differing": 0,
       "opCount": 1126,
       "assets": 1,
-      "opBytes": 19342,
+      "opBytes": 19321,
       "backingDiffers": 0
     },
     {
@@ -2906,7 +3102,7 @@
       "differing": 0,
       "opCount": 948,
       "assets": 0,
-      "opBytes": 16473,
+      "opBytes": 16449,
       "backingDiffers": 0
     },
     {
@@ -2916,7 +3112,7 @@
       "differing": 0,
       "opCount": 948,
       "assets": 0,
-      "opBytes": 16473,
+      "opBytes": 16449,
       "backingDiffers": 0
     },
     {
@@ -2926,7 +3122,7 @@
       "differing": 0,
       "opCount": 1026,
       "assets": 0,
-      "opBytes": 17815,
+      "opBytes": 17800,
       "backingDiffers": 0
     },
     {
@@ -2936,7 +3132,7 @@
       "differing": 0,
       "opCount": 1026,
       "assets": 0,
-      "opBytes": 17815,
+      "opBytes": 17800,
       "backingDiffers": 0
     },
     {
@@ -2946,7 +3142,7 @@
       "differing": 0,
       "opCount": 1023,
       "assets": 0,
-      "opBytes": 17767,
+      "opBytes": 17752,
       "backingDiffers": 0
     },
     {
@@ -2956,7 +3152,7 @@
       "differing": 0,
       "opCount": 1023,
       "assets": 0,
-      "opBytes": 17767,
+      "opBytes": 17752,
       "backingDiffers": 0
     },
     {
@@ -2966,7 +3162,7 @@
       "differing": 0,
       "opCount": 507,
       "assets": 3,
-      "opBytes": 8667,
+      "opBytes": 8664,
       "backingDiffers": 0
     },
     {
@@ -2976,7 +3172,7 @@
       "differing": 0,
       "opCount": 507,
       "assets": 3,
-      "opBytes": 8667,
+      "opBytes": 8664,
       "backingDiffers": 0
     },
     {
@@ -2984,9 +3180,9 @@
       "scale": 1,
       "status": "zero",
       "differing": 0,
-      "opCount": 1110,
+      "opCount": 1098,
       "assets": 4,
-      "opBytes": 22042,
+      "opBytes": 21606,
       "backingDiffers": 0
     },
     {
@@ -2994,9 +3190,9 @@
       "scale": 2,
       "status": "zero",
       "differing": 0,
-      "opCount": 1110,
+      "opCount": 1098,
       "assets": 4,
-      "opBytes": 22042,
+      "opBytes": 21606,
       "backingDiffers": 0
     },
     {
@@ -3466,7 +3662,7 @@
       "differing": 0,
       "opCount": 150,
       "assets": 0,
-      "opBytes": 2276,
+      "opBytes": 2282,
       "backingDiffers": 0
     },
     {
@@ -3476,14 +3672,14 @@
       "differing": 0,
       "opCount": 150,
       "assets": 0,
-      "opBytes": 2276,
+      "opBytes": 2282,
       "backingDiffers": 0
     },
     {
       "id": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
       "scale": 0,
-      "status": "error",
-      "detail": "load: Corrupted zip: can't find end of central directory"
+      "status": "skipped",
+      "detail": "malformed fuzzer input: Corrupted zip: can't find end of central directory"
     },
     {
       "id": "poi-crop-to-0.pptx#0",
@@ -3492,7 +3688,7 @@
       "differing": 0,
       "opCount": 64,
       "assets": 0,
-      "opBytes": 916,
+      "opBytes": 928,
       "backingDiffers": 0
     },
     {
@@ -3502,7 +3698,7 @@
       "differing": 0,
       "opCount": 64,
       "assets": 0,
-      "opBytes": 916,
+      "opBytes": 928,
       "backingDiffers": 0
     },
     {
@@ -3512,7 +3708,7 @@
       "differing": 0,
       "opCount": 64,
       "assets": 0,
-      "opBytes": 916,
+      "opBytes": 928,
       "backingDiffers": 0
     },
     {
@@ -3522,7 +3718,7 @@
       "differing": 0,
       "opCount": 64,
       "assets": 0,
-      "opBytes": 916,
+      "opBytes": 928,
       "backingDiffers": 0
     },
     {
@@ -3532,7 +3728,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 954,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
@@ -3542,7 +3738,7 @@
       "differing": 0,
       "opCount": 65,
       "assets": 1,
-      "opBytes": 954,
+      "opBytes": 966,
       "backingDiffers": 0
     },
     {
@@ -3988,8 +4184,8 @@
     {
       "id": "poi-issue_51265_1.docx#0",
       "scale": 1,
-      "status": "diff",
-      "differing": 37138,
+      "status": "zero",
+      "differing": 0,
       "opCount": 45,
       "assets": 1,
       "opBytes": 578,
@@ -3998,8 +4194,8 @@
     {
       "id": "poi-issue_51265_1.docx#0",
       "scale": 2,
-      "status": "diff",
-      "differing": 141273,
+      "status": "zero",
+      "differing": 0,
       "opCount": 45,
       "assets": 1,
       "opBytes": 578,
@@ -4008,11 +4204,11 @@
     {
       "id": "poi-keyframes.pptx#0",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2311,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2284,
       "assets": 4,
-      "opBytes": 43226,
+      "opBytes": 42508,
       "backingDiffers": 0
     },
     {
@@ -4020,19 +4216,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2252,
+      "opCount": 2225,
       "assets": 4,
-      "opBytes": 41337,
+      "opBytes": 40619,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#1",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2123,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2084,
       "assets": 6,
-      "opBytes": 40331,
+      "opBytes": 39128,
       "backingDiffers": 0
     },
     {
@@ -4040,19 +4236,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2079,
+      "opCount": 2040,
       "assets": 6,
-      "opBytes": 38883,
+      "opBytes": 37680,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#2",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2332,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2317,
       "assets": 4,
-      "opBytes": 41120,
+      "opBytes": 40475,
       "backingDiffers": 0
     },
     {
@@ -4060,19 +4256,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2310,
+      "opCount": 2295,
       "assets": 4,
-      "opBytes": 40396,
+      "opBytes": 39751,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#3",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2100,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2085,
       "assets": 4,
-      "opBytes": 36861,
+      "opBytes": 36395,
       "backingDiffers": 0
     },
     {
@@ -4080,19 +4276,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2078,
+      "opCount": 2063,
       "assets": 4,
-      "opBytes": 36137,
+      "opBytes": 35671,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#4",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 1940,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1925,
       "assets": 4,
-      "opBytes": 33839,
+      "opBytes": 33384,
       "backingDiffers": 0
     },
     {
@@ -4100,19 +4296,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 1918,
+      "opCount": 1903,
       "assets": 4,
-      "opBytes": 33115,
+      "opBytes": 32660,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#5",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 1970,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1955,
       "assets": 4,
-      "opBytes": 34553,
+      "opBytes": 34095,
       "backingDiffers": 0
     },
     {
@@ -4120,19 +4316,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 1948,
+      "opCount": 1933,
       "assets": 4,
-      "opBytes": 33829,
+      "opBytes": 33371,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#6",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2081,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2066,
       "assets": 4,
-      "opBytes": 36360,
+      "opBytes": 35908,
       "backingDiffers": 0
     },
     {
@@ -4140,19 +4336,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2059,
+      "opCount": 2044,
       "assets": 4,
-      "opBytes": 35636,
+      "opBytes": 35184,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#7",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2435,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2420,
       "assets": 4,
-      "opBytes": 42121,
+      "opBytes": 41627,
       "backingDiffers": 0
     },
     {
@@ -4160,19 +4356,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2413,
+      "opCount": 2398,
       "assets": 4,
-      "opBytes": 41397,
+      "opBytes": 40903,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#8",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 1993,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1978,
       "assets": 4,
-      "opBytes": 34704,
+      "opBytes": 34240,
       "backingDiffers": 0
     },
     {
@@ -4180,19 +4376,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 1971,
+      "opCount": 1956,
       "assets": 4,
-      "opBytes": 33980,
+      "opBytes": 33516,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#9",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 1867,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1852,
       "assets": 4,
-      "opBytes": 32344,
+      "opBytes": 31913,
       "backingDiffers": 0
     },
     {
@@ -4200,19 +4396,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 1845,
+      "opCount": 1830,
       "assets": 4,
-      "opBytes": 31620,
+      "opBytes": 31189,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#10",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 1654,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1639,
       "assets": 4,
-      "opBytes": 29087,
+      "opBytes": 28647,
       "backingDiffers": 0
     },
     {
@@ -4220,19 +4416,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 1632,
+      "opCount": 1617,
       "assets": 4,
-      "opBytes": 28363,
+      "opBytes": 27923,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#11",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 3846,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3819,
       "assets": 4,
-      "opBytes": 67557,
+      "opBytes": 66680,
       "backingDiffers": 0
     },
     {
@@ -4240,19 +4436,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 3802,
+      "opCount": 3775,
       "assets": 4,
-      "opBytes": 66109,
+      "opBytes": 65232,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#12",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2383,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2368,
       "assets": 4,
-      "opBytes": 40928,
+      "opBytes": 40419,
       "backingDiffers": 0
     },
     {
@@ -4260,19 +4456,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2361,
+      "opCount": 2346,
       "assets": 4,
-      "opBytes": 40204,
+      "opBytes": 39695,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#13",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 1599,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1584,
       "assets": 4,
-      "opBytes": 28451,
+      "opBytes": 27988,
       "backingDiffers": 0
     },
     {
@@ -4280,19 +4476,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 1577,
+      "opCount": 1562,
       "assets": 4,
-      "opBytes": 27727,
+      "opBytes": 27264,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#14",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 990,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 975,
       "assets": 4,
-      "opBytes": 18692,
+      "opBytes": 18257,
       "backingDiffers": 0
     },
     {
@@ -4300,19 +4496,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 968,
+      "opCount": 953,
       "assets": 4,
-      "opBytes": 17968,
+      "opBytes": 17533,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#15",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2842,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2815,
       "assets": 4,
-      "opBytes": 51973,
+      "opBytes": 51265,
       "backingDiffers": 0
     },
     {
@@ -4320,19 +4516,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2798,
+      "opCount": 2771,
       "assets": 4,
-      "opBytes": 50525,
+      "opBytes": 49817,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#16",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2702,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2675,
       "assets": 4,
-      "opBytes": 49588,
+      "opBytes": 48903,
       "backingDiffers": 0
     },
     {
@@ -4340,19 +4536,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2658,
+      "opCount": 2631,
       "assets": 4,
-      "opBytes": 48140,
+      "opBytes": 47455,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#17",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2930,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2903,
       "assets": 4,
-      "opBytes": 53509,
+      "opBytes": 52764,
       "backingDiffers": 0
     },
     {
@@ -4360,19 +4556,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2886,
+      "opCount": 2859,
       "assets": 4,
-      "opBytes": 52061,
+      "opBytes": 51316,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#18",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2648,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2621,
       "assets": 4,
-      "opBytes": 48737,
+      "opBytes": 48055,
       "backingDiffers": 0
     },
     {
@@ -4380,19 +4576,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2604,
+      "opCount": 2577,
       "assets": 4,
-      "opBytes": 47289,
+      "opBytes": 46607,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#19",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2708,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2681,
       "assets": 4,
-      "opBytes": 49652,
+      "opBytes": 48970,
       "backingDiffers": 0
     },
     {
@@ -4400,19 +4596,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2664,
+      "opCount": 2637,
       "assets": 4,
-      "opBytes": 48204,
+      "opBytes": 47522,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#20",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2663,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2636,
       "assets": 4,
-      "opBytes": 48986,
+      "opBytes": 48304,
       "backingDiffers": 0
     },
     {
@@ -4420,19 +4616,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2619,
+      "opCount": 2592,
       "assets": 4,
-      "opBytes": 47538,
+      "opBytes": 46856,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#21",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2915,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2888,
       "assets": 4,
-      "opBytes": 52836,
+      "opBytes": 52154,
       "backingDiffers": 0
     },
     {
@@ -4440,19 +4636,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2871,
+      "opCount": 2844,
       "assets": 4,
-      "opBytes": 51388,
+      "opBytes": 50706,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#22",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2775,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2748,
       "assets": 4,
-      "opBytes": 50655,
+      "opBytes": 49973,
       "backingDiffers": 0
     },
     {
@@ -4460,19 +4656,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2731,
+      "opCount": 2704,
       "assets": 4,
-      "opBytes": 49207,
+      "opBytes": 48525,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#23",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2672,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2645,
       "assets": 4,
-      "opBytes": 49126,
+      "opBytes": 48444,
       "backingDiffers": 0
     },
     {
@@ -4480,19 +4676,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2628,
+      "opCount": 2601,
       "assets": 4,
-      "opBytes": 47678,
+      "opBytes": 46996,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#24",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2803,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2776,
       "assets": 4,
-      "opBytes": 51267,
+      "opBytes": 50571,
       "backingDiffers": 0
     },
     {
@@ -4500,19 +4696,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2759,
+      "opCount": 2732,
       "assets": 4,
-      "opBytes": 49819,
+      "opBytes": 49123,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#25",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 990,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 975,
       "assets": 4,
-      "opBytes": 18692,
+      "opBytes": 18257,
       "backingDiffers": 0
     },
     {
@@ -4520,19 +4716,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 968,
+      "opCount": 953,
       "assets": 4,
-      "opBytes": 17968,
+      "opBytes": 17533,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#26",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2083,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2056,
       "assets": 4,
-      "opBytes": 39180,
+      "opBytes": 38404,
       "backingDiffers": 0
     },
     {
@@ -4540,19 +4736,19 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2039,
+      "opCount": 2012,
       "assets": 4,
-      "opBytes": 37732,
+      "opBytes": 36956,
       "backingDiffers": 0
     },
     {
       "id": "poi-keyframes.pptx#27",
       "scale": 1,
-      "status": "diff",
-      "differing": 2,
-      "opCount": 2726,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2699,
       "assets": 4,
-      "opBytes": 51659,
+      "opBytes": 50814,
       "backingDiffers": 0
     },
     {
@@ -4560,9 +4756,9 @@
       "scale": 2,
       "status": "diff",
       "differing": 109,
-      "opCount": 2682,
+      "opCount": 2655,
       "assets": 4,
-      "opBytes": 50211,
+      "opBytes": 49366,
       "backingDiffers": 0
     },
     {
@@ -4692,7 +4888,7 @@
       "differing": 0,
       "opCount": 488,
       "assets": 0,
-      "opBytes": 5821,
+      "opBytes": 5833,
       "backingDiffers": 0
     },
     {
@@ -4702,7 +4898,7 @@
       "differing": 0,
       "opCount": 488,
       "assets": 0,
-      "opBytes": 5821,
+      "opBytes": 5833,
       "backingDiffers": 0
     },
     {
@@ -4732,7 +4928,7 @@
       "differing": 0,
       "opCount": 424,
       "assets": 0,
-      "opBytes": 6427,
+      "opBytes": 6424,
       "backingDiffers": 0
     },
     {
@@ -4742,7 +4938,7 @@
       "differing": 0,
       "opCount": 424,
       "assets": 0,
-      "opBytes": 6427,
+      "opBytes": 6424,
       "backingDiffers": 0
     },
     {
@@ -4828,15 +5024,21 @@
     {
       "id": "pydocx-having-images.docx#0",
       "scale": 1,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 44,
+      "assets": 3,
+      "opBytes": 721,
       "backingDiffers": 0
     },
     {
       "id": "pydocx-having-images.docx#0",
       "scale": 2,
-      "status": "tile",
-      "detail": "drawImage",
+      "status": "zero",
+      "differing": 0,
+      "opCount": 44,
+      "assets": 3,
+      "opBytes": 721,
       "backingDiffers": 0
     },
     {
@@ -4926,7 +5128,7 @@
       "differing": 0,
       "opCount": 165,
       "assets": 0,
-      "opBytes": 2611,
+      "opBytes": 2617,
       "backingDiffers": 0
     },
     {
@@ -4936,7 +5138,7 @@
       "differing": 0,
       "opCount": 165,
       "assets": 0,
-      "opBytes": 2611,
+      "opBytes": 2617,
       "backingDiffers": 0
     },
     {
@@ -4946,7 +5148,7 @@
       "differing": 0,
       "opCount": 180,
       "assets": 0,
-      "opBytes": 2881,
+      "opBytes": 2887,
       "backingDiffers": 0
     },
     {
@@ -4956,17 +5158,17 @@
       "differing": 0,
       "opCount": 180,
       "assets": 0,
-      "opBytes": 2881,
+      "opBytes": 2887,
       "backingDiffers": 0
     },
     {
       "id": "pypptx-test_slides.pptx#0",
       "scale": 1,
-      "status": "diff",
-      "differing": 3590,
-      "opCount": 926,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 914,
       "assets": 3,
-      "opBytes": 15055,
+      "opBytes": 14673,
       "backingDiffers": 0
     },
     {
@@ -4974,9 +5176,9 @@
       "scale": 2,
       "status": "zero",
       "differing": 0,
-      "opCount": 876,
+      "opCount": 864,
       "assets": 3,
-      "opBytes": 13827,
+      "opBytes": 13445,
       "backingDiffers": 0
     },
     {
@@ -4986,7 +5188,7 @@
       "differing": 0,
       "opCount": 165,
       "assets": 0,
-      "opBytes": 2611,
+      "opBytes": 2617,
       "backingDiffers": 0
     },
     {
@@ -4996,12 +5198,12 @@
       "differing": 0,
       "opCount": 165,
       "assets": 0,
-      "opBytes": 2611,
+      "opBytes": 2617,
       "backingDiffers": 0
     }
   ],
   "note": "C = direct paint vs record → encodeUnit → OVSD frames (gzip 9, 64 KiB fragments) → Reassembler → decodeUnit → replayUnit; assets in memory (ASSET_DEFINE wire form is Stage 1c). Tiles are reported, not fixed by widening RECORDED_SUBSET.",
   "gate": "zero-diff",
-  "gitSha": "3dd13297ba7554d483d22fd994f26c24b4c2d9d8",
-  "generatedAt": "2026-11-08T16:00:05.439Z"
+  "gitSha": "1c12a1fda7a9f497b919cd3400bbebd38f827251",
+  "generatedAt": "2026-11-08T16:26:33.418Z"
 }

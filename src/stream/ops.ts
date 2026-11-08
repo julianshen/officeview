@@ -50,7 +50,7 @@ export interface Operands {
 export type OpCode = keyof Operands
 export type Op = { [K in OpCode]: { code: K } & Operands[K] }[OpCode]
 export type Asset = { id: number; hash: string } & (
-  { type: 'bitmap'; w: number; h: number; rgba: Uint8Array } |
+  { type: 'bitmap'; source: 'image' | 'canvas'; w: number; h: number; rgba: Uint8Array } |
   { type: 'linear'; x0: number; y0: number; x1: number; y1: number; stops: Array<[number, string]> } |
   { type: 'radial'; x0: number; y0: number; r0: number; x1: number; y1: number; r1: number; stops: Array<[number, string]> } |
   { type: 'pattern'; bitmap: number; repetition: string; transform?: Matrix }

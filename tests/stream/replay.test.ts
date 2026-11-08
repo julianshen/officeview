@@ -1,16 +1,16 @@
 // @vitest-environment node
-import { createCanvas } from 'canvas'
+import { createCanvas, loadImage } from 'canvas'
 import { describe, expect, it, vi } from 'vitest'
 import { OpWriter, Opcode as O, type Asset } from '../../src/stream/ops'
 import { replayUnit, ReplayError } from '../../src/stream/replay'
-import type { CanvasLike } from '../../src/core/canvas-backend'
+import type { CanvasLike, ImageLike } from '../../src/core/canvas-backend'
 
 const surface = () => createCanvas(96, 80)
 const context = (c: ReturnType<typeof surface>) => c.getContext('2d') as unknown as CanvasRenderingContext2D
 const pixels = (c: ReturnType<typeof surface>) => c.getContext('2d').getImageData(0, 0, c.width, c.height).data
-const backend = { createCanvas: (w: number, h: number) => createCanvas(w, h) as unknown as CanvasLike }
+const backend = { createCanvas: (w: number, h: number) => createCanvas(w, h) as unknown as CanvasLike, async imageFromPixels(w:number,h:number,rgba:Uint8Array) { const c=createCanvas(w,h),x=c.getContext('2d'),d=x.createImageData(w,h);d.data.set(rgba);x.putImageData(d,0,0);return await loadImage(c.toBuffer('image/png')) as unknown as ImageLike } }
 const map = (...assets: Asset[]) => new Map(assets.map(a => [a.id, a]))
-const bitmap: Asset = { id: 1, hash: 'bitmap', type: 'bitmap', w: 2, h: 2, rgba: Uint8Array.of(255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255) }
+const bitmap: Asset = { id: 1, hash: 'bitmap', type: 'bitmap', source: 'canvas', w: 2, h: 2, rgba: Uint8Array.of(255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255) }
 function source() { const c = createCanvas(2, 2), ctx = c.getContext('2d'), d = ctx.createImageData(2, 2); d.data.set(bitmap.type === 'bitmap' ? bitmap.rgba : []); ctx.putImageData(d, 0, 0); return c }
 async function compare(w: OpWriter, paint: (ctx: CanvasRenderingContext2D) => void, assets = map()) {
   const direct = surface(), replay = surface(); paint(context(direct))
@@ -59,8 +59,8 @@ describe('stream replayer', () => {
       .op(O.IMAGE_DRAW,{assetId:1,args:[40,0]}).op(O.IMAGE_DRAW,{assetId:1,args:[40,10,12,12]}).op(O.IMAGE_DRAW,{assetId:1,args:[0,0,1,2,60,10,12,20]})
     const direct=surface(),out=surface(),c=context(direct),src=source(),p=c.createPattern(src as unknown as CanvasImageSource,'repeat')!
     const m=c.getTransform();Object.assign(m,{a:3,b:0,c:0,d:2,e:1,f:1});p.setTransform(m);c.fillStyle=p;c.fillRect(0,0,30,30);c.drawImage(src as unknown as CanvasImageSource,40,0);c.drawImage(src as unknown as CanvasImageSource,40,10,12,12);c.drawImage(src as unknown as CanvasImageSource,0,0,1,2,60,10,12,20)
-    const create=vi.fn(async(w:number,h:number)=>backend.createCanvas(w,h))
-    await replayUnit(context(out),{ops:w.bytes(),assets:map(bitmap,pattern)},{createCanvas:create})
+    const create=vi.fn((w:number,h:number)=>backend.createCanvas(w,h))
+    await replayUnit(context(out),{ops:w.bytes(),assets:map(bitmap,pattern)},{...backend,createCanvas:create})
     expect(create).toHaveBeenCalledTimes(1);expect(Buffer.compare(Buffer.from(pixels(out)),Buffer.from(pixels(direct)))).toBe(0)
   })
   it('replays inline TILE under the current transform',async()=>{
@@ -77,9 +77,9 @@ describe('stream replayer', () => {
     else ops=w.op(O.IMAGE_DRAW,{assetId:999,args:[0,0]}).bytes()
     const out=surface();await expect(replayUnit(context(out),{ops,assets},backend)).rejects.toBeInstanceOf(ReplayError);expect(pixels(out).some(n=>n!==0)).toBe(false)
   })
-  it('a rejected asynchronous surface allocation leaves output untouched',async()=>{
+  it('a rejected asynchronous image allocation leaves output untouched',async()=>{
     const w=new OpWriter().op(O.RECT,{mode:0,rect:[0,0,20,20]}).op(O.IMAGE_DRAW,{assetId:1,args:[0,0]});const out=surface()
-    await expect(replayUnit(context(out),{ops:w.bytes(),assets:map(bitmap)},{createCanvas:async()=>{throw new Error('refused')}})).rejects.toBeInstanceOf(ReplayError)
+    await expect(replayUnit(context(out),{ops:w.bytes(),assets:map({...bitmap,source:'image'})},{...backend,imageFromPixels:async()=>{throw new Error('refused')}})).rejects.toBeInstanceOf(ReplayError)
     expect(pixels(out).some(n=>n!==0)).toBe(false)
   })
 })
@@ -93,11 +93,12 @@ it('rejects a cyclic pattern-to-pattern reference without traversing the cycle',
 })
 it('owns validated image bytes across asynchronous backend preparation', async () => {
   const rgba = bitmap.type==='bitmap' ? bitmap.rgba.slice() : new Uint8Array()
-  const assets = map({...bitmap,type:'bitmap',w:2,h:2,rgba})
+  const assets = map({...bitmap,type:'bitmap',source:'image',w:2,h:2,rgba})
   const w = new OpWriter().op(O.IMAGE_DRAW,{assetId:1,args:[0,0]})
-  let resolve!: (canvas:CanvasLike)=>void
-  const out = surface(), run = replayUnit(context(out),{ops:w.bytes(),assets},{createCanvas:()=>new Promise(r=>{resolve=r})})
-  rgba.fill(0); assets.clear(); resolve(backend.createCanvas(2,2)); await run
+  let resolve!: (image:ImageLike)=>void
+  let preparedBytes!: Uint8Array
+  const out = surface(), run = replayUnit(context(out),{ops:w.bytes(),assets},{...backend,imageFromPixels:(_w,_h,bytes)=>new Promise(r=>{preparedBytes=bytes;resolve=r})})
+  rgba.fill(0); assets.clear(); resolve(await backend.imageFromPixels(2,2,preparedBytes)); await run
   const expected=surface();context(expected).drawImage(source() as unknown as CanvasImageSource,0,0)
   expect(Buffer.compare(Buffer.from(pixels(out)),Buffer.from(pixels(expected)))).toBe(0)
 })
@@ -121,8 +122,8 @@ describe('native rejection preflight', () => {
   it.each(cases)('never partially paints when the backend rejects $name', async ({code,data}) => {
     const w=new OpWriter().op(O.RECT,{mode:0,rect:[0,0,20,20]});w.op(code,data as never)
     const out=surface()
-    try { await replayUnit(context(out),{ops:w.bytes(),assets:map()},backend) }
-    catch(error) { expect(error).toBeInstanceOf(ReplayError); expect(pixels(out).some(n=>n!==0)).toBe(false) }
+    await expect(replayUnit(context(out),{ops:w.bytes(),assets:map()},backend)).rejects.toBeInstanceOf(ReplayError)
+    expect(pixels(out).some(n=>n!==0)).toBe(false)
   })
   it('preserves native ignored style-string semantics',async()=>{
     const w=new OpWriter().op(O.STYLE_COLOR,{target:0,color:'red'}).op(O.STYLE_COLOR,{target:0,color:'not-a-color'})
@@ -130,4 +131,10 @@ describe('native rejection preflight', () => {
       .op(O.RECT,{mode:0,rect:[0,0,20,20]}).op(O.GLYPH_RUN,{mode:0,text:'A',x:2,y:40,advances:[]})
     await compare(w,c=>{c.fillStyle='red';c.fillStyle='not-a-color';c.font='16px sans-serif';c.font='not-a-font';c.globalCompositeOperation='not-a-composite' as GlobalCompositeOperation;c.fillRect(0,0,20,20);c.fillText('A',2,40)})
   })
+})
+
+it('materializes image sources as decoded images before drawing',async()=>{
+ const a={...bitmap,source:'image' as const}, out=surface(), decode=vi.fn(backend.imageFromPixels), create=vi.fn(backend.createCanvas)
+ await replayUnit(context(out),{ops:new OpWriter().op(O.IMAGE_DRAW,{assetId:1,args:[0,0,13,17]}).bytes(),assets:map(a)},{createCanvas:create,imageFromPixels:decode})
+ expect(decode).toHaveBeenCalledTimes(1);expect(create).not.toHaveBeenCalled()
 })

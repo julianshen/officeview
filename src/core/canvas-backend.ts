@@ -24,6 +24,8 @@ export interface CanvasBackend {
   /** Human-readable id for diagnostics, e.g. '@napi-rs/canvas'. */
   readonly name: string
   createCanvas(width: number, height: number): CanvasLike
+  /** Reconstitute a decoded image, preserving native image sampling semantics. */
+  imageFromPixels(width: number, height: number, rgba: Uint8Array): Promise<ImageLike>
   /** Decode raster bytes (png/jpeg/gif/webp/bmp). */
   decodeImage(bytes: Uint8Array, mime?: string): Promise<ImageLike>
   /** Rasterise SVG bytes into an image `drawImage` accepts. */
@@ -61,6 +63,9 @@ export const browserBackend: CanvasBackend = {
     if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(width, height) as unknown as CanvasLike
     if (typeof document !== 'undefined') return Object.assign(document.createElement('canvas'), { width, height })
     throw new Error('no canvas available: install a CanvasBackend (installCanvasBackend)')
+  },
+  async imageFromPixels(width, height, rgba) {
+    return await createImageBitmap(new ImageData(new Uint8ClampedArray(rgba), width, height)) as unknown as ImageLike
   },
   async decodeImage(bytes, mime) {
     return await createImageBitmap(new Blob([bytes as BlobPart], mime ? { type: mime } : undefined)) as unknown as ImageLike

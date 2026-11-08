@@ -35,7 +35,8 @@ const ctxOf = (c: ReturnType<typeof surface>) => c.getContext('2d') as unknown a
 const rgba = (c: ReturnType<typeof surface>) => ctxOf(c).getImageData(0, 0, c.width, c.height).data
 
 function readImage(source: CanvasImageSource): ImageSnapshot {
-  const { width: w, height: h } = source as unknown as { width: number; height: number }
+  const image = source as unknown as { width: number; height: number; naturalWidth?: number; naturalHeight?: number }
+  const w = image.naturalWidth ?? image.width, h = image.naturalHeight ?? image.height
   const c = surface(w, h)
   ctxOf(c).drawImage(source as never, 0, 0)
   return { w, h, rgba: new Uint8Array(rgba(c)) }
@@ -75,7 +76,7 @@ async function one(unit: Unit, id: string, scale: number, unitId: number): Promi
   const a = surface(w, h)
   const actx = ctxOf(a); actx.scale(scale, scale); unit.paint(actx)
   const b = surface(w, h)
-  const rec = createRecorder(ctxOf(b), { scale, readImage })
+  const rec = createRecorder(ctxOf(b), { scale, readImage, partialAlphaSnapshots: 'allow', patternSources: 'snapshot' })
   rec.ctx.scale(scale, scale)
   unit.paint(rec.ctx)
   const recorded = rec.finish()

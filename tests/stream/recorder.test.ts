@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { createCanvas } from 'canvas'
+import { createCanvas, loadImage } from 'canvas'
 import { describe, expect, it } from 'vitest'
 import { RECORD_TEXT } from '../../src/core/text-recording'
 import { createRecorder, AssetTable } from '../../src/stream/record/recorder'
@@ -9,12 +9,19 @@ import { listCorpus, loadUnits, sizeCeil } from '../../scripts/stream-s0/corpus'
 
 const context = (w = 180, h = 100) => createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D
 const pixels = (c: CanvasRenderingContext2D) => Buffer.from(c.getImageData(0, 0, c.canvas.width, c.canvas.height).data)
-const backend = { createCanvas: async (w: number, h: number) => createCanvas(w, h) as unknown as HTMLCanvasElement }
+const backend = {
+  createCanvas: (w: number, h: number) => createCanvas(w, h) as unknown as HTMLCanvasElement,
+  async imageFromPixels(w: number, h: number, rgba: Uint8Array) {
+    const c = createCanvas(w, h), ctx = c.getContext('2d'), image = ctx.createImageData(w, h)
+    image.data.set(rgba); ctx.putImageData(image, 0, 0)
+    return await loadImage(c.toBuffer('image/png')) as unknown as HTMLImageElement
+  },
+}
 async function compare(paint: (ctx: CanvasRenderingContext2D) => void, w = 180, h = 100) {
   const direct = context(w, h), backing = context(w, h), replay = context(w, h)
   paint(direct)
-  const recorder = createRecorder(backing, { scale: 1 }); paint(recorder.ctx)
-  const unit = recorder.finish(); expect(unit.discriminator).toBe(1)
+  const recorder = createRecorder(backing, { scale: 1, patternSources: process.env.S0_BACKEND === 'napi' ? 'snapshot' : 'live' }); paint(recorder.ctx)
+  const unit = recorder.finish(); expect(unit.discriminator, unit.discriminator === 3 ? unit.reason : '').toBe(1)
   if (unit.discriminator !== 1) throw new Error(unit.reason)
   expect(Buffer.compare(pixels(direct), pixels(backing))).toBe(0)
   await replayUnit(replay, { ops: unit.ops, assets: new Map(unit.assets.map(a => [a.id, a])) }, backend)
@@ -100,8 +107,8 @@ describe('recorder facade', () => {
   })
   it('hashes canonical owned asset bytes and deduplicates snapshots', () => {
     const assets = new AssetTable(), rgba = Uint8Array.of(255, 0, 0, 255)
-    const id = assets.add({ type: 'bitmap', w: 1, h: 1, rgba })
-    expect(assets.add({ type: 'bitmap', w: 1, h: 1, rgba: rgba.slice() })).toBe(id)
+    const id = assets.add({ type: 'bitmap', source: 'canvas', w: 1, h: 1, rgba })
+    expect(assets.add({ type: 'bitmap', source: 'canvas', w: 1, h: 1, rgba: rgba.slice() })).toBe(id)
     rgba.fill(0); const a = assets.all()[0]; expect(a.hash).toMatch(/^[a-f0-9]{64}$/)
     if (a.type === 'bitmap') expect([...a.rgba]).toEqual([255, 0, 0, 255])
   })
@@ -117,7 +124,8 @@ it('captures decoded images via a synchronous backend reader, or explicitly fall
   const { loadImage } = await import('canvas')
   const source = createCanvas(12, 12); source.getContext('2d').fillRect(0, 0, 12, 12)
   const image = await loadImage(source.toBuffer('image/png'))
-  const backing = context(), result = context()
+  const backing = context(), result = context(), direct = context()
+  direct.drawImage(image as unknown as CanvasImageSource, 4, 5)
   let reads = 0
   const recorder = createRecorder(backing, { scale: 1, readImage(input) {
     reads++
@@ -125,19 +133,19 @@ it('captures decoded images via a synchronous backend reader, or explicitly fall
     return { w: 12, h: 12, rgba: new Uint8Array(ctx.getImageData(0, 0, 12, 12).data) }
   } })
   recorder.ctx.drawImage(image as unknown as CanvasImageSource, 4, 5)
-  const unit = recorder.finish(); expect(unit.discriminator).toBe(1); expect(reads).toBe(1)
+  const unit = recorder.finish(); expect(unit.discriminator, unit.discriminator === 3 ? unit.reason : '').toBe(1); expect(reads).toBe(1)
   if (unit.discriminator !== 1) throw new Error(unit.reason)
   await replayUnit(result, { ops: unit.ops, assets: new Map(unit.assets.map(a => [a.id, a])) }, backend)
-  expect(Buffer.compare(pixels(backing), pixels(result))).toBe(0)
+  expect(Buffer.compare(pixels(direct), pixels(result))).toBe(0)
   const withoutReader = createRecorder(context(), { scale: 1 }); withoutReader.ctx.drawImage(image as unknown as CanvasImageSource, 0, 0)
   expect(withoutReader.finish()).toEqual({ discriminator: 3, reason: 'drawImage' })
 })
 it('captures preconfigured scale and styles without a DPR lookup', async () => {
-  const backing = context(), output = context(); backing.scale(2, 2); backing.fillStyle = 'green'; backing.globalAlpha = .5
+  const backing = context(), output = context(), direct = context(); direct.scale(2, 2); direct.fillStyle = 'green'; direct.globalAlpha = .5; direct.fillRect(3, 4, 10, 11); backing.scale(2, 2); backing.fillStyle = 'green'; backing.globalAlpha = .5
   const recorder = createRecorder(backing, { scale: 2 }); recorder.ctx.fillRect(3, 4, 10, 11)
   const unit = recorder.finish(); if (unit.discriminator !== 1) throw new Error(unit.reason)
   await replayUnit(output, { ops: unit.ops, assets: new Map(unit.assets.map(a => [a.id, a])) }, backend)
-  expect(Buffer.compare(pixels(backing), pixels(output))).toBe(0)
+  expect(Buffer.compare(pixels(direct), pixels(output))).toBe(0)
 })
 it('refuses partially transparent snapshots instead of claiming a lossy command replay', () => {
   const paint = (ctx: CanvasRenderingContext2D) => {
@@ -150,4 +158,92 @@ it('refuses partially transparent snapshots instead of claiming a lossy command 
   paint(direct); paint(recorder.ctx)
   expect(Buffer.compare(pixels(backing), pixels(direct))).toBe(0)
   expect(recorder.finish()).toEqual({ discriminator: 3, reason: 'drawImage' })
+})
+
+
+it.each(['rgba(0,0,0,0.875)', 'rgba(0,0,0,0.395)', '#00000040'])('keeps assigned colour precision: %s', async color => {
+  await compare(ctx => {
+    ctx.fillStyle = color; ctx.fillRect(0, 0, 30, 30)
+    ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.strokeRect(40, 10, 30, 30)
+    ctx.shadowColor = color; ctx.shadowOffsetX = 15; ctx.fillStyle = 'red'; ctx.fillRect(90, 10, 10, 10)
+  })
+})
+it('refuses ambiguous initial partial-alpha colours', () => {
+  const ctx = context(); ctx.fillStyle = 'rgba(0,0,0,.875)'
+  expect(createRecorder(ctx, { scale: 1 }).finish()).toEqual({ discriminator: 3, reason: 'initial-state' })
+})
+it('snapshots live pattern source mutations at paint time', async () => {
+  await compare(ctx => {
+    const c = createCanvas(8, 8), s = c.getContext('2d')
+    s.fillStyle = 'red'; s.fillRect(0, 0, 8, 8)
+    ctx.fillStyle = ctx.createPattern(c as unknown as CanvasImageSource, 'repeat')!
+    ctx.fillRect(0, 0, 30, 30)
+    s.fillStyle = 'blue'; s.fillRect(0, 0, 8, 8)
+    ctx.fillRect(40, 0, 30, 30)
+  })
+})
+it.each(['getContext', 'width', 'height'])('latches backing canvas escape: %s', key => {
+  const rec = createRecorder(context(), { scale: 1 })
+  expect(rec.ctx.canvas.width).toBe(180); expect(rec.ctx.canvas.height).toBe(100)
+  if (key === 'getContext') rec.ctx.canvas.getContext('2d')
+  else (rec.ctx.canvas as any)[key] = 20
+  expect(rec.finish()).toEqual({ discriminator: 3, reason: `canvas.${key}` })
+})
+it('refuses a readImage whose dimensions differ from its decoded source', async () => {
+  const c = createCanvas(12, 12), image = await loadImage(c.toBuffer('image/png'))
+  const rec = createRecorder(context(), { scale: 1, readImage: () => ({ w: 1, h: 1, rgba: new Uint8Array(4) }) })
+  rec.ctx.drawImage(image as unknown as CanvasImageSource, 0, 0)
+  expect(rec.finish()).toEqual({ discriminator: 3, reason: 'drawImage' })
+})
+it('includes source kind in bitmap deduplication', () => {
+  const table = new AssetTable(), rgba = Uint8Array.of(255, 0, 0, 255)
+  const canvas = table.add({ type: 'bitmap', source: 'canvas', w: 1, h: 1, rgba })
+  const image = table.add({ type: 'bitmap', source: 'image', w: 1, h: 1, rgba })
+  expect(image).not.toBe(canvas)
+})
+it('preserves evenodd fill and saved gradient mutations', async () => {
+  await compare(ctx => {
+    ctx.beginPath(); ctx.rect(0, 0, 40, 40); ctx.rect(10, 10, 20, 20); ctx.fill('evenodd')
+    const g = ctx.createLinearGradient(50, 0, 100, 0); g.addColorStop(0, 'red'); g.addColorStop(1, 'blue')
+    ctx.fillStyle = g; ctx.save(); ctx.fillStyle = 'black'; g.addColorStop(.5, 'yellow'); ctx.restore()
+    ctx.fillRect(50, 0, 70, 50)
+  })
+})
+
+it.skipIf(process.env.S0_BACKEND !== 'napi')('replays JPEG image sampling at both scales and all qualities exactly', async () => {
+  const source = createCanvas(320, 240), s = source.getContext('2d'), data = s.createImageData(320, 240)
+  for (let y = 0; y < 240; y++) for (let x = 0; x < 320; x++) {
+    const at = (y * 320 + x) * 4
+    data.data.set([(x * 13 + y * 3) % 256, (x * 7 ^ y * 11) % 256, (x * y) % 256, 255], at)
+  }
+  s.putImageData(data, 0, 0)
+  const image = await loadImage(source.toBuffer('image/jpeg'))
+  for (const [w, h] of [[137, 103], [800, 600]]) for (const quality of ['low', 'medium', 'high'] as const) {
+    const direct = context(w, h), backing = context(w, h), result = context(w, h)
+    const recorder = createRecorder(backing, { scale: 1, readImage(input) {
+      const c = createCanvas(320, 240), cctx = c.getContext('2d'); cctx.drawImage(input as never, 0, 0)
+      return { w: 320, h: 240, rgba: new Uint8Array(cctx.getImageData(0, 0, 320, 240).data) }
+    } })
+    for (const ctx of [direct, recorder.ctx]) { ctx.imageSmoothingQuality = quality; ctx.drawImage(image as unknown as CanvasImageSource, 0, 0, w, h) }
+    const unit = recorder.finish(); if (unit.discriminator !== 1) throw new Error(unit.reason)
+    await replayUnit(result, { ops: unit.ops, assets: new Map(unit.assets.map(a => [a.id, a])) }, backend)
+    expect(Buffer.compare(pixels(direct), pixels(result)), `${w}x${h} ${quality}`).toBe(0)
+  }
+})
+it.skipIf(process.env.S0_BACKEND !== 'napi')('allows exact partial-alpha snapshots on napi explicitly', async () => {
+  const scratch = createCanvas(30, 30), s = scratch.getContext('2d')
+  s.fillStyle = 'rgba(153,77,211,.31)'; s.fillRect(.3, .4, 23.2, 18.1)
+  const direct = context(), backing = context(), result = context()
+  const rec = createRecorder(backing, { scale: 1, partialAlphaSnapshots: 'allow' })
+  for (const ctx of [direct, rec.ctx]) { ctx.fillStyle = '#41aa72'; ctx.fillRect(0, 0, 180, 100); ctx.drawImage(scratch as unknown as CanvasImageSource, 12, 13) }
+  const unit = rec.finish(); expect(unit.discriminator, unit.discriminator === 3 ? unit.reason : '').toBe(1); if (unit.discriminator !== 1) throw new Error(unit.reason)
+  await replayUnit(result, { ops: unit.ops, assets: new Map(unit.assets.map(a => [a.id, a])) }, backend)
+  expect(Buffer.compare(pixels(direct), pixels(result))).toBe(0)
+})
+it('does not rebind an unchanged gradient around an already-built path', async () => {
+  const unit = await compare(ctx => {
+    const gradient = ctx.createLinearGradient(0, 0, 40, 0); gradient.addColorStop(0, 'red'); gradient.addColorStop(1, 'blue')
+    ctx.fillStyle = gradient; ctx.beginPath(); ctx.rect(2.3, 3.7, 40.2, 30.1); ctx.fill(); ctx.stroke()
+  })
+  expect([...new OpReader(unit.ops)].filter(op => op.code === Opcode.STYLE_OBJ)).toHaveLength(1)
 })
