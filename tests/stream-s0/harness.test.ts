@@ -86,12 +86,13 @@ it.skipIf(corpusFiles.length === 0)('listCorpus finds the corpus documents', () 
   // `~$i-Bug66263-table.docx`) that `listCorpus` correctly excludes — the
   // documents are 11 docx + 9 xlsx + 26 pptx = 46. The test pins THAT so the
   // harness reflects the real inventory; codex-r8's corpus was 49 including
-  // those two lock files.
-  expect(corpusFiles).toHaveLength(46)
+  // those two lock files. The Stage-0 top-up (owner ruling 2026-11-08) adds
+  // 6 POI docx + 5 certified image-heavy POI decks: 17 + 9 + 31 = 57.
+  expect(corpusFiles).toHaveLength(57)
   const by = (kind: string) => corpusFiles.filter((f) => f.kind === kind).length
-  expect(by('docx')).toBe(11)
+  expect(by('docx')).toBe(17)
   expect(by('xlsx')).toBe(9)
-  expect(by('pptx')).toBe(26)
+  expect(by('pptx')).toBe(31)
   for (const f of corpusFiles) expect(f.name.startsWith('~$')).toBe(false)
 })
 
