@@ -52,7 +52,7 @@ export const SUPPLEMENTS = ['image-heavy', 't9-image-heavy'] as const
 /** Owner rulings on RED gates (spec §2 item 14, draft 12). */
 export const RULINGS: Record<string, string> = {
   T2: 'expected baseline — the six drawn constructs are the confirmed §6.4 server strip list, the strip fails closed on unrecognised hidden flags, and zero hidden ink on the stream path gates Stage 1',
-  T11: 'fix, keep the ceiling — move the `src/index.ts:43` worker re-export to a subpath entry as the first Stage-1 item (§8.1)',
+  T11: 'the 380 KB chunk is the shared parser/renderer engine `<OfficeDoc>` imports eagerly (removing the worker re-export was measured and does not change it); the 38,720 B transitive ceiling applies to the stream client entry `officeview/core`, and the main entry keeps the index.js-alone budget plus a no-growth gate on its closure (§8.1, §2 item 14b)',
 }
 
 export function loadResults(dir: string): Map<string, Json | undefined> {
@@ -88,7 +88,7 @@ const SCOPE_CALLS = `1. **T11** — Stage 0 runs the §8.1 gate scripts against 
 const DECISIONS = `- **Keyed non-linear mark message** (spec §13.2, commit 391616b6): a Stage-0 review showed a K = 5 median of colluders framed an innocent token under the linear BCH/CRC map (innocent Z 9.19–9.40). Now \`msg_40 = HMAC(kMsg, keyGen | codeword_40)[:40]\`, and ≥ 2 candidates over τ ⇒ \`collusion-suspected\` (names no one). Measured innocent Z after the fix: −0.06.
 - **"25 % crop" = 25 % removed from each axis** (≈ 44 % of the area) (spec §13.5, commit 8420b855).
 - **T7 ΔE00 choice gates on page max**, not p95 — marks cover < 1 % of a real page, so p95 is ~0 (plan, commit 767e26ec).
-- **Stage-0 rulings (spec draft 12, §2 item 14):** T2 strip list confirmed + fail-closed rule (§6.4); T11 fixed by a worker subpath entry, ceiling kept (§8.1); a pinned open font pack of metric-compatible faces (§7.4 rule 6); DOCX top-up and hand-certified image-heavy units with a T9 supplement run.`
+- **Stage-0 rulings (spec draft 12, §2 item 14):** T2 strip list confirmed + fail-closed rule (§6.4); T11 ceiling applies to the \`officeview/core\` stream client, main entry no-growth (§8.1); a pinned open font pack of metric-compatible faces (§7.4 rule 6); DOCX top-up and hand-certified image-heavy units with a T9 supplement run.`
 
 export function renderReport(results: Map<string, Json | undefined>): string {
   const rows = gateRows(results)
