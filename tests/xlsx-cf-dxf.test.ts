@@ -50,6 +50,34 @@ describe('CF strict dxf parsing', () => {
     expect('fill.bg' in properties).toBe(false)
     const style = resolveCfCellStyle(undefined, { properties }, colors)
     expect(style.fillColor).toBeUndefined()
+    // M1: A fgColor-only dxf leaves base fill untouched (does not clear to white/undefined)
+    const baseWithFill = { fillColor: 'FFFFFF00', numFmtId: 0 }
+    const stylePreserved = resolveCfCellStyle(baseWithFill, { properties }, colors)
+    expect(stylePreserved.fillColor).toBe('FFFFFF00')
+  })
+
+  it('accepts native Excel preset dxf fill without patternType (Ruling C2)', () => {
+    const { properties, unsupported } = parseCfDxf(
+      dxfNode(`<fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill>`),
+      colors,
+    )
+    expect(unsupported).toEqual([])
+    expect(properties['fill.bg']).toBe('FFFFC7CE')
+    const style = resolveCfCellStyle(undefined, { properties }, colors)
+    expect(style.fillColor).toBe('FFFFC7CE')
+  })
+
+  it('accepts color auto="1" and benign font children condense/extend/family/scheme/charset (Ruling C2)', () => {
+    const { properties, unsupported } = parseCfDxf(
+      dxfNode(
+        `<font><b val="1"/><family val="2"/><scheme val="minor"/><charset val="1"/><condense val="0"/><extend val="0"/><color auto="1"/></font>` +
+          `<border><bottom style="thin"><color auto="1"/></bottom></border>`,
+      ),
+      colors,
+    )
+    expect(unsupported).toEqual([])
+    expect(properties['font.bold']).toBe(true)
+    expect(properties['border.bottom.style']).toBe('thin')
   })
 
   it('a dxf solid fill with bgColor paints fill (Ruling T11-B)', () => {
@@ -116,7 +144,7 @@ describe('CF strict dxf parsing', () => {
     const cases: Array<[string, string]> = [
       [`<fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill><gradientFill/></fill>`, 'gradientFill'],
       [`<fill><patternFill patternType="gray125"><fgColor rgb="FFFF0000"/></patternFill></fill>`, 'gray125'],
-      [`<fill><patternFill><fgColor rgb="FFFF0000"/></patternFill></fill>`, 'patternType'],
+      [`<fill><patternFill patternType="lightDown"><fgColor rgb="FFFF0000"/></patternFill></fill>`, 'patternType'],
       [`<border><diagonal style="thin"/></border>`, 'diagonal'],
       [`<border diagonalUp="1"><top style="thin"/></border>`, 'diagonalUp'],
       [`<border><vertical style="thin"/></border>`, 'vertical'],

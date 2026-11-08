@@ -55,7 +55,10 @@ const BORDER_STYLES: ReadonlySet<string> = new Set([
 const TRUTHY: ReadonlySet<string> = new Set(['1', 'true'])
 const FALSY: ReadonlySet<string> = new Set(['0', 'false'])
 const BORDER_SIDES: ReadonlyArray<string> = ['left', 'right', 'top', 'bottom']
-const FONT_CHILDREN: ReadonlySet<string> = new Set(['name', 'sz', 'b', 'i', 'strike', 'u', 'color'])
+const FONT_CHILDREN: ReadonlySet<string> = new Set([
+  'name', 'sz', 'b', 'i', 'strike', 'u', 'color',
+  'family', 'scheme', 'charset', 'condense', 'extend',
+])
 const FILL_CHILDREN: ReadonlySet<string> = new Set(['patternFill'])
 const PATTERN_CHILDREN: ReadonlySet<string> = new Set(['fgColor', 'bgColor'])
 const BORDER_CHILDREN: ReadonlySet<string> = new Set(['left', 'right', 'top', 'bottom'])
@@ -96,7 +99,7 @@ function colorOf(node: XmlNode | undefined, where: string, unsupported: string[]
     return undefined
   }
   if (a.auto === '1' || a.auto === 'true') {
-    unsupported.push(`${where}: automatic colour cannot be resolved`)
+    // Excel automatic colour (theme text / black); ignored on differential styles
     return undefined
   }
   if (typeof a.rgb === 'string' && /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(a.rgb)) {
@@ -163,7 +166,7 @@ function inspectFill(node: XmlNode, unsupported: string[]): void {
       continue
     }
     const pattern = getChild(node, 'patternFill')!
-    const type = attrs(pattern).patternType
+    const type = attrs(pattern).patternType ?? 'solid'
     if (type !== 'solid' && type !== 'none') {
       unsupported.push(`patternFill patternType="${String(type)}" is not solid or an explicit none clear`)
     }
@@ -266,6 +269,7 @@ export function parseCfDxf(node: XmlNode, colors: SheetColorContext): CfStrictDx
   const fill = dxf.fill
   if (fill && (fill.pattern !== undefined || fill.fg !== undefined || fill.bg !== undefined)) {
     if (fill.pattern !== undefined) properties['fill.pattern'] = fill.pattern
+    else if (fill.bg !== undefined || fill.fg !== undefined) properties['fill.pattern'] = 'solid'
     if (fill.fg !== undefined) properties['fill.fg'] = encodeCfColor(fill.fg)
     if (fill.bg !== undefined) properties['fill.bg'] = encodeCfColor(fill.bg)
     writes.add('fill')
@@ -318,7 +322,12 @@ export function resolveCfCellStyle(
   if ('fill.pattern' in p || 'fill.bg' in p) {
     // Differential solid fills use bgColor only (unlike ordinary cell fills).
     // A dxf solid fill with only fgColor paints no fill (Ruling T11-B).
-    out.fillColor = p['fill.pattern'] === 'none' || p['fill.pattern'] === null ? undefined : color(p['fill.bg'])
+    // M1: Leave fillColor untouched when the dxf has no bgColor and the pattern isn't 'none'.
+    if (p['fill.pattern'] === 'none' || p['fill.pattern'] === null) {
+      delete out.fillColor
+    } else if ('fill.bg' in p) {
+      out.fillColor = color(p['fill.bg'])
+    }
   }
   for (const side of ['left', 'right', 'top', 'bottom'] as const) {
     const path = `border.${side}`
