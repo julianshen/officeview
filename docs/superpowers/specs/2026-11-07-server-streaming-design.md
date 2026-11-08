@@ -102,6 +102,9 @@ everything they once covered.
     is the primary mark **on every unit** (§13.2); keyed text displacement is
     a second, independent layer on command-projection units (§20). Rejected:
     hidden QR codes.
+    **Collusion fix (2026-11-08, Stage 0):** the payload enters the code
+    through a keyed non-linear map, and a multi-candidate hit is reported
+    as `collusion-suspected`, never as one viewer (§13.2).
 11. **Visible mark (2026-11-08).** Per session: fixed text (default), viewer
     identity fields, or off. Both marks off ⇒ an **untraceable** session,
     recorded in its audit row (§6.1, §19.2).
@@ -1207,6 +1210,24 @@ Payload: `codeword_40 = token_24 | salt_8 | CRC8_8` (the session token is
 a 24-bit monotonic counter from the audit table, never reused while its
 audit row lives; exhaustion refuses sessions rather than recycling).
 
+**Keyed non-linear message map (owner decision 2026-11-08, Stage-0 review
+finding):** the 40 bits that enter the code are **not** `codeword_40`
+itself but `msg_40 = HMAC-SHA256(kMsg, keyGen | codeword_40)` truncated to
+40 bits (`kMsg` a further HKDF child of §13.4), stored in the audit row and
+recovered only by table lookup. Reason: BCH and CRC-8 are linear and the
+salt was fixed, so the XOR of any odd number of colluders' messages was
+itself an issued token's message, and a K = 5 sample median (per-chip
+majority, +3/8 on the 5-way product) scored that **innocent** token as
+high as the colluders (measured Z 9.19 vs 7.7–9.9). With the keyed map a
+collusion lands on an issued message only by chance (≈ M / 2⁴⁰ per
+collusion: 6 × 10⁻⁸ at M = 65,536, 1.5 × 10⁻⁵ at M = 2²⁴), and an audit
+insert that collides with an existing row's `msg_40` re-draws the salt.
+**Multi-hit refusal:** when two or more candidates pass `τ_abs`, the
+decision is `collusion-suspected` — it names no single viewer and lists
+the passing candidates for manual review; the `τ_margin` rule alone never
+attributes in that case. T9 measures innocent-framing rate per collusion
+attack (median K ∈ {3, 5}, K-average, differencing) against these rules.
+
 - **Page-keyed tiled basis:** the carrier positions/sizes are
   **page-keyed**, not session-keyed: `kBasis = HKDF(kMaster, "basis" |
   docRef | unitId)` places `N_chips ≥ 512` chips on tiled macroblocks
@@ -1284,7 +1305,7 @@ enumeration; stated explicitly with the even/odd distinction, round
 ### 13.4 Key law
 
 `OFFICEVIEW_STREAM_KEY` (32 B, absent ⇒ fail-closed startup) → HKDF:
-`kToken`, `kDoc`, `kCarrier`, `kPixel`, `kBasis`, `kJitter` + a
+`kToken`, `kDoc`, `kCarrier`, `kPixel`, `kBasis`, `kJitter`, `kMsg` + a
 key-generation byte per deployment era. `docRef` is
 `HMAC(kDoc, sha256)` truncated; the plain hash never travels. `sid` is
 random per session, never the viewer's identity; the audit table binds
