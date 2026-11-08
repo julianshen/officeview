@@ -25,6 +25,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "aptos display",
@@ -45,6 +46,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 2,
       "rasterFamilies": []
     },
@@ -67,6 +69,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -86,6 +89,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": []
     },
@@ -108,6 +112,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "trebuchet ms"
@@ -137,6 +142,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 3,
+      "unitsThatWouldRasterWithPack": 3,
       "units": 6,
       "rasterFamilies": [
         "calibri light",
@@ -162,6 +168,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -191,6 +198,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "calibri light",
@@ -216,6 +224,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 5,
+      "unitsThatWouldRasterWithPack": 5,
       "units": 5,
       "rasterFamilies": [
         "calibri light"
@@ -240,6 +249,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "century gothic"
@@ -269,6 +279,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 2,
+      "unitsThatWouldRasterWithPack": 2,
       "units": 2,
       "rasterFamilies": [
         "calibri light",
@@ -294,6 +305,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 2,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 2,
       "rasterFamilies": [
         "calibri"
@@ -323,6 +335,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "calibri light",
@@ -343,6 +356,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": []
     },
@@ -370,6 +384,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 2,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 2,
       "rasterFamilies": [
         "calibri",
@@ -400,6 +415,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "arial",
@@ -430,6 +446,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 3,
       "rasterFamilies": [
         "calibri",
@@ -455,6 +472,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "cambria"
@@ -489,6 +507,7 @@
       "verifiable": 1,
       "unverifiable": 3,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "arial",
@@ -520,6 +539,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri",
@@ -550,6 +570,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri",
@@ -585,6 +606,7 @@
       "verifiable": 1,
       "unverifiable": 3,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "arial",
@@ -616,6 +638,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri",
@@ -651,6 +674,7 @@
       "verifiable": 1,
       "unverifiable": 3,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "arial",
@@ -677,6 +701,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -696,6 +721,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": []
     },
@@ -723,6 +749,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "calibri light",
@@ -747,6 +774,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 3,
       "rasterFamilies": []
     },
@@ -774,6 +802,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri",
@@ -794,6 +823,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 4,
       "rasterFamilies": []
     },
@@ -821,6 +851,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "noto sans arabic ui",
@@ -846,6 +877,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -870,6 +902,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "liberation serif"
@@ -894,6 +927,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 1,
       "units": 1,
       "rasterFamilies": [
         "aptos"
@@ -918,6 +952,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "liberation serif"
@@ -947,6 +982,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri",
@@ -972,6 +1008,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -991,6 +1028,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": []
     },
@@ -1013,6 +1051,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 3,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 3,
       "rasterFamilies": [
         "calibri"
@@ -1042,6 +1081,7 @@
       "verifiable": 1,
       "unverifiable": 2,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri",
@@ -1062,6 +1102,7 @@
       "verifiable": 1,
       "unverifiable": 0,
       "unitsThatWouldRaster": 0,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 0,
       "rasterFamilies": []
     },
@@ -1084,6 +1125,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -1108,6 +1150,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -1132,6 +1175,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -1156,6 +1200,7 @@
       "verifiable": 1,
       "unverifiable": 1,
       "unitsThatWouldRaster": 1,
+      "unitsThatWouldRasterWithPack": 0,
       "units": 1,
       "rasterFamilies": [
         "calibri"
@@ -1168,8 +1213,10 @@
     "verifiable": 45,
     "unverifiable": 59,
     "unitsThatWouldRaster": 48,
+    "unitsThatWouldRasterWithPack": 19,
     "unitsTotal": 66,
-    "rasterFallbackRate": 0.7273
+    "rasterFallbackRate": 0.7273,
+    "rasterFallbackRateWithPack": 0.2879
   },
   "familiesCausingRaster": [
     {
@@ -1221,6 +1268,93 @@
       "count": 1
     }
   ],
+  "familiesCausingRasterWithPack": [
+    {
+      "family": "calibri light",
+      "count": 7
+    },
+    {
+      "family": "aptos",
+      "count": 2
+    },
+    {
+      "family": "aptos display",
+      "count": 1
+    },
+    {
+      "family": "trebuchet ms",
+      "count": 1
+    },
+    {
+      "family": "century gothic",
+      "count": 1
+    },
+    {
+      "family": "poppins",
+      "count": 1
+    },
+    {
+      "family": "noto sans arabic ui",
+      "count": 1
+    }
+  ],
+  "pinnedPack": [
+    {
+      "family": "calibri",
+      "file": "Carlito-Regular.ttf",
+      "hash96": "f6418f708baede9789daef5d"
+    },
+    {
+      "family": "carlito",
+      "file": "Carlito-Regular.ttf",
+      "hash96": "f6418f708baede9789daef5d"
+    },
+    {
+      "family": "cambria",
+      "file": "Caladea-Regular.ttf",
+      "hash96": "f1e899278b7b4491aba5b6a8"
+    },
+    {
+      "family": "caladea",
+      "file": "Caladea-Regular.ttf",
+      "hash96": "f1e899278b7b4491aba5b6a8"
+    },
+    {
+      "family": "arial",
+      "file": "LiberationSans-Regular.ttf",
+      "hash96": "76d04c18ea243f426b7de1f3"
+    },
+    {
+      "family": "helvetica",
+      "file": "LiberationSans-Regular.ttf",
+      "hash96": "76d04c18ea243f426b7de1f3"
+    },
+    {
+      "family": "liberation sans",
+      "file": "LiberationSans-Regular.ttf",
+      "hash96": "76d04c18ea243f426b7de1f3"
+    },
+    {
+      "family": "times new roman",
+      "file": "LiberationSerif-Regular.ttf",
+      "hash96": "058ea80864aef09a23f45cbe"
+    },
+    {
+      "family": "liberation serif",
+      "file": "LiberationSerif-Regular.ttf",
+      "hash96": "058ea80864aef09a23f45cbe"
+    },
+    {
+      "family": "courier new",
+      "file": "LiberationMono-Regular.ttf",
+      "hash96": "f2b83c763e8afd2170933337"
+    },
+    {
+      "family": "liberation mono",
+      "file": "LiberationMono-Regular.ttf",
+      "hash96": "f2b83c763e8afd2170933337"
+    }
+  ],
   "fixtureProbe": [
     {
       "label": "cjk",
@@ -1254,6 +1388,6 @@
   "note": "REPORTED per plan Task 4 — the raster-fallback rate is the number the owner needs (§7.4 rule 3: units using any byte-less face ship as rasters)",
   "gate": "t4",
   "backend": "@napi-rs/canvas",
-  "gitSha": "55f0751f443a55bff1060ed9f2ba1c11029f31c4",
-  "generatedAt": "2026-11-08T10:29:58.257Z"
+  "gitSha": "97d868d2ba453e85655ac6de29e87f4bab11c26b",
+  "generatedAt": "2026-11-08T14:10:46.738Z"
 }

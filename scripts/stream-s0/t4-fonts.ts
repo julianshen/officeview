@@ -75,6 +75,37 @@ function bundledFaces(): Face[] {
   return out
 }
 
+/**
+ * Proposed server-pinned font pack (owner ruling 2026-11-08, spec §7.4):
+ * open, metric-compatible faces the server lays out with and the client
+ * holds byte-identically. Document family (lowercase) → pack file. Only
+ * metric-compatible substitutes are listed (Calibri Light has none, so it
+ * stays a raster cause).
+ */
+export const PACK_ALIASES: Record<string, string> = {
+  calibri: 'Carlito-Regular.ttf',
+  carlito: 'Carlito-Regular.ttf',
+  cambria: 'Caladea-Regular.ttf',
+  caladea: 'Caladea-Regular.ttf',
+  arial: 'LiberationSans-Regular.ttf',
+  helvetica: 'LiberationSans-Regular.ttf',
+  'liberation sans': 'LiberationSans-Regular.ttf',
+  'times new roman': 'LiberationSerif-Regular.ttf',
+  'liberation serif': 'LiberationSerif-Regular.ttf',
+  'courier new': 'LiberationMono-Regular.ttf',
+  'liberation mono': 'LiberationMono-Regular.ttf',
+}
+
+/** Pack faces present on disk: family → hash96 of the pinned bytes. */
+export function packFaces(dir = path.join(process.cwd(), 'scripts', 'stream-s0', 'fontpack')): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const [family, file] of Object.entries(PACK_ALIASES)) {
+    const at = path.join(dir, file)
+    if (existsSync(at)) out.set(family, hash96(readFileSyncBytes(at)))
+  }
+  return out
+}
+
 function readFileSyncBytes(at: string): Uint8Array {
   return new Uint8Array(readFileSyncInternal(at))
 }
@@ -121,7 +152,7 @@ function registerEmbeddedFace(face: { family: string; bytes: Uint8Array; variant
  * from the parsed doc, bundled faces (repo font assets), and the census's
  * font strings classify the rest as system (unverifiable → raster).
  */
-export async function requiredFaces(file: CorpusFile): Promise<FaceClassification & { units: Array<{ unit: number; families: string[] }> }> {
+export async function requiredFaces(file: CorpusFile): Promise<FaceClassification & { units: Array<{ unit: number; families: string[] }>; unitsThatWouldRasterWithPack: number }> {
   const doc = await loadOfficeFile(readFileSyncBytes(file.path))
   const embedded = (doc as { embeddedFonts?: Array<{ family: string; variant: string; bytes: Uint8Array }> }).embeddedFonts ?? []
   const faces: Face[] = embedded.map((face, index) => ({
@@ -151,6 +182,8 @@ export async function requiredFaces(file: CorpusFile): Promise<FaceClassificatio
   const paintable = await getPaintables(doc)
   const perUnit: Array<{ unit: number; families: string[] }> = []
   let unitsThatWouldRaster = 0
+  let unitsThatWouldRasterWithPack = 0
+  const pack = packFaces()
   for (let index = 0; index < paintable.length; index++) {
     const paintable0 = paintable[index]
     const canvas: Canvas = createCanvas(
@@ -169,6 +202,7 @@ export async function requiredFaces(file: CorpusFile): Promise<FaceClassificatio
     perUnit.push({ unit: index, families: unique })
     const wouldRaster = unique.some((family) => !verifiableNames.has(family))
     if (wouldRaster) unitsThatWouldRaster++
+    if (unique.some((family) => !verifiableNames.has(family) && !pack.has(family))) unitsThatWouldRasterWithPack++
   }
   // Faces the census saw but that are neither embedded nor bundled: system.
   const seenFamilies = new Set<string>()
@@ -181,7 +215,7 @@ export async function requiredFaces(file: CorpusFile): Promise<FaceClassificatio
   const verifiable = faces.filter((f) => f.bytes).length
   const unverifiable = faces.length - verifiable
   paintable.dispose()
-  return { faces, verifiable, unverifiable, unitsThatWouldRaster, units: perUnit }
+  return { faces, verifiable, unverifiable, unitsThatWouldRaster, unitsThatWouldRasterWithPack, units: perUnit }
 }
 
 async function run(): Promise<number> {
@@ -193,8 +227,10 @@ async function run(): Promise<number> {
   }
   const corpus = listCorpus()
   const perFile: Array<Record<string, unknown>> = []
-  const totals = { files: 0, faces: 0, verifiable: 0, unverifiable: 0, unitsThatWouldRaster: 0, unitsTotal: 0 }
+  const totals = { files: 0, faces: 0, verifiable: 0, unverifiable: 0, unitsThatWouldRaster: 0, unitsThatWouldRasterWithPack: 0, unitsTotal: 0 }
   const rasterCauses = new Map<string, number>()
+  const rasterCausesWithPack = new Map<string, number>()
+  const pack = packFaces()
 
   // The CJK/ligature/BiDi advance probe: napi vs node-canvas (the node-canvas
   // arm runs in a child node process — the preload maps `canvas` in-process).
@@ -228,6 +264,7 @@ console.log(JSON.stringify(out))
       totals.verifiable += result.verifiable
       totals.unverifiable += result.unverifiable
       totals.unitsThatWouldRaster += result.unitsThatWouldRaster
+      totals.unitsThatWouldRasterWithPack += result.unitsThatWouldRasterWithPack
       totals.unitsTotal += result.units.length
       const rasterFamilies = new Set<string>()
       for (const unit of result.units) {
@@ -236,6 +273,7 @@ console.log(JSON.stringify(out))
         }
       }
       for (const family of rasterFamilies) rasterCauses.set(family, (rasterCauses.get(family) ?? 0) + 1)
+      for (const family of rasterFamilies) if (!pack.has(family)) rasterCausesWithPack.set(family, (rasterCausesWithPack.get(family) ?? 0) + 1)
       perFile.push({
         file: file.name,
         // The report carries face METADATA, never the bytes themselves
@@ -252,6 +290,7 @@ console.log(JSON.stringify(out))
         verifiable: result.verifiable,
         unverifiable: result.unverifiable,
         unitsThatWouldRaster: result.unitsThatWouldRaster,
+        unitsThatWouldRasterWithPack: result.unitsThatWouldRasterWithPack,
         units: result.units.length,
         rasterFamilies: [...new Set(result.units
           .flatMap((u) => u.families)
@@ -263,15 +302,19 @@ console.log(JSON.stringify(out))
   }
 
   const rasterFallbackRate = totals.unitsTotal > 0 ? Math.round((totals.unitsThatWouldRaster / totals.unitsTotal) * 10_000) / 10_000 : 0
+  const rasterFallbackRateWithPack = totals.unitsTotal > 0 ? Math.round((totals.unitsThatWouldRasterWithPack / totals.unitsTotal) * 10_000) / 10_000 : 0
   writeResult('t4', {
     status: 'REPORTED',
     perFile,
-    totals: { ...totals, rasterFallbackRate },
+    totals: { ...totals, rasterFallbackRate, rasterFallbackRateWithPack },
+    // Counts are FILES in which the family forced at least one raster unit.
     familiesCausingRaster: [...rasterCauses.entries()].sort((a, b) => b[1] - a[1]).map(([family, count]) => ({ family, count })),
+    familiesCausingRasterWithPack: [...rasterCausesWithPack.entries()].sort((a, b) => b[1] - a[1]).map(([family, count]) => ({ family, count })),
+    pinnedPack: [...pack.entries()].map(([family, hash]) => ({ family, file: PACK_ALIASES[family], hash96: hash })),
     fixtureProbe,
     note: 'REPORTED per plan Task 4 — the raster-fallback rate is the number the owner needs (§7.4 rule 3: units using any byte-less face ship as rasters)',
   })
-  console.log(`[t4] files ${totals.files} · faces ${totals.faces} · verifiable ${totals.verifiable} · unverifiable ${totals.unverifiable} · units ${totals.unitsTotal} · wouldRaster ${totals.unitsThatWouldRaster} (${rasterFallbackRate})`)
+  console.log(`[t4] files ${totals.files} · faces ${totals.faces} · verifiable ${totals.verifiable} · unverifiable ${totals.unverifiable} · units ${totals.unitsTotal} · wouldRaster ${totals.unitsThatWouldRaster} (${rasterFallbackRate}) · with pinned pack ${totals.unitsThatWouldRasterWithPack} (${rasterFallbackRateWithPack})`)
   return 0
 }
 
