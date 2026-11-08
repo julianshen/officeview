@@ -81,9 +81,9 @@
     {
       "id": "docx-hidden-shape-in-group",
       "kind": "docx",
-      "status": "clean",
+      "status": "leak",
       "controlDrawn": true,
-      "hiddenDrawn": false,
+      "hiddenDrawn": true,
       "unitsWith": 1,
       "unitsWithout": 1,
       "modelExposure": [
@@ -169,12 +169,12 @@
   ],
   "totals": {
     "fixtures": 13,
-    "leaks": 5,
+    "leaks": 6,
     "invalid": 0,
-    "clean": 8
+    "clean": 7
   },
   "gate": "t2",
   "backend": "@napi-rs/canvas",
-  "gitSha": "76e3305912c7c400a563bee3f3cc37efb75fc3a5",
-  "generatedAt": "2026-11-08T11:27:10.380Z"
+  "gitSha": "13fbdda9148ea04511bba777d46238eac670492b",
+  "generatedAt": "2026-11-08T11:28:18.661Z"
 }

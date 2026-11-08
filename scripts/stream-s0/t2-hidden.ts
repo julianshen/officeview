@@ -54,7 +54,9 @@ async function run(): Promise<number> {
     const withText = a.texts.join('|')
     const withoutText = b.texts.join('|')
     const controlDrawn = withText.includes(f.control) && withoutText.includes(f.control)
-    const hiddenDrawn = withText.includes(f.marker)
+    // Runs may split a string across several fillText calls (e.g. a line
+    // break inside a group shape's text box) — match on the concatenation too.
+    const hiddenDrawn = withText.includes(f.marker) || a.texts.join('').includes(f.marker)
     let status: 'leak' | 'clean' | 'INVALID'
     if (!controlDrawn) { status = 'INVALID'; invalid++ }
     else if (hiddenDrawn) { status = 'leak'; leaks++ }
