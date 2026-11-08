@@ -292,3 +292,46 @@ it('going over work budget refuses per range, never for the whole sheet (I4)', a
   expect(batch?.layer.styleAt(0, 0, undefined)?.fillColor).toBe('FF00FF00')
   batch?.dispose()
 })
+
+it('merged sub-cells do not take anchor value in statistics, agreeing in resident and paged paths (N2)', async () => {
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const { createObjectWorkbookSource } = await import('../src/xlsx/view/source')
+  const makeSheet = (): XlsxSheet => ({
+    name: 'S', sheetId: '1', cols: [],
+    merges: ['A2:A3'],
+    mergeRanges: [{ minRow: 1, maxRow: 2, minCol: 0, maxCol: 0 }],
+    rows: [
+      { index: 0, cells: [{ row: 0, col: 0, ref: 'A1', value: 1, styleIndex: 0 }] },
+      { index: 1, cells: [{ row: 1, col: 0, ref: 'A2', value: 5, styleIndex: 0 }] },
+      { index: 3, cells: [{ row: 3, col: 0, ref: 'A4', value: 2, styleIndex: 0 }] },
+    ],
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        ranges: [{ firstRow: 0, lastRow: 3, firstCol: 0, lastCol: 0 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FFFF0000' },
+        definition: { kind: 'predicate', type: 'duplicateValues', dialect: 'base', formulas: [] },
+      }],
+    },
+  })
+
+  // 1. Resident path
+  const sheetResident = makeSheet()
+  const batchResident = await prepareCfPaint(sheetResident)
+  expect(batchResident).toBeDefined()
+  // A2 has value 5 and is not a duplicate of itself (merged A2:A3 subcell does not count as 5 in statistics)
+  const residentStyle = batchResident?.layer.styleAt(1, 0, undefined)
+  expect(residentStyle?.fillColor).toBeUndefined()
+  batchResident?.dispose()
+
+  // 2. Paged path (storeCfSource)
+  const sheetPaged = makeSheet()
+  const store = createObjectWorkbookSource({ sheets: [sheetPaged] }, 'paged-test').store('1')!
+  const batchPaged = await prepareCfPaint(sheetPaged, { store })
+  expect(batchPaged).toBeDefined()
+  const pagedStyle = batchPaged?.layer.styleAt(1, 0, undefined)
+  expect(pagedStyle?.fillColor).toBeUndefined()
+  batchPaged?.dispose()
+})
