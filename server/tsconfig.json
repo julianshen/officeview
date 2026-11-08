@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.json",
-  "compilerOptions": { "types": ["bun"], "lib": ["ES2022", "DOM", "DOM.Iterable"], "target": "ES2022" },
+  "compilerOptions": { "types": ["bun-types"], "lib": ["ES2022", "DOM", "DOM.Iterable"], "target": "ES2022" },
   "include": ["src", "test"]
 }
