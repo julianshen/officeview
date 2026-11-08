@@ -1,0 +1,1259 @@
+{
+  "status": "REPORTED",
+  "perFile": [
+    {
+      "file": "lo-airplane-transition.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:aptos display",
+          "family": "aptos display",
+          "source": "system"
+        },
+        {
+          "id": "system:aptos",
+          "family": "aptos",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "aptos display",
+        "aptos"
+      ]
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 2,
+      "rasterFamilies": []
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "lo-narration.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 1,
+      "rasterFamilies": []
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:trebuchet ms",
+          "family": "trebuchet ms",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "trebuchet ms"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 3,
+      "units": 6,
+      "rasterFamilies": [
+        "calibri light",
+        "calibri"
+      ]
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri light",
+        "calibri"
+      ]
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 5,
+      "units": 5,
+      "rasterFamilies": [
+        "calibri light"
+      ]
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:century gothic",
+          "family": "century gothic",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "century gothic"
+      ]
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 2,
+      "units": 2,
+      "rasterFamilies": [
+        "calibri light",
+        "calibri"
+      ]
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 2,
+      "units": 2,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        },
+        {
+          "id": "system:poppins",
+          "family": "poppins",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri light",
+        "poppins"
+      ]
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 1,
+      "rasterFamilies": []
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 2,
+      "units": 2,
+      "rasterFamilies": [
+        "calibri",
+        "calibri light"
+      ]
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:arial",
+          "family": "arial",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "arial",
+        "calibri"
+      ]
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 3,
+      "rasterFamilies": [
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-55733.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:cambria",
+          "family": "cambria",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "cambria"
+      ]
+    },
+    {
+      "file": "poi-56295.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:arial",
+          "family": "arial",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 3,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "arial",
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-59021.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-59746_NoRowNums.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-62272.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:arial",
+          "family": "arial",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 3,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "arial",
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-64508.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-66365.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:arial",
+          "family": "arial",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 3,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "arial",
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-Bug66263-table.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "poi-comment.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 1,
+      "rasterFamilies": []
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri light",
+          "family": "calibri light",
+          "source": "system"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri light",
+        "calibri"
+      ]
+    },
+    {
+      "file": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+      "error": "Corrupted zip: can't find end of central directory"
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 3,
+      "rasterFamilies": []
+    },
+    {
+      "file": "poi-link-external-workbook-a.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 4,
+      "rasterFamilies": []
+    },
+    {
+      "file": "poi-rtl.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:noto sans arabic ui",
+          "family": "noto sans arabic ui",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation serif",
+          "family": "liberation serif",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "noto sans arabic ui",
+        "liberation serif"
+      ]
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "poi-table-indent.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:liberation serif",
+          "family": "liberation serif",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "liberation serif"
+      ]
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:aptos",
+          "family": "aptos",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "aptos"
+      ]
+    },
+    {
+      "file": "poi-unicode-path.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:liberation serif",
+          "family": "liberation serif",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "liberation serif"
+      ]
+    },
+    {
+      "file": "poi-xlsx-jdbc.xlsx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:liberation sans",
+          "family": "liberation sans",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri",
+        "liberation sans"
+      ]
+    },
+    {
+      "file": "pydocx-blk-inner-content.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "pydocx-having-images.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 1,
+      "rasterFamilies": []
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 3,
+      "units": 3,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "pydocx-test.docx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        },
+        {
+          "id": "system:cambria",
+          "family": "cambria",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 2,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri",
+        "cambria"
+      ]
+    },
+    {
+      "file": "pypptx-minimal.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 0,
+      "unitsThatWouldRaster": 0,
+      "units": 0,
+      "rasterFamilies": []
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "faces": [
+        {
+          "id": "bundled:Liter-Regular",
+          "family": "Liter-Regular",
+          "source": "bundled",
+          "bytesLength": 77008,
+          "hash96": "379fe197584f098a0318278c"
+        },
+        {
+          "id": "system:calibri",
+          "family": "calibri",
+          "source": "system"
+        }
+      ],
+      "verifiable": 1,
+      "unverifiable": 1,
+      "unitsThatWouldRaster": 1,
+      "units": 1,
+      "rasterFamilies": [
+        "calibri"
+      ]
+    }
+  ],
+  "totals": {
+    "files": 45,
+    "faces": 104,
+    "verifiable": 45,
+    "unverifiable": 59,
+    "unitsThatWouldRaster": 48,
+    "unitsTotal": 66,
+    "rasterFallbackRate": 0.7273
+  },
+  "familiesCausingRaster": [
+    {
+      "family": "calibri",
+      "count": 27
+    },
+    {
+      "family": "liberation sans",
+      "count": 9
+    },
+    {
+      "family": "calibri light",
+      "count": 7
+    },
+    {
+      "family": "arial",
+      "count": 4
+    },
+    {
+      "family": "liberation serif",
+      "count": 3
+    },
+    {
+      "family": "aptos",
+      "count": 2
+    },
+    {
+      "family": "cambria",
+      "count": 2
+    },
+    {
+      "family": "aptos display",
+      "count": 1
+    },
+    {
+      "family": "trebuchet ms",
+      "count": 1
+    },
+    {
+      "family": "century gothic",
+      "count": 1
+    },
+    {
+      "family": "poppins",
+      "count": 1
+    },
+    {
+      "family": "noto sans arabic ui",
+      "count": 1
+    }
+  ],
+  "fixtureProbe": [
+    {
+      "label": "cjk",
+      "text": "漢字テスト",
+      "widthNode": 118.8,
+      "widthNapi": 90,
+      "relDiff": 0.2424
+    },
+    {
+      "label": "ligature",
+      "text": "ffi ff fl",
+      "widthNode": 56.92,
+      "widthNapi": 56.47,
+      "relDiff": 0.0078
+    },
+    {
+      "label": "arabic-rtl",
+      "text": "مرحبا",
+      "widthNode": 47.01,
+      "widthNapi": 45.27,
+      "relDiff": 0.0371
+    },
+    {
+      "label": "hebrew-rtl",
+      "text": "שלום",
+      "widthNode": 54.48,
+      "widthNapi": 48.06,
+      "relDiff": 0.1179
+    }
+  ],
+  "note": "REPORTED per plan Task 4 — the raster-fallback rate is the number the owner needs (§7.4 rule 3: units using any byte-less face ship as rasters)",
+  "gate": "t4",
+  "backend": "@napi-rs/canvas",
+  "gitSha": "55f0751f443a55bff1060ed9f2ba1c11029f31c4",
+  "generatedAt": "2026-11-08T10:29:58.257Z"
+}
