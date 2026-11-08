@@ -1,39 +1,61 @@
 {
   "status": "GREEN",
+  "sheet": {
+    "rows": 500,
+    "cols": 100
+  },
+  "tilePx": 512,
+  "tiles": 200,
+  "deviceScale": 1,
+  "pipeline": "buildSheetGeometry → renderSheetViewport (src/xlsx/view/renderViewport.ts)",
   "runs": [
     {
       "run": 1,
-      "p50": 0.005707999999998492,
-      "p95": 0.01362499999999045,
-      "max": 25.902
+      "p50": 17.24612500000012,
+      "p95": 24.55358299999989,
+      "max": 66.74879200000001,
+      "kinds": {
+        "detail": 200
+      },
+      "records": 271568
     },
     {
       "run": 2,
-      "p50": 0.005750000000006139,
-      "p95": 0.009999999999990905,
-      "max": 0.019915999999994938
+      "p50": 17.62604100000044,
+      "p95": 24.71220799999992,
+      "max": 41.84929199999988,
+      "kinds": {
+        "detail": 200
+      },
+      "records": 271568
     },
     {
       "run": 3,
-      "p50": 0.005625000000009095,
-      "p95": 0.009415999999987434,
-      "max": 0.03404199999999946
+      "p50": 17.061749999999847,
+      "p95": 24.24449999999888,
+      "max": 26.12895799999933,
+      "kinds": {
+        "detail": 200
+      },
+      "records": 271568
     }
   ],
-  "bestOf3P95": 0.009415999999987434,
+  "bestOf3P95": 24.24449999999888,
+  "targetP95Ms": 120,
+  "meaningful": true,
   "loadavgStart": [
-    0,
-    0,
-    0
+    4.0498046875,
+    4.91259765625,
+    5.0693359375
   ],
   "loadavgEnd": [
-    0,
-    0,
-    0
+    3.73388671875,
+    4.81591796875,
+    5.033203125
   ],
-  "note": "Simplified tile timing (200 64x64 canvas tiles) — renderViewport not wired; best-of-3 p95 gate 120ms",
+  "note": "Gate = best-of-3 p95; tiles walk the sheet row-major from A1; another worktree's tests may share the CPU (loadavg recorded).",
   "gate": "t8",
   "backend": "@napi-rs/canvas",
-  "gitSha": "cbeb890cbd2c0bb2fabf1e6f8a9c9f8b64b28e70",
-  "generatedAt": "2026-11-08T11:29:37.519Z"
+  "gitSha": "e02b09831d365a873723a92a9a37b69549f496f2",
+  "generatedAt": "2026-11-08T12:20:01.906Z"
 }
