@@ -82,7 +82,7 @@ async function run(): Promise<number> {
   return 0
 }
 
-run().then(
+if (import.meta.main) run().then(
   (code) => process.exit(code),
   (error) => { console.error(error); process.exit(1) },
 )

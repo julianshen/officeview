@@ -459,7 +459,7 @@ async function decodePngAsync(at: string): Promise<Bitmap> {
   const cw = (canvas as unknown as { width: number }).width; const ch = (canvas as unknown as { height: number }).height; return { width: cw, height: ch, data: ctx.getImageData(0, 0, cw, ch).data }
 }
 
-run().then(
+if (import.meta.main) run().then(
   (code) => process.exit(code),
   (error) => { console.error(error); process.exit(1) },
 )

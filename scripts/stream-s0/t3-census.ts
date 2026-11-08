@@ -235,7 +235,7 @@ function createCtxFor(unit: Unit): CanvasRenderingContext2D {
 }
 
 
-run().then(
+if (import.meta.main) run().then(
   (code) => process.exit(code),
   (error) => { console.error(error); process.exit(1) },
 )
