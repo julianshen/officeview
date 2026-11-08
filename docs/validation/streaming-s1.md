@@ -112,3 +112,41 @@ Exact corpus file list (units):
 - `pypptx-no-core-props.pptx`: 1
 - `pypptx-test_slides.pptx`: 1
 - `pypptx-test.pptx`: 1
+
+## Stage 1c — demo stream server
+
+Branch `feature/streaming-s1`; plan `docs/superpowers/plans/2026-11-09-streaming-s1c-server.md`. `bun run test:server`: **183 passed, 0 failed** (18 files). `bun run test tests/stream`: 259 passed. `bun run s0:test:napi`: 318 passed. Both TypeScript checks are clean, and `bun run gates:core` passes (core closure 297 B; index closure 417,579 B, Δ143 ≤ recorded 144; module set = baseline ± 1).
+
+**T2 on the stream path (§17 row 1).** The 13 Stage-0 hidden constructs were checked two ways. (a) Projection → parse → paint (`server/test/t2-stream.test.ts`, table above): the control is painted, the marker never is, and model exposure is 0. (b) Over the wire (`server/test/ops.test.ts`), against a real `Bun.serve`, in both a protected (`final-raster`) and a relaxed (`commands`) session. No transmitted payload (MANIFEST, ASSET_DEFINE, UNIT_RASTER, UNIT_COMMANDS) contains the marker bytes. Relaxed GLYPH_RUN text contains the control but never the marker. **13/13 clean.**
+
+**Close-code matrix (§6.2 rule 8)** — `server/test/close-codes.test.ts`:
+
+| code | reached by |
+|---|---|
+| 4000 `unsupported-version` | `recVersions: [2, 3]`; HELLO > 4 KiB; malformed JSON; a non-object HELLO; a 70 KiB text message after READY; a binary frame before HELLO |
+| 4001 `unsupported-format` | ODT bytes (admission on the original bytes) |
+| 4002 `ready-timeout` | no READY in the window (no binary after MANIFEST); a READY with the wrong jti (refused, then the window closes) |
+| 4003 `auth-failed` | `authorize` → null; `resolveDocument` → null; resume without `resumeProof`; forged/wrong-viewer proof |
+| 4004 `session-expired` | RENEW never acknowledged |
+| 4005 `revoked` | `revoke(sid)` |
+| 4006 `layout-changed` | fingerprint change mid-session |
+| 4007 `oversized-frame` | client-only (1d); the server never sends it |
+| 4008 `rate-limited` | two op refusals, then the third breach in 60 s |
+| 4009 `policy-refused` | client `relax` |
+| 4409 `superseded` | resume with the live token |
+| `session-rotated` (refusal) | old jti after an acknowledged RENEW, and after resume (the socket stays open) |
+
+**Wire fidelity.** A protected unit's PNG is byte-identical to the pool's raster and keeps only the critical chunks. A relaxed unit's ASSET_DEFINE + UNIT_COMMANDS replay pixel-identically to the marked raster at scale 1 and 2. A READY that reports missing faces turns the unit into a raster plus a `face-missing` diag.
+
+**Pool.** Admission is the T12 model (T12 re-run GREEN from its new import). Worker affinity per docRef. A 2 s deadline retires the worker and refunds the charge only after it has closed. Dispose and worker death settle every job. Recycling happens after 256 pages.
+
+**Review.** Checkpoint 1 (codex) found 8 issues, all fixed with regression tests (`7f97cd2f`).
+
+**Stage-1 boundaries (recorded, not hidden).**
+- The forensic mark is Stage 2. The manifest notice `forensic-mark-stage-2` and audit `forensic: false` say so.
+- The visible mark is painted in the worker, so cache entries are per mark setting.
+- No separate parse worker.
+- Units over 8192 px per side or 64 MiB RGBA are refused (tiles are Stage 4).
+- Embedded fonts are not registered; their text paints with fallbacks and command units fall back to rasters.
+- `can.*` semantic services are off until Stage 3.
+- ASSET_DEFINE is sent per unit (no cross-unit asset dedupe yet).

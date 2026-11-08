@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
 
-const transpiler = new Bun.Transpiler({ loader: 'tsx' })
+const transpilers = { ts: new Bun.Transpiler({ loader: 'ts' }), tsx: new Bun.Transpiler({ loader: 'tsx' }), js: new Bun.Transpiler({ loader: 'js' }) }
 const EXT = ['.ts', '.tsx', '/index.ts', '/index.tsx', '.js']
 
 function resolveLocal(from: string, spec: string): string | undefined {
@@ -21,7 +21,8 @@ export function sourceClosure(entry: string, root: string): { files: string[]; p
     if (files.has(f)) continue
     files.add(f)
     if (!/\.(ts|tsx|js)$/.test(f)) continue
-    for (const imp of transpiler.scanImports(readFileSync(f, 'utf8'))) {
+    const t = f.endsWith('.tsx') ? transpilers.tsx : f.endsWith('.js') ? transpilers.js : transpilers.ts
+    for (const imp of t.scanImports(readFileSync(f, 'utf8'))) {
       if (imp.path.startsWith('.')) { const r = resolveLocal(f, imp.path); if (r) queue.push(r) }
       else packages.add(imp.path)
     }

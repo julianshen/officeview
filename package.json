@@ -68,7 +68,8 @@
     "s0:report": "bun scripts/stream-s0/report.ts",
     "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts",
     "gates:core": "OV_MODULE_MAP=1 bun run build && bun scripts/core-gates.ts",
-    "test:server": "cd server && bun test"
+    "test:server": "cd server && bun test",
+    "stream:demo": "bun --preload ./scripts/stream-s0/napi-preload.ts server/src/main.ts --demo --doc-dir corpus"
   },
   "peerDependencies": {
     "react": ">=18"
