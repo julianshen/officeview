@@ -247,3 +247,24 @@ it('does not rebind an unchanged gradient around an already-built path', async (
   })
   expect([...new OpReader(unit.ops)].filter(op => op.code === Opcode.STYLE_OBJ)).toHaveLength(1)
 })
+
+it.each(['15.94923772935894pt "Calibri"', 'italic bold 10.5pt Arial'])('preserves assigned font precision and ignored invalid fonts: %s', async font => {
+  const unit = await compare(ctx => {
+    ctx.font = font; ctx.fillText('– Hello world', 3.125, 30.875)
+    ctx.save(); ctx.font = '22px serif'; ctx.font = 'not-a-font'; ctx.fillText('Second', 2, 60); ctx.restore()
+    ctx.font = 'also-invalid'; ctx.fillText('Restored', 2, 90)
+  })
+  const fonts = [...new OpReader(unit.ops)].flatMap(op => op.code === Opcode.STATE_SETUP && op.fields.font ? [op.fields.font] : [])
+  expect(fonts).toContain(font); expect(fonts).not.toContain('not-a-font'); expect(fonts).not.toContain('also-invalid')
+})
+it('preserves native transform operations, including gradient mutation across save/restore', async () => {
+  const unit = await compare(ctx => {
+    ctx.translate(13.127, 9.764); ctx.scale(.986863884756439, .7594159346141462); ctx.rotate(.0733)
+    const g = ctx.createLinearGradient(0, 0, 90, 0); g.addColorStop(0, 'red'); g.addColorStop(1, 'blue'); ctx.fillStyle = g
+    ctx.beginPath(); ctx.rect(1.73, 2.41, 80.17, 44.28); ctx.fill()
+    ctx.save(); ctx.transform(1, .03, .04, 1, 4.33, 5.79); g.addColorStop(.5, 'yellow'); ctx.fillRect(5, 6, 30, 20); ctx.restore()
+    ctx.fillRect(11.2, 60.1, 70, 10)
+  })
+  const modes = [...new OpReader(unit.ops)].filter(op => op.code === Opcode.TRANSFORM).map(op => op.mode)
+  expect(modes).toContain(2); expect(modes).toContain(3); expect(modes).toContain(4); expect(modes).toContain(1)
+})

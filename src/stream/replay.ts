@@ -1,5 +1,5 @@
 import type { CanvasBackend, CanvasLike, ImageLike } from '../core/canvas-backend'
-import { Opcode, OpReader, type Asset, type Op, type Matrix } from './ops'
+import { Opcode, OpReader, type Asset, type Op, type TransformOperands, type Matrix } from './ops'
 
 export class ReplayError extends Error {
   constructor(message: string) { super(message); this.name = 'ReplayError' }
@@ -19,6 +19,14 @@ function gradient(ctx: CanvasRenderingContext2D, a: Extract<Asset, { type: 'line
   const g = a.type === 'linear' ? ctx.createLinearGradient(a.x0, a.y0, a.x1, a.y1) : ctx.createRadialGradient(a.x0, a.y0, a.r0, a.x1, a.y1, a.r1)
   for (const [at, color] of a.stops) g.addColorStop(at, color)
   return g
+}
+
+function applyTransform(ctx: CanvasRenderingContext2D, op: TransformOperands) {
+  if (op.mode === 0) ctx.setTransform(...op.matrix)
+  else if (op.mode === 1) ctx.transform(...op.matrix)
+  else if (op.mode === 2) ctx.translate(...op.matrix)
+  else if (op.mode === 3) ctx.scale(...op.matrix)
+  else ctx.rotate(op.matrix[0])
 }
 
 /** Replay at the recorded scale. Validate and prepare every referenced asset
@@ -44,7 +52,8 @@ export async function replayUnit(
           case 'linear': case 'radial':
             if (!finite(original.x0, original.y0, original.x1, original.y1) || (original.type === 'radial' && (!finite(original.r0, original.r1) || original.r0 < 0 || original.r1 < 0))) return fail(`Invalid gradient ${id}`)
             if (!Array.isArray(original.stops) || original.stops.some(([n, color]) => !Number.isFinite(n) || n < 0 || n > 1 || typeof color !== 'string')) return fail(`Invalid stops ${id}`)
-            a = { ...original, stops: original.stops.map(([n, color]) => [n, color]) }
+            if (original.transforms?.some(t => ![0,1,2,3,4].includes(t.mode) || t.matrix.length !== (t.mode < 2 ? 6 : t.mode < 4 ? 2 : 1) || !finite(...t.matrix))) return fail(`Invalid gradient transforms ${id}`)
+            a = { ...original, stops: original.stops.map(([n, color]) => [n, color]), ...(original.transforms ? { transforms: original.transforms.map(t => ({ ...t, matrix: [...t.matrix] } as TransformOperands)) } : {}) }
             // Native color validation happens before any destination draw.
             gradient(ctx, a); break
           case 'pattern':
@@ -85,17 +94,28 @@ export async function replayUnit(
       if (asset.transform) pattern!.setTransform(matrix(ctx, asset.transform))
       patterns.set(id, pattern!)
     }
+    // Prepare recorder gradients on an isolated context. Temporarily moving the
+    // destination CTM can round/reproject an already-built native path.
+    const gradients = new Map<number, CanvasGradient>()
+    let gradientHost: CanvasRenderingContext2D | null | undefined
+    for (const [id, a] of assets) if ((a.type === 'linear' || a.type === 'radial') && a.transforms) {
+      const host = gradientHost ??= backend.createCanvas(1, 1).getContext('2d')
+      if (!host) return fail('Gradient context unavailable')
+      host.setTransform(1, 0, 0, 1, 0, 0)
+      for (const t of a.transforms) applyTransform(host, t)
+      gradients.set(id, gradient(host, a))
+    }
     for (const op of ops) {
       switch (op.code) {
         case Opcode.STATE_PUSH: ctx.save(); break
         case Opcode.STATE_POP: ctx.restore(); break
         case Opcode.TRANSFORM:
-          if (op.mode === 0) ctx.setTransform(...op.matrix); else ctx.transform(...op.matrix)
+          applyTransform(ctx, op)
           break
         case Opcode.STYLE_COLOR: ctx[styleNames[op.target]] = op.color; break
         case Opcode.STYLE_OBJ: {
           const a = assets.get(op.assetId)!
-          const style = a.type === 'linear' || a.type === 'radial' ? gradient(ctx, a) : patterns.get(a.id)!
+          const style = a.type === 'linear' || a.type === 'radial' ? gradients.get(a.id) ?? gradient(ctx, a) : patterns.get(a.id)!
           if (op.target === 0) ctx.fillStyle = style; else ctx.strokeStyle = style
           break
         }

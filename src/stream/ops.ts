@@ -33,10 +33,11 @@ export interface StateFields {
   fontStretch?: string; textRendering?: typeof STATE_ENUMS.textRendering[number]
 }
 export type Matrix = [number, number, number, number, number, number]
+export type TransformOperands = { mode: 0 | 1; matrix: Matrix } | { mode: 2 | 3; matrix: [number, number] } | { mode: 4; matrix: [number] }
 export interface Operands {
   [Opcode.STATE_PUSH]: Record<never, never>
   [Opcode.STATE_POP]: Record<never, never>
-  [Opcode.TRANSFORM]: { mode: 0 | 1; matrix: Matrix }
+  [Opcode.TRANSFORM]: TransformOperands
   [Opcode.STYLE_COLOR]: { target: 0 | 1 | 2; color: string }
   [Opcode.STYLE_OBJ]: { target: 0 | 1; assetId: number }
   [Opcode.STATE_SETUP]: { fields: StateFields }
@@ -51,8 +52,8 @@ export type OpCode = keyof Operands
 export type Op = { [K in OpCode]: { code: K } & Operands[K] }[OpCode]
 export type Asset = { id: number; hash: string } & (
   { type: 'bitmap'; source: 'image' | 'canvas'; w: number; h: number; rgba: Uint8Array } |
-  { type: 'linear'; x0: number; y0: number; x1: number; y1: number; stops: Array<[number, string]> } |
-  { type: 'radial'; x0: number; y0: number; r0: number; x1: number; y1: number; r1: number; stops: Array<[number, string]> } |
+  { type: 'linear'; x0: number; y0: number; x1: number; y1: number; stops: Array<[number, string]>; transforms?: TransformOperands[] } |
+  { type: 'radial'; x0: number; y0: number; r0: number; x1: number; y1: number; r1: number; stops: Array<[number, string]>; transforms?: TransformOperands[] } |
   { type: 'pattern'; bitmap: number; repetition: string; transform?: Matrix }
 )
 
@@ -99,7 +100,7 @@ function writeOp(w: Sink, op: Op) {
   w.u8(op.code)
   switch (op.code) {
     case Opcode.STATE_PUSH: case Opcode.STATE_POP: return
-    case Opcode.TRANSFORM: w.enum(op.mode, 1); w.numbers(op.matrix, 6); return
+    case Opcode.TRANSFORM: w.enum(op.mode, 4); w.numbers(op.matrix, op.mode < 2 ? 6 : op.mode < 4 ? 2 : 1); return
     case Opcode.STYLE_COLOR: w.enum(op.target, 2); w.string(op.color); return
     case Opcode.STYLE_OBJ: w.enum(op.target, 1); w.u32(op.assetId); return
     case Opcode.STATE_SETUP: {
@@ -177,7 +178,7 @@ function readOp(r: Cursor): Op {
   const code = r.u8()
   switch (code) {
     case Opcode.STATE_PUSH: case Opcode.STATE_POP: return { code }
-    case Opcode.TRANSFORM: return { code, mode: r.enum(1) as 0 | 1, matrix: r.numbers(6) as Matrix }
+    case Opcode.TRANSFORM: { const mode = r.enum(4); return { code, mode, matrix: r.numbers(mode < 2 ? 6 : mode < 4 ? 2 : 1) } as Op }
     case Opcode.STYLE_COLOR: return { code, target: r.enum(2) as 0 | 1 | 2, color: r.string() }
     case Opcode.STYLE_OBJ: return { code, target: r.enum(1) as 0 | 1, assetId: r.u32() }
     case Opcode.STATE_SETUP: {

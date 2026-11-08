@@ -1,7 +1,7 @@
 /** Server/test-only canvas recorder. Never import this module from the client runtime. */
 import { createHash } from 'node:crypto'
 import { RECORD_TEXT } from '../../core/text-recording'
-import { Opcode, OpWriter, type Asset, type Matrix, type StateFields } from '../ops'
+import { Opcode, OpWriter, type Asset, type Matrix, type TransformOperands, type StateFields } from '../ops'
 import { RECORDED_SUBSET } from './subset'
 
 type WithoutIdentity<T> = T extends Asset ? Omit<T, 'id' | 'hash'> : never
@@ -36,8 +36,8 @@ export class AssetTable {
       bitmap(input)
       // Hash before the retained copy, so identical snapshots need no second allocation.
       owned = { type: input.type, source: input.source, w: input.w, h: input.h, rgba: input.rgba }
-    } else if (input.type === 'linear') owned = { type: input.type, x0: input.x0, y0: input.y0, x1: input.x1, y1: input.y1, stops: input.stops.map(([at, c]) => [at, c]) }
-    else if (input.type === 'radial') owned = { type: input.type, x0: input.x0, y0: input.y0, r0: input.r0, x1: input.x1, y1: input.y1, r1: input.r1, stops: input.stops.map(([at, c]) => [at, c]) }
+    } else if (input.type === 'linear') owned = { type: input.type, x0: input.x0, y0: input.y0, x1: input.x1, y1: input.y1, stops: input.stops.map(([at, c]) => [at, c]), ...(input.transforms ? { transforms: input.transforms.map(t => ({ ...t, matrix: [...t.matrix] } as TransformOperands)) } : {}) }
+    else if (input.type === 'radial') owned = { type: input.type, x0: input.x0, y0: input.y0, r0: input.r0, x1: input.x1, y1: input.y1, r1: input.r1, stops: input.stops.map(([at, c]) => [at, c]), ...(input.transforms ? { transforms: input.transforms.map(t => ({ ...t, matrix: [...t.matrix] } as TransformOperands)) } : {}) }
     else owned = { type: 'pattern', bitmap: input.bitmap, repetition: input.repetition, ...(input.transform ? { transform: [...input.transform] as Matrix } : {}) }
     const reference = owned.type === 'pattern' ? this.entries[owned.bitmap] : undefined
     if (owned.type === 'pattern' && reference?.type !== 'bitmap') throw new Error('Unknown pattern bitmap')
@@ -51,7 +51,7 @@ export class AssetTable {
 }
 
 type Native = Record<PropertyKey, any>
-type Wrapped = { native: object; facade: object; input: AssetInput; matrix?: Matrix; source?: CanvasImageSource }
+type Wrapped = { native: object; facade: object; input: AssetInput; source?: CanvasImageSource }
 const matrixOf = (m: DOMMatrix2DInit = {}): Matrix => [m.a ?? m.m11 ?? 1, m.b ?? m.m12 ?? 0, m.c ?? m.m21 ?? 0, m.d ?? m.m22 ?? 1, m.e ?? m.m41 ?? 0, m.f ?? m.m42 ?? 0]
 const pathSubs: Record<string, number> = { beginPath: 0, moveTo: 1, lineTo: 2, quadraticCurveTo: 3, bezierCurveTo: 4, arc: 5, arcTo: 6, ellipse: 7, rect: 8, roundRect: 9, closePath: 10 }
 const pathCounts = [0, 2, 2, 4, 6, 5, 5, 7, 4, 4, 0]
@@ -93,6 +93,8 @@ export function createRecorder(backing: CanvasRenderingContext2D, opts: {
     return { ...exactSnapshot(image), source: 'image' }
   }
   const styles: Record<string, any> = { fillStyle: native.fillStyle, strokeStyle: native.strokeStyle, shadowColor: native.shadowColor }
+  let transforms: TransformOperands[] = [{ mode: 0, matrix: matrixOf(backing.getTransform()) }]
+  const savedTransforms: TransformOperands[][] = []
   const savedStyles: Array<Record<string, any>> = []
   const styleIds: Record<string, number | undefined> = {}
   const savedStyleIds: Array<Record<string, number | undefined>> = []
@@ -107,14 +109,11 @@ export function createRecorder(backing: CanvasRenderingContext2D, opts: {
       // transform on native backends. Its immutable snapshot is already active.
       if (styleIds[name] === assetId) return
       styleIds[name] = assetId
-      const current = matrixOf(backing.getTransform())
-      if (wrapper.matrix) writer.op(Opcode.TRANSFORM, { mode: 0, matrix: wrapper.matrix })
       writer.op(Opcode.STYLE_OBJ, { target, assetId })
-      if (wrapper.matrix) writer.op(Opcode.TRANSFORM, { mode: 0, matrix: current })
     }
   }
-  function wrap(out: object, input: AssetInput, matrix?: Matrix, source?: CanvasImageSource): object {
-    const wrapper: Wrapped = { native: out, facade: {}, input, matrix, source }
+  function wrap(out: object, input: AssetInput, source?: CanvasImageSource): object {
+    const wrapper: Wrapped = { native: out, facade: {}, input, source }
     wrapper.facade = new Proxy({}, {
       get(_target, key) {
         const value = Reflect.get(out, key, out)
@@ -187,20 +186,28 @@ export function createRecorder(backing: CanvasRenderingContext2D, opts: {
             ? { type: 'linear', x0: +args[0], y0: +args[1], x1: +args[2], y1: +args[3], stops: [] }
             : { type: 'radial', x0: +args[0], y0: +args[1], r0: +args[2], x1: +args[3], y1: +args[4], r1: +args[5], stops: [] }
           if (!result || typeof result !== 'object') { refuse(name); return result }
-          return wrap(result, input, matrixOf(backing.getTransform()))
+          if (input.type === 'linear' || input.type === 'radial') input.transforms = transforms.slice()
+          return wrap(result, input)
         }
-        if (name === 'createPattern') return result && image !== undefined ? wrap(result, { type: 'pattern', bitmap: image, repetition: args[1] || 'repeat' }, undefined, args[0]) : result
+        if (name === 'createPattern') return result && image !== undefined ? wrap(result, { type: 'pattern', bitmap: image, repetition: args[1] || 'repeat' }, args[0]) : result
         record(name, () => {
           if (['measureText', 'getTransform', 'getLineDash'].includes(name)) return
           if (name === 'save' || name === 'restore') {
-            if (name === 'save') { savedStyles.push({ ...styles }); savedStyleIds.push({ ...styleIds }) }
+            if (name === 'save') { savedTransforms.push(transforms.slice()); savedStyles.push({ ...styles }); savedStyleIds.push({ ...styleIds }) }
             else if (savedStyles.length) {
+              transforms = savedTransforms.pop()!
               Object.assign(styles, savedStyles.pop())
               for (const key of Object.keys(styleIds)) delete styleIds[key]
               Object.assign(styleIds, savedStyleIds.pop())
             }
             writer.op(name === 'save' ? Opcode.STATE_PUSH : Opcode.STATE_POP); return }
-          if (['setTransform', 'transform', 'translate', 'scale', 'rotate'].includes(name)) { writer.op(Opcode.TRANSFORM, { mode: 0, matrix: matrixOf(backing.getTransform()) }); return }
+          if (['setTransform', 'transform', 'translate', 'scale', 'rotate'].includes(name)) {
+            const mode = ['setTransform', 'transform', 'translate', 'scale', 'rotate'].indexOf(name)
+            const matrix = mode === 0 && args.length <= 1 ? matrixOf(args[0]) : args.map(Number)
+            const op = { mode, matrix } as TransformOperands
+            if (mode === 0) transforms = [op]; else transforms = [...transforms, op]
+            writer.op(Opcode.TRANSFORM, op); return
+          }
           if (name === 'setLineDash') { writer.op(Opcode.STATE_SETUP, { fields: { lineDash: backing.getLineDash() } }); return }
           if (name in pathSubs) {
             const sub = pathSubs[name] as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
@@ -228,12 +235,27 @@ export function createRecorder(backing: CanvasRenderingContext2D, opts: {
     set(_target, prop, value) {
       if (prop === RECORD_TEXT) return true
       const wrapper = value && typeof value === 'object' ? wrappers.get(value) : undefined
+      const previous = prop === 'font' ? backing.font : undefined
       Reflect.set(backing, prop, wrapper?.native ?? value, backing)
       const name = String(prop)
       if (!RECORDED_SUBSET.setters.has(name)) refuse(name)
       else record(name, () => {
         if (name === 'fillStyle' || name === 'strokeStyle' || name === 'shadowColor') { styles[name] = typeof value === 'string' ? value : wrapper?.native ?? value; style(name) }
-        else writer.op(Opcode.STATE_SETUP, { fields: { [name]: native[name] } as StateFields })
+        else if (name === 'font') {
+          if (backing.font === previous) {
+            // Native setters ignore invalid fonts. A distinct sentinel lets the
+            // backend validate even valid strings sharing the same readback.
+            backing.save()
+            let accepted: boolean
+            try {
+              backing.font = previous === '1px serif' ? '2px serif' : '1px serif'
+              const sentinel = backing.font; backing.font = value
+              accepted = backing.font !== sentinel
+            } finally { backing.restore() }
+            if (!accepted) return
+          }
+          writer.op(Opcode.STATE_SETUP, { fields: { font: String(value) } })
+        } else writer.op(Opcode.STATE_SETUP, { fields: { [name]: native[name] } as StateFields })
       })
       return true
     },

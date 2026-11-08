@@ -751,7 +751,7 @@ IEEE-754 f64. Strings are u32 UTF-8 byte length followed by exactly those bytes.
 |---|---|---|
 | 1 | STATE_PUSH | — |
 | 2 | STATE_POP | — |
-| 3 | TRANSFORM | u8 mode (0 set, 1 multiply) + 6 × f64 a b c d e f |
+| 3 | TRANSFORM | u8 mode: 0 setTransform / 1 transform + 6 × f64 a b c d e f; 2 translate / 3 scale + 2 × f64 x y; 4 rotate + 1 × f64 angle (radians) |
 | 4 | STYLE_COLOR | u8 target (0 fill, 1 stroke, 2 shadow) + string |
 | 5 | STYLE_OBJ | u8 target (0 fill, 1 stroke) + u32 assetId |
 | 6 | STATE_SETUP | u32 field mask + present fields in mask-bit order (see `StateFields`) |
