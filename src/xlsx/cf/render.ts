@@ -11,7 +11,7 @@ import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
 import { cellSourceRow } from '../view/sheetCells'
 import { isValueUnavailable, type ValuePolicy } from '../view/values'
-import { cfNeedsViewport } from '../cfLoader'
+import { cfNeedsViewport, cfExplicitBounds } from '../cfLoader'
 import { STATIC_SHEET_BUDGET } from '../render'
 import { CfPageFault, cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
 import type { SourceStore } from '../view/contracts'
@@ -240,27 +240,40 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const rects: SourceRect[] = []
     if (requested) rects.push(...requested)
     else {
-      // Ruling I3: Find the sheet's real data extent; CF sqref must not extend static
-      // extent beyond the sheet's real used range.
-      let dataBottom = 0, dataRight = 0
+      // computeMetrics includes merges, declarations and finite CF extents (bounded by I3). Open
+      // tails do not enlarge it; their coverage is clipped to this paint region.
+      const finite = cfExplicitBounds(sheet)
+      const canMatchBlanks = rules.rules.some(r => (r.definition as any).type === 'containsBlanks' || (r.definition as any).type === 'expression')
+      let bottom = finite && (canMatchBlanks || sheet.rows.length === 0) ? finite.r1 : 0
+      let right = finite && (canMatchBlanks || sheet.rows.length === 0) ? finite.c1 : 0
       for (const row of sheet.rows) {
-        await work(); dataBottom = Math.max(dataBottom, row.index)
+        await work(); bottom = Math.max(bottom, row.index)
         for (const cell of row.cells) {
-          await work(); dataBottom = Math.max(dataBottom, cellSourceRow(row, cell)); dataRight = Math.max(dataRight, cell.col)
+          await work(); bottom = Math.max(bottom, cellSourceRow(row, cell)); right = Math.max(right, cell.col)
         }
       }
-      for (const m of sheet.mergeRanges ?? []) { await work(); dataBottom = Math.max(dataBottom, m.maxRow); dataRight = Math.max(dataRight, m.maxCol) }
-      for (const r of regionStylesFor(sheet)?.rects ?? []) { await work(); dataBottom = Math.max(dataBottom, r.maxRow); dataRight = Math.max(dataRight, r.maxCol) }
-      for (const [row, cols] of sheet.resolvedSparklines ?? []) { dataBottom = Math.max(dataBottom, row); for (const col of cols.keys()) { await work(); dataRight = Math.max(dataRight, col) } }
-      const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), dataRight)
-      if (declared <= dataRight + 64) dataRight = declared
-      if (sheet.drawings?.length) { dataBottom = Math.max(dataBottom, sheet.drawingMarkers?.maxRow ?? 0); dataRight = Math.max(dataRight, sheet.drawingMarkers?.maxCol ?? 0) }
-      dataBottom = Math.min(dataBottom, STATIC_SHEET_BUDGET.maxGridRows - 1); dataRight = Math.min(dataRight, STATIC_SHEET_BUDGET.maxGridCols - 1)
+      for (const m of sheet.mergeRanges ?? []) { await work(); bottom = Math.max(bottom, m.maxRow); right = Math.max(right, m.maxCol) }
+      for (const r of regionStylesFor(sheet)?.rects ?? []) { await work(); bottom = Math.max(bottom, r.maxRow); right = Math.max(right, r.maxCol) }
+      for (const [row, cols] of sheet.resolvedSparklines ?? []) { bottom = Math.max(bottom, row); for (const col of cols.keys()) { await work(); right = Math.max(right, col) } }
+      const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), right)
+      if (declared <= right + 64) right = declared
+      if (sheet.drawings?.length) { bottom = Math.max(bottom, sheet.drawingMarkers?.maxRow ?? 0); right = Math.max(right, sheet.drawingMarkers?.maxCol ?? 0) }
 
-      // Clip CF rule ranges to the sheet's real data extent
+      bottom = Math.min(bottom, STATIC_SHEET_BUDGET.maxGridRows - 1)
+      right = Math.min(right, STATIC_SHEET_BUDGET.maxGridCols - 1)
+
+      const aggregateRuleWork = rules.rules.reduce((sum, rule) => {
+        return sum + rule.ranges.reduce((rSum, range) => {
+          const rLastRow = range.lastRow === 1048575 ? bottom : range.lastRow
+          const rLastCol = range.lastCol === 16383 ? right : range.lastCol
+          return rSum + Math.max(0, rLastRow - range.firstRow + 1) * Math.max(0, rLastCol - range.firstCol + 1)
+        }, 0)
+      }, 0)
+      if (aggregateRuleWork > CF_LIMITS.workUnits) return unavailable(sheet)
+
       for (const rule of rules.rules) for (const r of rule.ranges) {
-        const lastRow = Math.min(r.lastRow, dataBottom)
-        const lastCol = Math.min(r.lastCol, dataRight)
+        const lastRow = r.lastRow === 1048575 ? bottom : (canMatchBlanks ? r.lastRow : Math.min(r.lastRow, bottom))
+        const lastCol = r.lastCol === 16383 ? right : (canMatchBlanks ? r.lastCol : Math.min(r.lastCol, right))
         if (lastRow >= r.firstRow && lastCol >= r.firstCol) rects.push({ ...r, lastRow, lastCol })
       }
     }
@@ -275,6 +288,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const paintCells = options.viewport || options.request ? Math.min(CF_LIMITS.preparedCells, rects.reduce((n, r) => n + (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1), 0)) : 256
     if (!hold.grow(hold.bytes + paintCells * 2048)) throw new Error('CF paint workspace')
     let heldBytes = hold.bytes
+    let hadWorkLimit = false
     for (let e = 0; e < (scoped ? rects.length : edges.length - 1); e++) {
       const firstRow = scoped ? rects[e].firstRow : edges[e], endRow = scoped ? rects[e].lastRow + 1 : edges[e + 1]
       const intervals: Array<[number, number]> = []
@@ -305,6 +319,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
           } finally { lease.release() }
         } catch (error) {
           if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF cancelled')) {
+            hadWorkLimit = true
             // Ruling I4: Refusal is per-range, not the whole sheet
             continue
           }
@@ -312,6 +327,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         } finally { service.dispose() }
       }
     }
+    if (hadWorkLimit && states.size === 0) return unavailable(sheet)
     let disposed = false
     const layer: RegionStyleLayer = {
       retainedBytes: hold.bytes,

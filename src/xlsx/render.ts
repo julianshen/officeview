@@ -343,15 +343,22 @@ function cfRasterLimits(sheet: XlsxSheet, row: number, col: number, width: numbe
 
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   const merges = (sheet.mergeRanges ?? []).filter(validMerge)
-  const cfBounds = cfExplicitBounds(sheet)
-  let maxCol = cfBounds?.c1 ?? 0
-  for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
+  let dataMaxCol = 0
+  for (const row of sheet.rows) for (const c of row.cells) dataMaxCol = Math.max(dataMaxCol, c.col)
   // Merged ranges are part of the painted grid even where only the anchor is populated.
-  for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
+  for (const r of merges) dataMaxCol = Math.max(dataMaxCol, r.maxCol)
   const styleRegions = regionStylesFor(sheet)?.rects ?? []
-  for (const rect of styleRegions) maxCol = Math.max(maxCol, Math.min(MAX_GRID_COLS - 1, rect.maxCol))
+  for (const rect of styleRegions) dataMaxCol = Math.max(dataMaxCol, Math.min(MAX_GRID_COLS - 1, rect.maxCol))
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
-    for (const col of columns.keys()) if (isValidCoordinate(row, col)) maxCol = Math.max(maxCol, col)
+    for (const col of columns.keys()) if (isValidCoordinate(row, col)) dataMaxCol = Math.max(dataMaxCol, col)
+  }
+  const cfBounds = cfExplicitBounds(sheet)
+  const canMatchBlanks = sheet.conditionalFormatting?.rules.some(r =>
+    (r.definition as any).type === 'containsBlanks' || (r.definition as any).type === 'expression'
+  )
+  let maxCol = dataMaxCol
+  if (cfBounds && (canMatchBlanks || dataMaxCol === 0)) {
+    maxCol = Math.max(maxCol, cfBounds.c1)
   }
   // Real spreadsheets declare column formatting far wider than the used range
   // (a sheet with data in A1:C10 may carry <col max="1025"/>). Sizing the grid
@@ -373,24 +380,28 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     }
   }
   const diagnostics: WorkerDiagnostic[] = []
-  let maxRow = cfBounds?.r1 ?? 0, inconsistent = 0
-  for (const row of sheet.rows) if (!drawing || Number.isSafeInteger(row.index) && row.index >= 0) maxRow = Math.max(row.index, maxRow)
+  let dataMaxRow = 0, inconsistent = 0
+  for (const row of sheet.rows) if (!drawing || Number.isSafeInteger(row.index) && row.index >= 0) dataMaxRow = Math.max(row.index, dataMaxRow)
   // An explicit cell reference names its row even when the row record does not.
   for (const row of sheet.rows) {
     for (const cell of row.cells) {
       const source = cellSourceRow(row, cell)
       if (source === row.index || !Number.isSafeInteger(source) || source < 0) continue
       inconsistent++
-      maxRow = Math.max(maxRow, source)
+      dataMaxRow = Math.max(dataMaxRow, source)
     }
   }
   if (inconsistent) diagnostics.push({ code: 'inconsistent-row-coordinate', message: `${inconsistent} cell(s) carry a reference outside their row record; placed by the cell reference` })
-  for (const r of merges) maxRow = Math.max(maxRow, r.maxRow)
-  for (const rect of styleRegions) maxRow = Math.max(maxRow, Math.min(MAX_GRID_ROWS - 1, rect.maxRow))
+  for (const r of merges) dataMaxRow = Math.max(dataMaxRow, r.maxRow)
+  for (const rect of styleRegions) dataMaxRow = Math.max(dataMaxRow, Math.min(MAX_GRID_ROWS - 1, rect.maxRow))
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
-      if (isValidCoordinate(row, col)) { maxRow = Math.max(maxRow, row); break }
+      if (isValidCoordinate(row, col)) { dataMaxRow = Math.max(dataMaxRow, row); break }
     }
+  }
+  let maxRow = dataMaxRow
+  if (cfBounds && (canMatchBlanks || dataMaxRow === 0)) {
+    maxRow = Math.max(maxRow, cfBounds.r1)
   }
   const nRows = Math.min(Math.max(maxRow + 1, drawing ? (sheet.drawingMarkers?.maxRow ?? 0) + 1 : 1), MAX_GRID_ROWS)
   const rowHeightsPx = new Array<number>(nRows).fill(DEFAULT_ROW_PX)
