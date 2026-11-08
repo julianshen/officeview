@@ -6,10 +6,19 @@
  * loading the full corpus — the full corpus battery runs in
  * `scripts/stream-s0/t1-backend.ts` (background run; see the .done file).
  */
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createCanvas } from 'canvas'
-import type { Bitmap } from '../../scripts/stream-s0/corpus'
+import * as napiCanvas from '@napi-rs/canvas'
+import * as canvasModule from 'canvas'
+import { listCorpus, loadUnits, type Bitmap, type Unit } from '../../scripts/stream-s0/corpus'
 import { collectRenderResults, diffBitmaps } from '../../scripts/stream-s0/t1-backend'
+
+// Round-10-fix1: the round-9 T1 run compared node-canvas with node-canvas
+// (the parent ran without the preload, so "napi" was node-canvas too and all
+// 648 diff rows were all-zero). These tests pin the fix: the two runners
+// report DIFFERENT backends, and a known text page really differs.
+const napiRun = process.env.S0_BACKEND === 'napi'
 
 const blackBitmap = (w: number, h: number): Bitmap => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) })
 const solidBitmap = (w: number, h: number, r: number, g: number, b: number): Bitmap => {
@@ -125,5 +134,49 @@ describe('T1 machinery (injected units, no corpus)', () => {
     ).constructionSites
     const bad = rows.filter((r) => r.napi !== 'ok')
     expect(bad).toEqual([])
+  })
+})
+
+describe('T1 backend identity (round-10-fix1)', () => {
+  it('the two runners report different backends', () => {
+    // Module identity: under the plain run `canvas` resolves to the real
+    // node-canvas package (no shim marker); `@napi-rs/canvas` is the napi
+    // module. The napi run aliases `canvas` → the shim, whose marker export
+    // matches. Either way the two sides are distinct modules.
+    // The marker is MY shim's export; the raw @napi-rs/canvas module never
+    // has it — so identity is proven by the RESOLVED `canvas` module (aliased
+    // under napi = shim = marker present; plain = real canvas = marker absent).
+    const canvasIsNapi = 'STREAM_S0_BACKEND' in canvasModule
+    const napiRawHasMarker = 'STREAM_S0_BACKEND' in napiCanvas
+    expect(napiRawHasMarker).toBe(false)
+    expect(canvasIsNapi).toBe(napiRun)
+  })
+
+  it.skipIf(napiRun)('a known text page differs >0 pixels between the backends', async () => {
+    // The orchestrator's evidence: poi-55733.docx unit 0 at scale 1 differs
+    // between node-canvas and napi (glyph rasterization differs). This test
+    // pins that the T1 diff is REAL (never all-zero again).
+    const file = listCorpus().find((f) => f.name === 'poi-55733.docx')
+    expect(file, 'corpus/poi-55733.docx must exist').toBeTruthy()
+    const units = await loadUnits(file!)
+    const unit: Unit = units[0]
+    const nodeBmp: Bitmap = { width: 0, height: 0, data: new Uint8ClampedArray(0) }
+    const napiBmp: Bitmap = { width: 0, height: 0, data: new Uint8ClampedArray(0) }
+    // Render via collectRenderResults with two distinct factories.
+    const results = collectRenderResults(
+      [{ file: 'poi-55733.docx', units: [unit] }],
+      {
+        plain: { canvasFactory: createCanvas as unknown as never, stamp: undefined, env: 'node-canvas' },
+        napi: { canvasFactory: napiCanvas.createCanvas as unknown as never, stamp: undefined, env: '@napi-rs/canvas' },
+      },
+      { grid: [[1, 1]] },
+    )
+    expect(results.renderSuccess.okNode).toBe(1)
+    expect(results.renderSuccess.okNapi).toBe(1)
+    const row = results.diff[0]
+    expect(row).toBeTruthy()
+    expect(row!.pixelsDiffering).toBeGreaterThan(0)
+    void nodeBmp
+    void napiBmp
   })
 })

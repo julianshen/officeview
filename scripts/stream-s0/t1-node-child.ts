@@ -12,12 +12,24 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { loadOfficeFile } from '../../src/components/OfficeFile'
 import { getPaintables } from '../../src/render/paint'
+import * as canvasModule from 'canvas'
 import { createCanvas } from 'canvas'
 
 const [file, unitIndexRaw, zoomRaw, dprRaw, outPng] = process.argv.slice(2)
 const unitIndex = Number(unitIndexRaw)
 const zoom = Number(zoomRaw)
 const dpr = Number(dprRaw)
+
+/** Round-10-fix1 guard: this child must be the node-canvas backend. The bun
+ * preload maps `canvas` → the napi shim; if it leaked into the child (a
+ * mis-invoked `bun run s0:napi` child), the marker export is present and the
+ * run must refuse rather than compare napi with napi (the round-9 bug).
+ * Checked via the imported module namespace (sync, identity-based). */
+const childBackend = 'STREAM_S0_BACKEND' in canvasModule ? '@napi-rs/canvas' : 'node-canvas'
+if (childBackend !== 'node-canvas') {
+  console.error(JSON.stringify({ ok: false, error: `child must run WITHOUT the napi preload (backend is ${childBackend})` }))
+  process.exit(5)
+}
 
 if (!file || !Number.isInteger(unitIndex) || !Number.isFinite(zoom) || !Number.isFinite(dpr) || !outPng) {
   console.error(JSON.stringify({ ok: false, error: 'usage: t1-node-child <file> <unitIndex> <zoom> <dpr> <outPng>' }))
@@ -60,4 +72,4 @@ const { mkdirSync, writeFileSync } = await import('node:fs')
 mkdirSync(path.dirname(outPng), { recursive: true })
 writeFileSync(outPng, png)
 void data
-console.log(JSON.stringify({ ok: true, width: canvas.width, height: canvas.height, out: outPng }))
+console.log(JSON.stringify({ ok: true, backend: childBackend, width: canvas.width, height: canvas.height, out: outPng }))

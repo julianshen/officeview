@@ -64,6 +64,9 @@ interface DiffRow {
   unit: number
   zoom: number
   dpr: number
+  /** The backend each side actually ran under (round-10-fix1 guard). */
+  nodeBackend: string
+  napiBackend: string
   pixelsDiffering: number
   fracDiffering: number
   maxChannelDelta: number
@@ -318,6 +321,16 @@ function exerciseSiteNapi(spec: SiteSpec, napi: { createCanvas: (w: number, h: n
 
 /** Full-corpus T1 run: renders both backends, diffs, and writes t1.json. */
 async function run(): Promise<number> {
+  // Round-10-fix1 guard (the round-9 run compared node-canvas with
+  // node-canvas because the parent ran without the preload): the parent MUST
+  // be the napi backend, and the child MUST be node-canvas. Anything else is
+  // an abort, never a GREEN report.
+  const parentBackend = resolveBackend()
+  if (parentBackend !== '@napi-rs/canvas') {
+    console.error(`[t1] REFUSED: parent backend is ${parentBackend}; run under the napi preload:`)
+    console.error('  bun run s0:napi scripts/stream-s0/t1-backend.ts')
+    return 2
+  }
   const corpus = listCorpus()
   mkdirSync(CACHE_DIR, { recursive: true })
   mkdirSync(path.join(CACHE_DIR, 'napi'), { recursive: true })
@@ -356,9 +369,15 @@ async function run(): Promise<number> {
             napiOnlyFailures.push({ file: file.name, unit: unit.index, error: (error as Error).message })
             continue
           }
+          let childBackend: string | undefined
           try {
             const child = execFileSync('bun', [path.join('scripts', 'stream-s0', 't1-node-child.ts'), file.path, String(unit.index), String(zoom), String(dpr), nodePng], { encoding: 'utf8', timeout: 60_000 })
-            void child
+            // The child's LAST stdout line is its JSON status ({ ok, backend }).
+            const last = child.trim().split(/\r?\n/).at(-1) ?? '{}'
+            childBackend = (JSON.parse(last) as { backend?: string }).backend
+            if (childBackend !== 'node-canvas') {
+              throw new Error(`node child reported backend ${childBackend ?? 'unknown'} — the preload must not leak into the child`)
+            }
             if (!existsSync(nodePng)) throw new Error('node child did not write a PNG')
             okNode++
           } catch (error) {
@@ -370,8 +389,15 @@ async function run(): Promise<number> {
           }
           const nodeBmp = await decodePngAsync(nodePng)
           const napiBmp = await decodePngAsync(napiPng)
+          // Round-10-fix1 guard: the two sides must be DIFFERENT backends —
+          // a row comparing node-canvas with node-canvas is the round-9 bug
+          // (all-zero diffs); abort the run, never report it.
+          if (childBackend === parentBackend || childBackend === undefined) {
+            console.error(`[t1] REFUSED: child backend ${childBackend ?? 'unknown'} must differ from the parent (${parentBackend})`)
+            return 2
+          }
           const d = diffBitmaps(nodeBmp, napiBmp)
-          if (d) rows.push({ file: file.name, unit: unit.index, zoom, dpr, ...d })
+          if (d) rows.push({ file: file.name, unit: unit.index, zoom, dpr, nodeBackend: childBackend, napiBackend: parentBackend, ...d })
         }
       }
     } catch (error) {
