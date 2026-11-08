@@ -235,7 +235,7 @@ it('a failed text preparation retries on worker notify and publishes CF text wit
 }, 60000)
 
 it('a persistently refused text key stops retrying instead of re-reading forever', async () => {
-  // GREEN: notify-driven retries are bounded per key (initial + 3), so a
+  // GREEN: notify-driven retries are bounded per key (initial + 10), so a
   // permanently failing preparation fails closed to base text. Without the
   // bound every worker notification would re-read the worker without limit.
   const { RemoteWorkbook } = await import('../src/worker/viewerRemoteSource')
@@ -259,11 +259,11 @@ it('a persistently refused text key stops retrying instead of re-reading forever
     await ui.findByRole('gridcell', { name: /A1, value 1\.3/ }, { timeout: 30000 })
     await act(async () => { await new Promise(r => setTimeout(r, 500)) })
     calls = 0
-    // Ten worker notifications on the same claimed key must not cause ten
-    // re-reads: the per-key budget (initial + 3 retries) caps them.
-    for (let i = 0; i < 10; i++) await act(async () => { remote!.notify() })
+    // Twenty worker notifications on the same claimed key must not cause twenty
+    // re-reads: the per-key budget (initial + 10 retries) caps them.
+    for (let i = 0; i < 20; i++) await act(async () => { remote!.notify() })
     await act(async () => { await new Promise(r => setTimeout(r, 500)) })
-    expect(calls).toBeLessThanOrEqual(6)
+    expect(calls).toBeLessThanOrEqual(12)
     // Fail closed: base text stands, never a CF claim.
     expect(ui.getByRole('gridcell', { name: /A1, value / }).textContent).toContain('1.3')
   } finally {

@@ -179,22 +179,7 @@ test('six zoom/DPR pairs keep CF formatting', async ({ browser }) => {
               // to the origin before asserting the top-left cells.
               await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
               const b2 = page.getByRole('gridcell', { name: /^B2, value / })
-              if (leg.paged) {
-                // Paged CF after viewport changes is nondeterministic
-                // (follow-up): pin robustness — settles to a real value with
-                // consistent claims (CF value iff CF descriptor, never a
-                // false claim), paint present, no errors.
-                await expect.poll(async () => await b2.textContent() ?? '', { timeout: 30_000 }).toMatch(/1\.(25|3)/)
-                const text = await b2.textContent() ?? ''
-                if (text.includes('1.25')) {
-                  expect(text, `dpr=${dpr} zoom=${zoom}: CF descriptor present`).toContain('Conditional formatting applied')
-                } else {
-                  expect(text, `dpr=${dpr} zoom=${zoom}: no false CF claim`).not.toContain('Conditional formatting')
-                  expect(text, `dpr=${dpr} zoom=${zoom}: no false CF value`).not.toContain('1.25')
-                }
-              } else {
-                await expect(b2, `dpr=${dpr} zoom=${zoom}: CF text`).toContainText('1.25', { timeout: 30_000 })
-              }
+              await expect(b2, `dpr=${dpr} zoom=${zoom}: CF text`).toContainText('1.25', { timeout: 30_000 })
               const grid = await settledCfGrid(page, 200)
               expect(countPink(grid, 0, 0, grid.width, grid.height), `dpr=${dpr} zoom=${zoom}: CF fill`).toBeGreaterThan(200)
             }
@@ -217,20 +202,7 @@ test('frozen panes keep CF painting and pinned headers', async ({ context }) => 
   try {
     await openCf(page, `${NUMFMT}-frozen`, bytes, leg)
     const b2 = page.getByRole('gridcell', { name: /^B2, value / })
-    if (leg.paged) {
-      // Paged CF after scrolling is nondeterministic (follow-up): pin
-      // robustness — settles to a real value with consistent claims.
-      await expect.poll(async () => await b2.textContent() ?? '', { timeout: 30_000 }).toMatch(/1\.(25|3)/)
-      const text = await b2.textContent() ?? ''
-      if (text.includes('1.25')) {
-        expect(text, 'frozen: CF descriptor present').toContain('Conditional formatting applied')
-      } else {
-        expect(text, 'frozen: no false CF claim').not.toContain('Conditional formatting')
-        expect(text, 'frozen: no false CF value').not.toContain('1.25')
-      }
-    } else {
-      await expect(b2, 'frozen: CF text').toContainText('1.25', { timeout: 30_000 })
-    }
+    await expect(b2, 'frozen: CF text').toContainText('1.25', { timeout: 30_000 })
     const scroller = page.getByTestId('officeview-sheet-scroller')
     await scroller.evaluate(node => { node.scrollTop = 600; node.scrollLeft = 400 })
     await page.waitForTimeout(500)

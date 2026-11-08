@@ -78,6 +78,8 @@ export interface CfCompareResult {
   workbookHash?: string
   /** Oracle case the output is bound to (id + status). */
   oracleRef?: string
+  /** SHA-256 of the oracle content (expected + markers) the output is bound to. */
+  oracleHash?: string
   /** Source reads issued to produce the output. */
   reads?: number
 }
@@ -96,15 +98,58 @@ function sha256Hex(lines: string[]): string {
 export async function compareInteractiveViewport(c: CfOracleCase, rootDir: string): Promise<CfCompareResult> {
   const oracleRef = `${c.id} [${c.status}]`
   const workbookHash = c.expected.savedSha256
+  // Oracle content hash: binds the expected markers/cells (independent
+  // fixture design intent), not just the case id/status.
+  const oracleHash = sha256Hex([JSON.stringify({ expected: c.expected, markers: c.markers })])
+  const fail = (reason: string): CfCompareResult => ({ id: c.id, mode: 'interactive', outcome: 'fail', reason, oracleRef, workbookHash, oracleHash, reads: 1 })
   const { prepareCfTextScope } = await import('../src/xlsx/cf/text')
   const { createTrackingBudget } = await import('./cf-refs/audit')
+  const { createCfMemory, CF_LIMITS } = await import('../src/xlsx/cf/limits')
+  const { createCfService } = await import('../src/xlsx/cf/service')
+  const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
+  const { residentSource } = await import('../src/xlsx/cf/render')
+  const { cfRulesVersion } = await import('../src/xlsx/view/pagedSource')
   const savedAbs = resolve(rootDir, c.saved)
   const pkg = await OfficePackage.load(new Uint8Array(readFileSync(savedAbs)))
   const doc = await parseXlsx(pkg)
   const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]
-  if (!sheet) return { id: c.id, mode: 'interactive', outcome: 'fail', reason: `Sheet ${c.sheet} missing`, oracleRef, workbookHash }
+  if (!sheet) return fail(`Sheet ${c.sheet} missing`)
   const rect = parseRangeA1(c.range)
-  if (!rect) return { id: c.id, mode: 'interactive', outcome: 'fail', reason: `Invalid range ${c.range}`, oracleRef, workbookHash }
+  if (!rect) return fail(`Invalid range ${c.range}`)
+  // Service composition: full property VALUES per cell (red vs blue detected).
+  const memory = createCfMemory()
+  if (!sheet.conditionalFormatting) return fail(`No conditional formatting in ${c.saved}`)
+  const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence })
+  const gen = cfRulesVersion(sheet.conditionalFormatting)
+  const stamp = { owner: 'compare', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: gen, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const source = residentSource(sheet, stamp, memory, 'engine')
+  const lease = await oracle.prepareCf(
+    { stamp, sourceRects: [{ firstRow: rect.minRow, lastRow: rect.maxRow, firstCol: rect.minCol, lastCol: rect.maxCol }], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes },
+    source,
+    memory,
+  )
+  const lines: string[] = []
+  try {
+    for (let row = rect.minRow; row <= rect.maxRow; row++) {
+      for (let col = rect.minCol; col <= rect.maxCol; col++) {
+        const outcome = lease.value.at(row, col)
+        if (outcome.kind === 'unresolved' && outcome.reason === 'cf-outside-preparation') continue
+        if (outcome.kind === 'ready') {
+          const props = outcome.value.properties as Record<string, unknown>
+          const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify(props[k])}`).join('+')
+          const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites].sort().join('+') : ''
+          lines.push(`${row},${col}:ready:${values}|${writes}`)
+        } else {
+          lines.push(`${row},${col}:${outcome.kind}:${outcome.kind === 'unresolved' ? outcome.reason : ''}`)
+        }
+      }
+    }
+  } finally {
+    lease.release()
+  }
+  oracle.dispose()
+  if (memory.currentBytes !== 0) return fail(`service composition leaked ${memory.currentBytes} bytes`)
+  // Resident presentation scope: descriptors per cell (viewer-facing output).
   const { budget, net, peak } = createTrackingBudget()
   const base = {}
   let scope: Awaited<ReturnType<typeof prepareCfTextScope>> | undefined
@@ -116,26 +161,25 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       budget,
     })
   } catch (error) {
-    return { id: c.id, mode: 'interactive', outcome: 'fail', reason: error instanceof Error ? error.message : String(error), oracleRef, workbookHash, reads: 1 }
+    return fail(error instanceof Error ? error.message : String(error))
   }
-  const lines: string[] = []
   if (scope) {
     for (let row = rect.minRow; row <= rect.maxRow; row++) {
       for (let col = rect.minCol; col <= rect.maxCol; col++) {
         const desc = scope.describe(row, col)?.text ?? ''
         const applied = scope.effectiveStyle(row, col, base as never) !== base
-        if (desc || applied) lines.push(`${row},${col}:${desc}|${applied ? '1' : '0'}`)
+        if (desc || applied) lines.push(`scope:${row},${col}:${desc}|${applied ? '1' : '0'}`)
       }
     }
   }
   const peakBytes = peak()
   scope?.dispose()
-  if (net() !== 0) return { id: c.id, mode: 'interactive', outcome: 'fail', reason: `resident viewport leaked ${net()} bytes`, oracleRef, workbookHash, reads: 1 }
-  if (scope && peakBytes <= 0) return { id: c.id, mode: 'interactive', outcome: 'fail', reason: 'resident viewport observed no allocation', oracleRef, workbookHash, reads: 1 }
+  if (net() !== 0) return fail(`resident viewport leaked ${net()} bytes`)
+  if (scope && peakBytes <= 0) return fail('resident viewport observed no allocation')
   return {
     id: c.id, mode: 'interactive', outcome: 'recipe-pending',
     reason: 'Viewport data path verified with output hash; pixel diff awaits Excel viewport refs. Behavior covered by tests/browser/xlsx-cf.spec.ts.',
-    outputHash: sha256Hex(lines), workbookHash, oracleRef, reads: 1,
+    outputHash: sha256Hex(lines), workbookHash, oracleRef, oracleHash, reads: 1,
   }
 }
 
@@ -154,6 +198,7 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
   const { createCfMemory } = await import('../src/xlsx/cf/limits')
   const rect = parseRangeA1(c.range)
   if (!rect) return { id: c.id, mode: 'paged', outcome: 'fail', reason: `Invalid range ${c.range}`, oracleRef, workbookHash }
+  const oracleHash = sha256Hex([JSON.stringify({ expected: c.expected, markers: c.markers })])
   const saved = new Uint8Array(readFileSync(resolve(rootDir, c.saved)))
   const session = await openImportSession(
     { kind: 'blob', blob: new Blob([saved.buffer as ArrayBuffer]) },
@@ -181,23 +226,29 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       return {
         id: c.id, mode: 'paged', outcome: 'recipe-pending',
         reason: `Paged read pending on import (tracked: ${(result.pendingSheetIds ?? []).join(',') || 'none'}); data path verified, pixel diff awaits Excel viewport refs.`,
-        outputHash: sha256Hex(['pending']), workbookHash, oracleRef, reads: 1,
+        outputHash: sha256Hex(['pending']), workbookHash, oracleRef, oracleHash, reads: 1,
       }
     }
     if (result.kind !== 'ready') {
       return {
         id: c.id, mode: 'paged', outcome: 'recipe-pending',
         reason: `Paged read withheld (${result.kind}); data path verified fail-closed, pixel diff awaits Excel viewport refs.`,
-        outputHash: sha256Hex([result.kind]), workbookHash, oracleRef, reads: 1,
+        outputHash: sha256Hex([result.kind]), workbookHash, oracleRef, oracleHash, reads: 1,
       }
     }
+    // Hash full property VALUES (not just names): a red→blue fill change
+    // must change the hash. Values are primitives (colors, codes, flags).
     const lines = [...result.states]
       .sort((a, b) => a.row - b.row || a.col - b.col)
-      .map(s => `${s.row},${s.col}:${Object.keys(s.properties ?? {}).sort().join('+')}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}`)
+      .map(s => {
+        const props = s.properties ?? {}
+        const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify((props as Record<string, unknown>)[k])}`).join('+')
+        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}`
+      })
     return {
       id: c.id, mode: 'paged', outcome: 'recipe-pending',
       reason: 'Viewport data path verified with output hash; pixel diff awaits Excel viewport refs. Behavior covered by tests/browser/xlsx-cf.spec.ts.',
-      outputHash: sha256Hex(lines), workbookHash, oracleRef, reads: 1,
+      outputHash: sha256Hex(lines), workbookHash, oracleRef, oracleHash, reads: 1,
     }
   } finally {
     await session.release()

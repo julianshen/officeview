@@ -522,11 +522,11 @@ export interface CycleSample {
 }
 
 /** Open/read/cancel/close cycles against a real paged session. A fresh memory
- * observes every round: peak proves real work, and the retained shared charge
- * must be identical across identical rounds (stability, not growth).
- * Retained shared definitions are legitimate; per-round growth is a leak.
- * Pre-aborted reads must throw cancellation; a mid-flight abort must settle
- * without charge and leave the session usable. */
+ * observes every round: peak proves real work, and complete teardown (store
+ * release for shared definitions plus session release for pages) must return
+ * to a zero baseline — stability alone is not cleanup. Pre-aborted reads must
+ * throw cancellation; a mid-flight abort must settle without charge and leave
+ * the session usable. */
 export async function pressureCycles(rounds = 20): Promise<CycleSample> {
   const started = Date.now()
   const { openImportSession } = await import('../../src/xlsx/storage/pagedImport')
@@ -535,23 +535,21 @@ export async function pressureCycles(rounds = 20): Promise<CycleSample> {
   let maxPeak = 0
   let maxNet = 0
   let finalNet = 0
-  let firstRetained = -1
   let reads = 0
   for (let i = 0; i < rounds; i++) {
-    // Fresh memory per round (caller-scoped, as in real use): cross-round
-    // accumulation would be caller behavior, not a product leak. Stability
-    // of the retained shared charge across identical rounds is the signal.
+    // Fresh memory per round (caller-scoped, as in real use).
     const memory = createCfMemory()
     const session = await openImportSession(
       { kind: 'blob', blob: new Blob([new Uint8Array(saved).buffer]) },
       { docId: `audit-cycle-${i}`, profile: 'D' },
     )
+    let store: ReturnType<ReturnType<typeof createPagedWorkbookSource>['store']> | undefined
     try {
       await session.done
       const source = createPagedWorkbookSource(session)
       const sheetId = source.sheets[0]!.sheetId
-      const store = source.store(sheetId)
-      const stamp = (owner: string) => ({ owner, sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 })
+      store = source.store(sheetId)
+      const stamp = (owner: string) => ({ owner, sheetId, workbookValueGen: store!.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 })
       // Complete read through the audited memory: peak proves real work.
       reads++
       const ready = await store.readConditionalFormatting?.({
@@ -613,15 +611,14 @@ export async function pressureCycles(rounds = 20): Promise<CycleSample> {
       if (!again || again.kind !== 'ready') throw new Error(`cycle ${i}: session unusable after abort (mid-flight outcome ${midOutcome})`)
       maxPeak = Math.max(maxPeak, memory.peakBytes)
     } finally {
+      // Complete teardown: store release drops shared definitions and drawing
+      // holds; session release removes pages. Caller-scoped memory must return
+      // to the released baseline — no orphaned charges.
+      await store?.release()
       await session.release()
     }
     finalNet = memory.currentBytes
-    // Retained shared definitions are legitimate but must be identical across
-    // identical rounds: per-round growth is a leak. (Session release orphans
-    // the shared charge on caller-scoped memory — bounded, stable, and freed
-    // with the memory; tracked as product follow-up, not gated as failure.)
-    if (firstRetained < 0) firstRetained = finalNet
-    else if (finalNet !== firstRetained) throw new Error(`cycle ${i}: retained bytes grew ${firstRetained} -> ${finalNet}`)
+    if (finalNet !== 0) throw new Error(`cycle ${i}: net bytes ${finalNet} after release`)
   }
   return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, wallMs: Date.now() - started }
 }
@@ -720,7 +717,7 @@ async function main(): Promise<void> {
   checkPressureSample(stats, { expectOutcome: 'admitted' })
   const cycles = await pressureCycles(20)
   // eslint-disable-next-line no-console
-  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (stable shared retention, ${cycles.wallMs}ms context only)`)
+  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
   if (cycles.maxPeakBytes <= 0) throw new Error('cycles observed no allocation')
   if (cycles.reads < cycles.cycles * 4) throw new Error(`cycles issued ${cycles.reads} reads, expected at least ${cycles.cycles * 4} (ready + cancelled + mid-flight + retry per cycle)`)
   const baseline = await baselineNoCf()

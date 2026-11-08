@@ -66,4 +66,38 @@ describe('awaitSettled resolves on settle, abort, or timeout', () => {
     expect(result).toBe('settled')
     expect(channel.count()).toBe(0)
   })
+
+  it('balances abort listeners across repeated waits', async () => {
+    const channel = deferredNotify()
+    const controller = new AbortController()
+    let added = 0
+    let removed = 0
+    const rawAdd = controller.signal.addEventListener.bind(controller.signal)
+    const rawRemove = controller.signal.removeEventListener.bind(controller.signal)
+    controller.signal.addEventListener = ((...args: [string, EventListener]) => { added++; return (rawAdd as (...a: unknown[]) => void)(...args) }) as typeof controller.signal.addEventListener
+    controller.signal.removeEventListener = ((...args: [string, EventListener]) => { removed++; return (rawRemove as (...a: unknown[]) => void)(...args) }) as typeof controller.signal.removeEventListener
+    for (let i = 0; i < 20; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      expect(await awaitSettled(() => false, channel.subscribe, controller.signal, 0)).toBe('timeout')
+    }
+    expect(added).toBe(20)
+    expect(removed).toBe(20)
+    expect(channel.count()).toBe(0)
+  })
+
+  it('a synchronous notification settles without throwing', async () => {
+    let ready = false
+    let unsubscribed = false
+    const subscribe = (notify: () => void): (() => void) => {
+      // Valid eager subscription: marks the predicate ready and notifies
+      // before returning the unsubscribe function.
+      ready = true
+      notify()
+      return () => { unsubscribed = true }
+    }
+    const controller = new AbortController()
+    const result = await awaitSettled(() => ready, subscribe, controller.signal, 5000)
+    expect(result).toBe('settled')
+    expect(unsubscribed).toBe(true)
+  })
 })

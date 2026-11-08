@@ -120,6 +120,19 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
 
 ---
 
+## 7. Fix Round 2 — Review Findings Resolved (Task 11 R1)
+
+Corrects §5 counts/coverage and resolves review-t11-r2 findings 1–5. Manifest: 13 cases = 12 `recipe-pending` + 1 `unsupported`; 115 capabilities = 110 blocked + 5 refused-unsupported.
+
+- **Viewport lifecycle determinism (finding 1)**: paged CF now asserts uniform `1.25` on every scale/frozen transition (no either/or fallback). Root cause was prepare churn, not worker speed: every effect re-run aborted the in-flight prepare (even bail-outs for the same key), so 896 prepares started with 1 completing and viewport changes never settled. Fix: at most one preparation per key (duplicate re-runs return early), cleanup aborts only superseded keys (bail re-runs preserve in-flight work; unmount cancels via a dedicated effect), retry budget raised to initial + 10 to cover load churn plus viewport recovery. Verified deterministic across repeated browser runs (zoom/frozen ×3, full spec both engines).
+- **Adapter value hashing + oracle binding (finding 2)**: interactive hashes service property VALUES (red→blue changes the hash) plus scope descriptors; paged hashes wire state VALUES. Both bind `outputHash`, `workbookHash` (manifest savedSha256), `oracleRef` (id + status), and `oracleHash` (SHA-256 of expected + markers). Deterministic and content-sensitive (verified by unit tests). Pixel diff stays pending without Excel viewport refs.
+- **Print output (finding 2)**: `paintCfCapture` print mode verified in vitest to paint CF pink fill (not just notice/PDF shell). The UI Print button is inert in the harness (click and Ctrl/Cmd+P produce no `preparePrint` invocation, no pages, no errors — follow-up with evidence); the browser print test remains UI smoke (notice + PDF size) with per-leg expectations (resident notice+PDF; worker/paged no-canvas notice). No app export UI exists; export is the Paintable route (covered by `cf-compare export` mode, pending refs).
+- **Listener/notify cleanup (findings 4–5)**: `awaitSettled` removes its abort listener on every finish path (unit-tested balance: 20 adds → 20 removes) and tolerates synchronous notifications (unit-tested, no TDZ).
+- **Ownership teardown (finding 3)**: cycles now call `store.release()` (drops shared definitions) plus `session.release()`; caller-scoped memory returns to a zero baseline (was stable 5758 orphaned). Pre-aborted reads must throw `cancelled` (type asserted); mid-flight abort settles without charge with session reuse; stability gate replaced by released-baseline assertion.
+- **Engines (finding 5)**: Playwright 1.64.0; Chromium (chromium-1208 build); WebKit (webkit-2370 build, Playwright emulation — never Safari/real device per spec §12.2). Browser spec: 7 tests green on both engines (uniform CF assertions on all legs). Focused commit SHAs and artifacts in task-11-report.md Fix round 2 appendix.
+
+---
+
 ## 6. Fix Round 1 — Review Findings Resolved (Task 11 R1)
 
 Corrects §5 counts/coverage and resolves review-t11-r1 findings 1–5. Manifest: 13 cases = 12 `recipe-pending` + 1 `unsupported` (`stage1-dxf-layering-2`); 115 capabilities = 110 supported-structural (blocked) + 5 refused-unsupported.
