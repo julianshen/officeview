@@ -198,3 +198,76 @@ it.each(['rule','empty'] as const)('asynchronous unchanged structure wakes %s CF
   expect(ui.getByRole('status').textContent).not.toMatch(/CF wire|Conditional formatting unavailable|unavailable for these tiles/)
  }finally{ui.unmount()}
 },15000)
+
+it('a failed text preparation retries on worker notify and publishes CF text without scrolling', async () => {
+  // RED: without a notify-driven retry the first (failing) preparation claims
+  // the text key with no scope and base text sticks forever, even after the
+  // worker can serve CF. GREEN: the retry publishes CF text with no scroll or
+  // selection change.
+  const { RemoteWorkbook } = await import('../src/worker/viewerRemoteSource')
+  const text = await import('../src/xlsx/cf/text')
+  const { PackageError } = await import('../src/core/package-error')
+  let remote: InstanceType<typeof RemoteWorkbook> | undefined
+  const identity = RemoteWorkbook.prototype.identity
+  vi.spyOn(RemoteWorkbook.prototype, 'identity').mockImplementation(function (this: InstanceType<typeof RemoteWorkbook>, id) { remote = this; return identity.call(this as never, id) })
+  let failReads = true
+  const realPrepare = text.prepareCfWireScope
+  const prepareSpy = vi.spyOn(text, 'prepareCfWireScope').mockImplementation(async (...args) => {
+    // Fail only the text path (no base layer); paint keeps its own behavior.
+    if (failReads && !(args[2] as { base?: unknown } | undefined)?.base) throw new PackageError('resource-limit', 'CF text preparation exceeds the admitted batch')
+    return realPrepare(...args)
+  })
+  const ui = await mountCf()
+  try {
+    // Base text while every text preparation fails; the key is claimed with no scope.
+    const base = await ui.findByRole('gridcell', { name: /A1, value 1\.3/ }, { timeout: 30000 })
+    expect(base.textContent).toContain('1.3')
+    // The worker becomes ready and notifies; the viewer must retry the text
+    // preparation without any scroll or selection change.
+    failReads = false
+    await act(async () => { remote!.notify() })
+    const formatted = await ui.findByRole('gridcell', { name: /A1, value 1\.25/ }, { timeout: 30000 })
+    expect(formatted.textContent).toContain('1.25')
+  } finally {
+    prepareSpy.mockRestore()
+    ui.unmount()
+  }
+}, 60000)
+
+it('a persistently refused text key stops retrying instead of re-reading forever', async () => {
+  // GREEN: notify-driven retries are bounded per key (initial + 3), so a
+  // permanently failing preparation fails closed to base text. Without the
+  // bound every worker notification would re-read the worker without limit.
+  const { RemoteWorkbook } = await import('../src/worker/viewerRemoteSource')
+  const text = await import('../src/xlsx/cf/text')
+  const { PackageError } = await import('../src/core/package-error')
+  let remote: InstanceType<typeof RemoteWorkbook> | undefined
+  const identity = RemoteWorkbook.prototype.identity
+  vi.spyOn(RemoteWorkbook.prototype, 'identity').mockImplementation(function (this: InstanceType<typeof RemoteWorkbook>, id) { remote = this; return identity.call(this as never, id) })
+  let calls = 0
+  const realPrepare = text.prepareCfWireScope
+  const prepareSpy = vi.spyOn(text, 'prepareCfWireScope').mockImplementation(async (...args) => {
+    if (!(args[2] as { base?: unknown } | undefined)?.base) {
+      calls++
+      throw new PackageError('resource-limit', 'CF text preparation exceeds the admitted batch')
+    }
+    return realPrepare(...args)
+  })
+  const ui = await mountCf()
+  try {
+    // Load quiesces with base text (every text preparation throws).
+    await ui.findByRole('gridcell', { name: /A1, value 1\.3/ }, { timeout: 30000 })
+    await act(async () => { await new Promise(r => setTimeout(r, 500)) })
+    calls = 0
+    // Ten worker notifications on the same claimed key must not cause ten
+    // re-reads: the per-key budget (initial + 3 retries) caps them.
+    for (let i = 0; i < 10; i++) await act(async () => { remote!.notify() })
+    await act(async () => { await new Promise(r => setTimeout(r, 500)) })
+    expect(calls).toBeLessThanOrEqual(6)
+    // Fail closed: base text stands, never a CF claim.
+    expect(ui.getByRole('gridcell', { name: /A1, value / }).textContent).toContain('1.3')
+  } finally {
+    prepareSpy.mockRestore()
+    ui.unmount()
+  }
+}, 60000)

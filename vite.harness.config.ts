@@ -56,6 +56,15 @@ function lazyPagedChunks(): Plugin {
         '/src/charts/index.ts',
         // Dev-server warmup only; the library CF bridge remains a dynamic import.
         '/src/xlsx/cf/limits.ts',
+        // The CF rule parser, paint preparation and derived-text scopes, loaded by
+        // cfLoader/xlsx-cf dynamic imports when a sheet carries CF rules.
+        '/src/xlsx/cf/parse.ts',
+        '/src/xlsx/cf/render.ts',
+        '/src/xlsx/cf/text.ts',
+        // The CF service and capture stream, loaded by paged import/source
+        // dynamic imports on the worker path.
+        '/src/xlsx/cf/service.ts',
+        '/src/xlsx/cf/capture.ts',
         // The pivot, table-style and slicer/timeline engines (xlsx/pivotLoader, tableStyleLoader, pagedSource, pagedDrawings, pagedFormatting).
         '/src/xlsx/pivots/index.ts',
         // The pivot controls (client, button layer, menus), InteractiveSheetDoc's dynamic import on a sheet with pivots.

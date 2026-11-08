@@ -995,9 +995,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return text.prepareCfWireScope(
       async chunk => {
         if (!current()) return { result: undefined, release: () => {} }
-        const held = remote.acquireCfPreparation(sheetId, chunk, {
+        const stamp = {
           owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen: 0,
-        }, batchSignal)
+        }
+        let held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
+        // A failed entry never reloads on its own, so a churn-time refusal
+        // (stale stamp while the worker races ahead) would stick past
+        // quiescence: drop the suspect generation once and re-read fresh.
+        // Bounded to one retry — a persistent failure fails closed below.
+        if (held.state.state === 'failed') {
+          held.release()
+          remote.invalidateCf(sheetId, chunk)
+          if (!current()) return { result: undefined, release: () => {} }
+          held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
+        }
         // The entry mutates under the loader: always re-read, never narrow.
         const settled = (): boolean => held.state.state === 'ready' || held.state.state === 'failed' || !current()
         try {
@@ -1101,8 +1112,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const cfTextKey = cfTextRects && entry && activeSheetId
     ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects })])
     : undefined
-  const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined } | null>(null)
+  const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
+  // Bounded recovery budget per key: a scopeless preparation retries on worker
+  // notifications, but a persistently refused key gives up instead of
+  // re-reading the worker forever. A new key resets the budget.
+  const cfTextRetries = useRef<{ key: string; count: number }>({ key: '', count: 0 })
   useEffect(() => { const old = heldCfText.current; heldCfText.current = cfText?.scope; if (old !== heldCfText.current) old?.dispose() }, [cfText])
   useEffect(() => () => heldCfText.current?.dispose(), [])
   useEffect(() => {
@@ -1110,10 +1125,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (cfText !== null) setCfText(null)
       return
     }
-    // Already holding the matching scope: nothing to do. Otherwise a new
-    // preparation starts; the key is claimed only when it publishes, so a
-    // canceled or superseded run always retries instead of sticking.
-    if (cfText?.key === cfTextKey) return
+    // Already holding matching CF text — or a deterministically empty sheet —
+    // for this key: nothing to do. Otherwise a new preparation starts; the key
+    // is claimed only by a published scope, so a canceled or superseded run
+    // always retries instead of sticking. A worker notification (loadTick)
+    // re-runs a scopeless, non-empty preparation, which is how a refused first
+    // attempt recovers once the worker can serve it (the loader drops a failed
+    // entry and re-reads fresh). Recovery is bounded per key so a persistent
+    // refusal fails closed to base text instead of re-reading forever.
+    if (cfText?.key === cfTextKey && (cfText.scope || (cfText as { empty?: boolean } | null)?.empty)) return
+    if (cfText?.key === cfTextKey) {
+      if (cfTextRetries.current.key !== cfTextKey) cfTextRetries.current = { key: cfTextKey, count: 0 }
+      if (++cfTextRetries.current.count > 3) return
+    } else {
+      cfTextRetries.current = { key: cfTextKey, count: 0 }
+    }
     let cancelled = false
     const abort = new AbortController()
     const sheet = entry.sheet, sheetId = activeSheetId
@@ -1121,21 +1147,27 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // A refused preparation (budget pressure) leaves base text rather than
       // failing the render; a canceled one is simply dropped.
       let scope: EffectiveFormatScope | undefined
+      let empty = false
       try {
         const locale = entry.sheet.semantics?.locale ?? 'en-US'
         scope = remote
-          ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget)
+          ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget, undefined, () => { empty = true })
           : await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
       } catch {
         scope = undefined
       }
       if (cancelled) { scope?.dispose(); return }
-      setCfText({ key: cfTextKey, scope })
+      // Equivalent states commit nothing: without this guard every failed
+      // preparation would re-render and immediately re-prepare in a hot loop.
+      // Deterministically empty sheets are marked so notifications stop
+      // re-preparing them; anything else retries on the next notification.
+      const next = empty ? { key: cfTextKey, scope, empty: true as const } : { key: cfTextKey, scope }
+      setCfText(previous => (previous?.key === next.key && previous?.scope === next.scope && (previous as typeof next).empty === next.empty) ? previous : next)
     })()
     return () => { cancelled = true; abort.abort() }
     // CF-only work: helpers are render-scoped closures over the same inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry, scroll, viewport, cfTextKey, cfText, activeSheetId])
+  }, [entry, scroll, viewport, cfTextKey, cfText, activeSheetId, loadTick])
   // Gate scope consumption by identity: while a replacement preparation is
   // pending, the previous sheet/generation scope must not format new cells.
   const liveCfScope = liveScopeFor(cfText, cfTextKey)
