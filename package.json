@@ -55,7 +55,10 @@
     "site:samples": "bun scripts/build-site-samples.ts",
     "site:dev": "bun run site:samples && vite --config vite.site.config.ts",
     "site:build": "bun run site:samples && vite build --config vite.site.config.ts",
-    "site:typecheck": "tsc -p site/tsconfig.json"
+    "site:typecheck": "tsc -p site/tsconfig.json",
+    "s0:test": "vitest run --config vitest.stream-s0.config.ts",
+    "s0:test:napi": "vitest run --config vitest.stream-s0-napi.config.ts",
+    "s0:report": "bun scripts/stream-s0/report.ts"
   },
   "peerDependencies": {
     "react": ">=18"
