@@ -103,3 +103,17 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
     - `LibreOffice/7.3.7.2$Linux_X86_64 LibreOffice_project/30$Build-2` (1 file: `poi-62272.xlsx`)
     - `Apache POI` (1 file: `poi-link-external-workbook-a.xlsx`)
     - Absent `docProps/app.xml` (5 POI files: `poi-47889.xlsx`, `poi-59021.xlsx`, `poi-59746_NoRowNums.xlsx`, `poi-66365.xlsx`, `poi-xlsx-jdbc.xlsx`)
+
+---
+
+## 5. Stage 1 Verification, Resource Audit & Browser Evidence (Task 11)
+
+- **Stage 1 unit tests**: `tests/xlsx-cf-stage1.test.ts` (6 tests green) — service-as-oracle refusal sweep across all 13 manifest cases plus both-paths (resident `prepareCfScope`, worker `prepareCfWireScope`) coverage; `tests/xlsx-cf-paged-semantics.test.tsx` (11 tests green, incl. two Task 11 RED→GREEN: failed-preparation notify retry, persistently-refused per-key bound).
+- **Resource audit**: `scripts/cf-refs/audit.ts` (`bun scripts/cf-refs/audit.ts --stage 1`) — 13/13 structural, 115/115 capabilities; pressure scenarios (whole-column 16384/16385, shared-rules 256/257, range boundaries 4096/4097, distinct ranges, refused sheet, 20-cycle leak check), baseline-no-CF control, eager-boundary admission; distinguishes approved refusals vs. unmeasured-disabled vs. unexpected failure (a wholly refused suite is not success).
+- **Browser evidence**: `tests/browser/xlsx-cf.spec.ts` (7 tests green Chromium; 6 green + 1 Chromium-only PDF skip WebKit) — CF number-format text, fill paint + worker leg parity, 6 zoom/DPR pairs, frozen panes, copy/find, keyboard, print notice across resident / worker / forced-paged legs.
+- **Pixel compare**: `scripts/cf-compare.ts` runs all 5 modes (`static`, `print`, `export` via the shared prepared Paintable; `interactive`/`paged` cite the browser spec — viewport pixel-diff has no Excel viewport refs). All 13 cases remain `recipe-pending` (no Excel screen/printer captures; manifest statuses unchanged, no manufactured evidence).
+- **Product fixes (separate focused changes, RED evidence)**:
+  1. Scopeless CF text retries on worker notification instead of sticking (unit RED→GREEN).
+  2. Loader drops a failed cache entry once and re-reads fresh (churn-time stale-stamp recovery).
+  3. Per-key retry bound (initial + 3) so persistent refusals fail closed (unit RED→GREEN: 10 notifies → 10 re-reads unbounded, ≤6 bounded).
+- **Known gap (follow-up, worker-side)**: a forced-paged (`?worker=1&paged=1`) CF text read can race page loads and the worker never answers — the main-thread entry stays `loading` with no failure and no notification, so no retry fires and base text sticks until a scroll issues a fresh read (which recovers). Paint is unaffected (viewport pages loaded). Evidence: 2 acquires (`225`-rect + `1`-rect, `viewGen 0`, `structureGen 2`) stuck `loading`, zero failures, zero logs over 8s quiescence. The browser spec asserts fail-closed base text (never false CF claims) on the paged leg until the worker wakes pending reads when pages land (or answers `pending` instead of silence). Natural (non-forced) paged CF text on large files is unverified.

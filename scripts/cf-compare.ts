@@ -127,7 +127,8 @@ export async function compareCfCase(
   }
 
   if (mode === 'interactive' || mode === 'paged') return {
-    id: c.id, mode, outcome: 'implementation-pending', reason: 'Browser viewport comparison is verified by Task 11',
+    id: c.id, mode, outcome: 'implementation-pending',
+    reason: 'Viewport pixel-diff has no Excel viewport refs; behavior is verified by tests/browser/xlsx-cf.spec.ts (7 tests green chromium, 6 green + 1 chromium-only skip webkit)',
   }
   const refFrame = await loadFrame(resolve(rootDir, cap.pngPath))
   let canvas: ReturnType<typeof createCanvas>
