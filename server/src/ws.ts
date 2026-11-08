@@ -48,6 +48,8 @@ export interface StreamServerOptions {
   renewLeadSec?: number
   readyMs?: number
   helloMs?: number
+  /** Resume grace after an abnormal drop (1001/1006), capped by the token exp. Default 30 s. */
+  detachGraceMs?: number
   /** Current layout fingerprint for a policy id (tests inject a change). */
   fingerprint?: (contentPolicyId: string) => string
   path?: string
@@ -76,7 +78,9 @@ export function createStreamServer(o: StreamServerOptions) {
   const now = o.now ?? Date.now
   const nowSec = () => Math.floor(now() / 1000)
   const ttl = o.tokenTtlSec ?? 300, lead = o.renewLeadSec ?? 5
-  const readyMs = o.readyMs ?? 2000, helloMs = o.helloMs ?? 5000
+  const readyMs = o.readyMs ?? 2000, helloMs = o.helloMs ?? 5000, graceMs = o.detachGraceMs ?? 30_000
+  /** sid → reaper of a detached session. */
+  const reapers = new Map<string, ReturnType<typeof setTimeout>>()
   const fingerprintOf = o.fingerprint ?? layoutFingerprint
   const table = new SessionTable()
   const audit = new AuditTable()
@@ -209,8 +213,9 @@ export function createStreamServer(o: StreamServerOptions) {
     const token = await issueToken(o.keys.kToken, { docRef: s.docRef, sid: s.sid, ttlSec: ttl, now: nowSec() })
     if (gone(ws)) return
     if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
-    const old = s.activeSocket as unknown as WS
-    if (old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
+    const old = s.activeSocket as unknown as WS | undefined
+    if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
+    const reaper = reapers.get(s.sid); if (reaper) { clearTimeout(reaper); reapers.delete(s.sid) }
     table.supersede(s.sid, ws as never, token.jti)
     sd.tokenExp = token.exp
     sd.decision = d!
@@ -218,6 +223,23 @@ export function createStreamServer(o: StreamServerOptions) {
     ws.data.rates = sessionRates.get(s.sid) ?? ws.data.rates
     sendManifest(ws, reqId, s.sid, token.token)
     scheduleRenew(ws, s.sid, token.exp)
+  }
+
+  function teardown(sid: string) {
+    const r = reapers.get(sid); if (r) { clearTimeout(r); reapers.delete(sid) }
+    table.close(sid)
+    sessionRates.delete(sid)
+    const sd = sessionDoc.get(sid)
+    sessionDoc.delete(sid)
+    if (sd) releaseDoc(sd.doc.docRef)
+  }
+  /** Keep the session (and its document charge) for a resume until the grace
+   * or the newest token's exp, whichever comes first. */
+  function detach(sid: string) {
+    table.detach(sid)
+    const sd = sessionDoc.get(sid)!, s = table.get(sid)! as Session & { pendingExp?: number }
+    const exp = Math.max(sd.tokenExp, s.pendingExp ?? 0)
+    reapers.set(sid, setTimeout(() => { reapers.delete(sid); if (table.get(sid)?.status === 'detached') teardown(sid) }, Math.max(0, Math.min(graceMs, exp * 1000 - now()))))
   }
 
   function sendManifest(ws: WS, reqId: number, sid: string, token: string) {
@@ -393,27 +415,26 @@ export function createStreamServer(o: StreamServerOptions) {
         }
         try { await onText(ws, data) } catch { close(ws, 'auth-failed') }
       },
-      close(ws: WS) {
+      close(ws: WS, code: number) {
         sockets.delete(ws)
         ipRates.release(ws.data.ip)
         for (const t of ws.data.timers) clearTimeout(t)
         const sid = ws.data.sid
+        // A server-initiated close set the phase first; only a peer drop reaches here open.
+        const serverClosed = ws.data.phase === 'closed'
         ws.data.phase = 'closed'
         if (!sid) return
         const s = table.get(sid)
-        if (s && s.activeSocket === (ws as unknown)) {
-          table.close(sid)
-          sessionRates.delete(sid)
-          const sd = sessionDoc.get(sid)
-          sessionDoc.delete(sid)
-          if (sd) releaseDoc(sd.doc.docRef)
-        }
+        if (!s || s.activeSocket !== (ws as unknown)) return
+        if (!serverClosed && (code === 1001 || code === 1006) && (s.status === 'manifest' || s.status === 'stream')) return detach(sid)
+        teardown(sid)
       },
     },
     /** §9.3 write-off: close once with 4005. */
     revoke(sid: string): boolean {
       const s = table.get(sid)
       if (!s) return false
+      if (!s.activeSocket) { teardown(sid); return true }
       close(s.activeSocket as unknown as WS, 'revoked')
       return true
     },

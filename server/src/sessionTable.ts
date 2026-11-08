@@ -2,14 +2,15 @@
 import type { EffectivePolicy } from './hooks'
 
 export interface SocketLike { close(code?: number, reason?: string): void }
-export type SessionStatus = 'manifest' | 'stream' | 'closed'
+export type SessionStatus = 'manifest' | 'stream' | 'detached' | 'closed'
 export interface Session {
   sid: string
   docRef: string
   viewerId?: string
   role: 'presenter' | 'audience'
   effectivePolicy: EffectivePolicy
-  activeSocket: SocketLike
+  /** Undefined while detached (socket dropped, inside the resume grace). */
+  activeSocket: SocketLike | undefined
   jti: string
   /** Set while a RENEW is outstanding: both jtis are accepted (§6.2 rule 6). */
   pendingJti?: string
@@ -63,8 +64,14 @@ export class SessionTable {
     s.pendingJti = undefined
     s.jti = newJti
     s.status = 'manifest'
-    if (old !== socket) old.close(4409, 'superseded')
+    if (old && old !== socket) old.close(4409, 'superseded')
     return s
+  }
+  /** The active socket dropped abnormally: keep the row for a resume. */
+  detach(sid: string): void {
+    const s = this.must(sid)
+    s.activeSocket = undefined
+    s.status = 'detached'
   }
   close(sid: string): void {
     const s = this.rows.get(sid)
