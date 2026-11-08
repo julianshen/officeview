@@ -13,7 +13,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['tests/stream-s0/**/*.test.ts'],
+    include: ['tests/stream-s0/**/*.test.ts', 'tests/stream/**/*.test.ts'],
     env: { S0_BACKEND: 'napi' },
     maxWorkers: 2,
   },
