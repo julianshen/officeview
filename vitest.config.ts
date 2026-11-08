@@ -15,7 +15,7 @@ export default defineConfig({
     // `bun run test:browser` — never through vitest.
     // Stage-0 streaming feasibility tests run via `bun run s0:test` /
     // `s0:test:napi` (node environment, backend-pinned configs).
-    exclude: [...configDefaults.exclude, 'tests/browser/**', 'tests/stream-s0/**'],
+    exclude: [...configDefaults.exclude, 'tests/browser/**', 'tests/stream-s0/**', 'server/**'],
     // Every jsdom test gets the compiled stylesheet (tokens, sentinel).
     setupFiles: ['tests/setup/styles.ts'],
     // vitest blanks CSS it is not told to process; run the real pipeline

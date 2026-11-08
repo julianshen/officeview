@@ -46,6 +46,9 @@
   "files": [
     "dist"
   ],
+  "workspaces": [
+    "server"
+  ],
   "scripts": {
     "build": "tsc --noEmit && vite build && vite build -c vite.core.config.ts && tsc -p tsconfig.build.json",
     "dev": "vite",
@@ -64,7 +67,8 @@
     "s0:test:napi": "vitest run --config vitest.stream-s0-napi.config.ts",
     "s0:report": "bun scripts/stream-s0/report.ts",
     "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts",
-    "gates:core": "OV_MODULE_MAP=1 bun run build && bun scripts/core-gates.ts"
+    "gates:core": "OV_MODULE_MAP=1 bun run build && bun scripts/core-gates.ts",
+    "test:server": "cd server && bun test"
   },
   "peerDependencies": {
     "react": ">=18"
