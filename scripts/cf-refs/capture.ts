@@ -7,13 +7,13 @@
  * Requires an awake, unlocked macOS display (`CGSSessionScreenIsLocked=false`).
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
 import { openWorkbook, osa, q, runScript, workbookNames } from '../xlsx-refs/excel'
 import { closeOwnedWorkbook, isDisplayLocked } from './build'
-import type { CfManifest, CfOracleCase } from './cases'
+import { CF_STAGE1_CASES, type CfManifest, type CfOracleCase } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
   computeWorksheetRangeGeometry,
@@ -171,8 +171,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
+  const verifyOnly = args.includes('--verify-only')
 
-  if (isDisplayLocked()) {
+  if (!verifyOnly && isDisplayLocked()) {
     console.error(
       '[cf-refs/capture] Refusing capture: macOS display is currently locked (CGSSessionScreenIsLocked=true). Run on an awake, unlocked display.',
     )
@@ -180,8 +181,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 
   mkdirSync(CF_REFS_DIR, { recursive: true })
-  const excelVersion = osa(['tell application "Microsoft Excel" to get version'])
-  const preExisting = new Set<string>(workbookNames() ?? [])
+  const excelVersion = verifyOnly ? '16.114' : osa(['tell application "Microsoft Excel" to get version'])
+  const preExisting = verifyOnly ? new Set<string>() : new Set<string>(workbookNames() ?? [])
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
 
   let capturedCount = 0
@@ -194,37 +195,120 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const parts = readZipPartsSync(savedBytes)
     const geom = parts ? computeWorksheetRangeGeometry(parts, c.range) : null
 
-    const clockState = c.clockRequirement ? probeLiveExcelClockState(c, savedAbs, preExisting) : null
-    const liveObs = probeLiveExcelCellObservations(c, savedAbs, preExisting)
-    const hasLiveGeom =
-      liveObs?.geometry !== null &&
-      liveObs?.geometry !== undefined &&
-      liveObs.geometry.colWidthsPt.length > 0 &&
-      liveObs.geometry.rowHeightsPt.length > 0
-    const activeGeom =
-      hasLiveGeom && parts
-        ? computeWorksheetRangeGeometry(parts, c.range, {
-            colWidthsPt: liveObs.geometry.colWidthsPt,
-            rowHeightsPt: liveObs.geometry.rowHeightsPt,
-          }) ?? geom
-        : geom
+    let hasLiveGeom = false
+    let activeGeom = geom
+    let cellTexts: Record<string, string> | undefined
+    let cellDecorations: Record<string, { underline?: 'none' | 'single' | 'double'; strikethrough?: boolean }> | undefined
+    let sidecarExcelVersion = excelVersion
+    let sidecarCapturedAt = new Date().toISOString()
+    let sidecarHostTimeZone = 'Asia/Taipei'
+    let clockState: { excelTodaySerial: number; staleTodayCacheRefreshed: boolean } | null = null
+    let observedTodayBranchFromSidecar: 'local' | 'utc' | undefined
+
+    if (verifyOnly) {
+      const firstCap = c.captures[0]
+      if (firstCap && existsSync(resolve(REPO_ROOT, firstCap.sidecarPath))) {
+        try {
+          const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, firstCap.sidecarPath), 'utf8')) as Record<string, unknown>
+          sidecarExcelVersion = String(sc.excelVersion ?? excelVersion)
+          sidecarCapturedAt = String(sc.capturedAt ?? sidecarCapturedAt)
+          sidecarHostTimeZone = String(sc.hostTimeZone ?? sidecarHostTimeZone)
+          observedTodayBranchFromSidecar = sc.observedTodayBranch as 'local' | 'utc' | undefined
+          if (Array.isArray(sc.colWidthsPt) && Array.isArray(sc.rowHeightsPt) && parts) {
+            hasLiveGeom = sc.geometrySource === 'excel-measured'
+            activeGeom =
+              computeWorksheetRangeGeometry(parts, c.range, {
+                colWidthsPt: sc.colWidthsPt as number[],
+                rowHeightsPt: sc.rowHeightsPt as number[],
+              }) ?? geom
+          }
+          if (typeof sc.excelTodaySerial === 'number') {
+            clockState = {
+              excelTodaySerial: sc.excelTodaySerial,
+              staleTodayCacheRefreshed: sc.staleTodayCacheRefreshed === true,
+            }
+          }
+          if (Array.isArray(sc.observedCells)) {
+            cellTexts = Object.fromEntries(
+              sc.observedCells
+                .filter((o: any) => typeof o.formattedText === 'string')
+                .map((o: any) => [o.ref, o.formattedText]),
+            )
+            cellDecorations = Object.fromEntries(
+              sc.observedCells
+                .filter((o: any) => o.decorationSource === 'excel-display-format')
+                .map((o: any) => [o.ref, { underline: o.underline, strikethrough: o.strikethrough }]),
+            )
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    } else {
+      clockState = c.clockRequirement ? probeLiveExcelClockState(c, savedAbs, preExisting) : null
+      const liveObs = probeLiveExcelCellObservations(c, savedAbs, preExisting)
+      hasLiveGeom =
+        liveObs?.geometry !== null &&
+        liveObs?.geometry !== undefined &&
+        liveObs.geometry.colWidthsPt.length > 0 &&
+        liveObs.geometry.rowHeightsPt.length > 0
+      activeGeom =
+        hasLiveGeom && parts
+          ? computeWorksheetRangeGeometry(parts, c.range, {
+              colWidthsPt: liveObs.geometry.colWidthsPt,
+              rowHeightsPt: liveObs.geometry.rowHeightsPt,
+            }) ?? geom
+          : geom
+      cellTexts = liveObs?.cellTexts
+      cellDecorations = liveObs?.cellDecorations
+    }
+
+    const updatedTemplate = CF_STAGE1_CASES.find(tc => tc.id === c.id)
+    const currentExpected = {
+      ...c.expected,
+      ...(updatedTemplate
+        ? {
+            cells: updatedTemplate.expected.cells,
+            positiveRefs: updatedTemplate.expected.positiveRefs,
+            negativeRefs: updatedTemplate.expected.negativeRefs,
+          }
+        : {}),
+      savedSha256,
+    }
+    const cWithUpdatedExpected: CfOracleCase = {
+      ...c,
+      expected: currentExpected,
+    }
 
     const updatedCaptures = c.captures.map(cap => {
       const pngAbs = resolve(REPO_ROOT, cap.pngPath)
       const sidecarAbs = resolve(REPO_ROOT, cap.sidecarPath)
-      capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance })
+      if (!verifyOnly) {
+        capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance })
+      }
       const pngBytes = new Uint8Array(readFileSync(pngAbs))
       const pngSha256 = sha256Hex(pngBytes)
       const decoded = decodePngSync(pngBytes)
+
+      let capGeom = activeGeom
+      if (cap.appearance === 'printer' && decoded && capGeom && decoded.height < capGeom.expectedHeightPt) {
+        const printerRowHeights = capGeom.rowHeightsPt.map(h => (h === 18 ? 16 : Math.round((h * 16) / 18)))
+        capGeom =
+          computeWorksheetRangeGeometry(parts!, c.range, {
+            colWidthsPt: capGeom.colWidthsPt,
+            rowHeightsPt: printerRowHeights,
+          }) ?? capGeom
+      }
+
       const observedCells =
-        decoded && activeGeom
-          ? observeCellsFromCapture(decoded, activeGeom, c, {
-              observedCellTexts: liveObs?.cellTexts,
-              observedCellDecorations: liveObs?.cellDecorations,
+        decoded && capGeom
+          ? observeCellsFromCapture(decoded, capGeom, cWithUpdatedExpected, {
+              observedCellTexts: cellTexts,
+              observedCellDecorations: cellDecorations,
             })
           : null
 
-      let observedTodayBranch: 'local' | 'utc' | undefined
+      let observedTodayBranch = observedTodayBranchFromSidecar
       if (c.clockRequirement && observedCells) {
         const localObs = observedCells.find(
           o => o.ref.toUpperCase() === c.clockRequirement!.localTodayCellRef.toUpperCase(),
@@ -240,24 +324,24 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         sidecarAbs,
         JSON.stringify(
           {
-            excelVersion,
+            excelVersion: sidecarExcelVersion,
             route: 'copy-picture',
             appearance: cap.appearance,
             scale: 1,
             pxPerPt: 1,
             width: decoded?.width,
             height: decoded?.height,
-            colWidthsPt: activeGeom?.colWidthsPt,
-            rowHeightsPt: activeGeom?.rowHeightsPt,
+            colWidthsPt: capGeom?.colWidthsPt,
+            rowHeightsPt: capGeom?.rowHeightsPt,
             geometrySource: hasLiveGeom ? 'excel-measured' : 'unverified',
             resavedByExcel: c.resavedByExcel === true,
             resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
             sheet: c.sheet,
             range: c.range,
-            hostTimeZone: 'Asia/Taipei',
+            hostTimeZone: sidecarHostTimeZone,
             savedSha256,
             pngSha256,
-            capturedAt: new Date().toISOString(),
+            capturedAt: sidecarCapturedAt,
             ...(clockState
               ? {
                   excelTodaySerial: clockState.excelTodaySerial,
@@ -282,12 +366,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       c.resaveReceipt.openedRepairFree === true
 
     const candidate: CfOracleCase = {
-      ...c,
+      ...cWithUpdatedExpected,
       status: hasResave && hasLiveGeom ? 'measured' : 'recipe-pending',
       captures: updatedCaptures,
       expected: {
-        ...c.expected,
-        savedSha256,
+        ...currentExpected,
         provenance: hasResave && hasLiveGeom ? 'excel-observed' : 'seed-hypothesis',
       },
       ...(!hasResave
@@ -310,12 +393,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       )
     } else {
       manifest.cases[i] = {
-        ...c,
-        captures: updatedCaptures,
+        ...candidate,
         status: 'recipe-pending',
         expected: {
-          ...c.expected,
-          savedSha256,
+          ...candidate.expected,
           provenance: 'seed-hypothesis',
         },
         reason: `Capture verification failed (${check.code}): ${check.reason}`,

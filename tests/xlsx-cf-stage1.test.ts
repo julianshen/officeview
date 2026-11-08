@@ -86,12 +86,12 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
   it('structural integrity without verified semantic evidence blocks Stage 1 completion', () => {
     const manifest = loadManifest()
     const report: Stage1AuditReport = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
-    // Integrity passes, but no supported capability has verified independent
-    // evidence (captures pending): the stage gate must report blocked, not green.
+    // Integrity passes, but some supported capabilities lack verified independent
+    // evidence (5 pending cases): the stage gate must report blocked, not green.
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(false)
-    expect(report.summary.verifiedCapabilities).toBe(0)
-    expect(report.blockedCapabilities.length).toBeGreaterThan(0)
+    expect(report.summary.verifiedCapabilities).toBe(59)
+    expect(report.blockedCapabilities.length).toBe(51)
     // Every blocked capability is a supported-structural (unmeasured) one;
     // refused-unsupported capabilities never block completion.
     const byId = new Map(report.perCapability.map(entry => [entry.capabilityId, entry.disposition]))

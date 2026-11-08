@@ -53,11 +53,12 @@ it('changing an authored-hidden source cell in the statistics range withdraws th
   const rule = s.conditionalFormatting!.rules[0]!
   s.conditionalFormatting = { diagnostics: [], rules: [{ ...rule, ranges:[{firstRow:0,lastRow:1,firstCol:0,lastCol:0}], definition:{kind:'aboveAverage', above:true, equal:false, dialect:'base', formulas:[]} }] }
   const source=createObjectWorkbookSource({sheets:[s]},'statistics'),store=source.store('s'), memory=createCfMemory()
-  const before=await prepareCfPaint(s,{store,memory})
+  const allowGate = { allows: () => true }
+  const before=await prepareCfPaint(s,{store,memory,evidence:allowGate})
   expect(before?.layer.styleAt(0,0,undefined)?.fillColor).toBe('FF00FF00')
   s.rows[1]!.cells[0]!.value=10; store.noteValuesChanged?.()
   expect(before?.layer.styleAt(0,0,undefined)?.fillColor).toBeUndefined()
-  const after=await prepareCfPaint(s,{store,memory})
+  const after=await prepareCfPaint(s,{store,memory,evidence:allowGate})
   expect(after?.layer.styleAt(0,0,undefined)?.fillColor).toBeUndefined()
   before?.dispose();after?.dispose();expect(memory.currentBytes).toBe(0)
 })

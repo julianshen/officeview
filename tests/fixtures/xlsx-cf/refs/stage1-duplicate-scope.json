@@ -67,7 +67,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 143,
       "inkPixelCount": 22,
       "inkWeight": 0.019642857142857142,
       "inkRgb": [
@@ -104,7 +104,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 143,
       "inkPixelCount": 22,
       "inkWeight": 0.019642857142857142,
       "inkRgb": [
@@ -141,7 +141,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 250,
+      "interiorMaxDelta": 155,
       "inkPixelCount": 33,
       "inkWeight": 0.029464285714285714,
       "inkRgb": [
@@ -178,7 +178,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 246,
+      "interiorMaxDelta": 138,
       "inkPixelCount": 25,
       "inkWeight": 0.022321428571428572,
       "inkRgb": [
@@ -228,7 +228,7 @@
       "glyphRowCount": 0,
       "glyphColumnTransitions": 0,
       "borderTopDelta": 56,
-      "borderTopVsControlDelta": 56,
+      "borderTopVsControlDelta": 43,
       "borderBottomDelta": 43,
       "borderBottomVsControlDelta": 0,
       "hasUnderlineInk": false,
@@ -252,7 +252,7 @@
         255
       ],
       "bgContrastDelta": 0,
-      "interiorMaxDelta": 242,
+      "interiorMaxDelta": 0,
       "inkPixelCount": 18,
       "inkWeight": 0.01607142857142857,
       "inkRgb": [
@@ -265,9 +265,9 @@
       "glyphRowCount": 7,
       "glyphColumnTransitions": 14,
       "borderTopDelta": 43,
-      "borderTopVsControlDelta": 43,
-      "borderBottomDelta": 0,
-      "borderBottomVsControlDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "1",
@@ -289,7 +289,7 @@
         255
       ],
       "bgContrastDelta": 57,
-      "interiorMaxDelta": 234,
+      "interiorMaxDelta": 88,
       "inkPixelCount": 27,
       "inkWeight": 0.024107142857142858,
       "inkRgb": [
@@ -326,7 +326,7 @@
         255
       ],
       "bgContrastDelta": 0,
-      "interiorMaxDelta": 242,
+      "interiorMaxDelta": 0,
       "inkPixelCount": 46,
       "inkWeight": 0.04107142857142857,
       "inkRgb": [
@@ -339,9 +339,9 @@
       "glyphRowCount": 7,
       "glyphColumnTransitions": 35,
       "borderTopDelta": 43,
-      "borderTopVsControlDelta": 43,
-      "borderBottomDelta": 0,
-      "borderBottomVsControlDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 99,
+      "borderBottomVsControlDelta": 56,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "10",
@@ -363,7 +363,7 @@
         255
       ],
       "bgContrastDelta": 99,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 156,
       "inkPixelCount": 49,
       "inkWeight": 0.04375,
       "inkRgb": [
@@ -400,7 +400,7 @@
         255
       ],
       "bgContrastDelta": 99,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 156,
       "inkPixelCount": 49,
       "inkWeight": 0.04375,
       "inkRgb": [
@@ -411,7 +411,7 @@
       "controlInkPixelCount": 50,
       "controlInkWeight": 0.044642857142857144,
       "glyphRowCount": 7,
-      "glyphColumnTransitions": 38,
+      "glyphColumnTransitions": 35,
       "borderTopDelta": 0,
       "borderTopVsControlDelta": 99,
       "borderBottomDelta": 0,
@@ -437,7 +437,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 156,
       "inkPixelCount": 46,
       "inkWeight": 0.04107142857142857,
       "inkRgb": [
@@ -448,7 +448,7 @@
       "controlInkPixelCount": 34,
       "controlInkWeight": 0.030357142857142857,
       "glyphRowCount": 7,
-      "glyphColumnTransitions": 26,
+      "glyphColumnTransitions": 25,
       "borderTopDelta": 0,
       "borderTopVsControlDelta": 56,
       "borderBottomDelta": 0,
@@ -474,7 +474,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 150,
       "inkPixelCount": 74,
       "inkWeight": 0.06607142857142857,
       "inkRgb": [
@@ -485,7 +485,7 @@
       "controlInkPixelCount": 62,
       "controlInkWeight": 0.055357142857142855,
       "glyphRowCount": 8,
-      "glyphColumnTransitions": 32,
+      "glyphColumnTransitions": 30,
       "borderTopDelta": 0,
       "borderTopVsControlDelta": 56,
       "borderBottomDelta": 0,
@@ -511,7 +511,7 @@
         255
       ],
       "bgContrastDelta": 56,
-      "interiorMaxDelta": 255,
+      "interiorMaxDelta": 150,
       "inkPixelCount": 74,
       "inkWeight": 0.06607142857142857,
       "inkRgb": [
@@ -522,7 +522,7 @@
       "controlInkPixelCount": 62,
       "controlInkWeight": 0.055357142857142855,
       "glyphRowCount": 8,
-      "glyphColumnTransitions": 32,
+      "glyphColumnTransitions": 30,
       "borderTopDelta": 0,
       "borderTopVsControlDelta": 56,
       "borderBottomDelta": 0,
@@ -548,7 +548,7 @@
         255
       ],
       "bgContrastDelta": 0,
-      "interiorMaxDelta": 236,
+      "interiorMaxDelta": 0,
       "inkPixelCount": 34,
       "inkWeight": 0.030357142857142857,
       "inkRgb": [
@@ -561,9 +561,9 @@
       "glyphRowCount": 7,
       "glyphColumnTransitions": 28,
       "borderTopDelta": 57,
-      "borderTopVsControlDelta": 57,
-      "borderBottomDelta": 0,
-      "borderBottomVsControlDelta": 43,
+      "borderTopVsControlDelta": 27,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "77",
@@ -585,7 +585,7 @@
         255
       ],
       "bgContrastDelta": 0,
-      "interiorMaxDelta": 231,
+      "interiorMaxDelta": 0,
       "inkPixelCount": 62,
       "inkWeight": 0.055357142857142855,
       "inkRgb": [
@@ -596,11 +596,11 @@
       "controlInkPixelCount": 62,
       "controlInkWeight": 0.055357142857142855,
       "glyphRowCount": 8,
-      "glyphColumnTransitions": 42,
+      "glyphColumnTransitions": 41,
       "borderTopDelta": 43,
-      "borderTopVsControlDelta": 43,
-      "borderBottomDelta": 0,
-      "borderBottomVsControlDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "88",

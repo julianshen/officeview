@@ -605,6 +605,10 @@ describe('CF oracle verifier', () => {
         {
           ...c0,
           status: 'measured',
+          expected: {
+            ...c0.expected,
+            provenance: 'seed-hypothesis',
+          },
           resavedByExcel: true,
           resaveReceipt: {
             openedRepairFree: true,
@@ -941,11 +945,20 @@ describe('CF oracle verifier', () => {
     expect(blankMergeCase.markers.some(m => m.sqref === 'Z5')).toBe(true)
     expect(blankMergeCase.markers.some(m => m.sqref === 'M1:M1048576')).toBe(true)
 
-    // Every capability in CF_STAGE1_CAPABILITIES is currently refused because captures are pending/unsupported
+    // Check capability verification status matches manifest case status:
+    // 7 resaved cases are verified (59 capabilities verified); 5 pending (51 capabilities) and 1 unsupported (5 capabilities) are refused
     expect(CF_STAGE1_CAPABILITIES.length).toBeGreaterThanOrEqual(90)
+    let verifiedCapCount = 0
+    let refusedCapCount = 0
     for (const cap of CF_STAGE1_CAPABILITIES) {
-      expect(isCapabilityVerified(cap.capabilityId, manifest, { rootDir: REPO_ROOT })).toBe(false)
+      if (isCapabilityVerified(cap.capabilityId, manifest, { rootDir: REPO_ROOT })) {
+        verifiedCapCount++
+      } else {
+        refusedCapCount++
+      }
     }
+    expect(verifiedCapCount).toBe(59)
+    expect(refusedCapCount).toBe(56)
 
     // 5. Clock window and fixture expiration enforcement
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-clock-'))
@@ -2022,5 +2035,94 @@ describe('CF oracle verifier', () => {
         { rootDir: REPO_ROOT },
       ),
     ).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+  })
+
+  it('verifies the 7 Excel 16.114 resaved Stage 1 captures and rejects mutated geometry/fill counterexamples', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const resavedIds = [
+      'stage1-cellis-literals',
+      'stage1-text-predicates',
+      'stage1-blanks-errors',
+      'stage1-duplicate-scope',
+      'stage1-dxf-layering',
+      'stage1-blank-merge-order',
+      'stage1-numfmt-accessibility',
+    ]
+
+    for (const id of resavedIds) {
+      const orig = manifest.cases.find(c => c.id === id)!
+      const candidate: CfOracleCase = {
+        ...orig,
+        status: 'measured',
+        expected: {
+          ...orig.expected,
+          provenance: 'excel-observed',
+        },
+      }
+      const check = verifyCfCase(candidate, { rootDir: REPO_ROOT })
+      expect(check.kind, `${id} must verify: ${check.kind === 'refusal' ? check.reason : ''}`).toBe('verified')
+    }
+
+    // Vacuity 1: 1-row geometry mutation must fail
+    const literalsOrig = manifest.cases.find(c => c.id === 'stage1-cellis-literals')!
+    const mutatedGeomCase: CfOracleCase = {
+      ...literalsOrig,
+      status: 'measured',
+      expected: {
+        ...literalsOrig.expected,
+        provenance: 'excel-observed',
+        // Shift B6 (positive fill) down by one row to B7 (unformatted control)
+        cells: literalsOrig.expected.cells.map(c => c.ref === 'B6' ? { ...c, ref: 'B7' } : c),
+      },
+    }
+    const geomCheck = verifyCfCase(mutatedGeomCase, { rootDir: REPO_ROOT })
+    expect(geomCheck.kind).toBe('refusal')
+    expect(geomCheck.kind === 'refusal' ? geomCheck.code : '').toBe('cell-expectation-mismatch')
+
+    // Vacuity 2: Fills removed from capture must fail
+    const testDir = mkdtempSync(join(tmpdir(), 'vacuity-fill-'))
+    try {
+      const origPngAbs = resolve(REPO_ROOT, literalsOrig.captures[0]!.pngPath)
+      const origPngBytes = new Uint8Array(readFileSync(origPngAbs))
+      const decoded = decodePngSync(origPngBytes)!
+      // Overwrite the B6 box with white (remove fill)
+      // B6 is at x: 84..168, y: 90..108
+      for (let y = 90; y < 108; y++) {
+        for (let x = 84; x < 168; x++) {
+          const idx = (y * decoded.width + x) * 4
+          decoded.data[idx] = 255
+          decoded.data[idx + 1] = 255
+          decoded.data[idx + 2] = 255
+          decoded.data[idx + 3] = 255
+        }
+      }
+      // Re-encode or simulate by mutating the sidecar / png hash
+      const mutatedPngPath = join(testDir, 'mutated.png')
+      // Create canvas with mutated data
+      const canvas = createCanvas(decoded.width, decoded.height)
+      const ctx = canvas.getContext('2d')
+      const imgData = ctx.createImageData(decoded.width, decoded.height)
+      imgData.data.set(decoded.data)
+      ctx.putImageData(imgData, 0, 0)
+      const mutatedBytes = new Uint8Array(canvas.toBuffer('image/png'))
+      writeFileSync(mutatedPngPath, mutatedBytes)
+      const mutatedPngHash = sha256(mutatedBytes)
+
+      const origSidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, literalsOrig.captures[0]!.sidecarPath), 'utf8')) as Record<string, unknown>
+      const mutatedSidecarPath = join(testDir, 'mutated.json')
+      writeFileSync(mutatedSidecarPath, JSON.stringify({ ...origSidecar, pngSha256: mutatedPngHash }))
+
+      const noFillCase: CfOracleCase = {
+        ...literalsOrig,
+        status: 'measured',
+        captures: [{ ...literalsOrig.captures[0]!, pngPath: mutatedPngPath, pngSha256: mutatedPngHash, sidecarPath: mutatedSidecarPath }],
+        expected: { ...literalsOrig.expected, provenance: 'excel-observed' },
+      }
+      const fillCheck = verifyCfCase(noFillCase, { rootDir: REPO_ROOT })
+      expect(fillCheck.kind).toBe('refusal')
+      expect(fillCheck.kind === 'refusal' ? fillCheck.code : '').toBe('cell-expectation-mismatch')
+    } finally {
+      rmSync(testDir, { recursive: true, force: true })
+    }
   })
 })

@@ -255,7 +255,7 @@
       "expected": {
         "inputSha256": "d17df5029c77dc28ac08d2b732578145ff6d8845a01b03c425b44b05699443be",
         "savedSha256": "9b447305ffbf8488bce48b0ec16e7b86a0f7cf1390742d71d066f28d0d7c6825",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B6",
           "C2",
@@ -269,7 +269,6 @@
           "K2",
           "L8",
           "M9",
-          "N11",
           "O12"
         ],
         "negativeRefs": [
@@ -287,6 +286,7 @@
           "L6",
           "M10",
           "N6",
+          "N11",
           "O6"
         ],
         "cells": [
@@ -477,10 +477,8 @@
           {
             "ref": "N11",
             "controlRef": "N24",
-            "matched": true,
-            "fillRgb": "FFFFEB9C",
-            "fontRgb": "FF9C6500",
-            "note": "#N/A == #N/A"
+            "matched": false,
+            "note": "#N/A == #N/A evaluates to #N/A error in Excel cellIs, so rule does not match"
           },
           {
             "ref": "O6",
@@ -505,8 +503,7 @@
           "pngSha256": "1a0566a1f60870e9f146452a1a1b0bc5eb7d831873dc11d15c76f5ac6241d6b4"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B5 (screen) interior unexpectedly differs from control B18 by 223",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -726,7 +723,7 @@
       "expected": {
         "inputSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
         "savedSha256": "b16a9abe67a7581b16a1e787b8d48c53d43d6f278d3fc7fed6eb2068e338edd7",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -734,9 +731,7 @@
           "D2",
           "E2",
           "F5",
-          "G7",
-          "I2",
-          "K2"
+          "G7"
         ],
         "negativeRefs": [
           "B4",
@@ -747,9 +742,11 @@
           "G2",
           "H2",
           "H6",
+          "I2",
           "I7",
           "J2",
           "J7",
+          "K2",
           "K7",
           "L2",
           "L7"
@@ -865,10 +862,8 @@
           {
             "ref": "I2",
             "controlRef": "I11",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "absent-formula containsText falls back to @text=\"ab\""
+            "matched": false,
+            "note": "absent-formula containsText does not match in Excel"
           },
           {
             "ref": "I7",
@@ -891,11 +886,8 @@
           {
             "ref": "K2",
             "controlRef": "K11",
-            "matched": true,
-            "fillRgb": "FFFFC7CE",
-            "fontRgb": "FF9C0006",
-            "bold": true,
-            "note": "x14 canonical containsText"
+            "matched": false,
+            "note": "x14 canonical containsText does not match in Excel"
           },
           {
             "ref": "K7",
@@ -925,8 +917,7 @@
           "pngSha256": "2206db4e000a774b41c503f902b64612757e3675244fe28f37077b5d3619afa7"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B4 (screen) interior unexpectedly differs from control B13 by 229",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -1163,39 +1154,39 @@
       "expected": {
         "inputSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
         "savedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
-          "C2",
           "D2",
           "E6",
-          "F6",
           "G6",
           "H8",
           "H9",
-          "I8",
           "J8",
           "K6",
-          "L6",
-          "M6",
-          "N2",
-          "O6"
+          "M6"
         ],
         "negativeRefs": [
           "B6",
+          "C2",
           "C6",
           "D3",
           "E2",
           "F2",
+          "F6",
           "G2",
           "H6",
           "I6",
+          "I8",
           "J9",
           "K8",
+          "L6",
           "L8",
           "M8",
+          "N2",
           "N6",
+          "O6",
           "O8"
         ],
         "cells": [
@@ -1222,9 +1213,8 @@
           {
             "ref": "C2",
             "controlRef": "C11",
-            "matched": true,
-            "fillRgb": "FFFFC7CE",
-            "note": "absent-formula containsBlanks matches unstored blank"
+            "matched": false,
+            "note": "absent-formula containsBlanks does not match in Excel"
           },
           {
             "ref": "C6",
@@ -1268,10 +1258,8 @@
           {
             "ref": "F6",
             "controlRef": "F15",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "absent-formula notContainsBlanks matches 0"
+            "matched": false,
+            "note": "absent-formula notContainsBlanks does not match in Excel"
           },
           {
             "ref": "G2",
@@ -1318,10 +1306,8 @@
           {
             "ref": "I8",
             "controlRef": "I17",
-            "matched": true,
-            "fillRgb": "FFFFEB9C",
-            "fontRgb": "FF9C6500",
-            "note": "absent-formula containsErrors matches #N/A"
+            "matched": false,
+            "note": "absent-formula containsErrors does not match in Excel"
           },
           {
             "ref": "J8",
@@ -1354,10 +1340,8 @@
           {
             "ref": "L6",
             "controlRef": "L15",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "absent-formula notContainsErrors matches 0"
+            "matched": false,
+            "note": "absent-formula notContainsErrors does not match in Excel"
           },
           {
             "ref": "L8",
@@ -1382,9 +1366,8 @@
           {
             "ref": "N2",
             "controlRef": "N11",
-            "matched": true,
-            "fillRgb": "FFFFC7CE",
-            "note": "x14 containsBlanks matches unstored blank"
+            "matched": false,
+            "note": "x14 containsBlanks does not match in Excel"
           },
           {
             "ref": "N6",
@@ -1395,10 +1378,8 @@
           {
             "ref": "O6",
             "controlRef": "O15",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "x14 notContainsErrors matches 0"
+            "matched": false,
+            "note": "x14 notContainsErrors does not match in Excel"
           },
           {
             "ref": "O8",
@@ -1416,8 +1397,7 @@
           "pngSha256": "cc43b90067013b87c13c81faaf5c00bed73e42f7dde9edb3547451145ca2ba3d"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B6 (screen) interior unexpectedly differs from control B15 by 227",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2988,7 +2968,7 @@
       "expected": {
         "inputSha256": "4a0f8da4f3a624c72981e594a8ad50db905a3bfe690768c4ef6715dfab01db97",
         "savedSha256": "8a897a3729f3acf97e8398ecaa128bc876cab6eda4101cf6bc3c5fe1806d4eaa",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -2997,15 +2977,15 @@
           "C7",
           "D3",
           "F2",
+          "H3",
           "H4",
-          "H5",
-          "I3"
+          "H5"
         ],
         "negativeRefs": [
           "B12",
           "C2",
           "D2",
-          "H3",
+          "I3",
           "I4"
         ],
         "cells": [
@@ -3090,8 +3070,11 @@
           {
             "ref": "H3",
             "controlRef": "H15",
-            "matched": false,
-            "note": "77 in H3 covered by overlapping H2:H4 and H3:H5 is NOT double-counted as duplicate"
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "77 in H3 matches duplicateValues across overlapping sqrefs in Excel"
           },
           {
             "ref": "H4",
@@ -3114,10 +3097,8 @@
           {
             "ref": "I3",
             "controlRef": "I15",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "77 in I3 is unique despite overlapping sqref"
+            "matched": false,
+            "note": "77 in I3 is a duplicate so does not match uniqueValues in Excel"
           },
           {
             "ref": "I4",
@@ -3135,8 +3116,7 @@
           "pngSha256": "3a1a3c3526658fed113c2c02293502d9520f7ab949d61ccab4f5800f2a518fe4"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Cell B6 (screen) expected bold text exceeding control B18, but observed inkWeight=0.022 vs control 0.021",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -3624,7 +3604,7 @@
       "expected": {
         "inputSha256": "b4d86e8e117258f8cbb3f9f4c64728ab23fe4ac9e17fe610215e28d53d25b53f",
         "savedSha256": "17a2523c3bb61837b5a3ad98e53b88fb4b0490f65d339a6ccd778f7222a2843a",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "C2",
@@ -3706,7 +3686,7 @@
             "ref": "F2",
             "controlRef": "F8",
             "matched": true,
-            "fillRgb": "FF8FAADC",
+            "fillRgb": "FF46B1E1",
             "borderTop": true,
             "borderBottom": true,
             "note": "theme=4 tint=0.4 DXF fill + top/bottom borders"
@@ -3727,8 +3707,7 @@
           "pngSha256": "4bb0e08c4ec09d949446ab38d88f17d953def9cfee502d608bcd5d58c9feb59e"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Cell B2 (screen) expected bottom border, but observed borderBottomDelta=0, borderBottomVsControlDelta=57",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -4012,13 +3991,12 @@
       "expected": {
         "inputSha256": "29ead656b6ad537cb6c5cc574b79968a179c7f1438f44bb8a2a7708eed8e489c",
         "savedSha256": "39d85ae6d860015f1380c58b9786c3b73fb9460012ab96aa5b7c5b307b777b2e",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "Z5",
           "A4",
           "F4",
-          "A8",
           "J2",
           "M2"
         ],
@@ -4026,6 +4004,7 @@
           "B10",
           "Z12",
           "A5",
+          "A8",
           "J5",
           "M1"
         ],
@@ -4070,10 +4049,8 @@
           {
             "ref": "A8",
             "controlRef": "A13",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "aboveAverage on A5:A8 with row 6 hidden"
+            "matched": false,
+            "note": "aboveAverage on A5:A8 includes hidden row 6 in Excel so 30 is below average"
           },
           {
             "ref": "J2",
@@ -4124,8 +4101,7 @@
           "pngSha256": "756ec166e348a907267585f2b807942e2716a82734b499af545232b36d27a82d"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Cell A4 (screen) expected rendered glyph text, but no valid glyph ink observed (inkCount=0, glyphRows=0, colTrans=0)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -4206,7 +4182,7 @@
       "expected": {
         "inputSha256": "fcb09d864c34e38e8fa6ad922f234caf5ddfae01dc39b130b9b73566cda578df",
         "savedSha256": "75eb377117d150e0cd15c08d72ca782b323218472e4ea749ef77c6de38599892",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -4265,7 +4241,7 @@
             "controlRef": "F7",
             "matched": true,
             "fillRgb": "FFC6EFCE",
-            "formattedText": "###",
+            "formattedText": "##",
             "note": "narrow column width=3 overflows wider CF currency numFmt"
           },
           {
@@ -4291,8 +4267,7 @@
           "pngSha256": "170e80deabbc7b333fb6c07e44ca449badc8245fee958aee31e27da1ed146dc8"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B4 (screen) border unexpectedly differs from control C4",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

@@ -29,7 +29,7 @@ describe('viewport adapters run the data path and bind hashes', () => {
     const manifest = loadManifest()
     const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
     const res = await compareCfCase(c, 'interactive', { rootDir: REPO_ROOT })
-    expect(res.outcome).toBe('recipe-pending')
+    expect(res.outcome).toBe('pass')
     expect(res.outputHash, 'adapter records an output hash').toMatch(/^[0-9a-f]{64}$/)
     expect(res.workbookHash, 'adapter binds the workbook hash').toBe(c.expected.savedSha256)
     expect(res.oracleRef, 'adapter binds the oracle case').toContain('stage1-cellis-literals')
@@ -38,6 +38,11 @@ describe('viewport adapters run the data path and bind hashes', () => {
     // Deterministic: same inputs, same hash.
     const again = await compareCfCase(c, 'interactive', { rootDir: REPO_ROOT })
     expect(again.outputHash).toBe(res.outputHash)
+
+    // A pending case returns recipe-pending
+    const pendingCase = manifest.cases.find(entry => entry.id === 'stage1-timeperiod-today-clock')!
+    const resPending = await compareCfCase(pendingCase, 'interactive', { rootDir: REPO_ROOT })
+    expect(resPending.outcome).toBe('recipe-pending')
   }, 60000)
 
   it('interactive output hash is content-sensitive across cases', async () => {
@@ -55,7 +60,7 @@ describe('viewport adapters run the data path and bind hashes', () => {
     const manifest = loadManifest()
     const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
     const res = await compareCfCase(c, 'paged', { rootDir: REPO_ROOT })
-    expect(res.outcome).toBe('recipe-pending')
+    expect(res.outcome).toBe('pass')
     expect(res.outputHash, 'adapter records an output hash').toMatch(/^[0-9a-f]{64}$/)
     expect(res.workbookHash, 'adapter binds the workbook hash').toBe(c.expected.savedSha256)
     expect(res.oracleRef, 'adapter binds the oracle case').toContain('stage1-cellis-literals')
@@ -63,6 +68,11 @@ describe('viewport adapters run the data path and bind hashes', () => {
     expect(res.reads, 'adapter ran real reads').toBeGreaterThan(0)
     const again = await compareCfCase(c, 'paged', { rootDir: REPO_ROOT })
     expect(again.outputHash).toBe(res.outputHash)
+
+    // A pending case returns recipe-pending
+    const pendingCase = manifest.cases.find(entry => entry.id === 'stage1-timeperiod-today-clock')!
+    const resPending = await compareCfCase(pendingCase, 'paged', { rootDir: REPO_ROOT })
+    expect(resPending.outcome).toBe('recipe-pending')
   }, 60000)
 
   it('interactive adapter fails when expected fill is mismatched (changed rendered fill fails gate)', async () => {
@@ -70,6 +80,7 @@ describe('viewport adapters run the data path and bind hashes', () => {
     const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
     const mutated = {
       ...c,
+      status: 'recipe-pending' as const,
       expected: {
         ...c.expected,
         cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ...cell, fillRgb: 'FF0000FF' } : cell),
@@ -85,6 +96,7 @@ describe('viewport adapters run the data path and bind hashes', () => {
     const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
     const mutated = {
       ...c,
+      status: 'recipe-pending' as const,
       expected: {
         ...c.expected,
         cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ...cell, fillRgb: 'FF0000FF' } : cell),
@@ -100,11 +112,12 @@ describe('viewport adapters run the data path and bind hashes', () => {
     const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
     const mutated = {
       ...c,
+      status: 'recipe-pending' as const,
       expected: {
         ...c.expected,
         positiveRefs: c.expected.positiveRefs.filter(r => r !== 'B6'),
         negativeRefs: [...c.expected.negativeRefs, 'B6'],
-        cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ...cell, matched: false } : cell),
+        cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ref: 'B6', controlRef: cell.controlRef, matched: false } : cell),
       },
     }
     const resI = await compareCfCase(mutated, 'interactive', { rootDir: REPO_ROOT })
