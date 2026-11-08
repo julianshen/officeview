@@ -1,6 +1,6 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 12 — Stage-0 owner rulings folded (§2 item 14; §6.4, §7.4, §8.1, §17); draft 11 APPROVED by codex r10 (reviews: codex r1–r10, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
+Status: **draft 12.1 — T11 ruling corrected (§2 item 14b, §8.1); draft 12 — Stage-0 owner rulings folded (§2 item 14; §6.4, §7.4, §8.1, §17); draft 11 APPROVED by codex r10 (reviews: codex r1–r10, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
 folded codex r1–r6, claude r1 and agy r1; draft 9 folded codex r7; **draft 10
 folded codex r8 (narrow fixes: §6.2 close-code registry, §7.1 byte grammar and
 transport caps, §14 decoded admission, §16 stage-labelled gates)** — nothing
@@ -119,9 +119,11 @@ everything they once covered.
     shape, a hidden slide) are confirmed as the server strip list (§6.4),
     and the strip **fails closed**: an unrecognised hidden flag is not drawn
     (§6.4). The Stage-0 RED is the expected baseline; T2 conformance gates
-    Stage 1. (b) **T11:** fix the eager closure, keep the 38,720 B
-    transitive ceiling — the worker re-export moves to a subpath entry as
-    Stage 1's first item (§8.1). (c) **T4:** a server-pinned open font pack
+    Stage 1. (b) **T11 (corrected 2026-11-08):** the 380 KB chunk is the
+    shared parser/renderer engine that `<OfficeDoc>` imports eagerly, not
+    the worker re-export. The 38,720 B transitive ceiling applies to the
+    stream client entry (`officeview/core`); the main entry keeps the
+    `index.js`-alone budget plus a no-growth gate on its closure (§8.1). (c) **T4:** a server-pinned open font pack
     of metric-compatible faces (§7.4 rule 6). (d) **Corpus:** top up DOCX to
     the minimum and hand-certify image-heavy units; T9 re-runs on those.
 
@@ -792,16 +794,17 @@ drops the unit and re-requests once.
 - Build `officeview/core` (`src/core-entry.ts`, name [call]) in a dedicated
   Vite **separate pass** with React externalised. Gates (honest because
   `eager-budget.ts:16` only gzips `dist/index.js` today):
-  1. **Transitive-graph budget:** sum gzipped bytes over `dist/index.js`'s
-     static-import closure (`tests/helpers/eager-graph.ts` closure) —
-     ceiling 38,720 B unchanged. Stage-0 T11 measured 417,436 B because
-     `src/index.ts:43` re-exports `handleWorkerRequest`/`renderPageBitmap`/
-     `isWorkerRenderSupported` from `./worker/office-worker`, pulling the
-     380 KB worker chunk into the static closure (`index.js` alone:
-     35,978 B). **Stage 1's first item** (owner ruling §2 item 14b) moves
-     those exports to a subpath entry (`officeview/worker`, name [call]) —
-     a breaking change for direct importers, shipped in a minor release with
-     a migration note — before any other Stage-1 work lands.
+  1. **Transitive-graph budget (owner ruling §2 item 14b):** sum gzipped
+     bytes over **`dist/core.js`'s** static-import closure
+     (`tests/helpers/eager-graph.ts` closure) — ceiling 38,720 B. The
+     stream client must not statically reach any parser or painter
+     module. The main entry keeps `eager-budget.ts`'s `dist/index.js`-alone
+     ceiling (38,720 B) **plus** a no-growth gate on `dist/index.js`'s
+     closure against the Stage-0 baseline (417,436 B; growth ≤ 16 B gzip
+     recorded as a diff). Stage-0 T11 found that closure includes a 380 KB
+     shared engine chunk (rollup names it `office-worker-*.js`; 56 xlsx,
+     19 drawing, 17 core modules) that `<OfficeDoc>` imports eagerly; a
+     lazy-engine refactor of the main entry is out of streaming scope.
   2. **`dist/core.js` purity assert:** zero `react`/`document` imports.
   3. **Main-bundle module-map identity:** `dist/index.js`'s map identical
      to the pre-branch build (± the branch's own discriminant); growth
@@ -1596,7 +1599,7 @@ Each stage a PR; gates by §16 suite IDs; measured, not narrated.
 | Stage | Scope | Done when |
 |---|---|---|
 | **0** | the **Stage-0 feasibility subsets** of T1–T9 as labelled in §16 (full T2/T7/T9 integration is gated at the stage each names) (including ΔE00 + coding parameters, §12a prototype, backend confirm, fonts probes, appearance-eligibility rate) **plus T11 (eager/core-entry gates) and T12 (resource probe) green before any wire implementation** (round-8 restore) | all gates green **with published numbers** in `docs/validation/streaming.md`; any gate failing reports to the owner rather than silently switching choices |
-| **1** | **first: the worker-subpath move (§8.1, §2 item 14b);** core entry + eager gates; server hidden-content strip incl. the fail-closed row (§6.4); pinned font pack (§7.4 rule 6); recorder + replay; WS handshake + typed closes; RemoteOfficeDoc branch; **Stage-1-mandatory semantic occlusion evidence (§7.7/§11 — implemented in this stage; the command-culling store is the only Stage-2 deferral)**; demo WS-only server (pool, default-protected sessions, marks, per-session print wiring); local-vs-others byte-for-byte test | corpus zero local-backend diff; T2's local-vs-stream tests **including zero ink for all 13 Stage-0 hidden constructs on the stream path**; handshake close-code matrix; T11 gates green |
+| **1** | core entry + eager gates (§8.1 as ruled in §2 item 14b); server hidden-content strip incl. the fail-closed row (§6.4); pinned font pack (§7.4 rule 6); recorder + replay; WS handshake + typed closes; RemoteOfficeDoc branch; **Stage-1-mandatory semantic occlusion evidence (§7.7/§11 — implemented in this stage; the command-culling store is the only Stage-2 deferral)**; demo WS-only server (pool, default-protected sessions, marks, per-session print wiring); local-vs-others byte-for-byte test | corpus zero local-backend diff; T2's local-vs-stream tests **including zero ink for all 13 Stage-0 hidden constructs on the stream path**; handshake close-code matrix; T11 gates green |
 | **2** | marks + per-§13 policy, occlusion **store** (command-culling; the Stage-1 evidence remains mandatory), per-session scratch lease; audit table + retention/key rotation; detection tool; M-rule prototype (decided scope) **with its shipping gate** | T6/T7/T9 green incl. false-attribution ≤ 10⁻⁶ over the declared table; marks-off sessions audit-recorded; M-rule protected-command tests green before any `culled-commands` ships |
 | **3** | §11 semantic services + print (§2 item 9); notes presenter surfaces | T2 notes variants; T8 partial; print audit |
 | **3b/3c/3d** | stream presentation per §12a (static+notes; animation; optional media = §12a.6) | §12a.8 lists (restored round 8); T5 green; 3c further blocked on the T5 prototype gates |
