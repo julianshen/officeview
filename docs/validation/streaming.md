@@ -114,7 +114,7 @@ Calibration: τ_abs 7.99 / τ_margin 3.85 at M = 65536; τ at M = 2²⁴ ≈ 8.6
 
 ## Corpus top-up and image-heavy certification
 
-Gates T1–T9 above ran on the original 46-file corpus. The top-up adds 6 POI DOCX files and 5 POI decks (`scripts/fetch-corpus.ts`). Image-heavy = image pixel share ≥ 30.0 % (paint with vs without `drawImage`) **and** texture ≥ 30.0 % (8×8 blocks with luma σ ≥ 4). 41 of 259 units certified (minimum 5) — GREEN. The 11 LibreOffice slides that are 70–100 % image all fail the texture test (flat backgrounds).
+Gates T1–T9 above ran on the original 46-file corpus. The top-up adds 6 POI DOCX files and 5 POI decks (`corpus-s0/` via `scripts/stream-s0/fetch-extra.ts`, outside the shared corpus). Image-heavy = image pixel share ≥ 30.0 % (paint with vs without `drawImage`) **and** texture ≥ 30.0 % (8×8 blocks with luma σ ≥ 4). 41 of 259 units certified (minimum 5) — GREEN. The 11 LibreOffice slides that are 70–100 % image all fail the texture test (flat backgrounds).
 
 ## T9 supplement — image-heavy and DOCX top-up units (τ from the full run, not recalibrated)
 
