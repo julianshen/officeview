@@ -2004,7 +2004,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         { ref: 'D4', controlRef: 'D10', matched: false, note: '50 <= 100 in table cell D4 does not match CF' },
         { ref: 'E2', controlRef: 'E8', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: 'CF DXF overrides pivot style fill' },
         { ref: 'E4', controlRef: 'E10', matched: false, note: '50 <= 100 in pivot cell E4 does not match CF' },
-        { ref: 'F2', controlRef: 'F8', matched: true, fillRgb: 'FF8FAADC', borderTop: true, borderBottom: true, note: 'theme=4 tint=0.4 DXF fill + top/bottom borders' },
+        { ref: 'F2', controlRef: 'F8', matched: true, fillRgb: 'FF46B1E1', borderTop: true, borderBottom: true, note: 'theme=4 tint=0.4 DXF fill + top/bottom borders' },
         { ref: 'F4', controlRef: 'F10', matched: false, note: '50 <= 100 in F4 does not match CF' },
       ],
     },

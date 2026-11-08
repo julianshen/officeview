@@ -337,6 +337,10 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
         return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}`
       })
     const { resolveCfCellStyle } = await import('../src/xlsx/cf/dxf')
+    const pkg = await OfficePackage.load(saved)
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]
+    const colors = { theme: sheet?.drawingTheme?.palette ?? sheet?.tableStyleSource?.colors.theme, indexed: sheet?.tableStyleSource?.colors.indexed }
     const base = {}
     const stateMap = new Map<string, (typeof result.states)[number]>()
     for (const s of result.states) stateMap.set(`${s.row},${s.col}`, s)
@@ -346,7 +350,7 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
       const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
       if (!hasProps) return { applied: false, unresolved }
-      const style = resolveCfCellStyle(base as never, { properties: s.properties }, {})
+      const style = resolveCfCellStyle(base as never, { properties: s.properties }, colors)
       return { applied: true, unresolved, style }
     })
     const outputHash = sha256Hex(lines)

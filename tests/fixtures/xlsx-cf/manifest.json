@@ -254,7 +254,7 @@
       ],
       "expected": {
         "inputSha256": "d17df5029c77dc28ac08d2b732578145ff6d8845a01b03c425b44b05699443be",
-        "savedSha256": "d17df5029c77dc28ac08d2b732578145ff6d8845a01b03c425b44b05699443be",
+        "savedSha256": "9b447305ffbf8488bce48b0ec16e7b86a0f7cf1390742d71d066f28d0d7c6825",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B6",
@@ -511,7 +511,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:23:58.082Z",
+        "excelVersion": "16.114",
+        "inputSha256": "d17df5029c77dc28ac08d2b732578145ff6d8845a01b03c425b44b05699443be",
+        "savedSha256": "9b447305ffbf8488bce48b0ec16e7b86a0f7cf1390742d71d066f28d0d7c6825",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-text-predicates",
@@ -717,7 +724,7 @@
       ],
       "expected": {
         "inputSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
-        "savedSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
+        "savedSha256": "b16a9abe67a7581b16a1e787b8d48c53d43d6f278d3fc7fed6eb2068e338edd7",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -923,7 +930,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:24:00.909Z",
+        "excelVersion": "16.114",
+        "inputSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
+        "savedSha256": "b16a9abe67a7581b16a1e787b8d48c53d43d6f278d3fc7fed6eb2068e338edd7",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-blanks-errors",
@@ -1146,7 +1160,7 @@
       ],
       "expected": {
         "inputSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
-        "savedSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
+        "savedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -1406,7 +1420,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:24:03.334Z",
+        "excelVersion": "16.114",
+        "inputSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
+        "savedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-timeperiod-today-clock",
@@ -2959,7 +2980,7 @@
       ],
       "expected": {
         "inputSha256": "4a0f8da4f3a624c72981e594a8ad50db905a3bfe690768c4ef6715dfab01db97",
-        "savedSha256": "4a0f8da4f3a624c72981e594a8ad50db905a3bfe690768c4ef6715dfab01db97",
+        "savedSha256": "8a897a3729f3acf97e8398ecaa128bc876cab6eda4101cf6bc3c5fe1806d4eaa",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3113,7 +3134,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:24:16.802Z",
+        "excelVersion": "16.114",
+        "inputSha256": "4a0f8da4f3a624c72981e594a8ad50db905a3bfe690768c4ef6715dfab01db97",
+        "savedSha256": "8a897a3729f3acf97e8398ecaa128bc876cab6eda4101cf6bc3c5fe1806d4eaa",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-priority-composition",
@@ -3586,7 +3614,7 @@
       ],
       "expected": {
         "inputSha256": "b4d86e8e117258f8cbb3f9f4c64728ab23fe4ac9e17fe610215e28d53d25b53f",
-        "savedSha256": "b4d86e8e117258f8cbb3f9f4c64728ab23fe4ac9e17fe610215e28d53d25b53f",
+        "savedSha256": "17a2523c3bb61837b5a3ad98e53b88fb4b0490f65d339a6ccd778f7222a2843a",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3669,7 +3697,7 @@
             "ref": "F2",
             "controlRef": "F8",
             "matched": true,
-            "fillRgb": "FF8FAADC",
+            "fillRgb": "FF46B1E1",
             "borderTop": true,
             "borderBottom": true,
             "note": "theme=4 tint=0.4 DXF fill + top/bottom borders"
@@ -3696,7 +3724,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:24:23.611Z",
+        "excelVersion": "16.114",
+        "inputSha256": "b4d86e8e117258f8cbb3f9f4c64728ab23fe4ac9e17fe610215e28d53d25b53f",
+        "savedSha256": "17a2523c3bb61837b5a3ad98e53b88fb4b0490f65d339a6ccd778f7222a2843a",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-dxf-layering-2",
@@ -3966,7 +4001,7 @@
       ],
       "expected": {
         "inputSha256": "29ead656b6ad537cb6c5cc574b79968a179c7f1438f44bb8a2a7708eed8e489c",
-        "savedSha256": "29ead656b6ad537cb6c5cc574b79968a179c7f1438f44bb8a2a7708eed8e489c",
+        "savedSha256": "39d85ae6d860015f1380c58b9786c3b73fb9460012ab96aa5b7c5b307b777b2e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -4085,7 +4120,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:24:26.695Z",
+        "excelVersion": "16.114",
+        "inputSha256": "29ead656b6ad537cb6c5cc574b79968a179c7f1438f44bb8a2a7708eed8e489c",
+        "savedSha256": "39d85ae6d860015f1380c58b9786c3b73fb9460012ab96aa5b7c5b307b777b2e",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-numfmt-accessibility",
@@ -4152,7 +4194,7 @@
       ],
       "expected": {
         "inputSha256": "fcb09d864c34e38e8fa6ad922f234caf5ddfae01dc39b130b9b73566cda578df",
-        "savedSha256": "fcb09d864c34e38e8fa6ad922f234caf5ddfae01dc39b130b9b73566cda578df",
+        "savedSha256": "75eb377117d150e0cd15c08d72ca782b323218472e4ea749ef77c6de38599892",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -4243,7 +4285,14 @@
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T12:24:29.842Z",
+        "excelVersion": "16.114",
+        "inputSha256": "fcb09d864c34e38e8fa6ad922f234caf5ddfae01dc39b130b9b73566cda578df",
+        "savedSha256": "75eb377117d150e0cd15c08d72ca782b323218472e4ea749ef77c6de38599892",
+        "openedRepairFree": true
+      }
     }
   ]
 }
