@@ -131,7 +131,7 @@ authorization, stricter motion proof) stay un-reversed. Draft-7's stricter
 | 10 stage ordering (eager + 1,000-request gates before wire; semantic occlusion evidence in Stage 1; culling store deferred) | §17 Stage 0 (T11/T12 mandatory) and Stage 1/Stage 2 rows re-split |
 | 11 concrete test assertions | §16 T2 (byte-for-byte weights, truncated-envelope bounded failure, in-repo WS server harness), T6 (both producer classes; audit retention + key rotation), T10 (M-rule shipping gate), §17 Stage 2 |
 | 12 XLSX completion (tile p95 ≤ 120 ms; row-order parity; selection parity) | §17 Stage 4 row + §16 T8 |
-| 13 recorder state/measurement (wordSpacing; smoothing quality; font-feature state; IEEE-754 LE; server DPR injection; font registration seam; backend face-resolution measurements) | §7.3 recorded-subset bullet + coordinate-encoding bullet; §7.5 STATE_SETUP; §9.2 pool/scale injection rules |
+| 13 recorder state/measurement (wordSpacing; smoothing quality; font-feature state; IEEE-754 LE; server DPR injection; font registration seam; backend face-resolution measurements) | §7.3 recorded-subset bullet + coordinate-encoding bullet; §7.5 STATE_SETUP; §9.2 pool/scale injection rules; §7.3 `registerFont` seam |
 | 14 text-layer decoder parameters (rich/sparse/none, distance ≤6/40, runner-up margin) | §20 appendix Layer-2 block restored with the round-8 measured-parameter naming (finding 6) |
 | 15 detection acceptance (text 80 %/image 75 %/pull-down matrix; sparse spooling; per-class degradation; decoder weights; key-generation output; q95/90/80/70 + upscale + crop battery) | §13.5 Detection-tool section restored as a full table + battery list |
 | 16 semantics (visible-mark never in search/copy/a11y; no local index/selection for remote; exact locale/BiDi; disabled-service wording) | §11 "end-to-end semantic assertions" + §15 |
@@ -160,13 +160,13 @@ findings.
 | F3 XLSX occlusion | Conservative **transformed painted bounds** (`drawingExtent`, `sheetCells.ts:23–73`) + effect extents + cell text spill; withheld on unresolved anchor, incomputable transform or unbounded effect; `drawingExtent` NOT called a complete effects proof; codex's rotated-box case added as a named T8 test | §12 analytic cell occlusion, §16 T8 |
 | F4 close vs drain | Session close ends ownership only; a running paint's charge moves to a `retirement-owner lease` (pool) refunded only after drain; cache handoff precedes the producer refund. One lifecycle home in §10; §9.3 references it; duplicated §9.3/§10/§13.4 hothomes pruned to one ordered reference | §9.3, §10, §13.4 |
 | F5 survival table | Added combined row: `JPEG q70 → 50 % downscale ≥ 75 %` with pipeline order stated; explicit statement that the ≤10⁻⁶ calibration covers the whole deployed decision (page pooling + weighted consensus of both decoders + alignment/crop/scale search) | §13.5 table + text |
-| F6 missing gates into body (each stage-gated) | §16 body adds: bounded truncated-manifest/hello test; in-repo Playwright WS happy/error/expiry + reconnect-restores-viewport-and-units; cropped + duotoned transmitted-snapshot inspection; per-page carrier-count publication (T7); named server font-registration seam next to `CanvasBackend` | §16 T2/T7/T9 + §9.2 (with link to Stage 0/2 gates) |
+| F6 missing gates into body (each stage-gated) | §16 body adds: bounded truncated-manifest/hello test; in-repo Playwright WS happy/error/expiry + reconnect-restores-viewport-and-units; cropped + duotoned transmitted-snapshot inspection; per-page carrier-count publication (T7); named server font-registration seam next to `CanvasBackend` | §16 T2/T7/T9 + §7.3 (with link to Stage 0/2 gates) |
 | F7 minor bullet list | even/odd median statement (62.5 %/100 %/68.75 % with the even/odd distinction); M-rule shipping gate pointer → §17 Stage 2 (T8's XLSX suite is not the gate); §12a.4 named the T7 mark-fidelity tolerance gate in T5/T7; typos fixed (`paint.ts:199`, "notice inline", `least-recently-used`, ASSET_DEFINE font-slash, unmatched parenthetical); single normative homes for lifecycle (§10), cache ceilings (§14), run/audit lifecycle (§9.3); `session-rotated` mapped as an op-refusal (never a CLOSE) and `4409 superseded` as the supersede CLOSE; reviews file: duplicate Round-7 merged, drafts-2–7 tables marked historical, lost-rule list credited to codex, body-backed claims (T2 harness/manifest, body-only), removed restorations trimmed | §13.3, §12a.4, §16 T5/T7, §7.7, §6.3, §9.3, §9.4, §10, §13.4, reviews file |
 | Round-9 table | This one | This file |
 
-| F6 (cont.) | server-side font-registration seam | §9.2 adds the `registerFont(request) → lease` seam **next to `CanvasBackend`** (the same injected-interface shape), since font registration is currently recon-only in `src/core/fonts/register.ts:9/21/30/40` but is a pool-level runtime dependency (registered per render worker — bounded by the §9.2 64 MiB font budget) |
+| F6 (cont.) | server-side font-registration seam | §7.3 adds the `registerFont(request) → lease` seam **next to `CanvasBackend`** (the same injected-interface shape), since font registration is currently recon-only in `src/core/fonts/register.ts:9/21/30/40` but is a pool-level runtime dependency (registered per render worker — bounded by the §9.2 64 MiB font budget) |
 
-| F6 (cont. 2) | font-registry assertion ack | The §7.4 registerFont seam is also explicitly referenced in the §6.2 rule-4 `READY` message's `missingFaces` field definition — an unverifiable installed face (a client cannot hash those bytes) is reported as missing by rule; §16 T4 updated with both gates |
+| F6 (cont. 2) | font-registry assertion ack | The §7.3 registerFont seam is also explicitly referenced in the §6.2 rule-4 `READY` message's `missingFaces` field definition — an unverifiable installed face (a client cannot hash those bytes) is reported as missing by rule; §16 T4 updated with both gates |
 
 ## Round-10 dispositions (codex r8; draft 10 — narrow fixes: §6.2/§7.1/§14/§16 + named lines only)
 
@@ -179,3 +179,13 @@ findings.
 | F5 minor | Fixed — T2/T7/T9 stage labels clarified as "Stage-0 feasibility subset … full integration at Stage N" (matches §17); §20 named the mixed-page decoder pin that T5 now contains explicitly; T4 says missing/**unverifiable**-face; the "an escaped inside" garble replaced by the round-10 grammar; the stray `**` at §9.3's notes bullet fixed; font-seam rows moved to proper §-referenced reviews rows (§7.3) with full-width Markdown; no claim is made that duplicate lifecycle prose was removed — §9.3 and §10 both carry it (§9.3 for the mark+lease/retirement lease, §10 for lifecycle ordering) and each points to the other |
 
 Owner decisions untouched; nothing removed or restructured beyond the named sections.
+
+## Round 11 (codex r9 → draft 11, applied by the orchestrator)
+
+| r9 finding | Fix |
+|---|---|
+| 1 single-fragment totalLen; unassigned codes | §7.1: totalLen = Σ payloadLen, no exception; kind 1–8 and discriminator 1–3 assigned; CRC-32 = IEEE/zlib; trailer wholly in the final fragment |
+| 2 manifest cap weakened; aggregate bypass | §14: manifest decoded back to 256 KiB; aggregate covers every in-flight job, fragmented or not (96 MiB, fits the 72 MiB largest admission); raster decoded caps count RGBA; valid-JSON oversize test |
+| 3 per-fragment 1 MiB cap lost | §7.1: ≤ 1 MiB per application fragment, both directions, one WS message each; browser receipt guard checks byteLength/Blob.size |
+| 4 registry close forms | §6.2: `rate-limited` close 4008 (third breach / 60 s), `policy-refused` close 4009 (client relax attempt); only `session-rotated` is never-close; renew qualifier "unless ACK rotated it" |
+| 5 fence, §17, history pointers | code fences closed around both byte tables; §17 Stage 0 names the feasibility subsets; font-seam history rows → §7.3 |

@@ -1,6 +1,6 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 10 (reviews: codex r1–r8, agy r1, claude r1)** — drafts 2–8
+Status: **draft 11 (reviews: codex r1–r9, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
 folded codex r1–r6, claude r1 and agy r1; draft 9 folded codex r7; **draft 10
 folded codex r8 (narrow fixes: §6.2 close-code registry, §7.1 byte grammar and
 transport caps, §14 decoded admission, §16 stage-labelled gates)** — nothing
@@ -392,17 +392,19 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `auth-failed` | close (`4003`) | §6.2 rule 7: wrong viewer/policy proof, missing resumeProof |
    | `session-expired` | close (`4004`) | §6.2 rule 6: token `exp` reached without a successful RENEW |
    | `revoked` | close (`4005`) | §9.3 session write-off (permission, credential loss) |
-   | `rate-limited` | op refusal (also a close on repeat offense) | §14 rate gates breached |
-   | `policy-refused` | op refusal (close on a client-relax attempt) | §6.1 relax-surface rule |
+   | `rate-limited` | op refusal; **close (`4008`)** on the third breach inside one 60 s window [call] | §14 rate gates breached |
+   | `policy-refused` | op refusal for a disallowed op; **close (`4009`)** on any client attempt to relax policy | §6.1 relax-surface rule |
    | `session-rotated` | **op refusal, never a CLOSE** | §6.2 rule 6: a post-rotation op pinned to the superseded jti; the client re-issues under the new token |
    | `face-missing` | **unit diagnostic** (not close/refusal) | §7.4 registry verdict: units stream as rasters |
    | `layout-changed` | close (`4006`) | §9.3 `layoutFingerprint` mismatch mid-session — a new open, not a repaint of stale work |
    | `oversized-frame` | close (`4007`) | §7.1: the client-side guard when a trusted server's frame exceeds the transport cap (server→client direction only) |
    | `4409 superseded` | WS close on the superseded socket | §6.2 rule 7: resume closes the old socket |
 
-   `session-rotated`, `rate-limited`, `policy-refused` are **op
-   refusals** (a typed text-message reply; the session stays open) —
-   never a CLOSE. `unsupported-version` on receipt-side transport
+   `session-rotated` is **only** an op refusal (a typed text-message
+   reply; the session stays open) — never a CLOSE. `rate-limited` and
+   `policy-refused` have both forms: an op refusal by default, and the
+   CLOSE numbers above under exactly the stated conditions. Close numbers
+   `4000–4009` and `4409` are unique. `unsupported-version` on receipt-side transport
    overage shares the close semantics of `oversized-frame`, which the
    F1 text defines as a client-side bug guard, not a hostile-server
    defense. Nothing outside this table participates in close-or-refusal
@@ -503,6 +505,15 @@ offset  size  field        meaning
 18      1     flags        u8, bit flags (below)
 19      4     payloadLen   u32 LE, this fragment's payload byte count
 23      …     payload      payloadLen bytes
+```
+
+**Assigned codes (normative):** `kind` — `1` MANIFEST, `2` ASSET_DEFINE,
+`3` UNIT_RASTER, `4` UNIT_COMMANDS, `5` XLSX_TILE, `6` SHOW_PLAN, `7`
+NOTES_RASTER, `8` PRINT_RASTER; `0` and `9–255` reserved (⇒ drop). Unit
+`discriminator` — `1` commands, `2` raster, `3` tile; others reserved.
+**CRC-32** everywhere means IEEE 802.3 CRC-32 (reflected polynomial
+`0xEDB88320`, init and final XOR `0xFFFFFFFF` — the zlib `crc32`). `magic`
+is the four ASCII bytes `4F 56 53 44` on the wire.
 
 flags bits: bit0 `final` (this is the last fragment); bit1 `ext01` (a
 10-byte first-fragment extension sits between the header and the payload —
@@ -517,6 +528,8 @@ message).
 **ext01 extension (first fragment only, 10 bytes at fixed offset 23, its
 presence is flag bit1 — round-10 F2 fix):**
 
+```
+
 offset  size  field
 23      8     totalLen     u64 LE — the complete COMPRESSED message length
                            across all fragments incl. the wholeCrc trailer
@@ -525,6 +538,7 @@ offset  size  field
                            `crc32` cover the payload bytes only — never the
                            header or the ext01 extension; `totalLen` is the
                            sum of all fragments' `payloadLen`s
+```
 
 **Compression boundary — exactly one compressor (round-10 F2):** the
 **complete message payload is gzip-compressed once, whole, before
@@ -537,14 +551,17 @@ framing fields), so there is no second `gzip` compressor anywhere.
 **Trailer (round-10 F2):** the message ends with a 4-byte trailer appended
 **outside compression, inside the encoded message**: `wholeCrc u32 LE` =
 CRC-32 of the **complete decompressed payload**. It rides as the final 4
-bytes of the compressed blob, is covered by the final fragment's `crc32`,
+bytes of the compressed blob, **lies entirely inside the final fragment**
+(an encoder never splits the trailer across fragments), is covered by the
+final fragment's `crc32`,
 **is counted inside `totalLen`**, and is validated after inflation — end-
 to-end proof of the decoded byte stream without re-hashing headers.
 
 **`totalLen` == byte-accurate:** totalLen is the encoded size of the
-compressed blob + trailer; it equals the **sum of `fragment payloadLen`s**
-(for multi-fragment messages; for single-fragment ones, ≥ payloadLen by
-the extension size) — a decoder that sums fragments and gets a different
+compressed blob + trailer; it equals the **sum of every fragment's
+`payloadLen`** with no exception — for a single fragment, `totalLen ==
+payloadLen` whether or not `ext01` is present (absent `ext01` ⇒ inferred
+`fragCount = 1`, `totalLen = payloadLen`) — a decoder that sums fragments and gets a different
 number fails the whole message before inflation.
 
 **Rejection rules (fail-closed, in order):** wrong magic ≠ 'OVSD' or wrong
@@ -563,16 +580,23 @@ defines the whole message; no other special case.
   timeout (the partial buffer is **discarded**, the client re-requests
   once, nothing partially validated); see the rejection rules and §14's
   encoded/decoded caps above — these bound every kind alike.
-  - **Transport caps are per endpoint (round-10 fix, agy F1 — the round-9
+  - **Application-fragment cap, both directions (normative):** every
+    application fragment — header + optional `ext01` + payload — is
+    **≤ 1 MiB** (`wsFrameBytes`) and is sent as **exactly one WebSocket
+    message**; per-kind reassembled-message caps (§14) are separate and
+    larger. A message above 1 MiB encoded is always fragmented.
+  - **Transport caps are per endpoint (round-10 fix, codex r8 F1 — the round-9
     wording overstated the browser):** the **server** sets a native
     receiver cap (`ws` `maxPayload`, the largest encoded fragment = 1 MiB)
     on client→server messages, so a hostile client cannot deliver an
     oversized frame past the server's parser. **Server → browser**, the
     *trusted* side, bounds every message it sends: no server-emitted
-    message exceeds the §14 per-kind encoded cap. **The browser `WebSocket`
+    fragment exceeds 1 MiB and no reassembled message exceeds the §14
+    per-kind encoded cap. **The browser `WebSocket`
     API has no pre-delivery size cap** (WHATWG: `new WebSocket(url,
-    protocols)` takes only url+protocols), so the client checks
-    `event.data.size` **on receipt** and closes with the typed transport
+    protocols)` takes only url+protocols), so the client checks each
+    message's size (`ArrayBuffer.byteLength`, or `Blob.size` when
+    `binaryType` is `blob`) against the 1 MiB fragment cap **on receipt** and closes with the typed transport
     code `oversized-frame` — a client-side guard against its own trusted
     server's bugs, **not** a security boundary against a malicious server
     (the server is trusted; the client is not, and a malicious server
@@ -1329,7 +1353,7 @@ outcomes.
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
   ≥ 5 s before the token's own `exp`**; the old token remains valid until
-  its own `exp` and per-op expiry enforcement is unchanged (round-10 F4),
+  its own `exp` unless an ACK has already rotated it (§6.2 rule 6) and per-op expiry enforcement is unchanged (round-10 F4),
   and a reassembly window of 5 s per multi-fragment message (§7.1).
 - **Sizes** [call]: `maxUnitPx 8192`; render deadline 2 s; outstanding
   units 8 (queue 32); scratch lease ≤ 2 final-raster units in flight
@@ -1343,7 +1367,7 @@ outcomes.
 
   | kind | encoded (`totalLen`) cap | decoded cap |
   |---|---|---|
-  | MANIFEST | ≤ 256 KiB | ≤ 2 MiB |
+  | MANIFEST | ≤ 256 KiB | ≤ 256 KiB |
   | ASSET_DEFINE | ≤ 1 MiB | ≤ 8 MiB |
   | UNIT_RASTER | ≤ 8 MiB | ≤ 64 MiB |
   | UNIT_COMMANDS | ≤ 8 MiB | ≤ 8 MiB |
@@ -1357,13 +1381,21 @@ outcomes.
   payload is inflated incrementally and the inflate/parse **aborts the
   moment decoded output exceeds the decoded cap** — a 1,052-byte gzip
   of 1 MiB of spaces never passes a 256 KiB manifest check (T6 bomb
-  test). Encoded + decoded transient bytes are **reserved together
+  test; plus an oversized **valid**-JSON manifest, so the gate is the
+  size bound, not a parse error). Raster kinds' decoded caps count the
+  **image-decoder RGBA output**, not just gzip-expanded PNG bytes; the
+  client admits `width × height × 4` from the PNG header before
+  decoding. Encoded + decoded transient bytes are **reserved together
   before inflate** (`AllocationReservation`, the round-2 pattern), so a
   compliant implementation cannot eager-decode before discovering
-  overage. **One aggregate reservation covers all in-flight
-  multi-fragment messages** (manifest + assets + show plans + units +
-  notes — not merely the eight unit requests): aggregate transient
-  ≤ 64 MiB per session [call]. **Unsolicited or unmatched `reqId`
+  overage. **One aggregate reservation covers every in-flight receive,
+  inflate, decode or parse job, fragmented or not** (manifest + assets +
+  show plans + units + notes — not merely the eight unit requests),
+  reserved before work starts and released on every exit path:
+  aggregate transient ≤ 96 MiB per session [call]. The largest single
+  admission (8 MiB encoded + 64 MiB decoded = 72 MiB) fits inside it;
+  a job whose reservation does not fit waits or is refused, it is never
+  over-allocated. **Unsolicited or unmatched `reqId`
   frames are dropped before any reassembly buffer is allocated.**
   Tests cover the compressed bomb, several concurrently admitted first
   fragments, and single-fragment compressed messages (§16 T6).
@@ -1493,7 +1525,7 @@ Each stage a PR; gates by §16 suite IDs; measured, not narrated.
 
 | Stage | Scope | Done when |
 |---|---|---|
-| **0** | T1–T9 batteries (including ΔE00 + coding parameters, §12a prototype, backend confirm, fonts probes, appearance-eligibility rate) **plus T11 (eager/core-entry gates) and T12 (resource probe) green before any wire implementation** (round-8 restore) | all gates green **with published numbers** in `docs/validation/streaming.md`; any gate failing reports to the owner rather than silently switching choices |
+| **0** | the **Stage-0 feasibility subsets** of T1–T9 as labelled in §16 (full T2/T7/T9 integration is gated at the stage each names) (including ΔE00 + coding parameters, §12a prototype, backend confirm, fonts probes, appearance-eligibility rate) **plus T11 (eager/core-entry gates) and T12 (resource probe) green before any wire implementation** (round-8 restore) | all gates green **with published numbers** in `docs/validation/streaming.md`; any gate failing reports to the owner rather than silently switching choices |
 | **1** | core entry + eager gates; recorder + replay; WS handshake + typed closes; RemoteOfficeDoc branch; **Stage-1-mandatory semantic occlusion evidence (§7.7/§11 — implemented in this stage; the command-culling store is the only Stage-2 deferral)**; demo WS-only server (pool, default-protected sessions, marks, per-session print wiring); local-vs-others byte-for-byte test | corpus zero local-backend diff; T2's local-vs-stream tests; handshake close-code matrix; T11 gates green |
 | **2** | marks + per-§13 policy, occlusion **store** (command-culling; the Stage-1 evidence remains mandatory), per-session scratch lease; audit table + retention/key rotation; detection tool; M-rule prototype (decided scope) **with its shipping gate** | T6/T7/T9 green incl. false-attribution ≤ 10⁻⁶ over the declared table; marks-off sessions audit-recorded; M-rule protected-command tests green before any `culled-commands` ships |
 | **3** | §11 semantic services + print (§2 item 9); notes presenter surfaces | T2 notes variants; T8 partial; print audit |
