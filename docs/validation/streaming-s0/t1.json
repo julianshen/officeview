@@ -1,0 +1,6565 @@
+{
+  "status": "GREEN",
+  "renderSuccess": {
+    "total": 66,
+    "okNode": 648,
+    "okNapi": 648,
+    "napiOnlyFailures": [],
+    "bothFailed": [
+      {
+        "file": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+        "error": "Corrupted zip: can't find end of central directory"
+      }
+    ]
+  },
+  "constructionSites": [
+    {
+      "site": "src/render/paint.ts:199",
+      "napi": "ok",
+      "evidence": "dynamic import('canvas') (headless measurement ctx) — reached via measurerFromDoc → createMeasurer via layoutDocx (docx path) — returned object:Object"
+    },
+    {
+      "site": "src/core/search.ts:212",
+      "napi": "ok",
+      "evidence": "dynamic import('canvas') (text-index recorder ctx) — reached via buildTextIndex (createTinyContext) — every indexed unit — returned object:Object"
+    },
+    {
+      "site": "src/core/images.ts:65",
+      "napi": "ok",
+      "evidence": "dynamic import('canvas') (scratch surface for image decode/duotone) — reached via applyDuotone + decodeImage scratch canvases (image-heavy units) — returned object:Object"
+    },
+    {
+      "site": "src/core/images.ts:149",
+      "napi": "ok",
+      "evidence": "dynamic import('canvas') (decodeImage fallback backend) — reached via decodeImage(bytes) for embedded rasters (image-heavy units) — returned object:Object"
+    },
+    {
+      "site": "src/slideshow/render/svg-raster.ts:64",
+      "napi": "ok",
+      "evidence": "dynamic import('canvas') (SVG → raster via loadImage) — reached via svg-raster for SVG drawings (pptx/xlsx svg-bearing units) — returned object:Object"
+    },
+    {
+      "site": "src/core/text-metrics.ts:31",
+      "napi": "ok",
+      "evidence": "ctx.canvas.constructor clone (side measure canvas) — reached via createLocalTextMeasurer (paint text runs) — returned object:Object"
+    },
+    {
+      "site": "src/core/text-metrics.ts:42",
+      "napi": "ok",
+      "evidence": "ctx.canvas.constructor clone (fallback measure canvas) — reached via createLocalTextMeasurer fallback branch (measurer hits helper path) — returned object:Object"
+    },
+    {
+      "site": "src/drawing/paint.ts:126",
+      "napi": "ok",
+      "evidence": "ctx.canvas.constructor clone (PaintSurface scratch) — reached via paintAffineSource surface and radial-gradient brush (drawing paint path) — returned object:Object"
+    },
+    {
+      "site": "src/drawing/pattern.ts:155",
+      "napi": "ok",
+      "evidence": "ctx.canvas.constructor clone (TileSurface for createPattern) — reached via pattern-fill tiles (scene paint with patterned drawing) — returned object:Object"
+    }
+  ],
+  "diff": [
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-47889.xlsx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-55733.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-55733.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-56295.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-56295.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-59021.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-59021.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-59746_NoRowNums.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-59746_NoRowNums.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-62272.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-62272.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-64508.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-64508.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-66365.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-66365.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-Bug66263-table.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-Bug66263-table.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-comment.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-comment.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-link-external-workbook-a.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-link-external-workbook-a.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-rtl.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-rtl.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table-indent.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-table-indent.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-unicode-path.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-unicode-path.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-xlsx-jdbc.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "poi-xlsx-jdbc.xlsx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-blk-inner-content.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-blk-inner-content.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-having-images.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-having-images.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "unit": 1,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-sct-inner-content.docx",
+      "unit": 2,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-test.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pydocx-test.docx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 1,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 0.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 0.75,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 1.25,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 1.5,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 2,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 1,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "zoom": 3,
+      "dpr": 2,
+      "pixelsDiffering": 0,
+      "fracDiffering": 0,
+      "maxChannelDelta": 0,
+      "p99ChannelDelta": 0
+    }
+  ],
+  "tolerance": {
+    "byKind": {
+      "pptx": {
+        "p95FracDiffering": 0,
+        "maxChannelDelta": 0
+      },
+      "xlsx": {
+        "p95FracDiffering": 0,
+        "maxChannelDelta": 0
+      },
+      "docx": {
+        "p95FracDiffering": 0,
+        "maxChannelDelta": 0
+      }
+    }
+  },
+  "note": "napi renders every corpus unit; every §7.3 site ok",
+  "gate": "t1",
+  "backend": "node-canvas",
+  "gitSha": "8c0e6bfdaac0ad02fc119ae3ec392e2f2f88a884",
+  "generatedAt": "2026-11-08T10:00:02.957Z"
+}
