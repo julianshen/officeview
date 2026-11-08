@@ -58,6 +58,7 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
       if (hold.kind !== 'reserved') throw new Error('CF page admission')
       try {
         const rows = new Uint32Array(1), cols = new Uint16Array(1)
+        const yielded = new Set<number>()
         let begin = 0, end = sheet.rows.length
         if (ordered && bounds && rects.length) {
           const first = Math.min(...rects.map(r => r.firstRow)), last = Math.max(...rects.map(r => r.lastRow))
@@ -72,12 +73,44 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
           const r = cellSourceRow(row, cell)
           if (!rects.some(b => r >= b.firstRow && r <= b.lastRow && cell.col >= b.firstCol && cell.col <= b.lastCol)) continue
           if (isValueUnavailable(cell, policy)) throw new Error('CF unavailable formula value')
-          const v = cell.value
-          const value: CfLiteral = cell.valueIsError ? { kind: 'error', value: String(v) } : v === null ? { kind: 'blank' }
+          let v = cell.value
+          let isErr = cell.valueIsError
+          const merge = sheet.mergeRanges?.find(m => r >= m.minRow && r <= m.maxRow && cell.col >= m.minCol && cell.col <= m.maxCol)
+          if (merge && (r !== merge.minRow || cell.col !== merge.minCol)) {
+            const anchorRow = sheet.rows.find(ar => ar.index === merge.minRow)
+            const anchorCell = anchorRow?.cells.find(ac => ac.col === merge.minCol)
+            if (anchorCell) {
+              v = anchorCell.value
+              isErr = anchorCell.valueIsError
+            }
+          }
+          const value: CfLiteral = isErr ? { kind: 'error', value: String(v) } : v === null ? { kind: 'blank' }
             : typeof v === 'number' ? { kind: 'number', value: v } : typeof v === 'boolean' ? { kind: 'boolean', value: v } : { kind: 'string', value: v }
           rows[0] = r; cols[0] = cell.col
+          yielded.add(r * 16384 + cell.col)
           yield { value: { rows, cols, values: [value] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } }
         } }
+        if (sheet.mergeRanges?.length) {
+          for (const m of sheet.mergeRanges) {
+            if (!rects.some(b => m.minRow <= b.lastRow && m.maxRow >= b.firstRow && m.minCol <= b.lastCol && m.maxCol >= b.firstCol)) continue
+            const anchorRow = sheet.rows.find(ar => ar.index === m.minRow)
+            const anchorCell = anchorRow?.cells.find(ac => ac.col === m.minCol)
+            if (!anchorCell) continue
+            const v = anchorCell.value
+            const isErr = anchorCell.valueIsError
+            const value: CfLiteral = isErr ? { kind: 'error', value: String(v) } : v === null ? { kind: 'blank' }
+              : typeof v === 'number' ? { kind: 'number', value: v } : typeof v === 'boolean' ? { kind: 'boolean', value: v } : { kind: 'string', value: v }
+            for (let mr = m.minRow; mr <= m.maxRow; mr++) {
+              for (let mc = m.minCol; mc <= m.maxCol; mc++) {
+                if (yielded.has(mr * 16384 + mc)) continue
+                if (!rects.some(b => mr >= b.firstRow && mr <= b.lastRow && mc >= b.firstCol && mc <= b.lastCol)) continue
+                rows[0] = mr; cols[0] = mc
+                yielded.add(mr * 16384 + mc)
+                yield { value: { rows, cols, values: [value] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } }
+              }
+            }
+          }
+        }
       } finally { hold.release() }
     },
   }
@@ -258,7 +291,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       styleAt(row, col, own, mode) {
         const style = base?.styleAt(row, col, own, mode) ?? own
         const merge = sheet.mergeRanges?.find(m => row >= m.minRow && row <= m.maxRow && col >= m.minCol && col <= m.maxCol)
-        if (merge && !evidence.allows('stage1-blank-merge-order', 'layout:merge-hidden-endpoint')) return style
+        if (merge && !evidence.allows('layout:merge-hidden-endpoint') && !evidence.allows('layout:merge-hidden-anchor') && !evidence.allows('stage1-blank-merge-order', 'layout:merge-hidden-endpoint') && !evidence.allows('stage1-blank-merge-order', 'layout:merge-hidden-anchor')) return style
         const state = !disposed && sameCfStamp(source.stamp(stamp.sheetId), stamp) && states.get(row * 16384 + col)
         return state ? resolveCfCellStyle(style, state, colors) : style
       },
