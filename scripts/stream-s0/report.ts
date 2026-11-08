@@ -9,6 +9,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 type Json = Record<string, any>
 
@@ -116,7 +117,7 @@ export function renderReport(results: Map<string, Json | undefined>): string {
 }
 
 if (import.meta.main) {
-  const root = join(import.meta.dir, '..', '..')
+  const root = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..')
   const md = renderReport(loadResults(join(root, 'docs', 'validation', 'streaming-s0')))
   writeFileSync(join(root, 'docs', 'validation', 'streaming.md'), md)
   console.log(md.split('\n').slice(0, 20).join('\n'))
