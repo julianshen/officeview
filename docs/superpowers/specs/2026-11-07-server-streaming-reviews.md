@@ -189,3 +189,11 @@ Owner decisions untouched; nothing removed or restructured beyond the named sect
 | 3 per-fragment 1 MiB cap lost | §7.1: ≤ 1 MiB per application fragment, both directions, one WS message each; browser receipt guard checks byteLength/Blob.size |
 | 4 registry close forms | §6.2: `rate-limited` close 4008 (third breach / 60 s), `policy-refused` close 4009 (client relax attempt); only `session-rotated` is never-close; renew qualifier "unless ACK rotated it" |
 | 5 fence, §17, history pointers | code fences closed around both byte tables; §17 Stage 0 names the feasibility subsets; font-seam history rows → §7.3 |
+
+## Round 12 (codex r10 → APPROVE)
+
+Codex r10 verified all five r9 findings fixed, executed a Python encoder/decoder against draft 11's
+text alone (three vectors decode; framing is unambiguous), checked numeric fit (1 MiB fragments ⇒
+≤ 9 fragments for the largest kind; 72 MiB largest admission inside the 96 MiB transient cap;
+close codes 4000–4009 + 4409 unique and used consistently) and balanced code fences. No findings.
+The golden vectors were added to §16 T6.

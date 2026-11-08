@@ -1,6 +1,6 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 11 (reviews: codex r1–r9, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
+Status: **draft 11 — APPROVED by codex r10 (reviews: codex r1–r10, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
 folded codex r1–r6, claude r1 and agy r1; draft 9 folded codex r7; **draft 10
 folded codex r8 (narrow fixes: §6.2 close-code registry, §7.1 byte grammar and
 transport caps, §14 decoded admission, §16 stage-labelled gates)** — nothing
@@ -1474,9 +1474,24 @@ keyboard surfaces unchanged; a disabled service states
   unit (no partial validation); byte-vector tests for the §7.1 grammar
   (single fragment, every kind, contradictory final/count, altered
   flags/length, wrong magic, wrong `wholeCrc`, gzip space-bomb, several
-  concurrent first fragments); transport caps per endpoint (server
-  native `maxPayload`, browser `event.data.size` receipt guard with no
-  pre-delivery cap — the F1 statement); handshake close-code matrix incl.
+  concurrent first fragments); **golden framing vectors** (codex r10,
+  executed: ver 1, MANIFEST kind 1, reqId 7, decoded payload `{}`, gzip
+  mtime 0 level 9) — decoders must accept each, and an encoder using the
+  same gzip parameters must reproduce them; they pin the framing, not a
+  canonical gzip encoding (ext01 is optional for one fragment and split
+  points vary):
+  ```text
+  single, no ext01 (flags 5):
+  4f56534401010700000000000000b948950d051a0000001f8b08000000000002ffabae050043bfa6a30200000043bfa6a3
+  single, ext01 (flags 7, totalLen 26, fragCount 1):
+  4f56534401010700000000000000b948950d071a0000001a0000000000000001001f8b08000000000002ffabae050043bfa6a30200000043bfa6a3
+  two fragments (flags 6 then 5, payloadLen 10 + 16, totalLen 26):
+  4f565344010107000000000000003bbafe1d060a0000001a0000000000000002001f8b08000000000002ff
+  4f5653440101070000000100000018c5d5120510000000abae050043bfa6a30200000043bfa6a3
+  ```
+  transport caps per endpoint (server native `maxPayload`; browser
+  receipt guard on `ArrayBuffer.byteLength`/`Blob.size` against the 1 MiB
+  fragment cap, no pre-delivery cap — the F1 statement); handshake close-code matrix incl.
   version-intersection refusals; wrong-viewer resume, missing
   `resumeProof`, `renew` race and rotation windows; notes recheck after
   resume; client-relax refusal (`policy-refused`); paired relaxed/
