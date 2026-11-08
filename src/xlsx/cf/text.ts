@@ -327,8 +327,9 @@ export const CF_TEXT_SCOPE_GRANT_BYTES = 2 * 1024 * 1024
  * Wait until `isSettled` holds, the signal aborts, or `timeoutMs` elapses.
  * A worker read that never settles (no failure, no notification) resolves
  * `'timeout'` instead of hanging forever, so the caller can drop the stuck
- * entry and re-read fresh (bounded recovery). Always unsubscribes and clears
- * the timer before resolving.
+ * entry and re-read fresh (bounded recovery). Every path removes the abort
+ * listener, clears the timer, and releases the subscription — including a
+ * synchronous notification that fires before subscription installation.
  */
 export async function awaitSettled(
   isSettled: () => boolean,
@@ -339,19 +340,38 @@ export async function awaitSettled(
   if (isSettled() || signal.aborted) return 'settled'
   return await new Promise<'settled' | 'timeout'>(resolve => {
     let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let unsub: (() => void) | undefined
+    const onAbort = (): void => {
+      finish('settled')
+    }
     const finish = (value: 'settled' | 'timeout'): void => {
       if (done) return
       done = true
-      clearTimeout(timer)
-      unsub()
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+      const release = unsub
+      unsub = undefined
+      release?.()
+      signal.removeEventListener('abort', onAbort)
       resolve(value)
     }
-    const unsub = subscribe(() => {
+    unsub = subscribe(() => {
       if (isSettled() || signal.aborted) finish('settled')
     })
-    signal.addEventListener('abort', () => finish('settled'), { once: true })
-    const timer = setTimeout(() => finish('timeout'), timeoutMs)
-    if (isSettled() || signal.aborted) finish('settled')
+    signal.addEventListener('abort', onAbort)
+    timer = setTimeout(() => finish('timeout'), timeoutMs)
+    // A synchronous notification may have finished before handles existed;
+    // release the orphaned subscription (finish already resolved above).
+    if (done && unsub) {
+      const release = unsub
+      unsub = undefined
+      release()
+    } else if (isSettled() || signal.aborted) {
+      finish('settled')
+    }
   })
 }
 
