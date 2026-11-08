@@ -100,4 +100,30 @@ describe('awaitSettled resolves on settle, abort, or timeout', () => {
     expect(result).toBe('settled')
     expect(unsubscribed).toBe(true)
   })
+
+  it('a synchronous notification installs no abort listener or timer', async () => {
+    // Probe: count add/removeEventListener on a live signal. A synchronous
+    // notify must leave zero live listeners after settlement (no orphaned
+    // handles), even though the subscription's unsubscribe still runs.
+    let ready = false
+    const listeners = new Set<() => void>()
+    const subscribe = (notify: () => void): (() => void) => {
+      ready = true
+      notify()
+      return () => { listeners.delete(notify) }
+    }
+    const controller = new AbortController()
+    let added = 0
+    let removed = 0
+    const rawAdd = controller.signal.addEventListener.bind(controller.signal)
+    const rawRemove = controller.signal.removeEventListener.bind(controller.signal)
+    controller.signal.addEventListener = ((...args: unknown[]) => { added++; return (rawAdd as (...a: unknown[]) => void)(...args) }) as typeof controller.signal.addEventListener
+    controller.signal.removeEventListener = ((...args: unknown[]) => { removed++; return (rawRemove as (...a: unknown[]) => void)(...args) }) as typeof controller.signal.removeEventListener
+    const result = await awaitSettled(() => ready, subscribe, controller.signal, 5000)
+    expect(result).toBe('settled')
+    // No handles installed after a synchronous settle: nothing to remove.
+    expect(added).toBe(0)
+    expect(removed).toBe(0)
+    expect(listeners.size).toBe(0)
+  })
 })

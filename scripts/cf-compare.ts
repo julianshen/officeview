@@ -129,6 +129,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     memory,
   )
   const lines: string[] = []
+  const outcomes = new Map<string, { kind: string; properties: Record<string, unknown>; writes: string[] }>()
   try {
     for (let row = rect.minRow; row <= rect.maxRow; row++) {
       for (let col = rect.minCol; col <= rect.maxCol; col++) {
@@ -139,11 +140,17 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
           const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify(props[k])}`).join('+')
           const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites].sort().join('+') : ''
           lines.push(`${row},${col}:ready:${values}|${writes}`)
+          outcomes.set(`${row},${col}`, { kind: 'ready', properties: props, writes: outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : [] })
         } else {
           lines.push(`${row},${col}:${outcome.kind}:${outcome.kind === 'unresolved' ? outcome.reason : ''}`)
+          outcomes.set(`${row},${col}`, { kind: outcome.kind, properties: {}, writes: [] })
         }
       }
     }
+    // Oracle content binding is the SHA-256 of expected+markers (oracleHash)
+    // plus the data-path output hash; semantic equality against Excel's
+    // rendered output requires captures (recipe-pending) and is gated by
+    // stageComplete/blockedCapabilities in the audit, not by this adapter.
   } finally {
     lease.release()
   }

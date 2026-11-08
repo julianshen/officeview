@@ -270,35 +270,57 @@ test('keyboard focus moves the active CF cell', async ({ context }) => {
   }
 })
 
-test('print capture shows the notice and produces output', async ({ context }) => {
+test('print capture prepares resident pages with CF and handles worker notice', async ({ context }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${NUMFMT}.xlsx`)
   for (const leg of LEGS) {
     await test.step(leg.name, async () => {
-  const page = await context.newPage()
-  try {
-    await openCf(page, NUMFMT, bytes, leg)
-    // Real prepared printing via the Print button does not trigger in the
-    // harness (button and Ctrl/Cmd+P are silently inert: no preparePrint
-    // invocation, no pages, no errors — follow-up). This asserts the print
-    // UI smoke (notice) and PDF output; CF in print output is verified via
-    // the Paintable print path (cf-compare print mode) once refs exist.
-    await page.emulateMedia({ media: 'print' })
-    await expect(page.getByTestId('officeview-sheet-print-notice'), 'print notice').toBeVisible()
-    if (leg.worker) {
-      // Worker-backed sheets intentionally do not print: no prepared pages,
-      // only a notice (paged message once the worker connects, otherwise
-      // the default print hint — either means no real print output).
-      await expect(page.locator('[data-testid="officeview-sheet-print-pages"] canvas')).toHaveCount(0, { timeout: 10_000 })
-      await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
-    } else if (test.info().project.name === 'chromium') {
-      // PDF capture is Headless-Chromium-only; the notice above proves the
-      // print path on every engine.
-      const pdf = await page.pdf({ format: 'A4', printBackground: true })
-      expect(pdf.byteLength, 'print capture produces output').toBeGreaterThan(1000)
-    }
-  } finally {
-    await page.close()
-  }
+      const page = await context.newPage()
+      await page.addInitScript(() => {
+        (window as unknown as { print: () => void }).print = () => {
+          (window as unknown as { __printed: number }).__printed = 1
+        }
+      })
+      try {
+        await openCf(page, NUMFMT, bytes, leg)
+        if (!leg.paged) {
+          // Resident and small-doc worker legs: click Print, which runs preparePrint
+          // -> preparePrintUnits. This prepares real print canvases with CF formatting.
+          await page.getByRole('button', { name: 'Print', exact: true }).click()
+          await page.waitForFunction(() => (window as unknown as { __printed?: number }).__printed === 1, { timeout: 30_000 })
+          const printCanvases = page.locator('[data-testid="officeview-sheet-print-pages"] canvas')
+          await expect(printCanvases).toHaveCount(1)
+          // The prepared print canvas contains painted CF formatting (pink fill FFFFC7CE).
+          const pink = await printCanvases.first().evaluate(canvas => {
+            const c = canvas as HTMLCanvasElement
+            const ctx = c.getContext('2d')
+            if (!ctx) return 0
+            const data = ctx.getImageData(0, 0, c.width, c.height).data
+            let count = 0
+            for (let i = 0; i < data.length; i += 4) {
+              if (Math.abs(data[i]! - 0xff) <= 48 && Math.abs(data[i + 1]! - 0xc7) <= 48 && Math.abs(data[i + 2]! - 0xce) <= 48) count++
+            }
+            return count
+          })
+          expect(pink, 'CF pink fill is painted on the prepared print canvas').toBeGreaterThan(20)
+          // Emulate print media: print notice is hidden once pages are prepared.
+          await page.emulateMedia({ media: 'print' })
+          await expect(page.getByTestId('officeview-sheet-print-notice')).toBeHidden()
+          await expect(printCanvases.first()).toBeVisible()
+          if (test.info().project.name === 'chromium') {
+            const pdf = await page.pdf({ format: 'A4', printBackground: true })
+            expect(pdf.byteLength, 'prepared print produces PDF output').toBeGreaterThan(1000)
+          }
+        } else {
+          // Forced-paged sheets intentionally do not print: no prepared pages,
+          // clicking Print announces PAGED_PRINT_MESSAGE with no prepared canvas.
+          await page.getByRole('button', { name: 'Print', exact: true }).click()
+          await page.emulateMedia({ media: 'print' })
+          await expect(page.locator('[data-testid="officeview-sheet-print-pages"] canvas')).toHaveCount(0)
+          await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+        }
+      } finally {
+        await page.close()
+      }
     })
   }
 })

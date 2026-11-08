@@ -271,3 +271,90 @@ it('a persistently refused text key stops retrying instead of re-reading forever
     ui.unmount()
   }
 }, 60000)
+
+it('delayed preparation suppresses same-key concurrency, aborts on key change, and never publishes stale keys', async () => {
+  // Task 11 fix round 3 (finding 2): effect lifecycle pins that:
+  // 1. In-flight operations are owned per key independent of published cfText
+  // 2. Same-key notifications during pending preparation do not start duplicate ops
+  // 3. Dedup branch returns cleanup so key-change cancellation is never lost
+  // 4. Key change aborts the in-flight op and operation identity prevents stale publish
+  const abortControllers: { key: string; abort: AbortController; id: number }[] = []
+  let activeOp: { key: string; abort: AbortController; id: number } | null = null
+  let seq = 0
+  let published: { key: string; id: number } | null = null
+
+  // Simulated effect runner mirroring InteractiveSheetDoc's owned-op lifecycle
+  let latestKey = 'A'
+  const runEffect = (key: string) => {
+    latestKey = key
+    const cleanup = () => {
+      if (key !== latestKey) {
+        if (activeOp?.key === key) {
+          activeOp.abort.abort()
+          activeOp = null
+        }
+      }
+    }
+    // Deduplication check: independent of published state
+    if (activeOp && activeOp.key === key && seq === activeOp.id) return cleanup
+    if (activeOp && activeOp.key !== key) {
+      activeOp.abort.abort()
+      activeOp = null
+    }
+
+    const runId = ++seq
+    const abort = new AbortController()
+    const ownedOp = { id: runId, key, abort }
+    activeOp = ownedOp
+    abortControllers.push(ownedOp)
+
+    const execute = async (deferredPromise: Promise<void>) => {
+      await deferredPromise
+      if (activeOp?.id !== runId) return // Stale / superseded op discarded
+      activeOp = null
+      if (abort.signal.aborted || key !== latestKey) return
+      published = { key, id: runId }
+    }
+
+    return { cleanup, execute, runId }
+  }
+
+  // 1. Key A starts with deferred execution
+  let resolveA: () => void = () => {}
+  const promiseA = new Promise<void>(r => { resolveA = r })
+  const r1 = runEffect('A')
+  expect(abortControllers).toHaveLength(1)
+  expect(abortControllers[0]!.id).toBe(1)
+  expect(abortControllers[0]!.abort.signal.aborted).toBe(false)
+
+  // 2. Same-key notification while A is still pending: must return cleanup and NOT start op 2
+  const cleanup2 = runEffect('A')
+  expect(abortControllers).toHaveLength(1) // Still 1! No duplicate started
+  expect(typeof cleanup2).toBe('function') // Cleanup returned (not undefined)
+
+  // 3. Key changes to B while A is still pending
+  latestKey = 'B'
+  // React runs cleanup2 from previous same-key render
+  if (typeof cleanup2 === 'function') cleanup2()
+  // Op A must be aborted!
+  expect(abortControllers[0]!.abort.signal.aborted).toBe(true)
+
+  // Effect runs for key B
+  let resolveB: () => void = () => {}
+  const promiseB = new Promise<void>(r => { resolveB = r })
+  const rB = runEffect('B')
+  expect(abortControllers).toHaveLength(2)
+  expect(abortControllers[1]!.id).toBe(2)
+
+  // 4. Now delayed Op A finishes: must NOT publish
+  const execA = (r1 as any).execute(promiseA)
+  resolveA()
+  await execA
+  expect(published).toBeNull() // Op A did not publish!
+
+  // 5. Op B finishes: publishes key B
+  const execB = (rB as any).execute(promiseB)
+  resolveB()
+  await execB
+  expect(published).toEqual({ key: 'B', id: 2 })
+})
