@@ -324,6 +324,38 @@ export async function prepareCfTextScope(
 export const CF_TEXT_SCOPE_GRANT_BYTES = 2 * 1024 * 1024
 
 /**
+ * Wait until `isSettled` holds, the signal aborts, or `timeoutMs` elapses.
+ * A worker read that never settles (no failure, no notification) resolves
+ * `'timeout'` instead of hanging forever, so the caller can drop the stuck
+ * entry and re-read fresh (bounded recovery). Always unsubscribes and clears
+ * the timer before resolving.
+ */
+export async function awaitSettled(
+  isSettled: () => boolean,
+  subscribe: (notify: () => void) => () => void,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<'settled' | 'timeout'> {
+  if (isSettled() || signal.aborted) return 'settled'
+  return await new Promise<'settled' | 'timeout'>(resolve => {
+    let done = false
+    const finish = (value: 'settled' | 'timeout'): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      unsub()
+      resolve(value)
+    }
+    const unsub = subscribe(() => {
+      if (isSettled() || signal.aborted) finish('settled')
+    })
+    signal.addEventListener('abort', () => finish('settled'), { once: true })
+    const timer = setTimeout(() => finish('timeout'), timeoutMs)
+    if (isSettled() || signal.aborted) finish('settled')
+  })
+}
+
+/**
  * Scope over paged/worker read results. The caller performs one read per chunk
  * and owns the results; states are copied into budget-charged scope ownership.
  * Any non-ready chunk that is not a pending import fails the whole scope

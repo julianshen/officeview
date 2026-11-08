@@ -987,9 +987,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer, onEmpty?: () => void): Promise<EffectiveFormatScope | undefined> => {
     if (!remote || !rects.length || batchSignal.aborted) return undefined
+    // A paged worker read that never settles (no failure, no notification)
+    // must not hang the preparation forever: 5s covers healthy loads (ms)
+    // and only fires on genuinely stuck requests.
+    const CF_PREPARE_SETTLE_TIMEOUT_MS = 5000
     const identity = remote.identity(sheetId)
     const structureGen = remote.merges(sheetId).gen
-    const current = () => !batchSignal.aborted && !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen
+    // Scope liveness is generations-only: the per-run abort signal cancels
+    // in-flight waits (checked explicitly), but must not kill a built scope
+    // when a bail-out re-run (same key, scope already claimed) cleans up.
+    // Otherwise the claimed scope goes stale with no recovery (same key, no
+    // new prepare). Explicit disposal (key change, unmount) ends scopes.
+    const live = () => !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen
+    const current = () => live() && !batchSignal.aborted
     const text = await import('../../xlsx/cf/text')
     if (!current()) return undefined
     return text.prepareCfWireScope(
@@ -1010,17 +1020,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
         }
         // The entry mutates under the loader: always re-read, never narrow.
+        // A read that never settles (no failure, no notification — e.g. a
+        // paged text read racing page loads) times out once, drops the stuck
+        // entry and re-reads fresh. Bounded: a second timeout fails closed.
         const settled = (): boolean => held.state.state === 'ready' || held.state.state === 'failed' || !current()
+        const waitSettled = async (): Promise<boolean> => {
+          if (settled() || batchSignal.aborted) return true
+          const outcome = await text.awaitSettled(settled, notify => remote.subscribe(notify), batchSignal, CF_PREPARE_SETTLE_TIMEOUT_MS)
+          return outcome === 'settled' || settled()
+        }
         try {
-          if (!settled() && !batchSignal.aborted) {
-            await new Promise<void>(resolve => {
-              if (settled() || batchSignal.aborted) return resolve()
-              const unsub = remote.subscribe(() => {
-                if (settled() || batchSignal.aborted) { unsub(); resolve() }
-              })
-              batchSignal.addEventListener('abort', () => { unsub(); resolve() }, { once: true })
-              if (settled()) { unsub(); resolve() }
-            })
+          if (!(await waitSettled()) && current() && !batchSignal.aborted) {
+            held.release()
+            remote.invalidateCf(sheetId, chunk)
+            if (!current()) return { result: undefined, release: () => {} }
+            held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
+            await waitSettled()
           }
           // States are copied synchronously by the scope builder; the entry is
           // always released here, so the scope never holds provider leases.
@@ -1033,7 +1048,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         }
       },
       rects,
-      { locale, budget, current, base, onEmpty, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+      { locale, budget, current: live, base, onEmpty, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
     )
   }
   const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
@@ -1110,7 +1125,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // when rules actually change (per render it would dominate scrolling).
 
   const cfTextKey = cfTextRects && entry && activeSheetId
-    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects })])
+    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1])
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
@@ -2396,7 +2411,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }) } : doc
     try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, assetLoader: loadAssets, allowed: () => allowPrintRef.current,
-    }) } catch (error) {
+    })     } catch (error) {
       if (token === printToken.current && allowPrintRef.current) setAnnouncement(error instanceof Error ? error.message : 'Print unavailable; try again.')
       return
     }
