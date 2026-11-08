@@ -4,7 +4,11 @@
     {
       "id": "xlsx-hidden-sheet",
       "kind": "xlsx",
-      "paintLeak": true,
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 2,
+      "unitsWithout": 1,
       "modelExposure": [
         "sheets[1].rows[0].cells[0].value"
       ],
@@ -13,7 +17,11 @@
     {
       "id": "xlsx-veryhidden-sheet",
       "kind": "xlsx",
-      "paintLeak": true,
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 2,
+      "unitsWithout": 1,
       "modelExposure": [
         "sheets[1].rows[0].cells[0].value"
       ],
@@ -22,7 +30,11 @@
     {
       "id": "xlsx-hidden-rows",
       "kind": "xlsx",
-      "paintLeak": false,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [
         "sheets[0].rows[1].cells[0].value"
       ],
@@ -31,94 +43,138 @@
     {
       "id": "xlsx-hidden-cols",
       "kind": "xlsx",
-      "paintLeak": true,
-      "modelExposure": [],
-      "exposureCount": 0
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sheets[0].rows[0].cells[1].value"
+      ],
+      "exposureCount": 1
     },
     {
       "id": "docx-vanish",
       "kind": "docx",
-      "paintLeak": true,
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [
-        "sections[0].paragraphs[0].runs[0].text",
-        "sections[0].blocks[0].paragraph.runs[0].text"
+        "sections[0].paragraphs[1].runs[0].text",
+        "sections[0].blocks[1].paragraph.runs[0].text"
       ],
       "exposureCount": 2
     },
     {
       "id": "docx-hidden-shape-docPr",
       "kind": "docx",
-      "paintLeak": true,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [],
       "exposureCount": 0
     },
     {
       "id": "docx-hidden-shape-in-group",
       "kind": "docx",
-      "paintLeak": true,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [
-        "sections[0].paragraphs[0].images[0].drawing.paragraphs[0].runs[0].text",
-        "sections[0].paragraphs[0].inline[0].image.drawing.paragraphs[0].runs[0].text",
-        "sections[0].blocks[0].paragraph.images[0].drawing.paragraphs[0].runs[0].text",
-        "sections[0].blocks[0].paragraph.inline[0].image.drawing.paragraphs[0].runs[0].text"
+        "sections[0].paragraphs[1].images[0].drawing.paragraphs[0].runs[0].text",
+        "sections[0].paragraphs[1].inline[0].image.drawing.paragraphs[0].runs[0].text",
+        "sections[0].blocks[1].paragraph.images[0].drawing.paragraphs[0].runs[0].text",
+        "sections[0].blocks[1].paragraph.inline[0].image.drawing.paragraphs[0].runs[0].text"
       ],
       "exposureCount": 4
     },
     {
       "id": "pptx-hidden-shape-cNvPr",
       "kind": "pptx",
-      "paintLeak": false,
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [
-        "slides[0].shapes[0].textBody.paragraphs[0].runs[0].text"
+        "slides[0].shapes[1].textBody.paragraphs[0].runs[0].text"
       ],
       "exposureCount": 1
     },
     {
       "id": "pptx-hidden-shape-in-group",
       "kind": "pptx",
-      "paintLeak": false,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [
-        "slides[0].shapes[0].children[0].textBody.paragraphs[0].runs[0].text"
+        "slides[0].shapes[1].children[0].textBody.paragraphs[0].runs[0].text"
       ],
       "exposureCount": 1
     },
     {
       "id": "pptx-hidden-slide",
       "kind": "pptx",
-      "paintLeak": false,
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 2,
+      "unitsWithout": 1,
       "modelExposure": [
-        "slides[0].shapes[0].textBody.paragraphs[0].runs[0].text"
+        "slides[1].shapes[0].textBody.paragraphs[0].runs[0].text"
       ],
       "exposureCount": 1
     },
     {
       "id": "pptx-notes",
       "kind": "pptx",
-      "paintLeak": false,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [],
       "exposureCount": 0
     },
     {
       "id": "xlsx-comment",
       "kind": "xlsx",
-      "paintLeak": true,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [],
       "exposureCount": 0
     },
     {
       "id": "docx-comment",
       "kind": "docx",
-      "paintLeak": false,
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
       "modelExposure": [],
       "exposureCount": 0
     }
   ],
   "totals": {
     "fixtures": 13,
-    "leaks": 7
+    "leaks": 5,
+    "invalid": 0,
+    "clean": 8
   },
   "gate": "t2",
   "backend": "@napi-rs/canvas",
-  "gitSha": "7eaa92326c654858b66be0bab5c5fb51d28e603a",
-  "generatedAt": "2026-11-08T11:22:19.299Z"
+  "gitSha": "76e3305912c7c400a563bee3f3cc37efb75fc3a5",
+  "generatedAt": "2026-11-08T11:27:10.380Z"
 }
