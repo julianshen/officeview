@@ -56,14 +56,18 @@ describe('render pool (§9.2/§14)', () => {
   it('dispose settles running and queued jobs and refunds everything (review r1-2)', async () => {
     const pool = mk({ workers: 1, caps: { ...DEFAULT_CAPS, perSessionOutstanding: 1, renderDeadlineMs: 5000 }, testHooks: true })
     await pool.open('deck', deck, 'visible-only')
-    const running = pool.render('s1', job('deck', { hangMs: 3000 }), 4096)
+    const running = pool.render('s1', job('deck', { hangMs: 1200 }), 4096)
     const queued = pool.render('s1', job('deck'), 4096)
     expect(pool.stats()).toMatchObject({ running: 1, queued: 1 })
     await Bun.sleep(20)
     pool.dispose()
-    const settled = await Promise.race([Promise.allSettled([running, queued]), Bun.sleep(1000).then(() => 'hung' as const)])
+    // Bun cannot interrupt a busy worker: the charge stays held until it really closes.
+    expect(pool.stats().reserved).toBe(4096)
+    const settled = await Promise.race([Promise.allSettled([running, queued]), Bun.sleep(4000).then(() => 'hung' as const)])
     expect(settled).not.toBe('hung')
     expect((settled as PromiseSettledResult<unknown>[]).map((r) => r.status)).toEqual(['rejected', 'rejected'])
+    // The running job's charge was refunded only after its worker closed (review r2-4).
+    expect(pool.stats().workers[0]!.closed).toBe(true)
     expect(pool.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0 })
   }, 10_000)
 

@@ -1,6 +1,12 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { OpReader, Opcode } from '../../src/stream/ops'
-import { hiddenFixtures } from '../../scripts/stream-s0/hidden-fixtures'
+import { loadImage } from '@napi-rs/canvas'
+import { decodeAssets } from '../../src/stream/asset-wire'
+import { decodeRasterBody } from '../../src/stream/raster'
+import { replayUnit } from '../../src/stream/replay'
+import type { Asset } from '../../src/stream/ops'
+import { DocumentHost } from '../src/render'
+import { augmentedFixtures } from './fixtures'
 import { Client, ORIGIN, start, disposePool } from './harness'
 
 afterAll(() => disposePool())
@@ -68,27 +74,43 @@ describe('HTTP surface (§6.1: no document route)', () => {
 })
 
 describe('T2 over the wire: 13 hidden constructs never transmitted', async () => {
-  const fixtures = await hiddenFixtures()
+  const fixtures = await augmentedFixtures()
   const enc = new TextEncoder()
   const contains = (hay: Uint8Array, needle: Uint8Array) => { outer: for (let i = 0; i + needle.length <= hay.length; i++) { for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer; return true } return false }
+  const host = new DocumentHost()
   for (const f of fixtures) it(`${f.id}`, async () => {
+    // The hidden source really is in the input (non-vacuous).
+    expect(contains(f.withHidden, enc.encode(f.marker)) || (await (await import('jszip')).default.loadAsync(f.withHidden).then(async (z) => (await Promise.all(Object.values(z.files).map((e) => e.async('string')))).join(''))).includes(f.marker)).toBe(true)
+    const pixels: Record<string, Buffer[]> = { relaxed: [], protected: [] }
+    const texts: string[] = []
     for (const projection of ['relaxed', 'protected'] as const) {
       const h = await start({ doc: f.withHidden, policy: { projection } }), c = new Client(h.url)
       const m = await c.hello(); await c.ready()
-      const texts: string[] = []
+      expect(contains(enc.encode(JSON.stringify(m)), enc.encode(f.marker))).toBe(false)
       for (let u = 0; u < m.units.count; u++) {
         c.unit(100 + u, u, 1)
         const { messages, unit } = await c.unitMessages(100 + u)
         for (const x of messages) expect(contains(x.payload, enc.encode(f.marker)), `${f.id} ${projection} unit ${u} kind ${x.kind}`).toBe(false)
-        if (unit.discriminator === 1) for (const op of new OpReader(unit.body)) if (op.code === Opcode.GLYPH_RUN) texts.push(op.text)
-      }
-      expect(contains(enc.encode(JSON.stringify(m)), enc.encode(f.marker))).toBe(false)
-      if (projection === 'relaxed') {
-        const all = texts.join('|') + texts.join('')
-        expect(all.includes(f.marker)).toBe(false)
-        if (texts.length) expect(all.includes(f.control)).toBe(true)
+        const size = m.units.list[u]!
+        const cv = host.backend.createCanvas(size.w, size.h), ctx = cv.getContext('2d') as unknown as CanvasRenderingContext2D
+        if (unit.discriminator === 1) {
+          for (const op of new OpReader(unit.body)) if (op.code === Opcode.GLYPH_RUN) texts.push(op.text)
+          const known = new Map<number, Asset>()
+          for (const x of messages.slice(0, -1)) for (const a of await decodeAssets(x.payload, known)) known.set(a.id, a)
+          await replayUnit(ctx, { ops: unit.body, assets: known }, host.backend)
+        } else {
+          ctx.drawImage(await loadImage(Buffer.from(decodeRasterBody(unit.body).png)) as never, 0, 0)
+        }
+        pixels[projection]!.push(Buffer.from(ctx.getImageData(0, 0, size.w, size.h).data))
       }
       c.close(); h.stop()
     }
+    // Visible evidence: the relaxed stream draws the control text, and the
+    // protected rasters are exactly those pixels (the control is visible there too).
+    const all = texts.join('|') + texts.join('')
+    expect(all.includes(f.control), `${f.id}: control text drawn`).toBe(true)
+    expect(all.includes(f.marker)).toBe(false)
+    expect(pixels.protected!.length).toBe(pixels.relaxed!.length)
+    pixels.protected!.forEach((p, i) => expect(p.equals(pixels.relaxed![i]!), `${f.id} unit ${i} protected == relaxed`).toBe(true))
   }, 60_000)
 })

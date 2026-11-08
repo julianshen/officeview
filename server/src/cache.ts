@@ -82,21 +82,23 @@ export type RenderCache<V> = LruBytes<V>
 export const createRenderCache = <V>(limit = RENDER_CACHE_BYTES) => new LruBytes<V>(limit)
 
 /** Accounting for parsed documents held by workers, keyed
- * `docRef|contentPolicyId|layoutFingerprint`; eviction calls `drop` so the
- * pool releases the parse (bytes are kept; a later request re-parses).
+ * `docRef|contentPolicy` (the fingerprint is per process). It is charged
+ * BEFORE a parse and on every request (so a reparse after eviction is charged
+ * again); an entry that can never fit is refused, never held uncharged.
+ * Eviction calls `drop` so the pool releases the parse (bytes are kept).
  * Charge = input bytes × 8 [call] — a parsed-model estimate, not a measurement. */
 export class DocumentLedger {
   private lru: LruBytes<{ docRef: string; policy: string }>
-  constructor(drop: (docRef: string, policy: string) => void, limit = DOCUMENT_CACHE_BYTES) {
+  constructor(drop: (docRef: string, policy: string) => void, readonly limit = DOCUMENT_CACHE_BYTES) {
     this.lru = new LruBytes(limit, (_k, v) => drop(v.docRef, v.policy))
   }
   static charge(inputBytes: number) { return inputBytes * 8 }
-  touch(docRef: string, policy: string, fingerprint: string, inputBytes: number): void {
-    const key = `${docRef}|${policy}|${fingerprint}`
-    if (!this.lru.get(key)) this.lru.put(key, { docRef, policy }, DocumentLedger.charge(inputBytes))
+  /** false = refused (the document alone exceeds the ceiling). */
+  touch(docRef: string, policy: string, inputBytes: number): boolean {
+    const key = `${docRef}|${policy}`
+    if (this.lru.get(key)) return true
+    return this.lru.put(key, { docRef, policy }, DocumentLedger.charge(inputBytes))
   }
-  pin(docRef: string, policy: string, fingerprint: string) { this.lru.pin(`${docRef}|${policy}|${fingerprint}`) }
-  unpin(docRef: string, policy: string, fingerprint: string) { this.lru.unpin(`${docRef}|${policy}|${fingerprint}`) }
   get size() { return this.lru.size }
   get evictions() { return this.lru.evictions }
 }

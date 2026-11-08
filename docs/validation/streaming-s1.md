@@ -115,9 +115,9 @@ Exact corpus file list (units):
 
 ## Stage 1c — demo stream server
 
-Branch `feature/streaming-s1`; plan `docs/superpowers/plans/2026-11-09-streaming-s1c-server.md`. `bun run test:server`: **183 passed, 0 failed** (18 files). `bun run test tests/stream`: 259 passed. `bun run s0:test:napi`: 318 passed. Both TypeScript checks are clean, and `bun run gates:core` passes (core closure 297 B; index closure 417,579 B, Δ143 ≤ recorded 144; module set = baseline ± 1).
+Branch `feature/streaming-s1`; plan `docs/superpowers/plans/2026-11-09-streaming-s1c-server.md`. `bun run test:server`: **192 passed, 0 failed** (19 files). `bun run test tests/stream`: 259 passed. `bun run s0:test:napi`: 318 passed. Both TypeScript checks are clean, and `bun run gates:core` passes (core closure 297 B; index closure 417,579 B, Δ143 ≤ recorded 144; module set = baseline ± 1).
 
-**T2 on the stream path (§17 row 1).** The 13 Stage-0 hidden constructs were checked two ways. (a) Projection → parse → paint (`server/test/t2-stream.test.ts`, table above): the control is painted, the marker never is, and model exposure is 0. (b) Over the wire (`server/test/ops.test.ts`), against a real `Bun.serve`, in both a protected (`final-raster`) and a relaxed (`commands`) session. No transmitted payload (MANIFEST, ASSET_DEFINE, UNIT_RASTER, UNIT_COMMANDS) contains the marker bytes. Relaxed GLYPH_RUN text contains the control but never the marker. **13/13 clean.**
+**T2 on the stream path (§17 row 1).** The 13 Stage-0 hidden constructs were checked two ways. (a) Projection → parse → paint (`server/test/t2-stream.test.ts`, table above): the control is painted, the marker never is, and model exposure is 0. (b) Over the wire (`server/test/ops.test.ts`), against a real `Bun.serve`, in both a protected (`final-raster`) and a relaxed (`commands`) session. No transmitted payload (MANIFEST, ASSET_DEFINE, UNIT_RASTER, UNIT_COMMANDS) contains the marker bytes. Relaxed GLYPH_RUN text contains the control but never the marker. Relaxed GLYPH_RUN text must contain the control, and every protected raster must be pixel-identical to the relaxed replay. **13/13 clean.**
 
 **Close-code matrix (§6.2 rule 8)** — `server/test/close-codes.test.ts`:
 

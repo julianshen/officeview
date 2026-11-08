@@ -33,6 +33,8 @@ interface Slot {
   pending: Map<number, { ok: (r: WorkerReply) => void }>
   /** Set once the current worker's `close` event fired (terminate or death). */
   closed: boolean
+  /** Resolves when the current worker's `close` event fires. */
+  whenClosed: Promise<void>
   docs: Map<string, string>       // docRef|policy → docKey on this worker
   pages: number
   parses: number
@@ -83,6 +85,8 @@ export class Pool {
     const worker = new Worker(WORKER_URL, { preload: [PRELOAD] } as WorkerOptions)
     slot.worker = worker
     slot.closed = false
+    let markClosed!: () => void
+    slot.whenClosed = new Promise<void>((r) => { markClosed = r })
     worker.onmessage = (e: MessageEvent<WorkerReply>) => {
       if (slot.worker !== worker) return
       const p = slot.pending.get(e.data.id)
@@ -92,6 +96,7 @@ export class Pool {
       p.ok(e.data)
     }
     worker.addEventListener('close', () => {
+      markClosed()
       if (slot.worker !== worker) return
       slot.closed = true
       slot.docs.clear()
@@ -192,6 +197,15 @@ export class Pool {
       this.finish(admitted)
       throw new RenderTimeout()
     }
+    if (!reply.ok && reply.id === -1) {
+      // The worker is going away (dispose, death): the paint may still be
+      // running, so the charge moves to a retirement owner and is refunded
+      // only once the worker has closed (review r2-4).
+      admitted.state = 'retiring'
+      await slot.whenClosed
+      this.finish(admitted)
+      throw new RenderFailed(reply.error)
+    }
     if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
     if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
     return reply.result as RenderedUnit
@@ -203,7 +217,7 @@ export class Pool {
     const old = slot.worker
     this.settle(slot, 'worker retired')
     if (!slot.closed) {
-      const closed = new Promise<void>((r) => old.addEventListener('close', () => r(), { once: true }))
+      const closed = slot.whenClosed
       old.terminate()
       await closed
     }
@@ -231,7 +245,7 @@ export class Pool {
 
   stats() {
     return {
-      workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy })),
+      workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
       retired: this.retired, recycled: this.recycled, affinity: Object.fromEntries(this.affinity),
     }

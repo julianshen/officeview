@@ -5,7 +5,7 @@
  * directory by bare file name (`?doc=deck.pptx`); anything else resolves to
  * nothing. A real deployment replaces both hooks with its own auth and store.
  */
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import type { Authorize, ResolveDocument } from './hooks'
 
@@ -27,7 +27,13 @@ export function demoHooks(o: { docDir: string; demo: boolean }): { authorize: Au
       const name = req.url.searchParams.get('doc')
       const at = safeDocPath(o.docDir, name)
       if (!at) return null
-      try { return { bytes: new Uint8Array(await readFile(at)), name: name! } } catch { return null }
+      try {
+        // Containment on REAL paths: a symlink inside the directory must not
+        // reach a file outside it (review r2-10).
+        const [root, real] = await Promise.all([realpath(o.docDir), realpath(at)])
+        if (dirname(real) !== root) return null
+        return { bytes: new Uint8Array(await readFile(real)), name: name! }
+      } catch { return null }
     },
   }
 }

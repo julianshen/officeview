@@ -20,6 +20,17 @@ describe('demo hooks', () => {
     for (const q of ['doc=%2e%2e%2fpackage.json', 'doc=..%2Fpackage.json', 'doc=missing.docx', '']) expect(await resolveDocument(req(q), { policy: {} })).toBeNull()
     expect((await resolveDocument(req('doc=pypptx-test.pptx'), { policy: {} }))?.bytes.length).toBeGreaterThan(0)
   })
+  it('a symlink inside the doc dir cannot reach a file outside it (review r2-10)', async () => {
+    const { mkdtempSync, symlinkSync, copyFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(resolve(tmpdir(), 'ovdocs-')), outside = mkdtempSync(resolve(tmpdir(), 'ovprivate-'))
+    copyFileSync(resolve(corpusDir, 'pypptx-test.pptx'), resolve(outside, 'secret.pptx'))
+    copyFileSync(resolve(corpusDir, 'pypptx-test.pptx'), resolve(dir, 'real.pptx'))
+    symlinkSync(resolve(outside, 'secret.pptx'), resolve(dir, 'deck.pptx'))
+    const { resolveDocument } = demoHooks({ docDir: dir, demo: true })
+    expect(await resolveDocument(req('doc=deck.pptx'), { policy: {} })).toBeNull()
+    expect(await resolveDocument(req('doc=real.pptx'), { policy: {} })).not.toBeNull()
+  })
   it('?relaxed=1 is honoured only with --demo', async () => {
     expect((await demoHooks({ docDir: corpusDir, demo: true }).authorize(req('relaxed=1')))?.policy).toEqual({ projection: 'relaxed' })
     expect((await demoHooks({ docDir: corpusDir, demo: false }).authorize(req('relaxed=1')))?.policy).toEqual({})

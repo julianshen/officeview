@@ -47,14 +47,18 @@ describe('byte-bounded LRU', () => {
 })
 
 describe('document ledger', () => {
-  it('drops the least recently used parse past the ceiling', () => {
+  it('charges before parse, drops the least recently used past the ceiling, refuses what can never fit (review r2-3)', () => {
     const dropped: string[] = []
     const l = new DocumentLedger((d, p) => dropped.push(`${d}|${p}`), 100)
-    l.touch('d1', 'visible-only@1', 'fp', 5)   // 40
-    l.touch('d2', 'visible-only@1', 'fp', 5)   // 80
-    l.touch('d1', 'visible-only@1', 'fp', 5)   // refresh d1
-    l.touch('d3', 'full@1', 'fp', 5)           // 120 > 100 → drop d2
-    expect(dropped).toEqual(['d2|visible-only@1'])
+    expect(l.touch('d1', 'visible-only', 5)).toBe(true)   // 40
+    expect(l.touch('d2', 'visible-only', 5)).toBe(true)   // 80
+    expect(l.touch('d1', 'visible-only', 5)).toBe(true)   // refresh d1
+    expect(l.touch('d3', 'full', 5)).toBe(true)           // 120 > 100 → drop d2
+    expect(dropped).toEqual(['d2|visible-only'])
     expect(l.size).toBe(80)
+    expect(l.touch('huge', 'visible-only', 13)).toBe(false)  // 104 > 100: refused, nothing held
+    expect(l.size).toBe(80)
+    expect(l.touch('d2', 'visible-only', 5)).toBe(true)   // a reparse after eviction is charged again
+    expect(dropped).toEqual(['d2|visible-only', 'd1|visible-only'])
   })
 })

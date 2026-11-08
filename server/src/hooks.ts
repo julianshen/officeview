@@ -5,6 +5,9 @@ export interface AuthRequest { headers: Headers; ip: string; url: URL; token?: s
 export interface AuthDecision {
   viewerId?: string
   role?: 'presenter' | 'audience'
+  /** On a resume whose proof is NOT the live session token: the hook vouches
+   * that it issued this proof for this viewer (§6.2 rule 7). */
+  resumeGranted?: boolean
   policy: {
     contentPolicy?: 'visible-only' | 'full'
     projection?: 'protected' | 'relaxed'

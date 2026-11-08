@@ -33,7 +33,6 @@ export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated'
 
 const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4 } as const
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
-const ENCODED_CAP = 8 * 1024 * 1024
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
 
@@ -52,6 +51,8 @@ export interface StreamServerOptions {
   /** Current layout fingerprint for a policy id (tests inject a change). */
   fingerprint?: (contentPolicyId: string) => string
   path?: string
+  /** §14 document-cache ceiling (tests shrink it). */
+  documentCacheBytes?: number
 }
 
 interface Conn {
@@ -83,8 +84,10 @@ export function createStreamServer(o: StreamServerOptions) {
   const docs = new Map<string, DocState>()          // docRef → state
   const sessionDoc = new Map<string, { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number }>()
   const sockets = new Set<WS>()
+  /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
+  const sessionRates = new Map<string, SessionRates>()
   const renderCache = createRenderCache<RenderedUnit>()
-  const ledger = new DocumentLedger((docRef, policy) => o.pool.dropParsed(docRef, policy === 'full@1' ? 'full' : 'visible-only'))
+  const ledger = new DocumentLedger((docRef, policy) => o.pool.dropParsed(docRef, policy === 'full' ? 'full' : 'visible-only'), o.documentCacheBytes)
   const pack = loadPack()
 
   const send = (ws: WS, msg: object) => { if (ws.data.phase !== 'closed') ws.send(JSON.stringify(msg)) }
@@ -101,12 +104,26 @@ export function createStreamServer(o: StreamServerOptions) {
     ws.data.timers.add(t)
     return t
   }
-  const sendBinary = (ws: WS, kind: number, reqId: number, payload: Uint8Array) => {
-    const frames = encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: (b) => gzipSync(b, { level: 6 }), fragmentBytes: FRAGMENT })
-    const total = frames.reduce((n, f) => n + f.length, 0)
-    if (total > ENCODED_CAP + frames.length * 33) return false
-    for (const f of frames) ws.sendBinary(f)
-    return true
+  /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
+   * framed, so a conforming client never sees an encoded-cap rejection. */
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20 }
+  const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
+    const z = new Uint8Array(gzipSync(payload, { level: 6 }))
+    if (z.length + 4 > ENCODED[kind]!) return undefined
+    return encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: () => z, fragmentBytes: FRAGMENT })
+  }
+  const sendFrames = (ws: WS, messages: Uint8Array[][]) => { for (const m of messages) for (const f of m) ws.sendBinary(f) }
+  const gone = (ws: WS) => ws.data.phase === 'closed'
+  const owns = (ws: WS, sid: string) => !gone(ws) && table.get(sid)?.activeSocket === (ws as unknown)
+
+  /** Document references across sessions; the last release forgets it in the pool. */
+  function acquireDoc(docRef: string): void {
+    const d = docs.get(docRef)
+    if (d) d.refs++; else docs.set(docRef, { docRef, refs: 1 } as DocState)
+  }
+  function releaseDoc(docRef: string): void {
+    const d = docs.get(docRef)
+    if (d && --d.refs <= 0) { docs.delete(docRef); o.pool.forget(docRef) }
   }
 
   function markOf(p: EffectivePolicy, d: AuthDecision): MarkSpec {
@@ -115,20 +132,22 @@ export function createStreamServer(o: StreamServerOptions) {
     return { kind: 'fixed' }
   }
 
-  /** RENEW ≥ lead before exp; without an ack the old token dies at its own exp. */
+  /** RENEW ≥ lead before exp; without an ack the old token dies at its own exp.
+   * Timers belong to the owning socket (cleared on close/supersession) and
+   * re-check ownership after every await. */
   function scheduleRenew(ws: WS, sid: string, exp: number) {
-    later(ws, (exp - lead) * 1000 - now(), async () => {
-      const s = table.get(sid), sd = sessionDoc.get(sid)
-      if (!s || !sd || s.activeSocket !== (ws as unknown) || ws.data.phase === 'closed') return
-      const next = await issueToken(o.keys.kToken, { docRef: sd.doc.docRef, sid, ttlSec: ttl, now: nowSec() })
-      table.beginRotation(sid, next.jti)
-      ;(s as Session & { pendingExp?: number }).pendingExp = next.exp
-      send(ws, { reqId: 0, type: 'renew', token: next.token, jti: next.jti, exp: next.exp })
-      later(ws, exp * 1000 - now(), () => {
-        const cur = table.get(sid)
-        if (cur && cur.pendingJti === next.jti) close(ws, 'session-expired')
-      })
-    })
+    later(ws, (exp - lead) * 1000 - now(), () => { void renew(ws, sid, exp).catch(() => close(ws, 'session-expired')) })
+  }
+  async function renew(ws: WS, sid: string, exp: number) {
+    const sd = sessionDoc.get(sid)
+    if (!sd || !owns(ws, sid)) return
+    const next = await issueToken(o.keys.kToken, { docRef: sd.doc.docRef, sid, ttlSec: ttl, now: nowSec() })
+    if (!owns(ws, sid)) return
+    const s = table.get(sid)!
+    table.beginRotation(sid, next.jti)
+    ;(s as Session & { pendingExp?: number }).pendingExp = next.exp
+    send(ws, { reqId: 0, type: 'renew', token: next.token, jti: next.jti, exp: next.exp })
+    later(ws, exp * 1000 - now(), () => { if (owns(ws, sid) && table.get(sid)!.pendingJti === next.jti) close(ws, 'session-expired') })
   }
 
   async function openSession(ws: WS, hello: Record<string, unknown>, reqId: number) {
@@ -136,49 +155,67 @@ export function createStreamServer(o: StreamServerOptions) {
     const resume = hello.resume as { sid?: unknown; resumeProof?: unknown } | undefined
     if (resume !== undefined) return resumeSession(ws, req, resume, reqId)
     const decision = await o.authorize(req)
+    if (gone(ws)) return
     if (!decision) return close(ws, 'auth-failed')
     const resolved = await o.resolveDocument(req, decision)
+    if (gone(ws)) return
     if (!resolved) return close(ws, 'auth-failed')
     if (!admit(resolved.bytes).ok) return close(ws, 'unsupported-format')
     const policy = effectivePolicy(decision)
     const docRef = await docRefOf(o.keys.kDoc, resolved.bytes)
-    let opened
-    try { opened = await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
-      return close(ws, (e as RenderFailed).refusal === 'unsupported-format' ? 'unsupported-format' : 'auth-failed')
-    }
-    if (ws.data.phase === 'closed') return
-    let doc = docs.get(docRef)
-    if (!doc) { doc = { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }; docs.set(docRef, doc) }
-    doc.refs++
-    ledger.touch(docRef, opened.contentPolicyId, opened.layoutFingerprint, resolved.bytes.length)
-    const sid = newSid()
-    const token = await issueToken(o.keys.kToken, { docRef, sid, ttlSec: ttl, now: nowSec() })
-    const s = table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt: nowSec() })
-    sessionDoc.set(sid, { doc: { ...doc, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId }, policy, decision, tokenExp: token.exp })
-    audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: 1, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: false, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, untraceable: policy.visibleMark === 'off' })
-    ws.data.sid = sid
-    sendManifest(ws, reqId, sid, token.token)
-    scheduleRenew(ws, sid, token.exp)
+    if (gone(ws)) return
+    // Charge the document BEFORE parsing; one that cannot fit is refused at admission.
+    if (!ledger.touch(docRef, policy.contentPolicy, resolved.bytes.length)) return close(ws, 'unsupported-format')
+    acquireDoc(docRef)
+    let committed = false
+    try {
+      let opened
+      try { opened = await o.pool.open(docRef, resolved.bytes, policy.contentPolicy) } catch (e) {
+        return close(ws, (e as RenderFailed).refusal === 'unsupported-format' ? 'unsupported-format' : 'auth-failed')
+      }
+      if (gone(ws)) return
+      const sid = newSid()
+      const token = await issueToken(o.keys.kToken, { docRef, sid, ttlSec: ttl, now: nowSec() })
+      if (gone(ws)) return
+      // Commit synchronously: nothing below awaits, so no close can interleave.
+      const s = table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt: nowSec() })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp })
+      sessionRates.set(sid, ws.data.rates)
+      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: 1, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: false, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, untraceable: policy.visibleMark === 'off' })
+      ws.data.sid = sid
+      committed = true
+      sendManifest(ws, reqId, sid, token.token)
+      scheduleRenew(ws, sid, token.exp)
+    } finally { if (!committed) releaseDoc(docRef) }
   }
 
+  /** §6.2 rule 7. Resume ALWAYS re-runs `authorize` and re-evaluates the
+   * effective policy; the proof is the live session token, or a proof the hook
+   * itself grants (`resumeGranted`). Validation and supersession are bound to
+   * the jti generation observed before any await, so of two racing resumes
+   * only one can commit. */
   async function resumeSession(ws: WS, req: AuthRequest, resume: { sid?: unknown; resumeProof?: unknown }, reqId: number) {
     if (typeof resume.sid !== 'string' || typeof resume.resumeProof !== 'string') return close(ws, 'auth-failed')
     const s = table.get(resume.sid), sd = sessionDoc.get(resume.sid)
     if (!s || !sd) return close(ws, 'auth-failed')
+    const generation = s.jti
     const v = await verifyToken(o.keys.kToken, resume.resumeProof, { now: nowSec(), docRef: s.docRef, sid: s.sid })
-    let ok = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
-    if (!ok) {
-      // Or a proof the developer's authorize hook freshly issues for this viewer.
-      const d = await o.authorize({ ...req, token: resume.resumeProof, resume: { sid: s.sid } })
-      ok = !!d && d.viewerId === s.viewerId && JSON.stringify(effectivePolicy(d)) === JSON.stringify(s.effectivePolicy)
-    }
-    if (!ok || ws.data.phase === 'closed') return close(ws, 'auth-failed')
+    if (gone(ws)) return
+    const tokenProof = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
+    const d = await o.authorize({ ...req, resume: { sid: s.sid }, ...(tokenProof ? {} : { token: resume.resumeProof }) })
+    if (gone(ws)) return
+    const ok = !!d && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(effectivePolicy(d)) === JSON.stringify(s.effectivePolicy)
+    if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     const token = await issueToken(o.keys.kToken, { docRef: s.docRef, sid: s.sid, ttlSec: ttl, now: nowSec() })
+    if (gone(ws)) return
+    if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     const old = s.activeSocket as unknown as WS
     if (old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
     table.supersede(s.sid, ws as never, token.jti)
     sd.tokenExp = token.exp
+    sd.decision = d!
     ws.data.sid = s.sid
+    ws.data.rates = sessionRates.get(s.sid) ?? ws.data.rates
     sendManifest(ws, reqId, s.sid, token.token)
     scheduleRenew(ws, s.sid, token.exp)
   }
@@ -198,7 +235,7 @@ export function createStreamServer(o: StreamServerOptions) {
       notices: [FORENSIC_NOTICE, ...(p.relaxed ? ['relaxed-session'] : [])],
     }
     ws.data.phase = 'manifest'
-    sendBinary(ws, KIND.MANIFEST, reqId, encodeManifest(m))
+    sendFrames(ws, [frame(KIND.MANIFEST, reqId, encodeManifest(m))!])
     later(ws, readyMs, () => { if (ws.data.phase === 'manifest') close(ws, 'ready-timeout') })
   }
 
@@ -218,6 +255,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
     if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return refuse(ws, reqId, 'policy-refused')
     const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
+    if (!owns(ws, s.sid)) return
     if (!v.ok) return v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused')
     const jti = table.acceptJti(s.sid, v.claims.jti)
     if (jti === 'rotated') return refuse(ws, reqId, 'session-rotated')
@@ -229,42 +267,55 @@ export function createStreamServer(o: StreamServerOptions) {
     if (rate === 'close') return close(ws, 'rate-limited')
     if (rate === 'refuse') return refuse(ws, reqId, 'rate-limited')
     if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    // Every request re-charges its parse: an evicted document re-enters the ledger on reparse.
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
     const p = sd.policy, mark = markOf(p, sd.decision)
     const missing = p.projection === 'commands' ? [...ws.data.missingFaces].sort() : undefined
-    const fields: RenderKeyFields = {
+    const job = { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex: unitIndex as number, scale: scale as number, mark }
+    const estimate = (() => { const size = sd.doc.units[unitIndex as number]!; return size.w * size.h * 4 * (scale as number) ** 2 * 2 })()
+    const fields = (projectionMode: 'final-raster' | 'commands'): RenderKeyFields => ({
       docRef: sd.doc.docRef, contentPolicyId: sd.doc.contentPolicyId, layoutFingerprint: sd.doc.fingerprint, recorderVersion: 1, scaleBucket: scale as number,
       markSettings: { visible: mark.kind, text: mark.kind === 'viewer' ? mark.text : mark.kind === 'fixed' ? 'fixed' : '', forensic: false },
-      projectionMode: p.projection, policyDetails: { projection: sd.doc.contentPolicyId, ...(missing ? { missingFaces: missing } : {}) }, unitId: unitIndex as number,
-    }
-    const key = renderKey(fields)
-    let unit = renderCache.get(key)
-    if (!unit) {
-      const size = sd.doc.units[unitIndex as number]!
+      projectionMode, policyDetails: { projection: sd.doc.contentPolicyId, ...(projectionMode === 'commands' && missing ? { missingFaces: missing } : {}) }, unitId: unitIndex as number,
+    })
+    const obtain = async (projection: 'final-raster' | 'commands'): Promise<RenderedUnit | RefusalCode> => {
+      const key = renderKey(fields(projection))
+      const hit = renderCache.get(key)
+      if (hit) return hit
       try {
-        unit = await o.pool.render(s.sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex: unitIndex as number, scale: scale as number, projection: p.projection, mark, ...(missing ? { missingFaces: missing } : {}) }, size.w * size.h * 4 * (scale as number) ** 2 * 2)
-      } catch (e) {
-        if (e instanceof AdmissionRefused) return refuse(ws, reqId, 'rate-limited')
-        return refuse(ws, reqId, 'policy-refused')
-      }
-      renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
+        const unit = await o.pool.render(s.sid, { ...job, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
+        renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
+        return unit
+      } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
     }
-    if (ws.data.phase !== 'stream' || table.get(s.sid)?.activeSocket !== (ws as unknown)) return
-    renderCache.pin(key)
-    try { sendUnit(ws, reqId, unitIndex as number, unit) } finally { renderCache.unpin(key) }
+    let unit = await obtain(p.projection)
+    if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+    if (typeof unit === 'string') return refuse(ws, reqId, unit)
+    let messages = prepareUnit(reqId, unitIndex as number, unit)
+    if (!messages && unit.kind === 'commands') {
+      // Assets too large for ASSET_DEFINE's caps: ship the unit as a raster (Task 7).
+      unit = await obtain('final-raster')
+      if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+      if (typeof unit === 'string') return refuse(ws, reqId, unit)
+      messages = prepareUnit(reqId, unitIndex as number, unit)
+    }
+    if (!messages) return refuse(ws, reqId, 'policy-refused')
+    if (unit.kind === 'raster' && unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
+    sendFrames(ws, messages)
   }
 
-  function sendUnit(ws: WS, reqId: number, unitIndex: number, unit: RenderedUnit) {
+  /** Frames a unit's messages under every per-kind cap, or undefined (nothing sent). */
+  function prepareUnit(reqId: number, unitIndex: number, unit: RenderedUnit): Uint8Array[][] | undefined {
     if (unit.kind === 'commands') {
-      let payloads: Uint8Array[] | undefined
-      try { payloads = encodeAssets(unit.assets) } catch (e) { if (!(e instanceof AssetTooLarge)) throw e }
-      if (payloads) {
-        for (const p of payloads) sendBinary(ws, KIND.ASSET_DEFINE, reqId, p)
-        if (sendBinary(ws, KIND.UNIT_COMMANDS, reqId, encodeUnit({ unitId: unitIndex, discriminator: 1, body: unit.ops }))) return
-      }
-      return refuse(ws, reqId, 'policy-refused')
+      let payloads: Uint8Array[]
+      try { payloads = encodeAssets(unit.assets) } catch (e) { if (e instanceof AssetTooLarge) return undefined; throw e }
+      const out: Uint8Array[][] = []
+      for (const p of payloads) { const f = frame(KIND.ASSET_DEFINE, reqId, p); if (!f) return undefined; out.push(f) }
+      const f = frame(KIND.UNIT_COMMANDS, reqId, encodeUnit({ unitId: unitIndex, discriminator: 1, body: unit.ops }))
+      return f ? [...out, f] : undefined
     }
-    if (unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
-    if (!sendBinary(ws, KIND.UNIT_RASTER, reqId, encodeUnit({ unitId: unitIndex, discriminator: 2, body: encodeRasterBody(unit.w, unit.h, unit.png) }))) refuse(ws, reqId, 'policy-refused')
+    const f = frame(KIND.UNIT_RASTER, reqId, encodeUnit({ unitId: unitIndex, discriminator: 2, body: encodeRasterBody(unit.w, unit.h, unit.png) }))
+    return f ? [f] : undefined
   }
 
   function onRenewAck(ws: WS, msg: Record<string, unknown>) {
@@ -352,12 +403,10 @@ export function createStreamServer(o: StreamServerOptions) {
         const s = table.get(sid)
         if (s && s.activeSocket === (ws as unknown)) {
           table.close(sid)
+          sessionRates.delete(sid)
           const sd = sessionDoc.get(sid)
           sessionDoc.delete(sid)
-          if (sd) {
-            const doc = docs.get(sd.doc.docRef)
-            if (doc && --doc.refs <= 0) { docs.delete(doc.docRef); o.pool.forget(doc.docRef) }
-          }
+          if (sd) releaseDoc(sd.doc.docRef)
         }
       },
     },
