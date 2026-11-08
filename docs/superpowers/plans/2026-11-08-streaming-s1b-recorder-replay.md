@@ -115,6 +115,8 @@
 
 ### Task 6: `CanvasBackend` + `registerFont` seams
 
+> **Executed differently (051f8e2d):** the backend is installed process-wide (`installCanvasBackend`) instead of threaded through `getPaintables` options: the sites are private helpers with no options plumbing, three are synchronous (so `createCanvas` is sync), and a pool worker uses one canvas library per process. Each site asks `installedCanvasBackend()` first and otherwise runs its historical code, so default behaviour is untouched (full suite green). `decodeImage` covers raster and SVG-by-mime; `rasteriseSvg` covers the slideshow SVG path. `registerFont` already flows through `PaintOptions.registerFont`.
+
 **Files:** Create `src/core/canvas-backend.ts`; Modify the nine sites listed above, `src/render/paint.ts` (`PaintOptions.backend?`), `src/core/fonts/register.ts` (export the `registerFont` interface type); Test `tests/core/canvas-backend.test.ts`.
 
 **Interfaces:**
