@@ -247,3 +247,67 @@ it('range statistics are cached across preparations (I5)', async () => {
   first!.dispose()
   second!.dispose()
 })
+
+it('a 3000x20 sheet with one rule keeps its CF without whole-sheet refusal (I4)', async () => {
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const rows: XlsxRow[] = []
+  for (let r = 0; r < 3000; r++) {
+    const cells: XlsxCell[] = []
+    for (let c = 0; c < 20; c++) {
+      cells.push({ row: r, col: c, ref: '', value: (r + c) % 10, styleIndex: 0 })
+    }
+    rows.push({ index: r, cells })
+  }
+  const sheet: XlsxSheet = {
+    name: 'S', sheetId: '1', merges: [], mergeRanges: [], cols: [],
+    rows,
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        ranges: [{ firstRow: 0, lastRow: 2999, firstCol: 0, lastCol: 19 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+        definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 5 }], dialect: 'base', formulas: [] },
+      }],
+    },
+  }
+  const batch = await prepareCfPaint(sheet)
+  expect(batch).toBeDefined()
+  expect(sheet.diagnostics?.some(d => d.feature === 'cf-paint-unavailable')).not.toBe(true)
+  expect(batch?.layer.styleAt(0, 6, undefined)?.fillColor).toBe('FF00FF00')
+  batch?.dispose()
+})
+
+it('going over work budget refuses per range, never for the whole sheet (I4)', async () => {
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const sheet: XlsxSheet = {
+    name: 'S', sheetId: '1', merges: [], mergeRanges: [], cols: [],
+    rows: [
+      { index: 0, cells: [{ row: 0, col: 0, ref: 'A1', value: 10, styleIndex: 0 }, { row: 0, col: 1, ref: 'B1', value: 10, styleIndex: 0 }] },
+    ],
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [
+        {
+          id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }],
+          writes: new Set(['fill']),
+          dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+          definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 5 }], dialect: 'base', formulas: [] },
+        },
+        {
+          id: 1, priority: 2, documentOrder: 1, stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 1048575, firstCol: 1, lastCol: 1 }],
+          writes: new Set(['fill']),
+          dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FFFF0000' },
+          definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 5 }], dialect: 'base', formulas: [] },
+        },
+      ],
+    },
+  }
+  const batch = await prepareCfPaint(sheet)
+  expect(batch).toBeDefined()
+  expect(batch?.layer.styleAt(0, 0, undefined)?.fillColor).toBe('FF00FF00')
+  batch?.dispose()
+})

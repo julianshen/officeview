@@ -183,7 +183,11 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     epochNowMs: sheet.semantics.epochNowMs,
   } : undefined)
   let units = 0
-  const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
+  const work = async () => {
+    if (signal?.aborted) throw new Error('CF cancelled')
+    if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work')
+    if (units % 1024 === 0) await hostTask()
+  }
   try {
     const scoped = Boolean(options.viewport && cfNeedsViewport(sheet))
     if (options.viewport && scoped) {
@@ -261,18 +265,11 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       bottom = Math.min(bottom, STATIC_SHEET_BUDGET.maxGridRows - 1)
       right = Math.min(right, STATIC_SHEET_BUDGET.maxGridCols - 1)
 
-      const aggregateRuleWork = rules.rules.reduce((sum, rule) => {
-        return sum + rule.ranges.reduce((rSum, range) => {
-          const rLastRow = range.lastRow === 1048575 ? bottom : range.lastRow
-          const rLastCol = range.lastCol === 16383 ? right : range.lastCol
-          return rSum + Math.max(0, rLastRow - range.firstRow + 1) * Math.max(0, rLastCol - range.firstCol + 1)
-        }, 0)
-      }, 0)
-      if (aggregateRuleWork > CF_LIMITS.workUnits) return unavailable(sheet)
-
       for (const rule of rules.rules) for (const r of rule.ranges) {
         const lastRow = Math.min(r.lastRow, bottom)
         const lastCol = r.lastCol === 16383 ? right : Math.min(r.lastCol, STATIC_SHEET_BUDGET.maxGridCols - 1)
+        const rangeWork = Math.max(0, lastRow - r.firstRow + 1) * Math.max(0, lastCol - r.firstCol + 1)
+        if (rangeWork > CF_LIMITS.workUnits) continue // Ruling I4: Refuse per range, never whole sheet
         if (lastRow >= r.firstRow && lastCol >= r.firstCol) rects.push({ ...r, lastRow, lastCol })
       }
     }
@@ -297,7 +294,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       const merged: Array<[number, number]> = []
       for (const [a, b] of intervals) { const last = merged.at(-1); if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b); else merged.push([a, b]) }
       for (let row = firstRow; row < endRow; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
-        await work()
+        if (signal?.aborted) throw new Error('CF cancelled')
+        if (++units % 1024 === 0) await hostTask()
         const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
         // Ruling I4: Per-batch work budget so static sheets (e.g. 3000x20) do not exhaust
         // the 1M whole-sheet limit. If a batch exceeds the budget, refusal is per-range.
@@ -317,7 +315,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
             }
           } finally { lease.release() }
         } catch (error) {
-          if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF cancelled')) {
+          if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF cancelled' || error.message === 'CF paint work' || (error as any).name === 'PackageError' || error.message.includes('resource-limit'))) {
             hadWorkLimit = true
             // Ruling I4: Refusal is per-range, not the whole sheet
             continue
@@ -326,7 +324,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         } finally { service.dispose() }
       }
     }
-    if (hadWorkLimit && states.size === 0) return unavailable(sheet)
     let disposed = false
     const layer: RegionStyleLayer = {
       retainedBytes: hold.bytes,
