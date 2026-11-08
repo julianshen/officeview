@@ -1,12 +1,28 @@
 {
-  "gate": "t11",
   "status": "RED",
-  "transitiveGzipBytes": 417436,
   "ceiling": 38720,
-  "moduleMapHash": "6e2c7a5af9edcf1caa054876ae897be1ac706306a0d193c4d0009148f688fc64",
-  "checkEager": "eager modules: 155\neager graph ok",
-  "gitSha": "13fbdda9",
-  "generatedAt": "2026-11-08T11:31:00.966Z",
-  "backend": "@napi-rs/canvas",
-  "note": "build succeeded via vite (tsc --noEmit failed on pre-existing stream-s0 script TS errors); gzip sum is of closure chunks (417436 > ceiling 38720) — ceiling interpretation unclear; baseline eager modules 155 unchanged"
+  "transitiveGzipBytes": 417436,
+  "indexOnlyGzipBytes": 35978,
+  "perChunk": [
+    {
+      "file": "importSession-CVQDRSWC.js",
+      "gzipBytes": 1171
+    },
+    {
+      "file": "index.js",
+      "gzipBytes": 35978
+    },
+    {
+      "file": "office-worker-DkKoHW-2.js",
+      "gzipBytes": 380287
+    }
+  ],
+  "moduleMapHash": "a0669339ada2a01085db11e6ebc77fb8914ff42ff6ee16b19c6437a919674dc3",
+  "checkEager": "eager modules: 155\npaged worker chunks ok: pagedImport-CFHiZh0W.js, viewerLargeSource-B56utudt.js\neager graph ok",
+  "corePurity": "stage1",
+  "note": "Gate 1 sums gzip over the static chunk closure of dist/index.js; eager-budget.ts today measures index.js alone (indexOnlyGzipBytes). Core entry + purity assert are Stage 1.",
+  "gate": "t11",
+  "backend": "node-canvas",
+  "gitSha": "dd68bc35316de0a72e4d0d7b9288f4730cf105f9",
+  "generatedAt": "2026-11-08T12:18:35.897Z"
 }
