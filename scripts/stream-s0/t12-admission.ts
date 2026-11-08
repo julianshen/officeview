@@ -11,6 +11,7 @@
  * not test a server.
  */
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolveBackend, writeResult } from './results'
 
 export interface Caps {
@@ -160,7 +161,7 @@ async function main(): Promise<number> {
     return 2
   }
   const WORKERS = 4
-  const preload = join(import.meta.dir, 'napi-preload.ts')
+  const preload = join(fileURLToPath(new URL('.', import.meta.url)), 'napi-preload.ts')
   const workerUrl = new URL('./t12-worker.ts', import.meta.url).href
   const workers = Array.from({ length: WORKERS }, () => new Worker(workerUrl, { preload: [preload] } as WorkerOptions))
   const ready = await Promise.all(workers.map((w) => new Promise<{ backend: string; units: Array<{ key: string; bytes: number }> }>((resolve, reject) => {
