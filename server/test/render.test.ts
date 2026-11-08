@@ -5,7 +5,7 @@ import { loadImage } from '@napi-rs/canvas'
 import { paintWatermark } from '../../src/core/watermark'
 import { replayUnit } from '../../src/stream/replay'
 import { pngChunkTypes } from '../../src/stream/raster'
-import { DocumentHost, markOptions, RenderRefusal } from '../src/render'
+import { DocumentHost, markOptions, RenderRefusal, unitSurfaceAllowed } from '../src/render'
 
 const root = resolve(import.meta.dir, '../..')
 const host = new DocumentHost()
@@ -86,5 +86,14 @@ describe('render core', () => {
 
   it('refuses ODT/garbage before parsing', async () => {
     await expect(host.open('x', new Uint8Array([1, 2, 3]), 'visible-only')).rejects.toThrow(/unsupported-format/)
+  })
+})
+
+describe('unit surface admission (review r1-3)', () => {
+  it('refuses by decoded RGBA bytes, not only by side length', () => {
+    expect(unitSurfaceAllowed(4096, 4096)).toBe(true)          // exactly 64 MiB
+    expect(unitSurfaceAllowed(5000, 5000)).toBe(false)         // 100 MB, both sides ≤ 8192
+    expect(unitSurfaceAllowed(8193, 1)).toBe(false)
+    expect(unitSurfaceAllowed(8192, 2048)).toBe(true)
   })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AssetTable } from '../../src/stream/record/recorder'
-import { AssetTooLarge, AssetWireError, decodeAssets, encodeAssets } from '../../src/stream/asset-wire'
+import { ASSET_DEFINE_DECODED_CAP, AssetTooLarge, AssetWireError, decodeAssets, encodeAssets } from '../../src/stream/asset-wire'
 import type { Asset } from '../../src/stream/ops'
 
 function assets(): Asset[] {
@@ -53,5 +53,31 @@ describe('ASSET_DEFINE codec', () => {
     const a = assets()
     const [p] = encodeAssets([a[4]!])
     await expect(decodeAssets(p!)).rejects.toThrow(/pattern bitmap/)
+  })
+})
+
+describe('ASSET_DEFINE hardening (review r1-5/6/7)', () => {
+  it.each([
+    ['NaN coordinate', { type: 'radial', x0: Number.NaN, y0: 0, r0: 0, x1: 0, y1: 0, r1: 1, stops: [[0, 'red']] }],
+    ['negative radius', { type: 'radial', x0: 0, y0: 0, r0: -1, x1: 0, y1: 0, r1: 1, stops: [[0, 'red']] }],
+    ['stop offset > 1', { type: 'linear', x0: 0, y0: 0, x1: 1, y1: 1, stops: [[2, 'red']] }],
+    ['infinite transform', { type: 'linear', x0: 0, y0: 0, x1: 1, y1: 1, stops: [[0, 'red']], transforms: [{ mode: 2, matrix: [Number.POSITIVE_INFINITY, 0] }] }],
+  ])('a correctly hashed asset with %s is refused', async (_n, input) => {
+    const t = new AssetTable(); t.add(input as never)
+    const [p] = encodeAssets(t.all())
+    await expect(decodeAssets(p!)).rejects.toBeInstanceOf(AssetWireError)
+  })
+  it('an unknown pattern repetition is refused', async () => {
+    const t = new AssetTable(); const b = t.add({ type: 'bitmap', source: 'image', w: 1, h: 1, rgba: Uint8Array.of(1, 2, 3, 4) })
+    t.add({ type: 'pattern', bitmap: b, repetition: 'sideways' })
+    await expect(decodeAssets(encodeAssets(t.all())[0]!)).rejects.toThrow(/repetition/)
+  })
+  it('a payload over the 8 MiB decoded cap is refused before parsing', async () => {
+    await expect(decodeAssets(new Uint8Array(ASSET_DEFINE_DECODED_CAP + 1))).rejects.toThrow(/payload-cap/)
+  })
+  it('an oversized bitmap is refused before its serialised copy is made', () => {
+    const rgba = new Uint8Array(1500 * 1500 * 4)
+    const a = { id: 0, hash: 'f'.repeat(64), type: 'bitmap' as const, source: 'image' as const, w: 1500, h: 1500, rgba }
+    expect(() => encodeAssets([a])).toThrow(AssetTooLarge)
   })
 })

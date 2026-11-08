@@ -15,6 +15,7 @@ import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { getPaintables, type PaintableArray } from '../../src/render/paint'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
 import type { Asset } from '../../src/stream/ops'
+import { UNIT_RASTER_DECODED_CAP } from '../../src/stream/raster'
 import { serverBackend } from './backend'
 import { facesUsed, loadPack, pinFonts } from './fonts'
 import { admit, projectPackage, type PolicyDiagnostic } from './policy'
@@ -32,6 +33,10 @@ export function markOptions(mark: MarkSpec): WatermarkOptions | undefined {
 }
 
 export const sizeCeil = (v: number) => Math.ceil(v - 1e-9)
+/** A unit surface is allowed only within BOTH the per-side cap and the §14
+ * UNIT_RASTER decoded cap (w × h × 4 ≤ 64 MiB) — checked before any surface
+ * is allocated. Larger units need tiles (Stage 4) and are refused today. */
+export const unitSurfaceAllowed = (w: number, h: number) => Math.max(w, h) <= MAX_UNIT_PX && w * h * 4 <= UNIT_RASTER_DECODED_CAP
 export interface UnitSize { w: number; h: number }
 export type RenderedUnit =
   | { kind: 'raster'; w: number; h: number; png: Uint8Array; fallback?: string }
@@ -120,7 +125,7 @@ export class DocumentHost {
     if (!(SCALE_BUCKETS as readonly number[]).includes(job.scale)) throw new RenderRefusal('scale')
     const r = doc.raw[job.unitIndex]!, paintable = doc.paintables[job.unitIndex]!
     const w = sizeCeil(Math.max(1, r.widthPx * job.scale)), h = sizeCeil(Math.max(1, r.heightPx * job.scale))
-    if (Math.max(w, h) > MAX_UNIT_PX) throw new RenderRefusal('oversize')
+    if (!unitSurfaceAllowed(w, h)) throw new RenderRefusal('oversize')
     const page = { widthPx: r.widthPx, heightPx: r.heightPx }
     const mark = markOptions(job.mark)
     this.pages++

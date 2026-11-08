@@ -64,6 +64,8 @@ export function encodeAssets(assets: readonly Asset[], cap = ASSET_DEFINE_DECODE
   let batch: Uint8Array[] = [], size = 4
   const flush = () => { if (!batch.length) return; const o = new Out(); o.u32(batch.length); for (const b of batch) o.raw(b); out.push(o.bytes()); batch = []; size = 4 }
   for (const a of assets) {
+    // Preflight a bitmap's size before materialising a second copy of its RGBA.
+    if (a.type === 'bitmap') { const n = 4 + 4 + enc.encode(a.hash).length + 1 + 1 + 8 + a.w * a.h * 4; if (n + 4 > cap) throw new AssetTooLarge(a.id, n + 4) }
     const o = new Out(); writeAsset(o, a); const b = o.bytes()
     if (b.length + 4 > cap) throw new AssetTooLarge(a.id, b.length + 4)
     if (size + b.length > cap) flush()
@@ -94,7 +96,24 @@ const hexOf = (b: ArrayBuffer) => Array.from(new Uint8Array(b), (x) => x.toStrin
 
 /** Decodes and verifies one ASSET_DEFINE payload. `known` resolves pattern
  * bitmap references to assets of the same unit defined earlier. */
+const REPETITIONS = new Set(['repeat', 'repeat-x', 'repeat-y', 'no-repeat'])
+const finite = (...ns: number[]) => ns.every(Number.isFinite)
+/** Replay-safe semantics a correct hash does not imply (review r1-5). */
+function checkSemantics(a: Asset): void {
+  const bad = (m: string) => { throw new AssetWireError(m) }
+  if (a.type === 'linear' || a.type === 'radial') {
+    if (a.type === 'linear' ? !finite(a.x0, a.y0, a.x1, a.y1) : !finite(a.x0, a.y0, a.r0, a.x1, a.y1, a.r1)) bad('gradient coordinates')
+    if (a.type === 'radial' && (a.r0 < 0 || a.r1 < 0)) bad('gradient radius')
+    if (a.stops.some(([at]) => !Number.isFinite(at) || at < 0 || at > 1)) bad('gradient stop')
+    if (a.transforms?.some((t) => !finite(...t.matrix))) bad('gradient transform')
+  } else if (a.type === 'pattern') {
+    if (!REPETITIONS.has(a.repetition)) bad('pattern repetition')
+    if (a.transform && !finite(...a.transform)) bad('pattern transform')
+  }
+}
+
 export async function decodeAssets(payload: Uint8Array, known: ReadonlyMap<number, Asset> = new Map()): Promise<Asset[]> {
+  if (payload.length > ASSET_DEFINE_DECODED_CAP) throw new AssetWireError('payload-cap')
   const i = new In(payload), out: Asset[] = [], byId = new Map(known)
   const count = i.u32()
   if (count === 0) throw new AssetWireError('empty')
@@ -122,6 +141,7 @@ export async function decodeAssets(payload: Uint8Array, known: ReadonlyMap<numbe
       a = { id, hash, type, bitmap, repetition, ...(transform ? { transform } : {}) }
     } else throw new AssetWireError('asset type')
     if (byId.has(id)) throw new AssetWireError('duplicate id')
+    checkSemantics(a)
     const { id: _id, hash: _hash, ...content } = a as Asset & Record<string, unknown>
     void _id; void _hash
     let canonical: unknown = content

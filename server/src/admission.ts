@@ -75,7 +75,8 @@ export class AdmissionModel {
   }
 
   request(sessionId: string, bytes: number, now = 0): RequestResult {
-    if (bytes > this.caps.sessionTransientBytes) { this.refusals['too-large']++; return { status: 'refused', reason: 'too-large' } }
+    // A non-integer/negative estimate, or one no idle pool could ever fit, is refused (never queued forever).
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.caps.sessionTransientBytes || bytes > this.caps.renderReservationBytes) { this.refusals['too-large']++; return { status: 'refused', reason: 'too-large' } }
     const s = this.session(sessionId)
     const job: Job = { id: this.nextId++, sessionId, bytes, state: 'queued', timedOut: false }
     // FIFO fairness: never jump ahead of this session's own queued work.
@@ -133,6 +134,16 @@ export class AdmissionModel {
       }
     }
     return started
+  }
+
+  /** Removes a queued (never started) job; its session slot is released. */
+  cancel(jobId: number): boolean {
+    const i = this.queue.findIndex((j) => j.id === jobId)
+    if (i < 0) return false
+    const [job] = this.queue.splice(i, 1)
+    this.session(job!.sessionId).queued--
+    job!.state = 'done'
+    return true
   }
 
   get queued(): number { return this.queue.length }

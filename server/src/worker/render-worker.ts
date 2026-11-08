@@ -3,7 +3,7 @@ import { DocumentHost, RenderRefusal, type MarkSpec, type Projection } from '../
 
 export type WorkerRequest =
   | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full' }
-  | { type: 'render'; id: number; docKey: string; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number }
+  | { type: 'render'; id: number; docKey: string; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
   | { type: 'drop'; id: number; docKey: string }
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: { parses: number; pages: number; docs: number } } | { id: number; ok: false; error: string; refusal?: string; stats: { parses: number; pages: number; docs: number } }
 
@@ -18,6 +18,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     if (m.type === 'open') result = await host.open(m.docRef, m.bytes, m.contentPolicy)
     else if (m.type === 'drop') { host.drop(m.docKey); result = null }
     else {
+      // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
+      if (m.crash) { process.exit(1); await new Promise(() => {}) }
       if (m.hangMs) { const until = performance.now() + m.hangMs; while (performance.now() < until) { /* test hook: a wedged paint */ } }
       result = host.render(m.docKey, m)
     }
