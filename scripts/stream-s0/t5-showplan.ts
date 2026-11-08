@@ -1,3 +1,4 @@
+import {spawnSync} from 'node:child_process'
 import {readFileSync} from 'node:fs'
 import {listCorpus} from './corpus'
 import {writeResult} from './results'
@@ -10,6 +11,7 @@ import {createSlideShowWorkspace} from '../../src/slideshow/workspace'
 import {createCanvas} from './napi-shim'
 import type {Bitmap} from './showplan/schema'
 function diff(a:Bitmap,b:Bitmap){if(a.width!==b.width||a.height!==b.height)return {fraction:1,pixels:a.width*a.height,sizeMismatch:true};let pixels=0;for(let i=0;i<a.data.length;i+=4)if(a.data[i]!==b.data[i]||a.data[i+1]!==b.data[i+1]||a.data[i+2]!==b.data[i+2]||a.data[i+3]!==b.data[i+3])pixels++;return {fraction:pixels/(a.width*a.height),pixels,sizeMismatch:false}}
+const importGraphTest=spawnSync('node',['node_modules/vitest/vitest.mjs','run','--config','vitest.stream-s0-napi.config.ts','tests/stream-s0/t5-showplan.test.ts','-t','client transitive executable imports'],{stdio:'inherit'}).status===0
 const close=await installNapiDom()
 const {installShowSeams,loadDeck,startShow}=await import('../../tests/helpers/slideshow-show-rig')
 const {slideXmls}=await import('../../tests/helpers/slideshow-coverage')
@@ -56,5 +58,5 @@ try {
  }
  const totalSteps=decks.reduce((n,d)=>n+d.steps,0)
  const rows=decks.flatMap(d=>d.rows),staticRows=rows.filter(r=>r.staticSlide),proof=rows.filter(r=>r.eligibility==='proof-subset').length
- writeResult('t5',{status:decks.some(d=>d.blocked.some((b:any)=>!b.reason.startsWith('hidden slide')))||!staticRows.length||staticRows.some(r=>r.fraction>.001)?'RED':'GREEN',decks,steps:totalSteps,measuredSteps:rows.length,unmeasuredSteps:totalSteps-rows.length,proofSubset:proof,stepComposited:totalSteps-proof,eligibilityRate:totalSteps?proof/totalSteps:0,staticSlides:staticRows.length,staticFailures:staticRows.filter(r=>r.fraction>.001).length,worstStaticDiff:Math.max(0,...staticRows.map(r=>r.fraction)),tolerance:.001,scope:'Static independent raster vs actual local player; unsafe animation intervals release only composed samples, never original layers. No analytic motion proof; interactive branches and unresolved durations are explicit limitations. No original PPTX, shapes, text, URLs or notes in client plan. Client graph gate is the separate automated test.'})
+ writeResult('t5',{status:!importGraphTest||!staticRows.length||staticRows.some(r=>r.fraction>.001)?'RED':'GREEN',importGraphTest,coverageGaps:decks.flatMap(d=>d.blocked.filter((b:any)=>!b.reason.startsWith('hidden slide')).map((b:any)=>({deck:d.deck,...b}))),decks,steps:totalSteps,measuredSteps:rows.length,unmeasuredSteps:totalSteps-rows.length,proofSubset:proof,stepComposited:totalSteps-proof,eligibilityRate:totalSteps?proof/totalSteps:0,staticSlides:staticRows.length,staticFailures:staticRows.filter(r=>r.fraction>.001).length,worstStaticDiff:Math.max(0,...staticRows.map(r=>r.fraction)),tolerance:.001,scope:'Static independent raster vs actual local player; unsafe animation intervals release only composed samples, never original layers. No analytic motion proof; interactive branches and unresolved durations are explicit limitations. No original PPTX, shapes, text, URLs or notes in client plan. Client graph gate is the separate automated test.'})
 }finally{close()}

@@ -43,7 +43,7 @@ export function calibrate(samples:{best:number;margin:number}[],m:number) {
   return {tau,absFit,marginFit,union,union24,tau24:Math.sqrt(tau.abs**2+2*Math.log(2**24/m)),fittedAbsTail:tail(tau.abs,absFit),fittedMarginTail:tail(tau.margin,marginFit),cdf:[0.5,0.9,0.95,0.99,1].map(q=>({q,best:quantile(samples.map(x=>x.best).filter(Number.isFinite),q),margin:quantile(samples.map(x=>x.margin),q)})),caveat:'Upper-decile Gaussian QQ extrapolation; 2000 decisions do not empirically certify 1e-6. Union floor assumes sub-Gaussian candidate scores; structured BCH/registration nulls must be checked, not asserted independent.'}
 }
 const attacks: {name:string; target:number|null; apply:(b:Bitmap)=>Bitmap|Promise<Bitmap>}[]=[
-  {name:'default',target:.9,apply:b=>b},...[95,90,80,70].map(q=>({name:`q${q}`,target:q===70?.75:null,apply:(b:Bitmap)=>jpeg(b,q)})),
+  {name:'default',target:.9,apply:b=>b},...[95,90,80,70,30,10].map(q=>({name:`q${q}`,target:q===70?.75:null,apply:(b:Bitmap)=>jpeg(b,q)})),
   {name:'up2',target:null,apply:b=>scale(b,2)},{name:'down0.5',target:.75,apply:b=>scale(b,.5)},
   {name:'q70-down0.5',target:.75,apply:async b=>scale(await jpeg(b,70),.5)},
   {name:'crop5',target:null,apply:b=>crop(b,.05)},{name:'crop25',target:.7,apply:b=>crop(b,.25)},
@@ -101,10 +101,12 @@ export async function runBattery(pages:Page[],options:Options={}) {
   // Per-class fits protect the rarest class from being hidden by pooled fits.
   const fits=['all','unmarked','wrong-key','out-of-table'].map(kind=>({kind,...calibrate(kind==='all'?nulls:nulls.filter(x=>x.kind===kind),M)}))
   const tau={abs:Math.max(...fits.map(f=>f.tau.abs)),margin:Math.max(...fits.map(f=>f.tau.margin))}
+  log(`calibration: full-M=${scored}/${N} attempts=${nulls.length} tau=${JSON.stringify(tau)}`)
   // Full multi-hit rule: exactly one threshold crossing, followed by margin.
   // Only top two are needed to re-evaluate that rule after calibration.
   const falseCount=nulls.filter(s=>s.best>=tau.abs&&s.best-s.margin<tau.abs&&s.margin>=tau.margin).length
   const suspectCount=nulls.filter(s=>s.best-s.margin>=tau.abs).length
+  const captureResults: {page:string;token:number;attack:string;registeredOffset:{x:number;y:number}|null;trueOffset:{x:number;y:number};support:number;zTrue:number|null;zBest:number|null;decision:string;cause:string}[]=[]
   const survival=attacks.map(a=>({attack:a.name,target:a.target,total:0,correct:0,innocent:0,suspected:0,none:0,rate:0,byClass:{} as Record<string,{total:number;correct:number}>,status:'REPORTED'}))
   const collusion=[...[2,4,6].map(k=>({attack:`average-${k}`,k,apply:average})),...[3,4,5,6].map(k=>({attack:`median-${k}`,k,apply:median})),{attack:'difference-2',k:2,apply:(b:Bitmap[])=>difference(b[0]!,b[1]!)}].map(a=>({...a,total:0,colluder:0,suspected:0,innocent:0,none:0,colluderRate:0,suspectedRate:0,innocentRate:0}))
   for(const [pageIndex,page] of pages.entries()) {
@@ -115,6 +117,13 @@ export async function runBattery(pages:Page[],options:Options={}) {
       for(let a=0;a<attacks.length;a++) {
         const row=survival[a]!,cls=row.byClass[page.kind]??={total:0,correct:0};row.total++;cls.total++
         const s=chips&&marked?scoreCapture(await attacks[a]!.apply(marked),page.bitmap,chips,matrix,params):empty(),d=decideScores(s,tau)
+        const frac=attacks[a]!.name.startsWith('crop25')?.25:attacks[a]!.name==='crop5'?.05:0
+        const trueOffset={x:Math.floor((page.bitmap.width-Math.floor(page.bitmap.width*(1-frac)))/2),y:Math.floor((page.bitmap.height-Math.floor(page.bitmap.height*(1-frac)))/2)}
+        const registeredOffset=s.registration?{x:s.registration.x,y:s.registration.y}:null
+        const correct=d.kind==='attributed'&&d.index===index
+        const cause=correct?'correct':!chips?'capacity':!registeredOffset?'registration-missing':Math.abs(registeredOffset.x-trueOffset.x)>.51||Math.abs(registeredOffset.y-trueOffset.y)>.51?'registration-offset':s.flat?'flat-residual':d.kind==='collusion-suspected'?'multiple-hits':'score-or-margin'
+        if(attacks[a]!.name.startsWith('crop'))log(`capture ${page.id} token=${index} ${attacks[a]!.name} pose=${JSON.stringify(registeredOffset)} support=${s.support} zTrue=${s.scores[index]??'flat'} ${cause}`)
+        captureResults.push({page:page.id,token:index,attack:attacks[a]!.name,registeredOffset,trueOffset,support:s.support,zTrue:Number.isFinite(s.scores[index])?s.scores[index]!:null,zBest:Number.isFinite(summary(s).best)?summary(s).best:null,decision:d.kind,cause})
         if(d.kind==='attributed'){if(d.index===index){row.correct++;cls.correct++}else row.innocent++}else if(d.kind==='collusion-suspected')row.suspected++;else row.none++
       }
     }
@@ -133,7 +142,7 @@ export async function runBattery(pages:Page[],options:Options={}) {
   const coverage={units:pages.length,counts,imageHeavyVerified:0,shortfall:{units:Math.max(0,40-pages.length),docx:Math.max(0,15-counts.docx!),xlsx:Math.max(0,10-counts.xlsx!),pptx:Math.max(0,10-counts.pptx!),imageHeavy:5},note:'All corpus units retained, including insufficient-carrier failures. No synthetic padding. Image-heavy unit classification has not been independently verified; minimum is NOT established.'}
   return {
     t7:{status:choice?'GREEN':'RED',coverage,pages:pages.map(p=>({id:p.id,kind:p.kind,width:p.bitmap.width,height:p.bitmap.height})),sweep,chosen:choice?.params??null,diagnosticParams:params,selection:'highest q70-half correct rate at union floor, one fixed token/page; final survival recalculated with fitted tau and five tokens/page',pageGate:'max over all pixels of all pages <=3'},
-    t9:{status:choice&&scored>=N&&falseCount===0&&survival.every(r=>r.status!=='RED')?'GREEN':'RED',coverage,candidateCount:M,matrixBytes:matrix.bytes,fullScoredDecisions:scored,candidateScores:nulls.reduce((a,s)=>a+s.scores,0),nulls,fits,tau,tau24:Math.sqrt(tau.abs**2+2*Math.log(2**24/M)),falseCount,suspectCount,zeroFalse95Upper:1-Math.pow(.05,1/nulls.length),survival,collusion:collusion.map(({apply,...row})=>row),scope:'Layer-1 Stage-0 only, no Layer-2 consensus claim. Seed/key are public reproducibility inputs, not production secrets. Crops remove the stated fraction of each axis; centered. No wall-clock gate.'},
+    t9:{status:choice&&scored>=N&&falseCount===0&&survival.every(r=>r.status!=='RED')?'GREEN':'RED',coverage,candidateCount:M,matrixBytes:matrix.bytes,fullScoredDecisions:scored,candidateScores:nulls.reduce((a,s)=>a+s.scores,0),nulls,fits,tau,tau24:Math.sqrt(tau.abs**2+2*Math.log(2**24/M)),falseCount,suspectCount,zeroFalse95Upper:1-Math.pow(.05,1/nulls.length),captures:captureResults,survival,collusion:collusion.map(({apply,...row})=>row),scope:'Layer-1 Stage-0 only, no Layer-2 consensus claim. Seed/key are public reproducibility inputs, not production secrets. Crops remove the stated fraction of each axis; centered. No wall-clock gate.'},
   }
 }
 async function main() {

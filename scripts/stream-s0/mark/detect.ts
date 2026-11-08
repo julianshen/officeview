@@ -37,7 +37,7 @@ export function scoreCapture(capture: Bitmap, reference: Bitmap, chips: Chip[], 
   const matrix = Array.isArray(candidates) ? prepareCandidates(candidates) : candidates
   const codeData = matrices.get(matrix)
   if (!codeData) throw new Error('Invalid candidate matrix')
-  const registration = register(capture, reference)
+  const registration = register(capture, reference, chips)
   if (!registration) return { scores: new Float64Array(), support: 0, flat: false }
   const { scaleX, scaleY, x: dx, y: dy, reference: scaledReference } = registration
   const values: number[] = [], indices: number[] = []

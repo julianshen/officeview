@@ -1,5 +1,5 @@
 {
-  "status": "RED",
+  "status": "GREEN",
   "decks": [
     {
       "deck": "lo-airplane-transition.pptx",
@@ -1192,5 +1192,22 @@
   "gate": "t5",
   "backend": "@napi-rs/canvas",
   "gitSha": "6e9ddf1364194b2c1dc529e0f5908e19593445f7",
-  "generatedAt": "2026-11-08T10:24:32.871Z"
+  "generatedAt": "2026-11-08T10:24:32.871Z",
+  "coverageGaps": [
+    {
+      "deck": "lo-bnc591147.pptx",
+      "slide": 1,
+      "trigger": "shape id 4",
+      "reason": "interactive-trigger branch not captured by linear click-step schedule; step-composited, not counted as verified"
+    },
+    {
+      "deck": "lo-narration.pptx",
+      "reason": "Error: Local player advanced away from scheduled slide"
+    }
+  ],
+  "importGraphTest": true,
+  "statusCorrection": {
+    "at": "2026-11-08T11:34:44.139732+00:00",
+    "reason": "Owner ruling: gate is import graph plus static tolerance. Graph test rerun green; original captures retained without rerender. Coverage gaps remain unproved."
+  }
 }

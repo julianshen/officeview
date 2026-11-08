@@ -15961,6 +15961,6 @@
   ],
   "gate": "t7",
   "backend": "@napi-rs/canvas",
-  "gitSha": "709a8adfdf1f773ae54151d80d595648491063d2",
-  "generatedAt": "2026-11-08T10:09:31.703Z"
+  "gitSha": "88af3a7761e325f55262ed22c6f6fd8ff78d9e7d",
+  "generatedAt": "2026-11-08T13:51:15.213Z"
 }
