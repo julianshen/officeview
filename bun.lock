@@ -40,6 +40,8 @@
       "name": "@officeview/stream-server",
       "dependencies": {
         "@napi-rs/canvas": "^1.1.0",
+        "fast-xml-parser": "^5.11.1",
+        "jszip": "^3.10.2",
       },
       "devDependencies": {
         "bun-types": "^1.3.0",
