@@ -98,3 +98,38 @@ it('does not construct a request key before admission on an exhausted account', 
   Array.prototype.map = function(this: unknown[], ...args: Parameters<typeof map>) { if (this === req.sourceRects) builds++; return map.apply(this, args) } as typeof map
   try { await expect(s.prepareCf(req, source)).rejects.toMatchObject({ code: 'resource-limit' }); expect(builds).toBe(0) } finally { Array.prototype.map = map; s.dispose() }
 })
+it('breaks equal-priority ties by document order, favoring later document order rules', async () => {
+  const { createCfService } = serviceApi
+  const memory = createCfMemory()
+  const tiedRules: CfSheetRules = {
+    diagnostics: [],
+    rules: [
+      {
+        id: 0,
+        priority: 7,
+        documentOrder: 0,
+        ranges: [rect],
+        stopIfTrue: false,
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.fg': 'FFFF0000' },
+        definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 10 }], dialect: 'base', formulas: [] },
+      },
+      {
+        id: 1,
+        priority: 7,
+        documentOrder: 1,
+        ranges: [rect],
+        stopIfTrue: false,
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.fg': 'FF00FF00' },
+        definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 0 }], dialect: 'base', formulas: [] },
+      },
+    ],
+  }
+  const service = createCfService(tiedRules, memory, { budget, evidence: { allows: () => true } })
+  const prepared = await service.prepareCf(request(), resident(25))
+  expect(prepared.value.at(0, 0)).toMatchObject({ kind: 'ready', value: { properties: { 'fill.fg': 'FF00FF00' } } })
+  prepared.release()
+  service.dispose()
+  expect(memory.currentBytes).toBe(0)
+})

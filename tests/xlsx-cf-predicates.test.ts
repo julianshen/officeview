@@ -333,14 +333,20 @@ describe('CF predicate evaluation', () => {
     const pct40 = rule({ kind: 'top10', rank: 40, bottom: false, percent: true })
     expect(evaluatePredicate(pct40, at, num(3), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
     expect(evaluatePredicate(pct40, at, num(9), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
-    // Omitted or zero rank never reaches evaluation: the parser already refused it.
+    // Excel oracle: ECMA-376 specifies default rank="10". Both omitted rank and rank="0"
+    // resolve to rank=10, matching Excel 16.114 on stage1-top10-rank-edge.
     const noRank = parsedDefinition('<cfRule type="top10" priority="1"/>')
     const zeroRank = parsedDefinition('<cfRule type="top10" priority="1" rank="0"/>')
-    expect(noRank).toMatchObject({ kind: 'unresolved' })
-    expect(zeroRank).toMatchObject({ kind: 'unresolved' })
-    expect(noRank).toEqual(zeroRank)
-    expect(evaluatePredicate(rule(noRank), at, num(9), stats, denyGate).kind).toBe('unresolved')
-    expect(evaluatePredicate(rule(zeroRank), at, num(9), stats, denyGate).kind).toBe('unresolved')
+    expect(noRank).toMatchObject({ kind: 'top10', rank: 10, bottom: false, percent: false })
+    expect(zeroRank).toMatchObject({ kind: 'top10', rank: 10, bottom: false, percent: false })
+    expect(evaluatePredicate(rule(noRank), at, num(1), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(rule(zeroRank), at, num(9), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
+
+    const zeroRankPercent = parsedDefinition('<cfRule type="top10" priority="1" percent="1" rank="0"/>')
+    expect(zeroRankPercent).toMatchObject({ kind: 'top10', rank: 10, bottom: false, percent: true })
+    // Top 10% of 5 numbers {1,2,2,3,9} = ceil(5*10/100) = 1 cell: matches 9 (F6), but not 1, 2, or 3 (F2..F5).
+    expect(evaluatePredicate(rule(zeroRankPercent), at, num(9), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(rule(zeroRankPercent), at, num(3), stats, denyGate)).toMatchObject({ kind: 'no-match' })
   })
 
   it('aboveAverage follows the manifest mean without stddev', () => {
@@ -401,6 +407,31 @@ describe('CF predicate evaluation', () => {
     }
     expect(evaluatePredicate(std1below, at, num(-2), popBelow, denyGate).kind).toBe('unresolved')
     expect(evaluatePredicate(std1below, at, num(-2), popBelow, allowGate)).toMatchObject({ kind: 'ready', value: true })
+  })
+
+  it('stddev uses sample standard deviation (Excel STDEV.S) and fails closed on range errors', () => {
+    // Stage 1 stage1-above-average-stddev values: {0,0,10,11}, mean 5.25.
+    // Sample stddev = sqrt(110.75 / 3) = 6.0759. Threshold for stdDev=1: 5.25 + 6.0759 = 11.3259.
+    // 11 < 11.3259: F5 does not match (Excel oracle leaves F5 white).
+    const at = { row: 0, col: 0 }
+    const sampleStats: CfRangeStatistics = {
+      scopeKey: 's', numericCount: 4, sum: 21, mean: 5.25, min: 0, max: 11,
+      stddevPop: 5.2619,
+      stddevSample: 6.0759,
+      sortedAsc: Float64Array.from([0, 0, 10, 11]), frequencies: new Map(), declaredCells: 4, spanCells: 4, storedCells: 4,
+    }
+    const std1 = rule({ kind: 'aboveAverage', above: true, equal: false, stdDev: 1 })
+    // Under sample stddev, 11 is not > 11.3259 -> no-match
+    expect(evaluatePredicate(std1, at, num(11), sampleStats, allowGate)).toMatchObject({ kind: 'no-match' })
+    expect(evaluatePredicate(std1, at, num(12), sampleStats, allowGate)).toMatchObject({ kind: 'ready', value: true })
+
+    // When range has errors, sample stddev is undefined (STDEV.S fails closed), yielding no-match
+    const errorStats: CfRangeStatistics = {
+      ...sampleStats,
+      stddevSample: undefined,
+      stddevPop: undefined,
+    }
+    expect(evaluatePredicate(std1, at, num(12), errorStats, allowGate)).toMatchObject({ kind: 'no-match' })
   })
 
   it('aboveAverage on statistics crossing hidden rows gates on layout:hidden-row-statistics on any range', () => {

@@ -255,7 +255,7 @@ function evaluateAboveAverage(
 ): CfOutcome<boolean> {
   if (stdDev !== undefined && equal) return { kind: 'unresolved', reason: 'cf-invalid-rule' }
   // Population-vs-sample is unmeasured: any stddev use needs evidence.
-  if (stdDev !== undefined && !evidence.allows('stage1-above-average-stddev', 'stddev-population')) {
+  if (stdDev !== undefined && !evidence.allows('stage1-above-average-stddev', 'stddev-sample') && !evidence.allows('stage1-above-average-stddev', 'stddev-population')) {
     return unmeasured()
   }
   // Hidden-row inclusion/exclusion in range statistics is unmeasured: ranges
@@ -270,8 +270,9 @@ function evaluateAboveAverage(
   if (st.mean === undefined || st.numericCount === 0) return { kind: 'no-match' }
   let threshold = st.mean
   if (stdDev !== undefined) {
-    if (st.stddevPop === undefined) return { kind: 'no-match' }
-    threshold = above ? st.mean + stdDev * st.stddevPop : st.mean - stdDev * st.stddevPop
+    const sd = st.stddevSample ?? st.stddevPop
+    if (sd === undefined) return { kind: 'no-match' }
+    threshold = above ? st.mean + stdDev * sd : st.mean - stdDev * sd
   }
   let matched: boolean
   if (above && !equal) matched = value.value > threshold

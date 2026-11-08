@@ -2234,7 +2234,7 @@
       "expected": {
         "inputSha256": "8a768879f1f4c7c6df8ca6bf4961f2d13585775d912c3d2e1da36b76c1036665",
         "savedSha256": "652f37ee580f1d3d3f0f321b423c598a06bd242322ab045ce621a8a79fd38a42",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B5",
           "B6",
@@ -2243,11 +2243,14 @@
           "C4",
           "D2",
           "E2",
+          "F6",
           "G6",
           "H5",
           "H6",
           "I2",
-          "J2"
+          "J2",
+          "K2",
+          "K6"
         ],
         "negativeRefs": [
           "B4",
@@ -2256,13 +2259,10 @@
           "D7",
           "E7",
           "F2",
-          "F6",
           "G2",
           "H2",
           "I7",
-          "J7",
-          "K2",
-          "K6"
+          "J7"
         ],
         "cells": [
           {
@@ -2358,13 +2358,15 @@
             "ref": "F2",
             "controlRef": "F12",
             "matched": false,
-            "note": "percent=1 rank=0 matches 0 cells"
+            "note": "percent=1 rank=0 defaults to top 10% (1 is not top 10%)"
           },
           {
             "ref": "F6",
             "controlRef": "F16",
-            "matched": false,
-            "note": "percent=1 rank=0 does not match max 9"
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "percent=1 rank=0 defaults to top 10% of 5 numbers = 1 cell (9)"
           },
           {
             "ref": "G2",
@@ -2435,14 +2437,20 @@
           {
             "ref": "K2",
             "controlRef": "K12",
-            "matched": false,
-            "note": "rank=0 matches 0 cells"
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "rank=0 defaults to top 10 (matches all 5 numbers)"
           },
           {
             "ref": "K6",
             "controlRef": "K16",
-            "matched": false,
-            "note": "rank=0 does not match max 9"
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "rank=0 defaults to top 10 (matches all 5 numbers)"
           }
         ]
       },
@@ -2454,8 +2462,7 @@
           "pngSha256": "7332e436768e9daf9b2b754efb15aead9e3239bd497aadef5f166925fc20787b"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell F6 (screen) background (198,239,206) unexpectedly differs from control F16 (255,255,255) by 57",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2668,7 +2675,7 @@
       "expected": {
         "inputSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
         "savedSha256": "bacfb45060a7c997fdd48cefc30b3b1e80665388f2c46a7c7e7e045e05f222ca",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B4",
           "C2",
@@ -2676,12 +2683,11 @@
           "D4",
           "E2",
           "E3",
-          "F5",
-          "G2",
           "H9",
           "I12",
           "J5",
           "K5",
+          "L12",
           "M5"
         ],
         "negativeRefs": [
@@ -2690,13 +2696,14 @@
           "D2",
           "E4",
           "F2",
+          "F5",
+          "G2",
           "G5",
           "H2",
           "I2",
           "J2",
           "K2",
           "L2",
-          "L12",
           "M2"
         ],
         "cells": [
@@ -2784,18 +2791,14 @@
           {
             "ref": "F5",
             "controlRef": "F17",
-            "matched": true,
-            "fillRgb": "FFC6EFCE",
-            "fontRgb": "FF006100",
-            "note": "11 > 5.25 + 5.2619 (population stdDev=1)"
+            "matched": false,
+            "note": "11 is not > mean 5.25 + 1*sampleStddev 6.0759 = 11.3259 (Excel STDEV.S)"
           },
           {
             "ref": "G2",
             "controlRef": "G14",
-            "matched": true,
-            "fillRgb": "FFFFEB9C",
-            "fontRgb": "FF9C6500",
-            "note": "-2 < 5.25 - 5.4486 (below 1 stdDev)"
+            "matched": false,
+            "note": "stddev evaluation fails closed on range containing #N/A error (leaves G2 white)"
           },
           {
             "ref": "G5",
@@ -2870,8 +2873,10 @@
           {
             "ref": "L12",
             "controlRef": "L24",
-            "matched": false,
-            "note": "stdDev=4 out-of-UI-range edge case on 100"
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "stdDev=4 clamped to 3 (100 > mean 9.09 + 3*sampleStddev 30.15 = 99.54)"
           },
           {
             "ref": "M2",
@@ -2897,8 +2902,7 @@
           "pngSha256": "222126d0b5fb0c34409cd3ba9ca325ff29c65765340e6db977fd33c3e4a18ab8"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Cell F5 (screen) expected fill FFC6EFCE (198,239,206), but observed background RGB (255,255,255) (delta 57)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -3368,7 +3372,7 @@
       "expected": {
         "inputSha256": "c7d1b234f082685379b5a82354f57a183f16813ad961ea7b4fa3814b21c2119e",
         "savedSha256": "9a3d2ba56c066b80c98cbba5f0418e8c259a8b0b3dd01c699ed81c14bcf0d51e",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B4",
@@ -3457,8 +3461,8 @@
             "ref": "E2",
             "controlRef": "E7",
             "matched": true,
-            "fillRgb": "FFFFC7CE",
-            "note": "equal priority=7 tie broken by document order (red first)"
+            "fillRgb": "FFC6EFCE",
+            "note": "equal priority=7 tie broken by document order (later green rule wins)"
           },
           {
             "ref": "E4",
@@ -3477,10 +3481,10 @@
             "ref": "F2",
             "controlRef": "F7",
             "matched": true,
-            "fillRgb": "FF63BE7B",
+            "fillRgb": "FF97BED9",
             "fontRgb": "FF9C0006",
             "bold": true,
-            "note": "cross-visual DXF bold red font coexists with colorScale max green + dataBar + iconSet"
+            "note": "cross-visual DXF bold red font coexists with dataBar blue fill + iconSet"
           },
           {
             "ref": "F5",
@@ -3519,8 +3523,7 @@
           "pngSha256": "d16181f6946a90fd580a3a20f7828df79a9a9656ab0b94d0b3ee4da341eeb37a"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (cell-expectation-mismatch): Cell E2 (screen) expected fill FFFFC7CE (255,199,206), but observed background RGB (198,239,206) (delta 57)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

@@ -52,6 +52,7 @@ export interface CfRangeStatistics {
   readonly min: number | undefined
   readonly max: number | undefined
   readonly stddevPop: number | undefined
+  readonly stddevSample?: number | undefined
   /** Ascending numeric values; retained for top/bottom cutoffs. */
   readonly sortedAsc: Float64Array
   /** Frequency by `cfValueKey`; blanks and errors are never counted. */
@@ -477,6 +478,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       let numericCount = 0
       let min = Infinity
       let max = -Infinity
+      let hasErrors = false
       let stored = 0
       const spend: SpendState = { pending: 0, signal, budget }
       const ensureCapacity = async (needed: number): Promise<boolean> => {
@@ -571,6 +573,8 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                     return { kind: 'unresolved', reason: 'cf-resource-limit' }
                   }
                 }
+              } else if (value.kind === 'error') {
+                hasErrors = true
               }
               // Error values are never counted: not numeric, not frequency keys.
             }
@@ -616,7 +620,10 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
           return { kind: 'unresolved', reason: 'cf-resource-limit' }
         }
       }
-      const variance = mean === undefined || !Number.isFinite(devSq + devComp) ? undefined : Math.max(0, (devSq + devComp) / numericCount)
+      const variancePop = mean === undefined || !Number.isFinite(devSq + devComp) ? undefined : Math.max(0, (devSq + devComp) / numericCount)
+      const varianceSample = mean === undefined || hasErrors || numericCount <= 1 || !Number.isFinite(devSq + devComp)
+        ? undefined
+        : Math.max(0, (devSq + devComp) / (numericCount - 1))
       // Admit the retained copy before building it.
       if (!growHold(numericCount * 8 + 64)) {
         return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -642,7 +649,8 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         mean,
         min: numericCount > 0 ? min : undefined,
         max: numericCount > 0 ? max : undefined,
-        stddevPop: variance === undefined ? undefined : Math.sqrt(variance),
+        stddevPop: variancePop === undefined ? undefined : Math.sqrt(variancePop),
+        stddevSample: varianceSample === undefined ? undefined : Math.sqrt(varianceSample),
         sortedAsc: retained,
         frequencies,
         declaredCells,
@@ -907,7 +915,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               )
               const empty: CfRangeStatistics = {
                 scopeKey: key, numericCount: 0, sum: 0, mean: undefined, min: undefined, max: undefined,
-                stddevPop: undefined, sortedAsc: new Float64Array(0), frequencies: new Map(),
+                stddevPop: undefined, stddevSample: undefined, sortedAsc: new Float64Array(0), frequencies: new Map(),
                 declaredCells: declared, spanCells: span, storedCells: 0,
                 hasHiddenRows,
               }

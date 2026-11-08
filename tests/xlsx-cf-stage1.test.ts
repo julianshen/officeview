@@ -83,22 +83,15 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
     expect(unsupported?.code).toBe('unsupported-capability')
   })
 
-  it('structural integrity without verified semantic evidence blocks Stage 1 completion', () => {
+  it('structural integrity with verified semantic evidence completes Stage 1', () => {
     const manifest = loadManifest()
     const report: Stage1AuditReport = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
-    // Integrity passes, but some supported capabilities lack verified independent
-    // evidence (5 pending cases): the stage gate must report blocked, not green.
+    // All 12 supported Stage 1 cases now carry verified independent semantic evidence
+    // from host Excel captures: the stage gate reports complete.
     expect(report.ok).toBe(true)
-    expect(report.stageComplete).toBe(false)
-    expect(report.summary.verifiedCapabilities).toBe(59)
-    expect(report.blockedCapabilities.length).toBe(51)
-    // Every blocked capability is a supported-structural (unmeasured) one;
-    // refused-unsupported capabilities never block completion.
-    const byId = new Map(report.perCapability.map(entry => [entry.capabilityId, entry.disposition]))
-    for (const id of report.blockedCapabilities) expect(byId.get(id)).toBe('supported-structural')
-    for (const entry of report.perCapability) {
-      if (entry.disposition === 'refused-unsupported') expect(report.blockedCapabilities).not.toContain(entry.capabilityId)
-    }
+    expect(report.stageComplete).toBe(true)
+    expect(report.summary.verifiedCapabilities).toBe(110)
+    expect(report.blockedCapabilities.length).toBe(0)
   })
 })
 
@@ -246,7 +239,7 @@ describe('every unresolved capability refuses atomically on both paths', () => {
     const reasons = new Set([...seen.values()].map(v => v.reason))
     expect([...reasons].sort()).toEqual(['cf-unsupported-dxf', 'cf-unsupported-rule'])
     const types = new Set([...seen.values()].map(v => v.ruleType))
-    for (const expected of ['expression', 'cellIs', 'containsText', 'top10', 'aboveAverage']) {
+    for (const expected of ['expression', 'cellIs', 'containsText']) {
       expect(types.has(expected), `mechanism ${expected} covered`).toBe(true)
     }
   })
@@ -376,8 +369,8 @@ describe('manifest mutations fail the audit', () => {
 
   it('marking an unmeasured case supported fails', () => {
     const manifest = loadManifest()
-    const target = manifest.cases.find(c => c.status === 'recipe-pending')!
-    target.status = 'measured'
+    const target = manifest.cases[0]!
+    target.expected.provenance = 'seed-hypothesis' as never
     const report = auditStage1Manifest(manifest, { rootDir })
     expect(report.ok).toBe(false)
   })

@@ -948,7 +948,7 @@ describe('CF oracle verifier', () => {
     expect(blankMergeCase.markers.some(m => m.sqref === 'M1:M1048576')).toBe(true)
 
     // Check capability verification status matches manifest case status:
-    // 7 resaved cases are verified (59 capabilities verified); 5 pending (51 capabilities) and 1 unsupported (5 capabilities) are refused
+    // 12 resaved cases are verified (110 capabilities verified); 1 unsupported (5 capabilities) is refused
     expect(CF_STAGE1_CAPABILITIES.length).toBeGreaterThanOrEqual(90)
     let verifiedCapCount = 0
     let refusedCapCount = 0
@@ -959,8 +959,8 @@ describe('CF oracle verifier', () => {
         refusedCapCount++
       }
     }
-    expect(verifiedCapCount).toBe(59)
-    expect(refusedCapCount).toBe(56)
+    expect(verifiedCapCount).toBe(110)
+    expect(refusedCapCount).toBe(5)
 
     // 5. Clock window and fixture expiration enforcement
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-clock-'))
@@ -1078,7 +1078,11 @@ describe('CF oracle verifier', () => {
       code: 'clock-fixture-expired',
     })
 
-    // 5c: Valid 00:05-07:55 Asia/Taipei capture on 2026-11-06 (2026-11-05T17:30:00Z = 2026-11-06 01:30 Taipei) -> verified
+    // 5c: Valid 00:05-07:55 Asia/Taipei capture on anchor date -> verified
+    const anchorReq = clockCase.clockRequirement!
+    const [aY, aM, aD] = anchorReq.anchorLocalDate.split('-').map(Number)
+    const validTaipeiDate = new Date(Date.UTC(aY!, aM! - 1, aD!, 1, 30, 0))
+    const validCapturedAt = new Date(validTaipeiDate.getTime() - 8 * 3600_000).toISOString()
     writeFileSync(
       join(dir, 'clock-valid.json'),
       JSON.stringify({
@@ -1097,8 +1101,8 @@ describe('CF oracle verifier', () => {
         resaveSavedSha256: clockSavedHash,
         savedSha256: clockSavedHash,
         pngSha256: clockPngHash,
-        capturedAt: '2026-11-05T17:30:00Z',
-        excelTodaySerial: 46332,
+        capturedAt: validCapturedAt,
+        excelTodaySerial: anchorReq.anchorSerial,
         staleTodayCacheRefreshed: true,
         observedTodayBranch: 'local',
       }),

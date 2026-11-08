@@ -483,12 +483,15 @@ function parseTopRank(
   const bottom = parseBoolAttr(a['bottom'], false)
   const percent = parseBoolAttr(a['percent'], false)
   if (bottom === undefined || percent === undefined) return 'invalid'
-  // Per Ruling R2: omitted rank equals rank="0" (both fail closed as cf-unsupported-rule)
-  const rankStr = a['rank'] ?? '0'
-  if (!isIntText(rankStr)) return 'invalid'
-  const rank = Number(rankStr)
-  if (!Number.isSafeInteger(rank)) return 'invalid'
-  if (rank <= 0) return undefined
+  // ECMA-376 default is rank 10; omitted rank and rank="0" evaluate as rank 10 in Excel
+  let rank = 10
+  if (a['rank'] !== undefined) {
+    if (!isIntText(a['rank'])) return 'invalid'
+    const num = Number(a['rank'])
+    if (!Number.isSafeInteger(num)) return 'invalid'
+    if (num <= 0) rank = 10
+    else rank = num
+  }
   if (percent ? rank > 100 : rank > 1000) return undefined
   return { rank, bottom, percent }
 }
@@ -507,8 +510,8 @@ function parseAboveAverage(
   // - stdDev with equalAverage: Excel drops stdDev and keeps equalAverage
   // - stdDev <= 0: Excel drops stdDev and falls back to plain aboveAverage
   if (equal || stdDev <= 0) return { above, equal }
-  if (stdDev > 3) return undefined
-  return { above, equal, stdDev }
+  const clampedStdDev = Math.min(3, stdDev)
+  return { above, equal, stdDev: clampedStdDev }
 }
 
 /** Total retained string weight under a node (attrs + text), or undefined past budget. */

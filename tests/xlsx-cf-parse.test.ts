@@ -423,13 +423,13 @@ describe('CF ranges, caps and invalid attributes', () => {
         `</conditionalFormatting>`,
     )
     expect(value.unresolvedSheet).toBeUndefined()
-    // R2: omitted rank equals rank=0
+    // ECMA-376 & Excel oracle: omitted rank equals rank=0, defaulting to rank=10
     expect(ruleByPriority(value.rules, 1).definition).toEqual(ruleByPriority(value.rules, 2).definition)
-    expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
-    expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'top10', rank: 10, bottom: false, percent: false })
+    expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'top10', rank: 10, bottom: false, percent: false })
     expect(ruleByPriority(value.rules, 3).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 4).definition).toMatchObject({ kind: 'top10', rank: 50, bottom: false, percent: true })
-    expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: false, stdDev: 3 })
     // R3: stdDev with equalAverage drops stdDev and keeps equalAverage
     expect(ruleByPriority(value.rules, 6).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: true })
     expect(ruleByPriority(value.rules, 7).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: false })

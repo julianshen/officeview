@@ -101,7 +101,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             while (j >= 0) {
               await work()
               const other = ordered[j]!
-              if (other.priority < value.priority || (other.priority === value.priority && other.documentOrder <= value.documentOrder)) break
+              if (other.priority < value.priority || (other.priority === value.priority && other.documentOrder >= value.documentOrder)) break
               ordered[j + 1] = other; j--
             }
             ordered[j + 1] = value

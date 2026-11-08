@@ -40,7 +40,7 @@ describe('viewport adapters run the data path and bind hashes', () => {
     expect(again.outputHash).toBe(res.outputHash)
 
     // A pending case returns recipe-pending
-    const pendingCase = manifest.cases.find(entry => entry.id === 'stage1-timeperiod-today-clock')!
+    const pendingCase = { ...c, status: 'recipe-pending' as const }
     const resPending = await compareCfCase(pendingCase, 'interactive', { rootDir: REPO_ROOT })
     expect(resPending.outcome).toBe('recipe-pending')
   }, 60000)
@@ -70,7 +70,7 @@ describe('viewport adapters run the data path and bind hashes', () => {
     expect(again.outputHash).toBe(res.outputHash)
 
     // A pending case returns recipe-pending
-    const pendingCase = manifest.cases.find(entry => entry.id === 'stage1-timeperiod-today-clock')!
+    const pendingCase = { ...c, status: 'recipe-pending' as const }
     const resPending = await compareCfCase(pendingCase, 'paged', { rootDir: REPO_ROOT })
     expect(resPending.outcome).toBe('recipe-pending')
   }, 60000)
