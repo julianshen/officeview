@@ -262,7 +262,8 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
   if (marker.rank !== undefined) {
     const rankAttr = attr(rule, 'rank')
     if (marker.rank === 'omitted') {
-      if (rankAttr !== undefined) return false
+      // Per Ruling R2: marker accepts absent OR 0 on input and 0 after resave
+      if (rankAttr !== undefined && Number(rankAttr) !== 0) return false
     } else {
       if (rankAttr === undefined || Number(rankAttr) !== marker.rank) return false
     }
@@ -270,13 +271,26 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
   if (marker.stdDev !== undefined && Number(attr(rule, 'stdDev')) !== marker.stdDev) return false
   if (marker.timePeriod !== undefined && attr(rule, 'timePeriod') !== marker.timePeriod) return false
   if (marker.text !== undefined && attr(rule, 'text') !== marker.text) return false
+  if (marker.iconSet !== undefined) {
+    const host = asNode(rule.iconSet)
+    const iconSetAttr = host ? attr(host, 'iconSet') : attr(rule, 'iconSet')
+    // Per Ruling R4: accept absent-or-default (3TrafficLights1 is OOXML default)
+    if (marker.iconSet === '3TrafficLights1') {
+      if (iconSetAttr !== undefined && iconSetAttr !== '3TrafficLights1') return false
+    } else {
+      if (iconSetAttr !== marker.iconSet) return false
+    }
+  }
 
   // Exact ordered operand list check (pins arity, operand values, and absence when formulas === [])
-  const actualFormulas = extractOrderedFormulas(rule, marker.extension)
-  const expectedFormulas = marker.formulas.map(normalizeFormulaOperand)
-  if (actualFormulas.length !== expectedFormulas.length) return false
-  for (let i = 0; i < expectedFormulas.length; i++) {
-    if (actualFormulas[i] !== expectedFormulas[i]) return false
+  // Per Ruling R1b: timePeriod matches on type/timePeriod/sqref/priority/dxf, not the formula string
+  if (marker.ruleType !== 'timePeriod') {
+    const actualFormulas = extractOrderedFormulas(rule, marker.extension)
+    const expectedFormulas = marker.formulas.map(normalizeFormulaOperand)
+    if (actualFormulas.length !== expectedFormulas.length) return false
+    for (let i = 0; i < expectedFormulas.length; i++) {
+      if (actualFormulas[i] !== expectedFormulas[i]) return false
+    }
   }
   return true
 }

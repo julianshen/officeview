@@ -208,10 +208,16 @@ describe('CF rule parsing: all 18 types', () => {
       expect(r, p).toBeDefined()
       expect(r!.definition).toMatchObject({ kind: 'timePeriod', period: p })
     }
+    // Per Ruling R1c: timePeriod resolves from attribute, not stored formula;
+    // divergent or off-by-one formulas still resolve the rule definition.
     const divergent = parse(
       `<conditionalFormatting sqref="B2:B3"><cfRule type="timePeriod" timePeriod="today" priority="1"><formula>FLOOR(B2,1)=TODAY()-2</formula></cfRule></conditionalFormatting>`,
     )
-    expect(divergent.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    expect(divergent.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'today' })
+    const offByOne = parse(
+      `<conditionalFormatting sqref="G2:G15"><cfRule type="timePeriod" timePeriod="lastWeek" priority="1"><formula>AND(TODAY()-ROUNDDOWN(G2,0)&gt;(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+6))</formula></cfRule></conditionalFormatting>`,
+    )
+    expect(offByOne.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'lastWeek' })
     const unknown = parse(
       `<conditionalFormatting sqref="B2:B3"><cfRule type="timePeriod" timePeriod="someday" priority="1"/></conditionalFormatting>`,
     )
@@ -410,20 +416,28 @@ describe('CF ranges, caps and invalid attributes', () => {
         `<cfRule type="aboveAverage" priority="5" stdDev="4"/>` +
         `<cfRule type="aboveAverage" priority="6" stdDev="1" equalAverage="1"/>` +
         `<cfRule type="aboveAverage" priority="7"/>` +
-        `<cfRule type="duplicateValues" priority="8"/>` +
-        `<cfRule type="uniqueValues" priority="9"/>` +
+        `<cfRule type="aboveAverage" priority="8" stdDev="0"/>` +
+        `<cfRule type="aboveAverage" priority="9" stdDev="-1"/>` +
+        `<cfRule type="duplicateValues" priority="10"/>` +
+        `<cfRule type="uniqueValues" priority="11"/>` +
         `</conditionalFormatting>`,
     )
     expect(value.unresolvedSheet).toBeUndefined()
+    // R2: omitted rank equals rank=0
+    expect(ruleByPriority(value.rules, 1).definition).toEqual(ruleByPriority(value.rules, 2).definition)
     expect(ruleByPriority(value.rules, 1).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 2).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 3).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(ruleByPriority(value.rules, 4).definition).toMatchObject({ kind: 'top10', rank: 50, bottom: false, percent: true })
     expect(ruleByPriority(value.rules, 5).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
-    expect(ruleByPriority(value.rules, 6).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+    // R3: stdDev with equalAverage drops stdDev and keeps equalAverage
+    expect(ruleByPriority(value.rules, 6).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: true })
     expect(ruleByPriority(value.rules, 7).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: false })
-    expect(ruleByPriority(value.rules, 8).definition).toMatchObject({ kind: 'predicate', type: 'duplicateValues' })
-    expect(ruleByPriority(value.rules, 9).definition).toMatchObject({ kind: 'predicate', type: 'uniqueValues' })
+    // R3: stdDev <= 0 drops stdDev and falls back to plain aboveAverage
+    expect(ruleByPriority(value.rules, 8).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: false })
+    expect(ruleByPriority(value.rules, 9).definition).toMatchObject({ kind: 'aboveAverage', above: true, equal: false })
+    expect(ruleByPriority(value.rules, 10).definition).toMatchObject({ kind: 'predicate', type: 'duplicateValues' })
+    expect(ruleByPriority(value.rules, 11).definition).toMatchObject({ kind: 'predicate', type: 'uniqueValues' })
   })
 
   it('refuses unknown types and bad dxfIds with ALL writes, and keeps stopIfTrue', () => {
@@ -781,7 +795,7 @@ describe('CF fix round 1: review-t3-r1 findings', () => {
     // Multi-range anchoring is unmeasured: the formula stays unresolved.
     expect(multiRange.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     const mixedRefs = parse(
-      `<conditionalFormatting sqref="B2:B9"><cfRule type="timePeriod" timePeriod="last7Days" priority="1"><formula>AND(TODAY()-FLOOR(E2,1)&lt;=6,FLOOR(B2,1)&lt;=TODAY())</formula></cfRule></conditionalFormatting>`,
+      `<conditionalFormatting sqref="B2:B9"><cfRule type="containsText" priority="1" text="ab"><formula>NOT(ISERROR(SEARCH("ab",E2)))</formula></cfRule></conditionalFormatting>`,
     )
     expect(mixedRefs.value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
   })

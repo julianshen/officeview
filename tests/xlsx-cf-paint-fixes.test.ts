@@ -140,3 +140,42 @@ it('whole-row coverage uses the static renderer column ceiling', async () => {
   const b = await prepareCfPaint(s)
   try { expect(b?.layer.styleAt(0, 1100, undefined)?.fillColor).toBe('FF00FF00') } finally { b?.dispose() }
 })
+
+it('a timePeriod=lastWeek rule whose stored formula is wrong/off-by-one still paints exactly lastWeek', async () => {
+  const { parseXml } = await import('../src/core/xml')
+  const { parseCfSheet } = await import('../src/xlsx/cf/parse')
+  const xmlCanonical = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<conditionalFormatting sqref="G2:G15">` +
+    `<cfRule type="timePeriod" timePeriod="lastWeek" priority="1" dxfId="0">` +
+    `<formula>AND(TODAY()-ROUNDDOWN(G2,0)&gt;=(WEEKDAY(TODAY())),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+7))</formula>` +
+    `</cfRule></conditionalFormatting></worksheet>`
+  const xmlOffByOne = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<conditionalFormatting sqref="G2:G15">` +
+    `<cfRule type="timePeriod" timePeriod="lastWeek" priority="1" dxfId="0">` +
+    `<formula>AND(TODAY()-ROUNDDOWN(G2,0)&gt;(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)&lt;(WEEKDAY(TODAY())+6))</formula>` +
+    `</cfRule></conditionalFormatting></worksheet>`
+  const styles = { colors: {}, dxfNodes: [parseXml('<dxf><fill><patternFill patternType="solid"><bgColor rgb="FF00FF00"/></patternFill></fill></dxf>')] }
+  const memory1 = createCfMemory()
+  const memory2 = createCfMemory()
+  const parsedCanonical = parseCfSheet(parseXml(xmlCanonical), styles, memory1)
+  const parsedOffByOne = parseCfSheet(parseXml(xmlOffByOne), styles, memory2)
+  try {
+    // R1c: both resolve to timePeriod=lastWeek from the attribute
+    expect(parsedCanonical.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'lastWeek' })
+    expect(parsedOffByOne.value.rules[0]!.definition).toMatchObject({ kind: 'timePeriod', period: 'lastWeek' })
+    // Both produce identical paint batches (evaluating the attribute, not stored formulas)
+    const sheetCanonical: XlsxSheet = { name: 'S1', sheetId: '1', merges: [], mergeRanges: [], cols: [], rows: [{ index: 1, cells: [{ row: 1, col: 6, ref: 'G2', value: 46325, styleIndex: 0 }] }], conditionalFormatting: parsedCanonical.value }
+    const sheetOffByOne: XlsxSheet = { name: 'S2', sheetId: '2', merges: [], mergeRanges: [], cols: [], rows: [{ index: 1, cells: [{ row: 1, col: 6, ref: 'G2', value: 46325, styleIndex: 0 }] }], conditionalFormatting: parsedOffByOne.value }
+    const batchCanonical = await prepareCfPaint(sheetCanonical)
+    const batchOffByOne = await prepareCfPaint(sheetOffByOne)
+    try {
+      expect(batchOffByOne?.layer.styleAt(1, 6, undefined)).toEqual(batchCanonical?.layer.styleAt(1, 6, undefined))
+    } finally {
+      batchCanonical?.dispose()
+      batchOffByOne?.dispose()
+    }
+  } finally {
+    parsedCanonical.release()
+    parsedOffByOne.release()
+  }
+})

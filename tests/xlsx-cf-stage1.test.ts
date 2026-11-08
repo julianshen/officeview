@@ -244,7 +244,7 @@ describe('every unresolved capability refuses atomically on both paths', () => {
     expect(unresolvedCount).toBeGreaterThan(0)
     expect(probedCells).toBeGreaterThan(0)
     const reasons = new Set([...seen.values()].map(v => v.reason))
-    expect([...reasons].sort()).toEqual(['cf-invalid-rule', 'cf-unsupported-dxf', 'cf-unsupported-rule'])
+    expect([...reasons].sort()).toEqual(['cf-unsupported-dxf', 'cf-unsupported-rule'])
     const types = new Set([...seen.values()].map(v => v.ruleType))
     for (const expected of ['expression', 'cellIs', 'containsText', 'top10', 'aboveAverage']) {
       expect(types.has(expected), `mechanism ${expected} covered`).toBe(true)

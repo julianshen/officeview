@@ -1509,7 +1509,7 @@
           "timePeriod": "thisWeek",
           "priority": 5,
           "formulas": [
-            "AND(TODAY()-ROUNDDOWN(F2,0)<=(WEEKDAY(TODAY())-1),ROUNDDOWN(F2,0)-TODAY()<=(7-WEEKDAY(TODAY())))"
+            "AND(TODAY()-ROUNDDOWN(F2,0)<=WEEKDAY(TODAY())-1,ROUNDDOWN(F2,0)-TODAY()<=7-WEEKDAY(TODAY()))"
           ],
           "dxf": {
             "fillRgb": "FFC6EFCE",
@@ -1525,7 +1525,7 @@
           "timePeriod": "lastWeek",
           "priority": 6,
           "formulas": [
-            "AND(TODAY()-ROUNDDOWN(G2,0)>(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)<(WEEKDAY(TODAY())+6))"
+            "AND(TODAY()-ROUNDDOWN(G2,0)>=(WEEKDAY(TODAY())),TODAY()-ROUNDDOWN(G2,0)<(WEEKDAY(TODAY())+7))"
           ],
           "dxf": {
             "fillRgb": "FFFFEB9C",
@@ -1600,8 +1600,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "730bf7cc3b6231780104a2be60d7b81b7b3f1188928d1703b0f9f1cdc4693256",
-        "savedSha256": "730bf7cc3b6231780104a2be60d7b81b7b3f1188928d1703b0f9f1cdc4693256",
+        "inputSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
+        "savedSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B4",
@@ -1808,12 +1808,11 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json",
-          "pngSha256": "e01187be9e87aca607c9970d5e49295d5f4c6555685adbe8edfd0ffbd0c5e0ef"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window to distinguish local vs UTC date boundary",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -1901,7 +1900,7 @@
           "timePeriod": "thisWeek",
           "priority": 4,
           "formulas": [
-            "AND(TODAY()-ROUNDDOWN(E2,0)<=(WEEKDAY(TODAY())-1),ROUNDDOWN(E2,0)-TODAY()<=(7-WEEKDAY(TODAY())))"
+            "AND(TODAY()-ROUNDDOWN(E2,0)<=WEEKDAY(TODAY())-1,ROUNDDOWN(E2,0)-TODAY()<=7-WEEKDAY(TODAY()))"
           ],
           "dxf": {
             "fillRgb": "FFC6EFCE",
@@ -1927,8 +1926,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "8d3641a34f7909bbf01727945295e9564f64c742c8bb8796611c9755983f258c",
-        "savedSha256": "8d3641a34f7909bbf01727945295e9564f64c742c8bb8796611c9755983f258c",
+        "inputSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
+        "savedSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B3",
@@ -2043,12 +2042,11 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json",
-          "pngSha256": "7105cc2f89c84a00f3dc5be6f41dae76cf8c27f28cf5762b09c57f8303df06a4"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window for 1904 date-system verification",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2438,12 +2436,11 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json",
-          "pngSha256": "7332e436768e9daf9b2b754efb15aead9e3239bd497aadef5f166925fc20787b"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2593,7 +2590,6 @@
           "sqref": "J2:J12",
           "ruleType": "aboveAverage",
           "aboveAverage": true,
-          "stdDev": 0,
           "priority": 9,
           "formulas": [],
           "dxf": {
@@ -2608,7 +2604,6 @@
           "sqref": "K2:K12",
           "ruleType": "aboveAverage",
           "aboveAverage": true,
-          "stdDev": -1,
           "priority": 10,
           "formulas": [],
           "dxf": {
@@ -2640,7 +2635,6 @@
           "ruleType": "aboveAverage",
           "aboveAverage": true,
           "equalAverage": true,
-          "stdDev": 1,
           "priority": 12,
           "formulas": [],
           "dxf": {
@@ -2664,6 +2658,8 @@
           "G2",
           "H9",
           "I12",
+          "J5",
+          "K5",
           "M5"
         ],
         "negativeRefs": [
@@ -2676,9 +2672,7 @@
           "H2",
           "I2",
           "J2",
-          "J5",
           "K2",
-          "K5",
           "L2",
           "L12",
           "M2"
@@ -2820,25 +2814,30 @@
             "ref": "J2",
             "controlRef": "J14",
             "matched": false,
-            "note": "stdDev=0 non-schema edge case on 0"
+            "note": "0 < mean 5.25"
           },
           {
             "ref": "J5",
             "controlRef": "J17",
-            "matched": false,
-            "note": "stdDev=0 non-schema edge case on 11"
+            "matched": true,
+            "fillRgb": "FFFFEB9C",
+            "fontRgb": "FF9C6500",
+            "note": "11 > mean 5.25 (stdDev=0 dropped by Excel repair)"
           },
           {
             "ref": "K2",
             "controlRef": "K14",
             "matched": false,
-            "note": "stdDev=-1 invalid negative edge case on 0"
+            "note": "0 < mean 5.25"
           },
           {
             "ref": "K5",
             "controlRef": "K17",
-            "matched": false,
-            "note": "stdDev=-1 invalid negative edge case on 11"
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "11 > mean 5.25 (stdDev=-1 dropped by Excel repair)"
           },
           {
             "ref": "L2",
@@ -2872,12 +2871,11 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json",
-          "pngSha256": "c070daf8ac85b6da28955c233084362c71a77ef4b3767a61bd0ebf96a80683e9"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -3185,7 +3183,7 @@
             "10"
           ],
           "dxf": {
-            "fillRgb": "FFFFC7CE"
+            "fillRgb": "FFFFC7CD"
           }
         },
         {
@@ -3302,6 +3300,7 @@
           "capabilityId": "priority:cross-visual-iconSet",
           "sqref": "F2:F5",
           "ruleType": "iconSet",
+          "iconSet": "3TrafficLights1",
           "priority": 11,
           "formulas": []
         },
@@ -3337,8 +3336,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "fb0a4b8ba3c2f8c8e4992743643526d944ea407a6152f84c1bd16d8203757beb",
-        "savedSha256": "fb0a4b8ba3c2f8c8e4992743643526d944ea407a6152f84c1bd16d8203757beb",
+        "inputSha256": "c7d1b234f082685379b5a82354f57a183f16813ad961ea7b4fa3814b21c2119e",
+        "savedSha256": "c7d1b234f082685379b5a82354f57a183f16813ad961ea7b4fa3814b21c2119e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3386,7 +3385,7 @@
             "ref": "C2",
             "controlRef": "C7",
             "matched": true,
-            "fillRgb": "FFFFC7CE",
+            "fillRgb": "FFFFC7CD",
             "fontRgb": "FF006100",
             "bold": true,
             "note": "orthogonal prio 3 fill + prio 4 bold font merge"
@@ -3486,12 +3485,11 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json",
-          "pngSha256": "5f2ba8e6d4e2939937d4477d6f767dc45b3fc04a8bb1bd68cce44d8e702a0e12"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,

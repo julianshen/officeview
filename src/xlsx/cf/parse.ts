@@ -431,24 +431,6 @@ function canonicalBlankFormula(type: string, formulas: readonly string[], anchor
   }
 }
 
-function canonicalTimePattern(period: string): RegExp | undefined {
-  const r = `(${REF_PATTERN})`
-  const patterns: Record<string, string> = {
-    today: `FLOOR\\(${r},1\\)=TODAY\\(\\)`,
-    yesterday: `FLOOR\\(${r},1\\)=TODAY\\(\\)-1`,
-    tomorrow: `FLOOR\\(${r},1\\)=TODAY\\(\\)\\+1`,
-    last7Days: `AND\\(TODAY\\(\\)-FLOOR\\(${r},1\\)<=6,FLOOR\\(${r},1\\)<=TODAY\\(\\)\\)`,
-    thisWeek: `AND\\(TODAY\\(\\)-ROUNDDOWN\\(${r},0\\)<=\\(WEEKDAY\\(TODAY\\(\\)\\)-1\\),ROUNDDOWN\\(${r},0\\)-TODAY\\(\\)<=\\(7-WEEKDAY\\(TODAY\\(\\)\\)\\)\\)`,
-    lastWeek: `AND\\(TODAY\\(\\)-ROUNDDOWN\\(${r},0\\)>\\(WEEKDAY\\(TODAY\\(\\)\\)-1\\),TODAY\\(\\)-ROUNDDOWN\\(${r},0\\)<\\(WEEKDAY\\(TODAY\\(\\)\\)\\+6\\)\\)`,
-    nextWeek: `AND\\(ROUNDDOWN\\(${r},0\\)-TODAY\\(\\)>\\(7-WEEKDAY\\(TODAY\\(\\)\\)\\),ROUNDDOWN\\(${r},0\\)-TODAY\\(\\)<\\(15-WEEKDAY\\(TODAY\\(\\)\\)\\)\\)`,
-    thisMonth: `AND\\(MONTH\\(${r}\\)=MONTH\\(TODAY\\(\\)\\),YEAR\\(${r}\\)=YEAR\\(TODAY\\(\\)\\)\\)`,
-    lastMonth: `AND\\(MONTH\\(${r}\\)=MONTH\\(EDATE\\(TODAY\\(\\),0-1\\)\\),YEAR\\(${r}\\)=YEAR\\(EDATE\\(TODAY\\(\\),0-1\\)\\)\\)`,
-    nextMonth: `AND\\(MONTH\\(${r}\\)=MONTH\\(EDATE\\(TODAY\\(\\),0\\+1\\)\\),YEAR\\(${r}\\)=YEAR\\(EDATE\\(TODAY\\(\\),0\\+1\\)\\)\\)`,
-  }
-  const body = patterns[period]
-  return body === undefined ? undefined : new RegExp(`^${body}$`, 'i')
-}
-
 /** Crude lexical token count (no evaluation): identifiers, numbers, strings, operators. */
 function countFormulaTokens(text: string): number {
   let tokens = 0
@@ -501,9 +483,10 @@ function parseTopRank(
   const bottom = parseBoolAttr(a['bottom'], false)
   const percent = parseBoolAttr(a['percent'], false)
   if (bottom === undefined || percent === undefined) return 'invalid'
-  if (a['rank'] === undefined) return undefined
-  if (!isIntText(a['rank'])) return 'invalid'
-  const rank = Number(a['rank'])
+  // Per Ruling R2: omitted rank equals rank="0" (both fail closed as cf-unsupported-rule)
+  const rankStr = a['rank'] ?? '0'
+  if (!isIntText(rankStr)) return 'invalid'
+  const rank = Number(rankStr)
   if (!Number.isSafeInteger(rank)) return 'invalid'
   if (rank <= 0) return undefined
   if (percent ? rank > 100 : rank > 1000) return undefined
@@ -520,8 +503,11 @@ function parseAboveAverage(
   if (!isIntText(a['stdDev'])) return 'invalid'
   const stdDev = Number(a['stdDev'])
   if (!Number.isSafeInteger(stdDev)) return 'invalid'
-  if (equal) return 'invalid'
-  if (stdDev < 1 || stdDev > 3) return undefined
+  // Per Ruling R3 & Excel resave repair:
+  // - stdDev with equalAverage: Excel drops stdDev and keeps equalAverage
+  // - stdDev <= 0: Excel drops stdDev and falls back to plain aboveAverage
+  if (equal || stdDev <= 0) return { above, equal }
+  if (stdDev > 3) return undefined
   return { above, equal, stdDev }
 }
 
@@ -783,15 +769,8 @@ function buildRuleBody(
         return invalid(priority, true, `timePeriod="${inputs.periodText ?? ''}" is not a known period`)
       }
       if (inputs.hasForeignFormula) return finishUnresolved('cf-unsupported-rule', withDxf())
-      if (inputs.formulas.length === 0) {
-        return finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
-      }
-      const pattern = canonicalTimePattern(period)
-      const f = inputs.formulas.length === 1 ? stripOutsideStrings(inputs.formulas[0]!) : ''
-      if (pattern && refsMatchAnchor(inputs.formulas.length === 1 ? [f] : [], anchor) && pattern.test(f)) {
-        return finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
-      }
-      return finishUnresolved('cf-unsupported-rule', withDxf())
+      // Per Ruling R1c: timePeriod resolves from attribute; stored formulas are Excel-generated artifacts
+      return finishResolved({ kind: 'timePeriod', period: period as CfTimePeriod })
     }
     case 'top10': {
       const rank = parseTopRank(inputs.attrs)

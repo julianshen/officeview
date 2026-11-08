@@ -86,6 +86,8 @@ export interface CfPartMarker {
   timePeriod?: string
   /** Expected `cfRule/@text`. */
   text?: string
+  /** Expected `cfRule/iconSet/@iconSet` or default. */
+  iconSet?: string
   /**
    * Complete ordered `<formula>` / `<xm:f>` operand list.
    * Empty array `[]` pins the absence of formula children; 2 elements pin both `between`/`notBetween` operands.
@@ -984,7 +986,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         ruleType: 'timePeriod',
         timePeriod: 'thisWeek',
         priority: 5,
-        formulas: ['AND(TODAY()-ROUNDDOWN(F2,0)<=(WEEKDAY(TODAY())-1),ROUNDDOWN(F2,0)-TODAY()<=(7-WEEKDAY(TODAY())))'],
+        formulas: ['AND(TODAY()-ROUNDDOWN(F2,0)<=WEEKDAY(TODAY())-1,ROUNDDOWN(F2,0)-TODAY()<=7-WEEKDAY(TODAY()))'],
         dxf: DXF_GREEN,
       },
       {
@@ -995,7 +997,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         ruleType: 'timePeriod',
         timePeriod: 'lastWeek',
         priority: 6,
-        formulas: ['AND(TODAY()-ROUNDDOWN(G2,0)>(WEEKDAY(TODAY())-1),TODAY()-ROUNDDOWN(G2,0)<(WEEKDAY(TODAY())+6))'],
+        formulas: ['AND(TODAY()-ROUNDDOWN(G2,0)>=(WEEKDAY(TODAY())),TODAY()-ROUNDDOWN(G2,0)<(WEEKDAY(TODAY())+7))'],
         dxf: DXF_YELLOW,
       },
       {
@@ -1150,7 +1152,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         ruleType: 'timePeriod',
         timePeriod: 'thisWeek',
         priority: 4,
-        formulas: ['AND(TODAY()-ROUNDDOWN(E2,0)<=(WEEKDAY(TODAY())-1),ROUNDDOWN(E2,0)-TODAY()<=(7-WEEKDAY(TODAY())))'],
+        formulas: ['AND(TODAY()-ROUNDDOWN(E2,0)<=WEEKDAY(TODAY())-1,ROUNDDOWN(E2,0)-TODAY()<=7-WEEKDAY(TODAY()))'],
         dxf: DXF_GREEN,
       },
       {
@@ -1491,7 +1493,6 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         sqref: 'J2:J12',
         ruleType: 'aboveAverage',
         aboveAverage: true,
-        stdDev: 0,
         priority: 9,
         formulas: [],
         dxf: DXF_YELLOW,
@@ -1503,7 +1504,6 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         sqref: 'K2:K12',
         ruleType: 'aboveAverage',
         aboveAverage: true,
-        stdDev: -1,
         priority: 10,
         formulas: [],
         dxf: DXF_RED,
@@ -1528,7 +1528,6 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         ruleType: 'aboveAverage',
         aboveAverage: true,
         equalAverage: true,
-        stdDev: 1,
         priority: 12,
         formulas: [],
         dxf: DXF_YELLOW,
@@ -1538,8 +1537,8 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
       inputSha256: '',
       savedSha256: '',
       provenance: 'seed-hypothesis',
-      positiveRefs: ['B4', 'C2', 'D3', 'D4', 'E2', 'E3', 'F5', 'G2', 'H9', 'I12', 'M5'],
-      negativeRefs: ['B3', 'C3', 'D2', 'E4', 'F2', 'G5', 'H2', 'I2', 'J2', 'J5', 'K2', 'K5', 'L2', 'L12', 'M2'],
+      positiveRefs: ['B4', 'C2', 'D3', 'D4', 'E2', 'E3', 'F5', 'G2', 'H9', 'I12', 'J5', 'K5', 'M5'],
+      negativeRefs: ['B3', 'C3', 'D2', 'E4', 'F2', 'G5', 'H2', 'I2', 'J2', 'K2', 'L2', 'L12', 'M2'],
       cells: [
         { ref: 'B3', controlRef: 'B15', matched: false, note: '2 is not strictly above mean 2' },
         { ref: 'B4', controlRef: 'B16', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '4 > mean 2' },
@@ -1559,10 +1558,10 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         { ref: 'H9', controlRef: 'H21', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '100 > mean + 2*stdDev' },
         { ref: 'I2', controlRef: 'I14', matched: false, note: '0 is not above 3 stdDev' },
         { ref: 'I12', controlRef: 'I24', matched: true, fillRgb: 'FFC6EFCE', fontRgb: 'FF006100', note: '100 > mean + 3*stdDev across 11 numbers' },
-        { ref: 'J2', controlRef: 'J14', matched: false, note: 'stdDev=0 non-schema edge case on 0' },
-        { ref: 'J5', controlRef: 'J17', matched: false, note: 'stdDev=0 non-schema edge case on 11' },
-        { ref: 'K2', controlRef: 'K14', matched: false, note: 'stdDev=-1 invalid negative edge case on 0' },
-        { ref: 'K5', controlRef: 'K17', matched: false, note: 'stdDev=-1 invalid negative edge case on 11' },
+        { ref: 'J2', controlRef: 'J14', matched: false, note: '0 < mean 5.25' },
+        { ref: 'J5', controlRef: 'J17', matched: true, fillRgb: 'FFFFEB9C', fontRgb: 'FF9C6500', note: '11 > mean 5.25 (stdDev=0 dropped by Excel repair)' },
+        { ref: 'K2', controlRef: 'K14', matched: false, note: '0 < mean 5.25' },
+        { ref: 'K5', controlRef: 'K17', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF9C0006', bold: true, note: '11 > mean 5.25 (stdDev=-1 dropped by Excel repair)' },
         { ref: 'L2', controlRef: 'L14', matched: false, note: 'stdDev=4 out-of-UI-range edge case on 0' },
         { ref: 'L12', controlRef: 'L24', matched: false, note: 'stdDev=4 out-of-UI-range edge case on 100' },
         { ref: 'M2', controlRef: 'M14', matched: false, note: '0 is not >= mean + 1*stdDev' },
@@ -1734,7 +1733,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         operator: 'greaterThan',
         priority: 3,
         formulas: ['10'],
-        dxf: { fillRgb: 'FFFFC7CE' },
+        dxf: { fillRgb: 'FFFFC7CD' },
       },
       {
         part: 'xl/worksheets/sheet1.xml',
@@ -1826,6 +1825,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         capabilityId: 'priority:cross-visual-iconSet',
         sqref: 'F2:F5',
         ruleType: 'iconSet',
+        iconSet: '3TrafficLights1',
         priority: 11,
         formulas: [],
       },
@@ -1862,7 +1862,7 @@ export const CF_STAGE1_CASES: readonly CfOracleCase[] = [
         { ref: 'B2', controlRef: 'B7', matched: true, fillRgb: 'FFFFC7CE', note: 'prio 1 red fill beats prio 2 green fill on 25' },
         { ref: 'B4', controlRef: 'B9', matched: true, fillRgb: 'FFC6EFCE', note: 'prio 2 green fill applies on 5' },
         { ref: 'B5', controlRef: 'B10', matched: false, note: '0 matches neither rule' },
-        { ref: 'C2', controlRef: 'C7', matched: true, fillRgb: 'FFFFC7CE', fontRgb: 'FF006100', bold: true, note: 'orthogonal prio 3 fill + prio 4 bold font merge' },
+        { ref: 'C2', controlRef: 'C7', matched: true, fillRgb: 'FFFFC7CD', fontRgb: 'FF006100', bold: true, note: 'orthogonal prio 3 fill + prio 4 bold font merge' },
         { ref: 'C4', controlRef: 'C9', matched: true, fontRgb: 'FF006100', bold: true, note: 'prio 4 bold green font applies alone on 5' },
         { ref: 'C5', controlRef: 'C10', matched: false, note: '0 matches neither orthogonal rule' },
         { ref: 'D2', controlRef: 'D7', matched: false, note: 'bare stopIfTrue on 25 halts prio 6 yellow fill with no visual change' },

@@ -924,10 +924,12 @@ describe('CF oracle verifier', () => {
     expect(top10Case.markers.some(m => m.percent && m.rank === 100)).toBe(true)
 
     const avgCase = manifest.cases.find(c => c.id === 'stage1-above-average-stddev')!
-    for (const sd of [1, 2, 3, 0, -1, 4]) {
+    for (const sd of [1, 2, 3, 4]) {
       expect(avgCase.markers.some(m => m.stdDev === sd), `missing stdDev=${sd}`).toBe(true)
     }
-    expect(avgCase.markers.some(m => m.stdDev === 1 && m.equalAverage === true)).toBe(true)
+    expect(avgCase.markers.some(m => m.capabilityId === 'aboveAverage:stdDev-0')).toBe(true)
+    expect(avgCase.markers.some(m => m.capabilityId === 'aboveAverage:stdDev-negative')).toBe(true)
+    expect(avgCase.markers.some(m => m.capabilityId === 'aboveAverage:stdDev-with-equalAverage')).toBe(true)
 
     const dupCase = manifest.cases.find(c => c.id === 'stage1-duplicate-scope')!
     expect(dupCase.markers.some(m => m.sqref === 'D2:D4 F2:F4')).toBe(true)

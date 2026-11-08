@@ -335,8 +335,12 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(pct40, at, num(9), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
     // Omitted or zero rank never reaches evaluation: the parser already refused it.
     const noRank = parsedDefinition('<cfRule type="top10" priority="1"/>')
+    const zeroRank = parsedDefinition('<cfRule type="top10" priority="1" rank="0"/>')
     expect(noRank).toMatchObject({ kind: 'unresolved' })
+    expect(zeroRank).toMatchObject({ kind: 'unresolved' })
+    expect(noRank).toEqual(zeroRank)
     expect(evaluatePredicate(rule(noRank), at, num(9), stats, denyGate).kind).toBe('unresolved')
+    expect(evaluatePredicate(rule(zeroRank), at, num(9), stats, denyGate).kind).toBe('unresolved')
   })
 
   it('aboveAverage follows the manifest mean without stddev', () => {
@@ -358,9 +362,22 @@ describe('CF predicate evaluation', () => {
     const eqBelow = rule({ kind: 'aboveAverage', above: false, equal: true })
     expect(evaluatePredicate(eqBelow, at, num(2), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
     expect(evaluatePredicate(eqBelow, at, num(4), stats, denyGate)).toMatchObject({ kind: 'no-match' })
-    // stdDev with equalAverage is normatively invalid (ungated: schema rule, not measurement).
+    // stdDev with equalAverage is normatively invalid if hand-constructed; on parse it repairs to plain equalAverage (Ruling R3).
     const invalid = rule({ kind: 'aboveAverage', above: true, equal: true, stdDev: 1 })
     expect(evaluatePredicate(invalid, at, num(11), stats, denyGate)).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+
+    // R3: stdDev<=0 or stdDev with equalAverage are repaired on parse to plain aboveAverage (preserving equalAverage)
+    const stdDev0 = parsedDefinition('<cfRule type="aboveAverage" priority="1" stdDev="0"/>')
+    expect(stdDev0).toMatchObject({ kind: 'aboveAverage', above: true, equal: false })
+    expect(evaluatePredicate(rule(stdDev0), at, num(4), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
+
+    const stdDevNeg = parsedDefinition('<cfRule type="aboveAverage" priority="1" stdDev="-1"/>')
+    expect(stdDevNeg).toMatchObject({ kind: 'aboveAverage', above: true, equal: false })
+    expect(evaluatePredicate(rule(stdDevNeg), at, num(4), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
+
+    const stdDevEq = parsedDefinition('<cfRule type="aboveAverage" priority="1" stdDev="1" equalAverage="1"/>')
+    expect(stdDevEq).toMatchObject({ kind: 'aboveAverage', above: true, equal: true })
+    expect(evaluatePredicate(rule(stdDevEq), at, num(2), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
   })
 
   it('population-stddev selection is gated on its evidence variant', () => {
