@@ -965,7 +965,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
   const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
   useEffect(()=>{const old=heldViewportCf.current;heldViewportCf.current=viewportCf?.batch;if(old!==heldViewportCf.current)old?.dispose()},[viewportCf])
-  useEffect(()=>()=>heldViewportCf.current?.dispose(),[])
+  useEffect(() => () => {
+    heldViewportCf.current?.dispose()
+    for (const s of doc.sheets) {
+      void ensureConditionalFormatting([s]).then(cf => cf?.disposeSheetCfStatistics(s))
+    }
+  }, [doc])
   useEffect(()=>{
     if(!cfViewportKey || assets?.cfViewportKey===cfViewportKey && assets?.cfLiveKey===cfLiveKey) { setViewportCf(null); return }
     if(!cfRules || !entry || !assets || assets.sheetId!==activeSheetId) { setViewportCf(null); return }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { prepareCfPaint } from '../src/xlsx/cf/render'
+import { prepareCfPaint, disposeSheetCfStatistics } from '../src/xlsx/cf/render'
 import { createCfMemory } from '../src/xlsx/cf/limits'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
@@ -60,7 +60,7 @@ it('changing an authored-hidden source cell in the statistics range withdraws th
   expect(before?.layer.styleAt(0,0,undefined)?.fillColor).toBeUndefined()
   const after=await prepareCfPaint(s,{store,memory,evidence:allowGate})
   expect(after?.layer.styleAt(0,0,undefined)?.fillColor).toBeUndefined()
-  before?.dispose();after?.dispose();expect(memory.currentBytes).toBe(0)
+  before?.dispose();after?.dispose();disposeSheetCfStatistics(s);expect(memory.currentBytes).toBe(0)
 })
 
 it('a warm mounted CF frame reuses its prepared state', async () => {
@@ -104,7 +104,7 @@ it('pivot overlay supplies the new value without mutating saved cells', async ()
   expect(before?.layer.styleAt(0,0,undefined)?.fillColor).toBeUndefined()
   const after=await prepareCfPaint(s,{store,memory})
   expect(after?.layer.styleAt(0,0,undefined)?.fillColor).toBe('FFFF0000')
-  before?.dispose();after?.dispose();expect(memory.currentBytes).toBe(0)
+  before?.dispose();after?.dispose();disposeSheetCfStatistics(s);expect(memory.currentBytes).toBe(0)
 })
 
 it('paged store overlay follows the same green-to-red generation rule', async () => {
@@ -125,7 +125,7 @@ it('paged store overlay follows the same green-to-red generation rule', async ()
     expect(before?.layer.styleAt(0,0,undefined)?.fillColor).toBeUndefined()
     const after=await prepareCfPaint(s,{store,memory})
     expect(after?.layer.styleAt(0,0,undefined)?.fillColor).toBe('FFFF0000')
-    before?.dispose();after?.dispose();expect(memory.currentBytes).toBe(0)
+    before?.dispose();after?.dispose();disposeSheetCfStatistics(s);expect(memory.currentBytes).toBe(0)
   } finally {await source.release()}
 })
 
