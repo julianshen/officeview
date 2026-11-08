@@ -1,11 +1,10 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 9 (reviews: codex r1–r7, agy r1, claude r1)** — draft 2 folded
-codex r1 + claude r1 (round-1 tables); drafts 3–8 folded codex r2–r6; draft 7
-folded agy r1 and consolidated (round-7); draft 8 restored codex's 17 lost or
-weakened rules and folded codex r6 (round 8); **draft 9 fixes codex-r7
-findings 1–7 (fix round: nothing removed, nothing narrowed)** — dispositions
-live in the sibling file. Docs-only stage continues.
+Status: **draft 10 (reviews: codex r1–r8, agy r1, claude r1)** — drafts 2–8
+folded codex r1–r6, claude r1 and agy r1; draft 9 folded codex r7; **draft 10
+folded codex r8 (narrow fixes: §6.2 close-code registry, §7.1 byte grammar and
+transport caps, §14 decoded admission, §16 stage-labelled gates)** — nothing
+else touched. Docs-only stage continues.
 Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no
 source edits.
 
@@ -379,17 +378,35 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    capability including `can.notes` for the resumed viewer (§12a.5). A
    wrong-viewer proof, a proof/policy mismatch, or a missing `resumeProof`
    closes with `auth-failed` — never a silent switch.
-8. **CLOSE / refusal codes (typed, all fail-closed; one mapping, restated at
-   §6.2 rule 7 and §10):** session-level CLOSE codes are
-   `unsupported-version`, `ready-timeout` (rule 4), `auth-failed`,
-   `session-expired`, `revoked`, `rate-limited`, `policy-refused`, and on
-   resume-supersession the old socket is closed with the **WS close code
-   `4409 superseded`** (an informational close, never an auth failure).
-   Op-level refusals (the session stays open) are `policy-refused`,
-   `rate-limited`, `session-rotated`, `face-missing`; `session-rotated`
-   is therefore **an op refusal, never a CLOSE code** — stale-jti ops
-   surface it, and the client re-issues them under the rotated token
-   (rule 6). No other close or refusal code exists.
+8. **Code registry (round-10 F4; one normative registry, complete):**
+   the only session CLOSE codes and op-refusal codes in the protocol are
+   in this table — "no other code exists" means exactly this list, and
+   the two required-but-unlisted ones (`unsupported-format`,
+   `layout-changed`) are restored here:
+
+   | name | class | raised when / where |
+   |---|---|---|
+   | `unsupported-version` | close (`4000`) | §6.2 rule 2: empty version-set intersection; also a client transferring an over-cap frame (§7.1) |
+   | `unsupported-format` | close (`4001`) | stream-server admission refuses ODT/RTF inputs, §6.2/§6.4 |
+   | `ready-timeout` | close (`4002`) | §6.2 rule 4: no valid READY inside the §14 ready window |
+   | `auth-failed` | close (`4003`) | §6.2 rule 7: wrong viewer/policy proof, missing resumeProof |
+   | `session-expired` | close (`4004`) | §6.2 rule 6: token `exp` reached without a successful RENEW |
+   | `revoked` | close (`4005`) | §9.3 session write-off (permission, credential loss) |
+   | `rate-limited` | op refusal (also a close on repeat offense) | §14 rate gates breached |
+   | `policy-refused` | op refusal (close on a client-relax attempt) | §6.1 relax-surface rule |
+   | `session-rotated` | **op refusal, never a CLOSE** | §6.2 rule 6: a post-rotation op pinned to the superseded jti; the client re-issues under the new token |
+   | `face-missing` | **unit diagnostic** (not close/refusal) | §7.4 registry verdict: units stream as rasters |
+   | `layout-changed` | close (`4006`) | §9.3 `layoutFingerprint` mismatch mid-session — a new open, not a repaint of stale work |
+   | `oversized-frame` | close (`4007`) | §7.1: the client-side guard when a trusted server's frame exceeds the transport cap (server→client direction only) |
+   | `4409 superseded` | WS close on the superseded socket | §6.2 rule 7: resume closes the old socket |
+
+   `session-rotated`, `rate-limited`, `policy-refused` are **op
+   refusals** (a typed text-message reply; the session stays open) —
+   never a CLOSE. `unsupported-version` on receipt-side transport
+   overage shares the close semantics of `oversized-frame`, which the
+   F1 text defines as a client-side bug guard, not a hostile-server
+   defense. Nothing outside this table participates in close-or-refusal
+   decisions; any new gate added to §6/§9/§13 must join the table.
 9. **Lifecycle (restored round 8):** close-on-unmount; **exactly-once close**
    on source replacement; buffered chunks discarded atomically (never a
    half-painted unit).
@@ -467,59 +484,108 @@ header below — one `magic` (`'OVSD'`) for **every** binary frame including
 kind `MANIFEST`).
 
 ```
-magic u32 ('OVSD') | ver u8 | kind u8 | reqId u32 | frameSeq u32 |
-crc32 u32 | flags u8 | payloadLen u32 | payload
-kinds: MANIFEST, ASSET_DEFINE, UNIT_RASTER, UNIT_COMMANDS, XLSX_TILE,
-       SHOW_PLAN (OVSP, §12a.2), NOTES_RASTER, PRINT_RASTER
-```
+First-fragment byte grammar (all LE, offsets from the start of the
+binary frame):
 
-- **`ver u8`** is the negotiated format version (the §6.2 set intersection);
-  a frame outside the agreed set fails closed (§7.6).
-- **`reqId` is the one correlation field**, named identically in text
-  messages (`{ reqId, type, … }`) and binary frames.
-- **Defined `flags` bits (round-9 F2):** bit 0 = **final-fragment** (this
-  fragment completes the message), bit 1 = **payload is JSON text** (an
-  escaped inside the binary header for MANIFEST/`NOTES_RASTER` metadata
-  sidecars), bit 2 = **compressed** — **one compression story:** every binary payload
-  is gzip-compressed before framing and never re-compressed inside a
-  framed body, so today bit 2 is always 1; a 0 is a protocol violation
-  and fails closed. Every other bit is reserved (must be 0).
-- **Precisely scoped CRCs (round-9 F2):** `crc32` covers **that fragment's
-  `payload` bytes and that fragment's header fields up to `crc32` itself** —
-  never a cross-fragment CRC. Reassembly (below) then validates the
-  unit-level CRC: for compressed payloads the *final fragment's* body ends
-  with a trailer `u32 wholeCrc = crc32 of the inflated unit body` (T6
-  fragment-corruption test asserts both layers).
-- **Length and completion semantics (round-9 F2):** each fragment removes
-  ambiguity: `payloadLen u32` = this fragment's encoded payload bytes; the
-  **first fragment** of a multi-fragment message additionally declares its
-  own fields `totalLen u64` (the full deflated message length, = the
-  sum of fragment `payloadLen`s) and `fragCount u16`, **and every fragment
-  is required to be ≤ `wsFrameBytes` 1 MiB**. A fragment that would exceed
-  them, a missing declaration on a multi-fragment message, or an
-  out-of-order `frameSeq` fails the whole message before accumulation.
-- **Bounded reassembly (normative; pre-allocation checks run before any
-  buffer of `totalLen` size, for every kind — MANIFEST, ASSET_DEFINE,
-  show plans and units alike):**
-  - fragment count ≤ 256 and `totalLen` ≤ the §14 per-kind decoded cap;
-  - reassembly window 5 s [call] (§14 handshake windows) with abort on
-    timeout — the partial buffer is **discarded** and the client re-requests
-    once, without any partial validation;
-  - the reassembly completes before any opcode, JSON or asset-path
-    validation runs — nothing is partially validated or painted (§10);
-  - the transport itself is bounded: `streamClient` constructs the WS with
-    a **`maxPayload` cap of `wsFrameBytes` (1 MiB)** so an oversized WS
-    *protocol* frame cannot make the library buffer unbounded before the
-    app-level gates run; TCP/RFC-level fragmentation of a `maxPayload`
-    message is transparent and never allocates beyond the cap.
-- **`byteLen` (per-unit body, unambiguous):** the **decoded (inflated) unit
-  body length in bytes**; encoded size is carried by `payloadLen` /
-  `totalLen` separately — no field names two meanings.
-- Per-unit body: `unitId u32 + byteLen u32 (decoded) + opCount u32 +
-  discriminator u8 (commands | raster | tile) + gzip-compressed body` —
-  never a whole-document `unitIndex[]`.
-- A `TILE` op carries its bitmap inline (within `wsFrameBytes`), never as
-  a data URI.
+offset  size  field        meaning
+0       4     magic        u32 LE, 'OVSD' (every kind — one magic)
+4       1     ver          u8, negotiated format version (§6.2 set intersection)
+5       1     kind         u8, one of: MANIFEST, ASSET_DEFINE, UNIT_RASTER,
+                           UNIT_COMMANDS, XLSX_TILE, SHOW_PLAN (OVSP §12a.2),
+                           NOTES_RASTER, PRINT_RASTER
+6       4     reqId        u32 LE, the correlation id (matches the requesting
+                           text message); must reference an expected/accepted
+                           request — unsolicited or unmatched ids are dropped
+                           before any allocation (round-10 F3)
+10      4     frameSeq     u32 LE, zero-based fragment index within the message
+14      4     crc32        u32 LE, CRC-32 of THIS fragment's `payload`
+                           bytes only (never cross-fragment, never of headers)
+18      1     flags        u8, bit flags (below)
+19      4     payloadLen   u32 LE, this fragment's payload byte count
+23      …     payload      payloadLen bytes
+
+flags bits: bit0 `final` (this is the last fragment); bit1 `ext01` (a
+10-byte first-fragment extension sits between the header and the payload —
+see below; set on fragment 0 only);
+bit2 `compressed` (always 1 today, see the compression rule); the rest are
+reserved and must be 0. `kind`/`reqId`/`compressed` are **invariant across
+the fragments of one message**; `frameSeq` advances 0..fragCount−1; the
+`final` bit must be set on exactly one fragment, whose frameSeq equals
+fragCount−1 (a final bit contradicting fragCount/sequence fails the whole
+message).
+
+**ext01 extension (first fragment only, 10 bytes at fixed offset 23, its
+presence is flag bit1 — round-10 F2 fix):**
+
+offset  size  field
+23      8     totalLen     u64 LE — the complete COMPRESSED message length
+                           across all fragments incl. the wholeCrc trailer
+31      2     fragCount    u16 LE — total fragment count
+33      …     payload      begins here on fragment 0. `payloadLen` and
+                           `crc32` cover the payload bytes only — never the
+                           header or the ext01 extension; `totalLen` is the
+                           sum of all fragments' `payloadLen`s
+
+**Compression boundary — exactly one compressor (round-10 F2):** the
+**complete message payload is gzip-compressed once, whole, before
+fragmentation**; nothing else in the path compresses. The old per-unit
+"uncompressed header + gzip body" description is deleted — `unitId`,
+`byteLen`, `opCount` and the discriminator now travel as **plain fields
+inside the once-compressed payload stream** (they are decoded fields, not
+framing fields), so there is no second `gzip` compressor anywhere.
+
+**Trailer (round-10 F2):** the message ends with a 4-byte trailer appended
+**outside compression, inside the encoded message**: `wholeCrc u32 LE` =
+CRC-32 of the **complete decompressed payload**. It rides as the final 4
+bytes of the compressed blob, is covered by the final fragment's `crc32`,
+**is counted inside `totalLen`**, and is validated after inflation — end-
+to-end proof of the decoded byte stream without re-hashing headers.
+
+**`totalLen` == byte-accurate:** totalLen is the encoded size of the
+compressed blob + trailer; it equals the **sum of `fragment payloadLen`s**
+(for multi-fragment messages; for single-fragment ones, ≥ payloadLen by
+the extension size) — a decoder that sums fragments and gets a different
+number fails the whole message before inflation.
+
+**Rejection rules (fail-closed, in order):** wrong magic ≠ 'OVSD' or wrong
+verified `ver` ⇒ drop; mismatched invariant fields across fragments ⇒ drop
+the message; final-bit/fragCount contradictions ⇒ drop; missing `ext01`
+on a multi-fragment message ⇒ drop; summed payloadLens ≠ totalLen ⇒ drop
+(pre-inflate); inflated size > decoded cap ⇒ abort mid-inflate (§14
+streaming admission); wrong `wholeCrc` ⇒ drop after inflation, before
+opcode/JSON validation; nothing partially validated or painted (§10).
+
+**Single-fragment grammar:** a single-fragment message sets the `final`
+bit, carries frameSeq 0, and MAY omit `ext01` when `payloadLen` alone
+defines the whole message; no other special case.
+- **Bounded reassembly (normative):** pre-allocation checks run before any
+  buffer; fragment count ≤ 256; reassembly window 5 s [call] with abort on
+  timeout (the partial buffer is **discarded**, the client re-requests
+  once, nothing partially validated); see the rejection rules and §14's
+  encoded/decoded caps above — these bound every kind alike.
+  - **Transport caps are per endpoint (round-10 fix, agy F1 — the round-9
+    wording overstated the browser):** the **server** sets a native
+    receiver cap (`ws` `maxPayload`, the largest encoded fragment = 1 MiB)
+    on client→server messages, so a hostile client cannot deliver an
+    oversized frame past the server's parser. **Server → browser**, the
+    *trusted* side, bounds every message it sends: no server-emitted
+    message exceeds the §14 per-kind encoded cap. **The browser `WebSocket`
+    API has no pre-delivery size cap** (WHATWG: `new WebSocket(url,
+    protocols)` takes only url+protocols), so the client checks
+    `event.data.size` **on receipt** and closes with the typed transport
+    code `oversized-frame` — a client-side guard against its own trusted
+    server's bugs, **not** a security boundary against a malicious server
+    (the server is trusted; the client is not, and a malicious server
+    controls what the browser buffers before that guard runs).
+    A custom `streamClient` factory returns the **same** browser API and
+    therefore cannot add a pre-delivery cap either; the round-9 claim that
+    `streamClient` passes a `maxPayload` is retracted.
+- Per-unit body (inside the compressed message payload): `unitId u32 +
+  byteLen u32 (decoded unit-body bytes) + opCount u32 + discriminator u8
+  (commands | raster | tile) + raw unit record` — never a whole-document
+  `unitIndex[]`.
+- A `TILE` op carries its bitmap inline (within the compressed message),
+  never as a data URI.
 
 ### 7.2 Why commands (short)
 
@@ -795,13 +861,13 @@ tiles; the presenter notes sidecar namespace
   across them. A fingerprint mismatch mid-session terminates the session
   with a typed `layout-changed` (restored round 8), never a repaint of
   stale work.
-- **Notes namespace (restored round 8):** presenter notes assets live in a
-  separate `notes:<presenterId>` sidecar namespace, never addressable
-  through the page-asset hash table; **any `ASSET_DEFINE` or asset-id lookup** is
-  authorized against (contentPolicy, notes namespace,
-  marks)** before release, so a guessed or reused notes id resolves to
-  nothing for a non-presenter (T6). Two presenters with different notes
-  rights therefore never share a cache tuple.
+- **Notes namespace (restored round 8):** presenter notes assets live in
+  a separate `notes:<presenterId>` sidecar namespace, never addressable
+  through the page-asset hash table; **any `ASSET_DEFINE` frame or
+  asset-id lookup** is authorized against (contentPolicy, notes
+  namespace, marks) before release, so a guessed or reused notes id
+  resolves to nothing for a non-presenter (T6). Two presenters with
+  different notes rights therefore never share a cache tuple.
 - **Ceilings:** the §14 retained-ceiling values (document cache 1 GiB,
   render cache 512 MiB — one normative home there) are enforced by the
   same admission that governs scratch leases; when a cache must evict,
@@ -1261,14 +1327,46 @@ outcomes.
   flight); process 256 sockets, 4,096 queued units.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
-  `ready-timeout`), `renew` grace 5 s before `session-expired`, and a
-  reassembly window of 5 s per multi-fragment unit (§7.1).
-- **Sizes** [call]: `maxUnitPx 8192`; decoded-image ≤ 64 MiB/unit;
-  inflated commands ≤ 8 MiB/unit; WS frame chunks 1 MiB (binary frames
-  per §7.1); assets/session 256 MiB; **show plans + layer assets ≤ 128
-  MiB aggregate decoded, combined** (§12a.2); manifest ≤ 256 KiB
-  decoded; render deadline 2 s; outstanding units 8 (queue 32); scratch
-  lease ≤ 2 final-raster units in flight (§9.3).
+  `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
+  ≥ 5 s before the token's own `exp`**; the old token remains valid until
+  its own `exp` and per-op expiry enforcement is unchanged (round-10 F4),
+  and a reassembly window of 5 s per multi-fragment message (§7.1).
+- **Sizes** [call]: `maxUnitPx 8192`; render deadline 2 s; outstanding
+  units 8 (queue 32); scratch lease ≤ 2 final-raster units in flight
+  (§9.3); assets/session aggregate 256 MiB streamed by hash; **show
+  plans + layer assets ≤ 128 MiB aggregate decoded, combined** (§12a.2)
+  — the aggregate is distinct from the per-message caps below.
+  **Transport:** server native `ws` `maxPayload` on client→server
+  messages = 1 MiB (the largest encoded fragment, §7.1).
+- **Per-kind message admission — encoded AND decoded caps (round-10 F3;
+  every kind, no implicit default):**
+
+  | kind | encoded (`totalLen`) cap | decoded cap |
+  |---|---|---|
+  | MANIFEST | ≤ 256 KiB | ≤ 2 MiB |
+  | ASSET_DEFINE | ≤ 1 MiB | ≤ 8 MiB |
+  | UNIT_RASTER | ≤ 8 MiB | ≤ 64 MiB |
+  | UNIT_COMMANDS | ≤ 8 MiB | ≤ 8 MiB |
+  | XLSX_TILE | ≤ 8 MiB | ≤ 64 MiB |
+  | SHOW_PLAN | ≤ 8 MiB | ≤ 32 MiB |
+  | NOTES_RASTER | ≤ 8 MiB | ≤ 64 MiB |
+  | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB |
+  | text control message | ≤ 64 KiB | ≤ 64 KiB |
+
+  Admission is **streaming inflation** (round-10 F3): the compressed
+  payload is inflated incrementally and the inflate/parse **aborts the
+  moment decoded output exceeds the decoded cap** — a 1,052-byte gzip
+  of 1 MiB of spaces never passes a 256 KiB manifest check (T6 bomb
+  test). Encoded + decoded transient bytes are **reserved together
+  before inflate** (`AllocationReservation`, the round-2 pattern), so a
+  compliant implementation cannot eager-decode before discovering
+  overage. **One aggregate reservation covers all in-flight
+  multi-fragment messages** (manifest + assets + show plans + units +
+  notes — not merely the eight unit requests): aggregate transient
+  ≤ 64 MiB per session [call]. **Unsolicited or unmatched `reqId`
+  frames are dropped before any reassembly buffer is allocated.**
+  Tests cover the compressed bomb, several concurrently admitted first
+  fragments, and single-fragment compressed messages (§16 T6).
 - **Retained ceilings (restored round 8):** document cache 1 GiB and
   render cache 512 MiB **per process, bounding the retained caches**
   (the 512 MiB render *reservation* bounds job admission; these two
@@ -1301,7 +1399,7 @@ keyboard surfaces unchanged; a disabled service states
   pixel-snap paths, transformed patterns and scratch-surface drawImage;
   fractional zoom proves 1:1 replay; per-script tolerance table;
   cross-backend published tolerances.
-- **T2 disclosure (stage-gated: Stage 1):** wire-inspection of transmitted
+- **T2 disclosure (Stage-0 feasibility subset runs before any wire work; the full integration battery is the Stage-1 gate, matching §17):** wire-inspection of transmitted
   payloads; the **bounded truncated-manifest/hello allocation test**
   (truncated/malformed first message parses under its decoded cap — no
   first-look allocation); the **in-repo Playwright WS harness**
@@ -1323,12 +1421,16 @@ keyboard surfaces unchanged; a disabled service states
   §7.5's restored state list); backend face-resolution measurements
   published.
 - **T4 fonts handshake:** `requiredFaces` manifest probes; missing/mismatch
-  and **missing/verifiable-face** raster fallback **inside a valid READY**;
+  and **missing/unverifiable-face** raster fallback **inside a valid READY**;
   absent READY at the ready window CLOSEs `ready-timeout` and streams
   nothing (round-9 finding-1); CJK/ligature/BiDi fixtures;
   scratch-rendered text case.
-- **T5 show plans:** §12a.2 admission limits (both combined-layer budget
-  and keyframe cap); **no-package/no-`PptxShape` client prototype**
+- **T5 show plans (full battery is the Stage-3c gate):** §12a.2 admission
+  limits; the **mixed-page decoder pin** named by §20 (a mixed
+  raster+command unit's command side must decode to the identical output
+  the `final-raster` path paints and the M-rule pin resolves — the code
+  path codex-r4 finding 2 requires); **no-package/no-`PptxShape` client
+  prototype**
   (Stage-0/3c blocker — show-plan suite, not lifecycle); §12a.3
   appearance adversaries (colour/opacity/mask/Morph + intermediate
   times); remote presenter adapters; fallback-rate reporting; §12a.8
@@ -1337,8 +1439,12 @@ keyboard surfaces unchanged; a disabled service states
   first-fragment declares `totalLen`/`fragCount`; corrupted per-fragment
   CRC, missing final-fragment, over-cap fragment count or `totalLen`,
   and reassembly-window timeout each discard the buffer and refuse the
-  unit (no partial validation); `maxPayload` transport cap verified;
-  handshake close-code matrix incl.
+  unit (no partial validation); byte-vector tests for the §7.1 grammar
+  (single fragment, every kind, contradictory final/count, altered
+  flags/length, wrong magic, wrong `wholeCrc`, gzip space-bomb, several
+  concurrent first fragments); transport caps per endpoint (server
+  native `maxPayload`, browser `event.data.size` receipt guard with no
+  pre-delivery cap — the F1 statement); handshake close-code matrix incl.
   version-intersection refusals; wrong-viewer resume, missing
   `resumeProof`, `renew` race and rotation windows; notes recheck after
   resume; client-relax refusal (`policy-refused`); paired relaxed/
@@ -1348,7 +1454,7 @@ keyboard surfaces unchanged; a disabled service states
   ASset/hashes)**; fingerprint-change `layout-changed` termination;
   sort/filter target authorization, tautology-filter over
   author-hidden rows, hidden pivot/slicer refusal.
-- **T7 marks (stage-gated: Stage 2):** ΔE00 ceiling measurement + codec
+- **T7 marks (Stage-0 feasibility subset: codec parameters/ΔE00 measured before wire work; the full integration battery is the Stage-2 gate, matching §17):** ΔE00 ceiling measurement + codec
   parameters published; **per-page carrier-count publication per unit**
   (restored round-9 finding 6); the **mark-fidelity tolerance gate for
   the §12a.4 approved layer subset** (the named `source-atop` gate);
@@ -1365,7 +1471,7 @@ keyboard surfaces unchanged; a disabled service states
   cell** filter values; per-session view-state key; **sort/filter
   row-order parity with local mode; selection parity** (restored
   round 8).
-- **T9 detection (stage-gated: Stage 2):** §13.5 table gates incl.
+- **T9 detection (Stage-0 feasibility subset: the detector math/parameters measured before wire work; the full integration battery is the Stage-2 gate, matching §17):** §13.5 table gates incl.
   **joint z-score + margin gating and whole-search false-attribution
   ≤ 10⁻⁶ measured over the declared audit-table size** (the q95/90/80/
   70, upscale 2×, 5 % and 25 % crop battery); **all of it on top of a
