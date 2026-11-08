@@ -1,10 +1,23 @@
 import type { CfOutcome } from './model'
-/** Reviewed runtime allowlist. Task 1 has no measured captures yet (12 pending, one unsupported).
- * Add exact case/variant pairs only after independent evidence review. Never read fixture files here. */
-const VERIFIED: readonly (readonly [id: string, variant: string])[] = Object.freeze([])
-export function hasEvidence(id: string, variant?: string): boolean {
-  return VERIFIED.some(pair => pair[0] === id && (variant === undefined || pair[1] === variant))
+import { VERIFIED_CAPABILITIES } from './verifiedCapabilities'
+
+export { VERIFIED_CAPABILITIES }
+
+/**
+ * Runtime evidence check keyed by catalog capabilityId (Ruling C1).
+ * Derive verified set from manifest/oracle via auditStage1Manifest.
+ */
+export function hasEvidence(idOrCapability: string, variant?: string): boolean {
+  if (variant !== undefined) {
+    return VERIFIED_CAPABILITIES.has(`${idOrCapability}:${variant}`)
+      || VERIFIED_CAPABILITIES.has(variant)
+      || VERIFIED_CAPABILITIES.has(idOrCapability)
+  }
+  return VERIFIED_CAPABILITIES.has(idOrCapability)
 }
-export function withCfEvidence<T>(id: string, variant: string, evaluate: () => T): CfOutcome<T> {
-  return hasEvidence(id, variant) ? { kind: 'ready', value: evaluate() } : { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+
+export function withCfEvidence<T>(capabilityId: string, evaluate: () => T): CfOutcome<T> {
+  return hasEvidence(capabilityId)
+    ? { kind: 'ready', value: evaluate() }
+    : { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
 }

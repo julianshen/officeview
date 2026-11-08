@@ -13,7 +13,7 @@
  * RED first: imports `../scripts/cf-refs/audit`, which does not exist yet.
  */
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { auditStage1Manifest, stageGateStatus, type Stage1AuditReport } from '../scripts/cf-refs/audit'
@@ -23,6 +23,7 @@ import { createCfService } from '../src/xlsx/cf/service'
 import { createCfMemory, CF_LIMITS } from '../src/xlsx/cf/limits'
 import { residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
+import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import type { XlsxSheet } from '../src/xlsx/types'
@@ -92,6 +93,47 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
     expect(report.stageComplete).toBe(true)
     expect(report.summary.verifiedCapabilities).toBe(110)
     expect(report.blockedCapabilities.length).toBe(0)
+  })
+
+  it('VERIFIED_CAPABILITIES matches the audit verified capabilities exactly (C1)', () => {
+    const manifest = loadManifest()
+    const report: Stage1AuditReport = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
+    const auditVerified = new Set(
+      report.perCapability.filter(c => c.disposition === 'verified').map(c => c.capabilityId),
+    )
+    expect(VERIFIED_CAPABILITIES).toEqual(auditVerified)
+    expect(VERIFIED_CAPABILITIES.size).toBe(110)
+  })
+
+  it('every evidence.allows literal under src/ resolves to a catalog ID (C1)', () => {
+    const catalogIds = new Set(CF_STAGE1_CAPABILITIES.map(c => c.capabilityId))
+    const cfDir = join(REPO_ROOT, 'src/xlsx/cf')
+    const files = readdirSync(cfDir).filter(f => f.endsWith('.ts'))
+    const literalPattern = /evidence\.allows\(\s*['"]([^'"]+)['"]/g
+    const checkedLiterals: string[] = []
+
+    for (const file of files) {
+      const content = readFileSync(join(cfDir, file), 'utf8')
+      let match: RegExpExecArray | null
+      while ((match = literalPattern.exec(content)) !== null) {
+        const id = match[1]!
+        checkedLiterals.push(id)
+        expect(catalogIds.has(id), `evidence.allows('${id}') in ${file} not found in catalog`).toBe(true)
+      }
+    }
+    expect(checkedLiterals.length).toBeGreaterThan(15)
+  })
+
+  it('production runtime evidence gate allows verified and refuses unverified/unsupported capabilities (C1)', () => {
+    expect(cfRuntimeEvidence.allows('cellIs:between-reversed')).toBe(true)
+    expect(cfRuntimeEvidence.allows('text:containsText-canonical')).toBe(true)
+    expect(cfRuntimeEvidence.allows('timePeriod:today')).toBe(true)
+    expect(cfRuntimeEvidence.allows('layout:hidden-row-statistics')).toBe(true)
+    expect(cfRuntimeEvidence.allows('priority:equal-priority-first')).toBe(true)
+
+    expect(cfRuntimeEvidence.allows('dxf:unsupported-gradientFill')).toBe(false)
+    expect(cfRuntimeEvidence.allows('dxf:unsupported-patternFill')).toBe(false)
+    expect(cfRuntimeEvidence.allows('nonexistent:capability')).toBe(false)
   })
 })
 

@@ -19,9 +19,8 @@ const stamp = (gen = 1): CfStamp => ({
 })
 const rect = (firstRow: number, lastRow: number, firstCol = 0, lastCol = 0): SourceRect => ({ firstRow, lastRow, firstCol, lastCol })
 const frozenBudget = (): CfWorkBudget => createCfWorkBudget({ now: () => 0 })
-// The production gate (backed by the reviewed evidence allowlist, currently
-// empty) must deny every measurement-dependent variant below.
-const denyGate: CfEvidenceGate = cfRuntimeEvidence
+const denyGate: CfEvidenceGate = { allows: () => false }
+const prodGate: CfEvidenceGate = cfRuntimeEvidence
 const allowGate: CfEvidenceGate = { allows: () => true }
 
 const num = (value: number): CfLiteral => ({ kind: 'number', value })

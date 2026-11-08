@@ -319,7 +319,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       styleAt(row, col, own, mode) {
         const style = base?.styleAt(row, col, own, mode) ?? own
         const merge = sheet.mergeRanges?.find(m => row >= m.minRow && row <= m.maxRow && col >= m.minCol && col <= m.maxCol)
-        if (merge && !evidence.allows('layout:merge-hidden-endpoint') && !evidence.allows('layout:merge-hidden-anchor') && !evidence.allows('stage1-blank-merge-order', 'layout:merge-hidden-endpoint') && !evidence.allows('stage1-blank-merge-order', 'layout:merge-hidden-anchor')) return style
+        if (merge && !evidence.allows('layout:merge-hidden-endpoint') && !evidence.allows('layout:merge-hidden-anchor')) return style
         const state = !disposed && sameCfStamp(source.stamp(stamp.sheetId), stamp) && states.get(row * 16384 + col)
         return state ? resolveCfCellStyle(style, state, colors) : style
       },

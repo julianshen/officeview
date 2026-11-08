@@ -159,10 +159,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 const outcome = outcomes[i]!
                 if (outcome.kind !== 'ready' || !outcome.value) continue
                 const priority = matching[i]!.priority
-                if (priorities.has(priority) && !evidence.allows('stage1-priority-composition', 'priority:equal-priority-first')) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
                 priorities.add(priority)
-                if (++positives > 1 && (!evidence.allows('stage1-priority-composition', 'priority:fill-winner')
-                  || !evidence.allows('stage1-priority-composition', 'priority:orthogonal-font-bold'))) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                if (++positives > 1 && (!evidence.allows('priority:fill-winner')
+                  || !evidence.allows('priority:orthogonal-font-bold'))) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
               }
               return Object.freeze({ kind: 'ready', value: await composeCellAsync(matching, outcomes, work) })
             } finally { textHold.release() }

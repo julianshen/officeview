@@ -89,8 +89,11 @@ function evaluateCellIs(
       if (operands.length !== 2) return unmeasured('cf-unsupported-rule')
       // Reversed operands normalise to [min,max] only with evidence.
       if (operands[0]!.kind !== 'number' || operands[1]!.kind !== 'number') return unmeasured()
-      if (operands[0]!.value > operands[1]!.value && !evidence.allows('stage1-cellis-literals', 'reversed-operand-normalization')) {
-        return unmeasured()
+      if (operands[0]!.value > operands[1]!.value) {
+        const allowed = operator === 'between'
+          ? evidence.allows('cellIs:between-reversed')
+          : evidence.allows('cellIs:notBetween-reversed')
+        if (!allowed) return unmeasured()
       }
       const decided = compareNumbers(operator, value.value, operands)
       return decided === undefined ? unmeasured() : decided ? { kind: 'ready', value: true } : { kind: 'no-match' }
@@ -176,13 +179,19 @@ function evaluateText(
   // fold-only hits need the measured case-insensitive semantics.
   if (exact) return type === 'notContainsText' ? { kind: 'no-match' } : { kind: 'ready', value: true }
   if (folded) {
-    if (!evidence.allows('stage1-text-predicates', 'case-insensitive-matching')) return unmeasured()
+    const allowed = (() => {
+      switch (type) {
+        case 'containsText': return evidence.allows('text:containsText-canonical')
+        case 'notContainsText': return evidence.allows('text:notContainsText-canonical')
+        case 'beginsWith': return evidence.allows('text:beginsWith-canonical')
+        case 'endsWith': return evidence.allows('text:endsWith-canonical')
+      }
+    })()
+    if (!allowed) return unmeasured()
     return type === 'notContainsText' ? { kind: 'no-match' } : { kind: 'ready', value: true }
   }
   return type === 'notContainsText' ? { kind: 'ready', value: true } : { kind: 'no-match' }
 }
-
-const BLANKS_EVIDENCE_ID = 'stage1-blanks-errors'
 
 function evaluateBlanks(
   type: 'containsBlanks' | 'notContainsBlanks',
@@ -206,9 +215,10 @@ function evaluateBlanksGated(
   evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
   if (!hasCanonicalFormula) return evaluateBlanks(type, value)
-  // Canonical blank formula: evaluate only behind the evidence variant; the
-  // test gate proves the semantics match the manifest once measured.
-  if (!evidence.allows(BLANKS_EVIDENCE_ID, `${type}-canonical`)) {
+  const allowed = type === 'containsBlanks'
+    ? evidence.allows('blanks:containsBlanks-canonical')
+    : evidence.allows('blanks:notContainsBlanks-canonical')
+  if (!allowed) {
     return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
   }
   return evaluateBlanks(type, value)
@@ -263,12 +273,12 @@ function evaluateAboveAverage(
 ): CfOutcome<boolean> {
   if (stdDev !== undefined && equal) return { kind: 'unresolved', reason: 'cf-invalid-rule' }
   // Population-vs-sample is unmeasured: any stddev use needs evidence.
-  if (stdDev !== undefined && !evidence.allows('stage1-above-average-stddev', 'stddev-sample') && !evidence.allows('stage1-above-average-stddev', 'stddev-population')) {
+  if (stdDev !== undefined && !evidence.allows('aboveAverage:stdDev-1-pop-vs-sample')) {
     return unmeasured()
   }
   // Hidden-row inclusion/exclusion in range statistics is unmeasured: ranges
   // crossing known hidden rows require evidence.
-  if (stats?.hasHiddenRows && !evidence.allows('stage1-blank-merge-order', 'layout:hidden-row-statistics')) {
+  if (stats?.hasHiddenRows && !evidence.allows('layout:hidden-row-statistics')) {
     return unmeasured()
   }
   if (value.kind !== 'number') return { kind: 'no-match' }
@@ -300,9 +310,12 @@ function evaluateDuplicates(
 ): CfOutcome<boolean> {
   // Blank and error cells are never flagged, per the staged hypothesis.
   if (value.kind === 'blank' || value.kind === 'error') return { kind: 'no-match' }
-  // Text equivalence (case folding) is unmeasured: withhold text cells without evidence.
-  if (value.kind === 'string' && !evidence.allows('stage1-duplicate-scope', 'text-case-equivalence')) {
-    return unmeasured()
+  // Text equivalence (case folding): withhold text cells without evidence.
+  if (value.kind === 'string') {
+    const allowed = unique
+      ? evidence.allows('uniqueValues:single-range')
+      : evidence.allows('duplicateValues:single-range')
+    if (!allowed) return unmeasured()
   }
   const settled = needStats(stats)
   if (settled.kind !== 'ready') return settled
@@ -320,10 +333,31 @@ function evaluateTimePeriod(
   context?: CfDateContext,
 ): CfOutcome<boolean> {
   const system = context?.dateSystem ?? '1900'
-  const capId = system === '1904' && evidence.allows(`timePeriod:1904-${period}`)
-    ? `timePeriod:1904-${period}`
-    : `timePeriod:${period}`
-  if (!evidence.allows(capId)) return unmeasured()
+  const allowed = (() => {
+    if (system === '1904') {
+      switch (period) {
+        case 'today': return evidence.allows('timePeriod:1904-today')
+        case 'yesterday': return evidence.allows('timePeriod:1904-yesterday')
+        case 'tomorrow': return evidence.allows('timePeriod:1904-tomorrow')
+        case 'thisWeek': return evidence.allows('timePeriod:1904-thisWeek')
+        case 'thisMonth': return evidence.allows('timePeriod:1904-thisMonth')
+        default: return false
+      }
+    }
+    switch (period) {
+      case 'today': return evidence.allows('timePeriod:today')
+      case 'yesterday': return evidence.allows('timePeriod:yesterday')
+      case 'tomorrow': return evidence.allows('timePeriod:tomorrow')
+      case 'last7Days': return evidence.allows('timePeriod:last7Days')
+      case 'thisWeek': return evidence.allows('timePeriod:thisWeek')
+      case 'lastWeek': return evidence.allows('timePeriod:lastWeek')
+      case 'nextWeek': return evidence.allows('timePeriod:nextWeek')
+      case 'thisMonth': return evidence.allows('timePeriod:thisMonth')
+      case 'lastMonth': return evidence.allows('timePeriod:lastMonth')
+      case 'nextMonth': return evidence.allows('timePeriod:nextMonth')
+    }
+  })()
+  if (!allowed) return unmeasured()
 
   if (value.kind !== 'number' || !Number.isFinite(value.value)) return { kind: 'no-match' }
   const cellDay = Math.floor(value.value)
@@ -439,10 +473,12 @@ export function evaluatePredicate(
           return evaluateErrors(definition.type, value)
         case 'duplicateValues':
         case 'uniqueValues': {
-          // Union scope semantics are unmeasured: multi-rectangle duplicate
-          // and unique evaluation needs evidence; single rectangles are exact.
-          if (rule.ranges.length !== 1 && !evidence.allows('stage1-duplicate-scope', 'multi-rectangle-union')) {
-            return unmeasured()
+          // Multi-rectangle duplicate/unique evaluation needs evidence; single rectangles are exact.
+          if (rule.ranges.length !== 1) {
+            const allowed = definition.type === 'duplicateValues'
+              ? evidence.allows('duplicateValues:disjoint-sqref')
+              : evidence.allows('uniqueValues:overlapping-sqref-no-double-count')
+            if (!allowed) return unmeasured()
           }
           return evaluateDuplicates(definition.type === 'uniqueValues', value, stats, evidence)
         }
