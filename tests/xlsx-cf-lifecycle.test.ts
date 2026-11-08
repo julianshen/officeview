@@ -188,64 +188,45 @@ it('CF sqref on A1:A5000 on a 3-row sheet does not extend extent or prepare 5000
   expect(pagesBlank[0].spec).not.toEqual({ widthPx: 480, heightPx: 96 })
 })
 
-it('range statistics are cached across preparations (I5)', async () => {
+it('range statistics are cached across preparations with zero rescan visits (I5)', async () => {
   const { prepareCfPaint } = await import('../src/xlsx/cf/render')
-  let scans = 0
+  let a2Scans = 0
+  const rows: XlsxRow[] = [
+    { index: 0, cells: [{ row: 0, col: 0, ref: 'A1', value: 10, styleIndex: 0 }] },
+  ]
+  for (let r = 1; r < 50; r++) {
+    const cell: any = { row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0 }
+    Object.defineProperty(cell, 'value', { get() { a2Scans++; return r } })
+    rows.push({ index: r, cells: [cell] })
+  }
   const sheet: any = {
-    name: 'Sheet1',
-    sheetId: 's1',
-    rows: [
-      {
-        index: 0,
-        cells: [{
-          get value() { scans++; return 10 },
-          col: 0,
-          row: 0,
-          valueIsError: false,
-          styleIndex: 0,
-        }],
-      },
-      {
-        index: 1,
-        cells: [{
-          get value() { scans++; return 20 },
-          col: 0,
-          row: 1,
-          valueIsError: false,
-          styleIndex: 0,
-        }],
-      },
-    ],
-    cols: [],
-    merges: [],
-    mergeRanges: [],
+    name: 'S', sheetId: '1', merges: [], mergeRanges: [], cols: [],
+    rows,
     conditionalFormatting: {
-      rules: [
-        {
-          id: 1,
-          priority: 1,
-          documentOrder: 0,
-          ranges: [{ firstRow: 0, lastRow: 1, firstCol: 0, lastCol: 0 }],
-          stopIfTrue: false,
-          writes: new Set(['fill']),
-          dxf: { 'fill.pattern': 'solid', 'fill.fg': 'FFFF0000' },
-          definition: { kind: 'aboveAverage', above: true, equal: false, dialect: 'base', formulas: [] },
-        },
-      ],
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        ranges: [{ firstRow: 0, lastRow: 49, firstCol: 0, lastCol: 0 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+        definition: { kind: 'top10', rank: 5, percent: false, bottom: false, dialect: 'base', formulas: [] },
+      }],
     },
   }
-  const first = await prepareCfPaint(sheet)
+  // Prepare only row 0 (A1)
+  const req = { sourceRects: [{ firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }] }
+  const first = await prepareCfPaint(sheet, { request: req as any })
   expect(first).toBeDefined()
-  const firstScans = scans
-  expect(firstScans).toBeGreaterThan(0)
-  // Second preparation on same sheet and generation reuses cached statistics
-  const second = await prepareCfPaint(sheet)
-  expect(second).toBeDefined()
-  // The value getter was not read again for statistics computation
-  // (the values read during second run are only the per-cell evaluation, not statistics rescan)
-  expect(scans).toBeLessThanOrEqual(firstScans * 2)
   first!.dispose()
+  const firstScans = a2Scans
+  expect(firstScans).toBe(49) // All 49 rows scanned for statistics on first preparation
+
+  // Second preparation of row 0 must reuse cached statistics and perform ZERO rescan visits on rows 1..49
+  const second = await prepareCfPaint(sheet, { request: req as any })
+  expect(second).toBeDefined()
   second!.dispose()
+  const rescanVisits = a2Scans - firstScans
+  expect(rescanVisits).toBe(0)
 })
 
 it('a 3000x20 sheet with one rule keeps its CF without whole-sheet refusal (I4)', async () => {

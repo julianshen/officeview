@@ -135,6 +135,14 @@ function unavailable(sheet: XlsxSheet): undefined {
 // Retained statistics sessions across preparations / viewport scrolls per (sheet, generation) (Ruling I5)
 const sheetStatsSessions = new WeakMap<object, { session: import('./statistics').CfStatisticsSession; key: string }>()
 
+export function disposeSheetCfStatistics(sheet: object): void {
+  const retained = sheetStatsSessions.get(sheet)
+  if (retained) {
+    retained.session.dispose()
+    sheetStatsSessions.delete(sheet)
+  }
+}
+
 /** Shared by resident assets and paged callers. paintRects scopes whole-axis
  * rules to the visible/printed source coordinates, including unstored blanks. */
 export async function prepareCfPaint(sheet: XlsxSheet, options: {

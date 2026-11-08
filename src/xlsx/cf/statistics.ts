@@ -385,22 +385,26 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
 
   function evict(): void {
     // LRU: Map preserves insertion order; the first key is the least recently used.
-    // Eviction drops the key only; live leases keep the shared charge.
-    for (const key of cache.keys()) {
-      cache.delete(key)
-      if (cache.size <= maxEntries) break
+    for (const [key, entry] of cache.entries()) {
+      if (cache.size <= maxEntries && retainedHeld <= sessionCap) break
+      dropEntry(key, entry)
     }
   }
 
   function dispose(): void {
+    for (const [key, entry] of cache.entries()) {
+      dropEntry(key, entry)
+    }
     cache.clear()
     boundsMemo.clear()
   }
 
   function dropEntry(key: string, entry: CacheEntry): void {
     if (cache.get(key) === entry) cache.delete(key)
-    try { entry.lease.release() } catch { /* release-only path */ }
-    trackRelease(entry.bytes)
+    if (entry.refs <= 0) {
+      try { entry.lease.release() } catch { /* release-only path */ }
+      trackRelease(entry.bytes)
+    }
   }
 
   function makeOutcome(key: string, entry: CacheEntry): CfOutcome<CfLease<CfRangeStatistics>> {
@@ -410,7 +414,10 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       if (settled) return
       settled = true
       entry.refs--
-      if (entry.refs <= 0) dropEntry(key, entry)
+      if (entry.refs <= 0 && !cache.has(key)) {
+        try { entry.lease.release() } catch { /* release-only path */ }
+        trackRelease(entry.bytes)
+      }
     }
     const lease: CfLease<CfRangeStatistics> = {
       value: entry.stats,
