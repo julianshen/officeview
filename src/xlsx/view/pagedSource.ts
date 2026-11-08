@@ -988,8 +988,15 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       }),
       pages: this.cfPages(request, account, options?.signal),
       }
-      return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account,
-        admitted === undefined ? options : { ...options, admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } })
+      const dateContext = options?.dateContext ?? {
+        dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
+      }
+      const remoteOptions: CfRemotePrepareOptions = {
+        ...options,
+        dateContext,
+        ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
+      }
+      return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
     } finally {
       try { hashHold.release() } catch { /* release-only path */ }
     }
@@ -1718,6 +1725,7 @@ export interface CfRemotePrepareOptions {
    * rules identity plus the content hash — both without reading rule values
    * — and skips its own sizing and serialization when they verify. */
   readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
+  readonly dateContext?: import('../cf/predicates').CfDateContext
 }
 export async function prepareCfRemote(
   request: CfReadRequest,
@@ -2003,7 +2011,7 @@ async function prepareCfRemoteOnce(
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget })
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext })
   let prepared: CfLease<CfPrepared> | undefined
   try {
     if (signal?.aborted) throw cancelled()

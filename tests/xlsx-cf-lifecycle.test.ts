@@ -67,7 +67,7 @@ it('resident and paged-shaped source snapshots agree, cover blanks and are immut
 })
 it('unmeasured positive precedence conflicts refuse; a reviewed evidence gate enables composition', async () => {
   const { createCfService } = serviceApi; const m = createCfMemory(); const paired = { ...rules, rules: [rules.rules[0]!, { ...rules.rules[0]!, id: 1, priority: 2, documentOrder: 1, dxf: { 'fill.fg': 'FFFF0000' } }] }
-  const unmeasured = createCfService(paired, m, { budget }); const withheld = await unmeasured.prepareCf(request(), resident(1))
+  const unmeasured = createCfService(paired, m, { budget, evidence: { allows: () => false } }); const withheld = await unmeasured.prepareCf(request(), resident(1))
   expect(withheld.value.at(0, 0)).toMatchObject({ kind: 'unresolved', reason: 'cf-unmeasured-capability' }); withheld.release(); unmeasured.dispose()
   const measured = createCfService(paired, m, { budget, evidence: { allows: () => true } }); const ready = await measured.prepareCf(request(), resident(1))
   expect(ready.value.at(0, 0)).toMatchObject({ kind: 'ready', value: { properties: { 'fill.fg': 'FF00FF00' } } }); ready.release(); measured.dispose(); expect(m.currentBytes).toBe(0)

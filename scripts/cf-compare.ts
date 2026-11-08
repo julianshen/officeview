@@ -185,7 +185,11 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
   // Service composition: full property VALUES per cell (red vs blue detected).
   const memory = createCfMemory()
   if (!sheet.conditionalFormatting) return fail(`No conditional formatting in ${c.saved}`)
-  const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence })
+  const dateContext = c.clockRequirement ? {
+    clockSerial: c.clockRequirement.anchorSerial,
+    dateSystem: c.clockRequirement.dateSystem,
+  } : undefined
+  const oracle = createCfService(sheet.conditionalFormatting, memory, { evidence: cfRuntimeEvidence, dateContext })
   const gen = cfRulesVersion(sheet.conditionalFormatting)
   const stamp = { owner: 'compare', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: gen, viewGen: 0, structureGen: 0, clockGen: 0 }
   const source = residentSource(sheet, stamp, memory, 'engine')
@@ -232,6 +236,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
       signal: new AbortController().signal,
       locale: 'en-US',
       budget,
+      dateContext,
     })
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error))
@@ -307,11 +312,15 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       { signal: new AbortController().signal, stamp: store.stamp as never },
     ).catch(() => undefined)
     const memory = createCfMemory()
+    const dateContext = c.clockRequirement ? {
+      clockSerial: c.clockRequirement.anchorSerial,
+      dateSystem: c.clockRequirement.dateSystem,
+    } : undefined
     const result = await store.readConditionalFormatting?.({
       rects: [{ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }],
       stamp: { owner: 'compare', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
       grantBytes: 2 * 1024 * 1024,
-    }, memory, { signal: new AbortController().signal })
+    }, memory, { signal: new AbortController().signal, dateContext })
     if (!result) return { id: c.id, mode: 'paged', outcome: 'fail', reason: 'Paged read returned nothing', oracleRef, workbookHash, reads: 1 }
     if (result.kind === 'pending') {
       return {

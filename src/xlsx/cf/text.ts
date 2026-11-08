@@ -29,6 +29,7 @@ export interface CfTextScopeRequest {
   readonly valuePolicy?: ValuePolicy
   readonly workbookValueGen?: number
   readonly store?: SourceStore
+  readonly dateContext?: import('./predicates').CfDateContext
 }
 
 /** Fixed admitted descriptor workspace per scope with a charged budget. */
@@ -235,7 +236,12 @@ export async function prepareCfTextScope(
     return undefined
   }
   const account = createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) })
-  const service = createCfService(rules, account, { evidence: cfRuntimeEvidence })
+  const dateContext = request.dateContext ?? (sheet.semantics ? {
+    dateSystem: sheet.semantics.dateSystem,
+    timeZone: sheet.semantics.timeZone,
+    epochNowMs: sheet.semantics.epochNowMs,
+  } : undefined)
+  const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext })
   try {
     const gen = cfRulesVersion(rules)
     const stamp: CfStamp = {

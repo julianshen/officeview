@@ -316,6 +316,7 @@ export interface CfReadOptions {
   readonly budget?: () => CfWorkBudget
   readonly envelopeBytes?: number
   readonly retainOutgoing?: (release: () => void) => void
+  readonly dateContext?: import('../cf/predicates').CfDateContext
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }

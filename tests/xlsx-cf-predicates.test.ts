@@ -11,7 +11,7 @@ import type { XlsxCell } from '../src/xlsx/types'
 import { createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { parseCfSheet } from '../src/xlsx/cf/parse'
 import { createCfStatistics, createResidentCfSource, type CfRangeStatistics } from '../src/xlsx/cf/statistics'
-import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
+import { evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
 
 const SHEET = 'sheet1'
 const stamp = (gen = 1): CfStamp => ({
@@ -20,7 +20,6 @@ const stamp = (gen = 1): CfStamp => ({
 const rect = (firstRow: number, lastRow: number, firstCol = 0, lastCol = 0): SourceRect => ({ firstRow, lastRow, firstCol, lastCol })
 const frozenBudget = (): CfWorkBudget => createCfWorkBudget({ now: () => 0 })
 const denyGate: CfEvidenceGate = { allows: () => false }
-const prodGate: CfEvidenceGate = cfRuntimeEvidence
 const allowGate: CfEvidenceGate = { allows: () => true }
 
 const num = (value: number): CfLiteral => ({ kind: 'number', value })

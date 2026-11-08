@@ -16,8 +16,15 @@ export function hasEvidence(idOrCapability: string, variant?: string): boolean {
   return VERIFIED_CAPABILITIES.has(idOrCapability)
 }
 
-export function withCfEvidence<T>(capabilityId: string, evaluate: () => T): CfOutcome<T> {
-  return hasEvidence(capabilityId)
-    ? { kind: 'ready', value: evaluate() }
+export function withCfEvidence<T>(
+  capabilityId: string,
+  evaluateOrVariant: string | (() => T),
+  evaluate?: () => T,
+): CfOutcome<T> {
+  const [variant, fn] = typeof evaluateOrVariant === 'function'
+    ? [undefined, evaluateOrVariant]
+    : [evaluateOrVariant, evaluate!]
+  return hasEvidence(capabilityId, variant)
+    ? { kind: 'ready', value: fn() }
     : { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
 }

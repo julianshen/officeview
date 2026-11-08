@@ -60,7 +60,7 @@ it('viewport blank synthesis uses the prepared generation and geometry', async (
 it('unmeasured merge formatting fails closed instead of guessing anchor semantics', async () => {
   const { prepareCfPaint } = await import('../src/xlsx/cf/render')
   const sheet = cfSheet(0, 0); sheet.rows = []; sheet.mergeRanges = [{ minRow: 0, maxRow: 0, minCol: 0, maxCol: 2 }]
-  const batch = await prepareCfPaint(sheet)
+  const batch = await prepareCfPaint(sheet, { evidence: { allows: () => false } })
   try { expect(batch?.layer.styleAt(0, 0, undefined)?.fillColor).toBeUndefined() } finally { batch?.dispose() }
 })
 it('painting workspace is admitted before a batch becomes renderable and refunds on dispose', async () => {

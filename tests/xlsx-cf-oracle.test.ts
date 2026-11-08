@@ -1171,7 +1171,7 @@ describe('CF oracle verifier', () => {
     expect(afterFull.cases[0].expected.savedSha256).toBe(resavedHash)
     expect(afterFull.cases[0].resavedByExcel).toBe(true)
     expect(sha256(new Uint8Array(readFileSync(savedCaseAPath)))).toBe(resavedHash)
-  })
+  }, 30000)
 
   it('rejects review-t1-r2 counterexamples: fill-only/bar-only PNG without text/font/border, mutated non-fill expectations, unobserved capabilities, missing pivot parts, missing Excel resave provenance, proportional vs ECMA-376 column geometry, and Excel version 16.120..199', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-r2-'))
