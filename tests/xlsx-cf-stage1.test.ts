@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
-import { auditStage1Manifest, type Stage1AuditReport } from '../scripts/cf-refs/audit'
+import { auditStage1Manifest, stageGateStatus, type Stage1AuditReport } from '../scripts/cf-refs/audit'
 import { CF_STAGE1_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 import { prepareCfTextScope, prepareCfWireScope } from '../src/xlsx/cf/text'
 import { createCfService } from '../src/xlsx/cf/service'
@@ -26,7 +26,7 @@ import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import type { XlsxSheet } from '../src/xlsx/types'
-import type { CfReadResult, CfCellStateWire } from '../src/xlsx/view/contracts'
+import type { CfReadResult } from '../src/xlsx/view/contracts'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 
@@ -57,8 +57,16 @@ async function sheetFromSaved(inputPath: string, savedPath: string): Promise<Xls
   return sheet as unknown as XlsxSheet
 }
 
+function baseOf(sheet: XlsxSheet, row: number, col: number): unknown {
+  for (const band of sheet.rows) {
+    const cell = band.cells.find(candidate => candidate.row === row && candidate.col === col)
+    if (cell) return cell.style
+  }
+  return undefined
+}
+
 describe('every supported Stage 1 semantic capability has verified oracle evidence', () => {
-  it('the manifest audit passes with full catalog coverage and structural evidence', () => {
+  it('the manifest audit passes integrity with full catalog coverage and structural evidence', () => {
     const manifest = loadManifest()
     const report: Stage1AuditReport = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
@@ -74,6 +82,42 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
     const unsupported = report.perCase.find(entry => entry.id === 'stage1-dxf-layering-2')
     expect(unsupported?.code).toBe('unsupported-capability')
   })
+
+  it('structural integrity without verified semantic evidence blocks Stage 1 completion', () => {
+    const manifest = loadManifest()
+    const report: Stage1AuditReport = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
+    // Integrity passes, but no supported capability has verified independent
+    // evidence (captures pending): the stage gate must report blocked, not green.
+    expect(report.ok).toBe(true)
+    expect(report.stageComplete).toBe(false)
+    expect(report.summary.verifiedCapabilities).toBe(0)
+    expect(report.blockedCapabilities.length).toBeGreaterThan(0)
+    // Every blocked capability is a supported-structural (unmeasured) one;
+    // refused-unsupported capabilities never block completion.
+    const byId = new Map(report.perCapability.map(entry => [entry.capabilityId, entry.disposition]))
+    for (const id of report.blockedCapabilities) expect(byId.get(id)).toBe('supported-structural')
+    for (const entry of report.perCapability) {
+      if (entry.disposition === 'refused-unsupported') expect(report.blockedCapabilities).not.toContain(entry.capabilityId)
+    }
+  })
+})
+
+describe('stage gate status distinguishes verified completion from blocked evidence', () => {
+  it('all verified completes; any supported-structural or unaccounted blocks', () => {
+    expect(stageGateStatus([
+      { capabilityId: 'a', caseId: 'c', disposition: 'verified' },
+      { capabilityId: 'b', caseId: 'c', disposition: 'verified' },
+    ])).toEqual({ complete: true, blocked: [] })
+    expect(stageGateStatus([
+      { capabilityId: 'a', caseId: 'c', disposition: 'verified' },
+      { capabilityId: 'b', caseId: 'c', disposition: 'supported-structural' },
+      { capabilityId: 'c', caseId: 'u', disposition: 'refused-unsupported' },
+    ])).toEqual({ complete: false, blocked: ['b'] })
+    expect(stageGateStatus([
+      { capabilityId: 'a', caseId: 'c', disposition: 'verified' },
+      { capabilityId: 'z', caseId: 'c', disposition: 'unaccounted' },
+    ])).toEqual({ complete: false, blocked: ['z'] })
+  })
 })
 
 describe('every unresolved capability refuses atomically on both paths', () => {
@@ -82,13 +126,6 @@ describe('every unresolved capability refuses atomically on both paths', () => {
     const seen = new Map<string, { ruleType: string; reason: string }>()
     let unresolvedCount = 0
     let probedCells = 0
-    const baseOf = (sheet: XlsxSheet, row: number, col: number) => {
-      for (const band of sheet.rows) {
-        const cell = band.cells.find(candidate => candidate.row === row && candidate.col === col)
-        if (cell) return cell.style
-      }
-      return undefined
-    }
     for (const c of manifest.cases) {
       const sheet = await sheetFromSaved(c.input, c.saved)
       const rules = sheet.conditionalFormatting?.rules ?? []
@@ -115,9 +152,10 @@ describe('every unresolved capability refuses atomically on both paths', () => {
           oracleMemory,
         )
         try {
-          // Record the composed outcome per cell plus the wire states for it.
+          // Record the composed outcome per cell. The service lease is the
+          // reference composition for exact per-cell agreement; the
+          // fail-closed invariant below holds without consulting it.
           const cells: { row: number; col: number; kind: string; hasProperties: boolean; hasWrites: boolean }[] = []
-          const wireStates: CfCellStateWire[] = []
           for (const r of rects) {
               for (let row = r.r0; row <= r.r1; row++) {
                 const outcome = lease.value.at(row, r.c0)
@@ -129,17 +167,6 @@ describe('every unresolved capability refuses atomically on both paths', () => {
                 : Array.isArray(writes) ? writes.length > 0 : false
               cells.push({ row, col: r.c0, kind: outcome.kind, hasProperties, hasWrites })
               probedCells++
-              if (outcome.kind === 'no-match') continue
-              if (outcome.kind === 'unresolved') {
-                wireStates.push({ row, col: r.c0, properties: {}, unresolvedWrites: undefined, unresolvedReason: outcome.reason })
-              } else {
-                wireStates.push({
-                  row, col: r.c0,
-                  properties: { ...outcome.value.properties },
-                  unresolvedWrites: outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined,
-                  unresolvedReason: undefined,
-                })
-              }
             }
           }
           // Observable contract per composed outcome:
@@ -182,7 +209,7 @@ describe('every unresolved capability refuses atomically on both paths', () => {
               locale: 'en-US',
               budget,
             })
-            if (wireStates.length > 0) expect(scope, `${c.id} resident scope`).toBeDefined()
+            if (cells.length > 0) expect(scope, `${c.id} resident scope`).toBeDefined()
             if (scope) {
               for (const cell of cells) {
                 const where = `${c.id} resident ${cell.row},${cell.col}`
@@ -193,39 +220,14 @@ describe('every unresolved capability refuses atomically on both paths', () => {
                   baseOf(sheet, cell.row, cell.col),
                   where,
                 )
-              }
-              scope.dispose()
-            }
-            expect(net()).toBe(0)
-          }
-          // Wire path must agree with the same oracle outcomes.
-          {
-            const { budget, net } = trackingBudget()
-            const result: CfReadResult = {
-              stamp: { owner: 'audit', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: gen, viewGen: 0, structureGen: 0, clockGen: 0 },
-              sheetId: sheet.sheetId ?? sheet.name,
-              kind: 'ready',
-              states: wireStates,
-              definitions: [],
-              definitionsVersion: 1,
-              diagnostics: [],
-            }
-            const scope = await prepareCfWireScope(
-              async () => ({ result, release: () => {} }),
-              rects,
-              { locale: 'en-US', budget },
-            )
-            if (wireStates.length > 0) expect(scope, `${c.id} wire scope`).toBeDefined()
-            if (scope) {
-              for (const cell of cells) {
-                const where = `${c.id} wire ${cell.row},${cell.col}`
-                expectCell(
-                  (row, col) => scope.describe(row, col) ?? undefined,
-                  (row, col, base) => scope.effectiveStyle(row, col, base as never),
-                  cell,
-                  baseOf(sheet, cell.row, cell.col),
-                  where,
-                )
+                // Service-free fail-closed invariant: a cell overlapping a
+                // parse-marked unresolved rule never presents CF properties as
+                // cleanly available.
+                const base = baseOf(sheet, cell.row, cell.col)
+                const desc = scope.describe(cell.row, cell.col)
+                const styled = scope.effectiveStyle(cell.row, cell.col, base as never)
+                expect(desc?.text === undefined || desc.text === 'Conditional formatting unavailable', where).toBe(true)
+                if (styled !== base) expect(desc?.text, where).toBe('Conditional formatting unavailable')
               }
               scope.dispose()
             }
@@ -248,6 +250,102 @@ describe('every unresolved capability refuses atomically on both paths', () => {
       expect(types.has(expected), `mechanism ${expected} covered`).toBe(true)
     }
   })
+})
+
+describe('unresolved rules withhold through the real paged worker route', () => {
+  it('parse-marked unresolved cells are unavailable with base style on the worker read path', async () => {
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const { createPagedWorkbookSource } = await import('../src/xlsx/view/pagedSource')
+    const { createCfMemory } = await import('../src/xlsx/cf/limits')
+    const manifest = loadManifest()
+    let rules = 0
+    let cells = 0
+    let readyReads = 0
+    let pendingReads = 0
+    for (const c of manifest.cases) {
+      const sheet = await sheetFromSaved(c.input, c.saved)
+      const unresolved = (sheet.conditionalFormatting?.rules ?? []).filter(rule => {
+        const definition = (rule as { definition?: { kind?: string } }).definition
+        return definition?.kind === 'unresolved'
+      })
+      if (unresolved.length === 0) continue
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const session = await openImportSession(
+        { kind: 'blob', blob: new Blob([bytes.buffer as ArrayBuffer]) },
+        { docId: `stage1-wire-${c.id}`, profile: 'D' },
+      )
+      try {
+        await session.done
+        const source = createPagedWorkbookSource(session)
+        const sheetId = source.sheets[0]!.sheetId
+        const store = source.store(sheetId)
+        const memory = createCfMemory()
+        for (const rule of unresolved) {
+          rules++
+          const ranges = (rule as unknown as { ranges: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[] }).ranges
+          const rects = ranges.map(r => ({ r0: r.firstRow, r1: Math.min(r.lastRow, r.firstRow + 4), c0: r.firstCol, c1: r.firstCol }))
+          if (rects.length === 0) continue
+          // Warm the pages first so the CF read evaluates actual states rather
+          // than pending on unimported ranges; a residual pending is still a
+          // correct fail-closed withhold (tracked for retry, never properties).
+          for (const r of rects) {
+            await store.readRows?.({ r0: r.r0, r1: r.r1, c0: r.c0, c1: r.c1 }, undefined, { signal: new AbortController().signal, stamp: store.stamp } as never).catch(() => undefined)
+          }
+          const { budget, net } = trackingBudget()
+          const result = await store.readConditionalFormatting?.({
+            rects,
+            stamp: { owner: 'audit', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+            grantBytes: 2 * 1024 * 1024,
+          }, memory, { signal: new AbortController().signal })
+          if (result?.kind !== 'ready') {
+            // Withheld without states: pending (import-tracked), unresolved or
+            // error. None may expose CF properties as available.
+            expect(result?.kind === 'pending' || result?.kind === 'unresolved' || result?.kind === 'error', `${c.id} withhold kind`).toBe(true)
+            if (result?.kind === 'pending') expect(result.pendingSheetIds?.length ?? 0, `${c.id} pending tracked`).toBeGreaterThan(0)
+            pendingReads++
+            continue
+          }
+          readyReads++
+          const { budget: wireBudget, net: wireNet } = trackingBudget()
+          const scope = await prepareCfWireScope(
+            async () => ({ result: result as CfReadResult, release: () => {} }),
+            rects,
+            { locale: 'en-US', budget: wireBudget },
+          )
+          try {
+            expect(scope, `${c.id} wire scope`).toBeDefined()
+            for (const r of rects) {
+              for (let row = r.r0; row <= r.r1; row++) {
+                cells++
+                const where = `${c.id} wire ${row},${r.c0}`
+                const desc = scope!.describe(row, r.c0)
+                const styled = scope!.effectiveStyle(row, r.c0, baseOf(sheet, row, r.c0) as never)
+                // Independent fail-closed contract (no product composition in
+                // the oracle): a cell overlapping a parse-marked unresolved
+                // rule must never present CF properties as cleanly available.
+                const base = baseOf(sheet, row, r.c0)
+                expect(desc?.text === undefined || desc.text === 'Conditional formatting unavailable', where).toBe(true)
+                if (styled !== base) expect(desc?.text, where).toBe('Conditional formatting unavailable')
+              }
+            }
+          } finally {
+            scope?.dispose()
+          }
+          expect(wireNet()).toBe(0)
+          expect(net()).toBe(0)
+          void budget
+        }
+      } finally {
+        await session.release()
+      }
+    }
+    expect(rules).toBeGreaterThan(0)
+    expect(cells).toBeGreaterThan(0)
+    // Both withhold paths must be exercised: ready-with-invariant and
+    // pending-tracked. (If all reads pend, page warming is broken.)
+    expect(readyReads).toBeGreaterThan(0)
+    expect(pendingReads).toBeGreaterThan(0)
+  }, 120000)
 })
 
 describe('manifest mutations fail the audit', () => {

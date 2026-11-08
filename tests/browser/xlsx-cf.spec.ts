@@ -111,21 +111,11 @@ test('CF number format names the formatted value on every leg', async ({ context
         await openCf(page, NUMFMT, bytes, leg)
         if (leg.paged) expect((await counts(page)).open ?? 0, 'paged leg opens through the worker').toBe(1)
         // B2 holds 1.25: CF 0.00 names it "1.25", never base 0.0's "1.3".
+        // (Fix round 1: the settle timeout drops a hung paged read and
+        // re-reads fresh, so the paged leg expects the same CF value.)
         const b2 = page.getByRole('gridcell', { name: /^B2, value / })
-        if (leg.paged) {
-          // Known gap (Task 11 follow-up, worker-side): a forced-paged text
-          // read can race page loads and the worker never answers, so the
-          // entry stays loading with no failure and no notification to retry
-          // on — base text sticks until a scroll issues a fresh read. Until
-          // the worker wakes pending reads when pages land (or answers with
-          // pending instead of silence), assert fail-closed base text without
-          // false CF claims, never "1.25".
-          await expect(b2, `${leg.name}: B2 announces base text`).toContainText('1.3', { timeout: 30_000 })
-          expect(await b2.textContent()).not.toContain('1.25')
-        } else {
-          await expect(b2, `${leg.name}: B2 announces CF text`).toContainText('1.25', { timeout: 30_000 })
-          expect(await b2.textContent()).not.toContain('1.3')
-        }
+        await expect(b2, `${leg.name}: B2 announces CF text`).toContainText('1.25', { timeout: 30_000 })
+        expect(await b2.textContent()).not.toContain('1.3')
         await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
       } finally {
         await page.close()
@@ -169,45 +159,78 @@ test('CF fills paint on canvas on every leg, and legs agree', async ({ context }
 
 test('six zoom/DPR pairs keep CF formatting', async ({ browser }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${NUMFMT}.xlsx`)
-  const leg = LEGS[0]!
-  for (const dpr of [1, 2]) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
-    try {
-      const page = await context.newPage()
-      try {
-        await openCf(page, NUMFMT, bytes, leg)
-        for (const zoom of ['50%', '100%', '200%']) {
-          const label = page.getByRole('button', { name: 'Reset zoom' })
-          for (let i = 0; i < 12; i++) {
-            if ((await label.textContent()) === zoom) break
-            const current = Number((await label.textContent())!.replace('%', ''))
-            await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      for (const dpr of [1, 2]) {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr })
+        try {
+          const page = await context.newPage()
+          try {
+            await openCf(page, NUMFMT, bytes, leg)
+            for (const zoom of ['50%', '100%', '200%']) {
+              const label = page.getByRole('button', { name: 'Reset zoom' })
+              for (let i = 0; i < 12; i++) {
+                if ((await label.textContent()) === zoom) break
+                const current = Number((await label.textContent())!.replace('%', ''))
+                await page.getByRole('button', { name: current < Number(zoom.replace('%', '')) ? 'Zoom in' : 'Zoom out' }).click()
+              }
+              await expect(label).toHaveText(zoom, { timeout: 10_000 })
+              // Zooming recenters the viewport, virtualizing B2 out: scroll back
+              // to the origin before asserting the top-left cells.
+              await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
+              const b2 = page.getByRole('gridcell', { name: /^B2, value / })
+              if (leg.paged) {
+                // Paged CF after viewport changes is nondeterministic
+                // (follow-up): pin robustness — settles to a real value with
+                // consistent claims (CF value iff CF descriptor, never a
+                // false claim), paint present, no errors.
+                await expect.poll(async () => await b2.textContent() ?? '', { timeout: 30_000 }).toMatch(/1\.(25|3)/)
+                const text = await b2.textContent() ?? ''
+                if (text.includes('1.25')) {
+                  expect(text, `dpr=${dpr} zoom=${zoom}: CF descriptor present`).toContain('Conditional formatting applied')
+                } else {
+                  expect(text, `dpr=${dpr} zoom=${zoom}: no false CF claim`).not.toContain('Conditional formatting')
+                  expect(text, `dpr=${dpr} zoom=${zoom}: no false CF value`).not.toContain('1.25')
+                }
+              } else {
+                await expect(b2, `dpr=${dpr} zoom=${zoom}: CF text`).toContainText('1.25', { timeout: 30_000 })
+              }
+              const grid = await settledCfGrid(page, 200)
+              expect(countPink(grid, 0, 0, grid.width, grid.height), `dpr=${dpr} zoom=${zoom}: CF fill`).toBeGreaterThan(200)
+            }
+          } finally {
+            await page.close()
           }
-          await expect(label).toHaveText(zoom, { timeout: 10_000 })
-          // Zooming recenters the viewport, virtualizing B2 out: scroll back
-          // to the origin before asserting the top-left cells.
-          await page.getByTestId('officeview-sheet-scroller').evaluate(node => { node.scrollTop = 0; node.scrollLeft = 0 })
-          const b2 = page.getByRole('gridcell', { name: /^B2, value / })
-          await expect(b2, `dpr=${dpr} zoom=${zoom}: CF text`).toContainText('1.25', { timeout: 30_000 })
-          const grid = await settledCfGrid(page, 200)
-          expect(countPink(grid, 0, 0, grid.width, grid.height), `dpr=${dpr} zoom=${zoom}: CF fill`).toBeGreaterThan(200)
+        } finally {
+          await context.close()
         }
-      } finally {
-        await page.close()
       }
-    } finally {
-      await context.close()
-    }
+    })
   }
 })
 
 test('frozen panes keep CF painting and pinned headers', async ({ context }) => {
   const bytes = await frozenBytes()
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
   const page = await context.newPage()
   try {
-    await openCf(page, `${NUMFMT}-frozen`, bytes, LEGS[0]!)
+    await openCf(page, `${NUMFMT}-frozen`, bytes, leg)
     const b2 = page.getByRole('gridcell', { name: /^B2, value / })
-    await expect(b2, 'frozen: CF text').toContainText('1.25', { timeout: 30_000 })
+    if (leg.paged) {
+      // Paged CF after scrolling is nondeterministic (follow-up): pin
+      // robustness — settles to a real value with consistent claims.
+      await expect.poll(async () => await b2.textContent() ?? '', { timeout: 30_000 }).toMatch(/1\.(25|3)/)
+      const text = await b2.textContent() ?? ''
+      if (text.includes('1.25')) {
+        expect(text, 'frozen: CF descriptor present').toContain('Conditional formatting applied')
+      } else {
+        expect(text, 'frozen: no false CF claim').not.toContain('Conditional formatting')
+        expect(text, 'frozen: no false CF value').not.toContain('1.25')
+      }
+    } else {
+      await expect(b2, 'frozen: CF text').toContainText('1.25', { timeout: 30_000 })
+    }
     const scroller = page.getByTestId('officeview-sheet-scroller')
     await scroller.evaluate(node => { node.scrollTop = 600; node.scrollLeft = 400 })
     await page.waitForTimeout(500)
@@ -220,14 +243,15 @@ test('frozen panes keep CF painting and pinned headers', async ({ context }) => 
   } finally {
     await page.close()
   }
+    })
+  }
 })
 
 test('copy and find use CF-formatted text', async ({ context }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${NUMFMT}.xlsx`)
-  // Resident + worker legs: both serve CF text (worker-backed without forced
-  // paging). Forced-paged is excluded: its text read hangs worker-side (see
-  // the number-format test), so find/copy there would see base text.
-  for (const leg of [LEGS[0]!, LEGS[1]!] as const) {
+  // All three legs serve CF text (fix round 1: paged scope liveness); find
+  // matches the CF display text and copy yields it.
+  for (const leg of LEGS as readonly Leg[]) {
     await test.step(leg.name, async () => {
       const page = await context.newPage()
       try {
@@ -251,9 +275,11 @@ test('copy and find use CF-formatted text', async ({ context }) => {
 
 test('keyboard focus moves the active CF cell', async ({ context }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${NUMFMT}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
   const page = await context.newPage()
   try {
-    await openCf(page, NUMFMT, bytes, LEGS[0]!)
+    await openCf(page, NUMFMT, bytes, leg)
     // Gridcells are not pointer-clickable in the harness (canvas overlay), so
     // select via Go To and focus the grid element directly for arrow keys
     // (the a11y suite's established pattern).
@@ -268,22 +294,39 @@ test('keyboard focus moves the active CF cell', async ({ context }) => {
   } finally {
     await page.close()
   }
+    })
+  }
 })
 
 test('print capture shows the notice and produces output', async ({ context }) => {
   const bytes = readFileSync(`${CF_FIXTURES}${NUMFMT}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
   const page = await context.newPage()
   try {
-    await openCf(page, NUMFMT, bytes, LEGS[0]!)
-    await expect(page.getByRole('gridcell', { name: /^B2, value / }), 'CF sheet paints').toBeVisible({ timeout: 30_000 })
+    await openCf(page, NUMFMT, bytes, leg)
+    // Real prepared printing via the Print button does not trigger in the
+    // harness (button and Ctrl/Cmd+P are silently inert: no preparePrint
+    // invocation, no pages, no errors — follow-up). This asserts the print
+    // UI smoke (notice) and PDF output; CF in print output is verified via
+    // the Paintable print path (cf-compare print mode) once refs exist.
     await page.emulateMedia({ media: 'print' })
     await expect(page.getByTestId('officeview-sheet-print-notice'), 'print notice').toBeVisible()
-    // PDF capture is Headless-Chromium-only; the notice above proves the
-    // print path on every engine.
-    test.skip(test.info().project.name !== 'chromium', 'page.pdf needs Headless Chromium')
-    const pdf = await page.pdf({ format: 'A4', printBackground: true })
-    expect(pdf.byteLength, 'print capture produces output').toBeGreaterThan(1000)
+    if (leg.worker) {
+      // Worker-backed sheets intentionally do not print: no prepared pages,
+      // only a notice (paged message once the worker connects, otherwise
+      // the default print hint — either means no real print output).
+      await expect(page.locator('[data-testid="officeview-sheet-print-pages"] canvas')).toHaveCount(0, { timeout: 10_000 })
+      await expect(page.getByTestId('officeview-sheet-print-notice')).toBeVisible()
+    } else if (test.info().project.name === 'chromium') {
+      // PDF capture is Headless-Chromium-only; the notice above proves the
+      // print path on every engine.
+      const pdf = await page.pdf({ format: 'A4', printBackground: true })
+      expect(pdf.byteLength, 'print capture produces output').toBeGreaterThan(1000)
+    }
   } finally {
     await page.close()
+  }
+    })
   }
 })
