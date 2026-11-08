@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto'
 import { createGzip, gzipSync } from 'node:zlib'
 import { once } from 'node:events'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { crc32 } from '../../src/stream/crc32'
 import { encodeMessage, Reassembler, FRAGMENT_CAP, MAX_FRAGMENTS, REASSEMBLY_MS, HEADER_BYTES, EXT01_BYTES, type Kind, type RejectReason } from '../../src/stream/frame'
 
@@ -22,7 +22,14 @@ describe('OVSD rejection battery', () => {
   it('magic', async () => { const [b] = encode(); b[0] ^= 1; await refused(make(), b, 'magic') })
   it('version', async () => { const [b] = encode(); b[4] = 2; await refused(make(), b, 'version') })
   it.each([0, 9])('kind %i', async kind => { const [b] = encode(); b[5] = kind; await refused(make(), b, 'kind') })
-  it('unexpected-reqId before buffering', async () => { await refused(make({ expects: () => false }), encode(bytes, { fragmentBytes: 43 })[0], 'unexpected-reqId') })
+  it('unexpected-reqId never creates a pending entry', async () => {
+    const r = make({ expects: () => false })
+    // Observe the actual insertion, not only the post-rejection byte count.
+    const pending = (r as unknown as { pending: Map<number, unknown> }).pending
+    const insert = vi.spyOn(pending, 'set')
+    try { await refused(r, encode(bytes, { fragmentBytes: 43 })[0], 'unexpected-reqId'); expect(insert).not.toHaveBeenCalled() }
+    finally { insert.mockRestore() }
+  })
   it('flags', async () => { const [b] = encode(); b[18] |= 8; await refused(make(), b, 'flags') })
   it('requires gzip even in a single frame', async () => { const [b] = encode(); b[18] &= ~4; await refused(make(), b, 'flags') })
   it('invariant-mismatch', async () => { const [a, b] = encode(bytes, { fragmentBytes: 43 }); const r = make(); expect(await r.push(a)).toBeNull(); b[5] = 2; await refused(r, b, 'invariant-mismatch') })
@@ -31,11 +38,11 @@ describe('OVSD rejection battery', () => {
   it('rejects an orphan continuation', async () => { await refused(make(), encode(bytes, { fragmentBytes: 43 })[1], 'sequence') })
   it('final-count', async () => { const [a] = encode(bytes, { fragmentBytes: 43 }); a[18] |= 1; await refused(make(), a, 'final-count') })
   it('rejects missing final on declared final index', async () => { const [a, b] = encode(bytes, { fragmentBytes: 43 }); const r = make(); await r.push(a); b[18] &= ~1; await refused(r, b, 'final-count') })
-  it('missing-ext01', async () => { const [b] = encode(); b[18] &= ~1; await refused(make(), b, 'missing-ext01') })
+  it('final-count precedes missing-ext01', async () => { const [b] = encode(); b[18] &= ~1; await refused(make(), b, 'final-count') })
   it('fragment-cap', async () => { const [b] = encode(); const huge = new Uint8Array(FRAGMENT_CAP + 1); huge.set(b); await refused(make(), huge, 'fragment-cap') })
   it('rejects truncated headers, extensions and payload lengths', async () => {
     const [b] = encode(bytes, { ext01: true })
-    for (const length of [4, 10, 22, 23, 32, b.length - 1]) await refused(make(), b.subarray(0, length), 'fragment-cap')
+    for (const length of [0, 1, 3, 4, 10, 22, 23, 32, b.length - 1]) await refused(make(), b.subarray(0, length), 'length')
   })
   it('fragment-count', async () => { const [b] = encode(bytes, { ext01: true }); view(b).setUint16(31, 257, true); await refused(make(), b, 'fragment-count') })
   it('fragment-crc', async () => { const [b] = encode(); b[start(b)] ^= 1; await refused(make(), b, 'fragment-crc') })
@@ -99,4 +106,59 @@ it('a rejection during asynchronous inflation prevents stale success', async () 
   expect(await first).toMatchObject({ ok: false, reason: 'sequence' })
   expect(r.bufferedBytes).toBe(0)
   expect(await r.push(b)).toMatchObject({ ok: true, payload: bytes })
+})
+
+
+describe('fix round 1 frame isolation', () => {
+  it.each(['magic', 'short', 'version', 'kind', 'reserved-flags', 'ext-continuation', 'ext-truncated', 'payload-length'])(
+    'drops only the malformed %s frame, never its forged reqId', async failure => {
+      const [a, b] = encode(bytes, { fragmentBytes: 43 }); const r = make()
+      await r.push(a); const held = r.bufferedBytes
+      let bad = b.slice(); let reason = failure
+      switch (failure) {
+        case 'magic': bad = new Uint8Array(23); bad.set([7, 0, 0, 0], 6); bad[0] = 1; break
+        case 'short': bad = bad.slice(0, 10); reason = 'length'; break
+        case 'version': bad[4] = 2; break
+        case 'kind': bad[5] = 0; break
+        // Even a changed invariant cannot authorize deletion when reserved flags are present.
+        case 'reserved-flags': bad[18] |= 8; bad[5] = 2; reason = 'flags'; break
+        case 'ext-continuation': bad[18] |= 2; reason = 'flags'; break
+        case 'ext-truncated': bad = a.slice(0, 32); reason = 'length'; break
+        case 'payload-length': view(bad).setUint32(19, 999, true); reason = 'length'; break
+      }
+      expect(await r.push(bad)).toEqual({ ok: false, reason })
+      expect(r.bufferedBytes).toBe(held)
+      expect(await r.push(b)).toEqual({ ok: true, reqId: 7, kind: 1, payload: bytes })
+      expect(r.bufferedBytes).toBe(0)
+    },
+  )
+  it('stops the clock at final admission, even if inflate crosses the deadline', async () => {
+    let now = 0; const r = make({ now: () => now }); const [a, b] = encode(bytes, { fragmentBytes: 43 })
+    await r.push(a); now = 4999; const result = r.push(b); now = 9000
+    expect(await result).toEqual({ ok: true, reqId: 7, kind: 1, payload: bytes })
+    expect(r.bufferedBytes).toBe(0)
+  })
+  it('sweep expires only incomplete messages, not an inflating complete message', async () => {
+    let now = 0; const r = make({ now: () => now })
+    const [a, b] = encode(bytes, { fragmentBytes: 43 })
+    await r.push(a); await r.push(encode(bytes, { reqId: 8, fragmentBytes: 43 })[0])
+    now = 4999; const result = r.push(b); now = 5000
+    expect(r.sweep()).toEqual([{ ok: false, reqId: 8, reason: 'timeout' }])
+    expect(await result).toEqual({ ok: true, reqId: 7, kind: 1, payload: bytes })
+    expect(r.sweep()).toEqual([]); expect(r.bufferedBytes).toBe(0)
+  })
+  it('rejects zero fragment count', async () => {
+    const [a] = encode(bytes, { ext01: true }); view(a).setUint16(31, 0, true)
+    await refused(make(), a, 'fragment-count')
+  })
+  it('rejects a non-final cumulative length overflow immediately', async () => {
+    const [a, b] = encode(randomBytes(100), { fragmentBytes: 43 }); const r = make()
+    view(a).setBigUint64(23, 15n, true)
+    expect(await r.push(a)).toBeNull(); expect(b[18] & 1).toBe(0)
+    await refused(r, b, 'total-len')
+  })
+  it('rejects duplicate fragments and drops the affected message', async () => {
+    const [a] = encode(bytes, { fragmentBytes: 43 }); const r = make()
+    await r.push(a); await refused(r, a, 'sequence')
+  })
 })

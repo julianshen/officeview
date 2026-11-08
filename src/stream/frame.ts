@@ -5,7 +5,7 @@ export const enum Kind {
   XLSX_TILE = 5, SHOW_PLAN = 6, NOTES_RASTER = 7, PRINT_RASTER = 8,
 }
 export const FRAGMENT_CAP = 1 << 20, MAX_FRAGMENTS = 256, REASSEMBLY_MS = 5000, HEADER_BYTES = 23, EXT01_BYTES = 10
-export type RejectReason = 'magic' | 'version' | 'kind' | 'unexpected-reqId' | 'flags' | 'invariant-mismatch' | 'sequence' | 'final-count' | 'missing-ext01' | 'fragment-cap' | 'fragment-count' | 'fragment-crc' | 'total-len' | 'encoded-cap' | 'decoded-cap' | 'inflate' | 'whole-crc' | 'timeout'
+export type RejectReason = 'magic' | 'version' | 'kind' | 'unexpected-reqId' | 'flags' | 'invariant-mismatch' | 'sequence' | 'final-count' | 'missing-ext01' | 'fragment-cap' | 'length' | 'fragment-count' | 'fragment-crc' | 'total-len' | 'encoded-cap' | 'decoded-cap' | 'inflate' | 'whole-crc' | 'timeout'
 export type Rejection = { ok: false; reqId?: number; reason: RejectReason }
 export type FrameResult = { ok: true; kind: Kind; reqId: number; payload: Uint8Array } | Rejection
 const MAGIC = 0x4453564f
@@ -74,32 +74,37 @@ export class Reassembler {
   }
   sweep(): Rejection[] {
     const rejections: Rejection[] = [], now = this.now()
-    for (const [id, p] of this.pending) if (now - p.began >= REASSEMBLY_MS) rejections.push(this.reject(id, 'timeout'))
+    for (const [id, p] of this.pending) if (!p.inflating && now - p.began >= REASSEMBLY_MS) rejections.push(this.reject(id, 'timeout'))
     return rejections
   }
   async push(fragment: Uint8Array): Promise<FrameResult | null> {
-    const v = data(fragment), reqId = fragment.length >= 10 ? v.getUint32(6, true) : undefined
-    if (fragment.length < 4 || v.getUint32(0, true) !== MAGIC) return this.reject(reqId, 'magic')
-    if (fragment.length < HEADER_BYTES) return this.reject(reqId, 'fragment-cap')
-    const id = reqId!, ver = fragment[4], kind = fragment[5] as Kind
-    if (!this.opts.acceptedVersions.has(ver)) return this.reject(id, 'version')
-    if (kind < 1 || kind > 8) return this.reject(id, 'kind')
+    // Until the envelope is structurally valid, its claimed reqId cannot
+    // authorize mutating any existing message (including cancelling inflation).
+    if (fragment.length < HEADER_BYTES) return this.reject(undefined, 'length')
+    const v = data(fragment)
+    if (v.getUint32(0, true) !== MAGIC) return this.reject(undefined, 'magic')
+    const ver = fragment[4], kind = fragment[5] as Kind
+    if (!this.opts.acceptedVersions.has(ver)) return this.reject(undefined, 'version')
+    if (kind < 1 || kind > 8) return this.reject(undefined, 'kind')
     const seq = v.getUint32(10, true), flags = fragment[18], compressed = flags & 4
     const final = !!(flags & 1), ext = !!(flags & 2)
+    if ((flags & ~7) || (ext && seq !== 0)) return this.reject(undefined, 'flags')
+    const start = HEADER_BYTES + (ext ? EXT01_BYTES : 0), length = v.getUint32(19, true)
+    if (fragment.length > FRAGMENT_CAP) return this.reject(undefined, 'fragment-cap')
+    if (fragment.length < start || length !== fragment.length - start) return this.reject(undefined, 'length')
+    const id = v.getUint32(6, true)
     let p = this.pending.get(id)
     if (p && (p.ver !== ver || p.kind !== kind || p.compressed !== compressed)) return this.reject(id, 'invariant-mismatch')
+    if (!compressed) return this.reject(undefined, 'flags')
     if (!this.opts.expects(id, kind)) return this.reject(id, 'unexpected-reqId')
-    if ((flags & ~7) || !compressed || (ext && seq !== 0)) return this.reject(id, 'flags')
-    const start = HEADER_BYTES + (ext ? EXT01_BYTES : 0), length = v.getUint32(19, true)
-    if (fragment.length > FRAGMENT_CAP || fragment.length < start || length !== fragment.length - start) return this.reject(id, 'fragment-cap')
-    if (p && this.now() - p.began >= REASSEMBLY_MS) return this.reject(id, 'timeout')
+    if (p && !p.inflating && this.now() - p.began >= REASSEMBLY_MS) return this.reject(id, 'timeout')
     if (p ? p.inflating || seq !== p.next : seq !== 0) return this.reject(id, 'sequence')
     let total = p?.total ?? length, count = p?.count ?? 1
     let totalBig = BigInt(total)
     if (!p && ext) { totalBig = v.getBigUint64(23, true); count = v.getUint16(31, true) }
     if (count < 1 || count > MAX_FRAGMENTS) return this.reject(id, 'fragment-count')
-    if (!p && !ext && !final) return this.reject(id, 'missing-ext01')
     if (seq >= count || final !== (seq === count - 1)) return this.reject(id, 'final-count')
+    if (!p && !ext && !final) return this.reject(id, 'missing-ext01')
     const cap = this.opts.encodedCap(kind)
     if (!Number.isSafeInteger(cap) || cap < 0 || totalBig > BigInt(cap)) return this.reject(id, 'encoded-cap')
     total = Number(totalBig)
@@ -114,6 +119,8 @@ export class Reassembler {
     }
     p.chunks.push(fragment.slice(start)); p.received = received; p.next++
     if (!final) return null
+    // Reassembly is complete; decoded-cap admission, not the fragment clock,
+    // bounds the remaining inflation work.
     p.inflating = true
     return this.inflate(id, p)
   }
@@ -145,7 +152,6 @@ export class Reassembler {
       while (true) {
         const { done, value } = await reader.read()
         if (p.rejected) return p.rejected
-        if (this.now() - p.began >= REASSEMBLY_MS) return this.reject(id, 'timeout')
         if (done) break
         if (value.length > cap - size) return this.reject(id, 'decoded-cap')
         size += value.length; checksum = crc32(value, checksum); chunks.push(value)
