@@ -270,7 +270,9 @@ function evaluateAboveAverage(
   if (st.mean === undefined || st.numericCount === 0) return { kind: 'no-match' }
   let threshold = st.mean
   if (stdDev !== undefined) {
-    const sd = st.stddevSample ?? st.stddevPop
+    // Ruling I2: Excel STDEV.S (sample stddev) only; never fall back to population stddev.
+    // When range contains errors or sample stddev is undefined, fail closed (no-match).
+    const sd = st.stddevSample
     if (sd === undefined) return { kind: 'no-match' }
     threshold = above ? st.mean + stdDev * sd : st.mean - stdDev * sd
   }

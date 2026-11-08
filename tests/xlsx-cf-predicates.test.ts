@@ -10,7 +10,7 @@ import type {
 import type { XlsxCell } from '../src/xlsx/types'
 import { createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import { parseCfSheet } from '../src/xlsx/cf/parse'
-import { createResidentCfSource, type CfRangeStatistics } from '../src/xlsx/cf/statistics'
+import { createCfStatistics, createResidentCfSource, type CfRangeStatistics } from '../src/xlsx/cf/statistics'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from '../src/xlsx/cf/predicates'
 
 const SHEET = 'sheet1'
@@ -381,9 +381,9 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(rule(stdDevEq), at, num(2), stats, denyGate)).toMatchObject({ kind: 'ready', value: true })
   })
 
-  it('population-stddev selection is gated on its evidence variant', () => {
-    // Manifest F5/G2/H9/I12 assume population stddev (5.2619 over {0,0,10,11}):
-    // withheld without evidence, reproduced with the allow gate.
+  it('stddev never falls back to population stddev (fails closed without sample stddev)', () => {
+    // Ruling I2: When stats has only stddevPop and no stddevSample, stddev rules fail closed (no-match)
+    // rather than using population stddev.
     const at = { row: 0, col: 0 }
     const pop: CfRangeStatistics = {
       scopeKey: 'p', numericCount: 4, sum: 21, mean: 5.25, min: 0, max: 11, stddevPop: 5.2619,
@@ -392,19 +392,19 @@ describe('CF predicate evaluation', () => {
     const std1 = rule({ kind: 'aboveAverage', above: true, equal: false, stdDev: 1 })
     expect(evaluatePredicate(std1, at, num(11), pop, denyGate).kind).toBe('unresolved')
     expect(evaluatePredicate(std1, at, num(0), pop, denyGate).kind).toBe('unresolved')
-    expect(evaluatePredicate(std1, at, num(11), pop, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    // Under allowGate, missing stddevSample yields no-match, NOT matching via population stddev
+    expect(evaluatePredicate(std1, at, num(11), pop, allowGate)).toMatchObject({ kind: 'no-match' })
     expect(evaluatePredicate(std1, at, num(0), pop, allowGate)).toMatchObject({ kind: 'no-match' })
     const std1below = rule({ kind: 'aboveAverage', above: false, equal: false, stdDev: 1 })
-    // Manifest G2: -2 is below one population stddev over {-2,2,10,11} (σ=5.4486).
     const popBelow: CfRangeStatistics = {
       scopeKey: 'pb', numericCount: 4, sum: 21, mean: 5.25, min: -2, max: 11, stddevPop: 5.4486,
       sortedAsc: Float64Array.from([-2, 2, 10, 11]), frequencies: new Map(), declaredCells: 4, spanCells: 4, storedCells: 4,
     }
     expect(evaluatePredicate(std1below, at, num(-2), popBelow, denyGate).kind).toBe('unresolved')
-    expect(evaluatePredicate(std1below, at, num(-2), popBelow, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    expect(evaluatePredicate(std1below, at, num(-2), popBelow, allowGate)).toMatchObject({ kind: 'no-match' })
   })
 
-  it('stddev uses sample standard deviation (Excel STDEV.S) and fails closed on range errors', () => {
+  it('stddev uses sample standard deviation (Excel STDEV.S) and fails closed on range errors', async () => {
     // Stage 1 stage1-above-average-stddev values: {0,0,10,11}, mean 5.25.
     // Sample stddev = sqrt(110.75 / 3) = 6.0759. Threshold for stdDev=1: 5.25 + 6.0759 = 11.3259.
     // 11 < 11.3259: F5 does not match (Excel oracle leaves F5 white).
@@ -420,13 +420,33 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(std1, at, num(11), sampleStats, allowGate)).toMatchObject({ kind: 'no-match' })
     expect(evaluatePredicate(std1, at, num(12), sampleStats, allowGate)).toMatchObject({ kind: 'ready', value: true })
 
-    // When range has errors, sample stddev is undefined (STDEV.S fails closed), yielding no-match
+    // When range has errors, sample stddev is undefined (STDEV.S fails closed), yielding no-match.
+    // Ruling I2: Even when stddevPop is defined, sample stddev must not fall back to population stddev.
     const errorStats: CfRangeStatistics = {
       ...sampleStats,
       stddevSample: undefined,
-      stddevPop: undefined,
+      stddevPop: 5.2619,
     }
     expect(evaluatePredicate(std1, at, num(12), errorStats, allowGate)).toMatchObject({ kind: 'no-match' })
+
+    // Exercise with real prepareStatistics over an error-bearing range:
+    const mem = createCfMemory({})
+    const statSession = createCfStatistics(mem)
+    const errorCells: XlsxCell[] = [
+      { row: 0, col: 0, ref: 'A1', value: 10, valueIsError: false, styleIndex: 0 },
+      { row: 1, col: 0, ref: 'A2', value: 20, valueIsError: false, styleIndex: 0 },
+      { row: 2, col: 0, ref: 'A3', value: '#N/A', valueIsError: true, styleIndex: 0 },
+    ]
+    const errorSrc = createResidentCfSource(errorCells, SHEET, stamp(1), mem)
+    const [realOut] = await statSession.prepareStatistics([[rect(0, 2)]], stamp(1), errorSrc, frozenBudget())
+    expect(realOut!.kind).toBe('ready')
+    if (realOut!.kind === 'ready') {
+      const realStats = realOut.value.value
+      expect(realStats.stddevSample).toBeUndefined()
+      expect(realStats.stddevPop).toBeDefined()
+      expect(evaluatePredicate(std1, at, num(100), realStats, allowGate)).toMatchObject({ kind: 'no-match' })
+      realOut.value.release()
+    }
   })
 
   it('aboveAverage on statistics crossing hidden rows gates on layout:hidden-row-statistics on any range', () => {
