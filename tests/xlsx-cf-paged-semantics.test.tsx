@@ -19,7 +19,7 @@ vi.mock('../src/xlsx/storage/importSession', async original => {
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const CF_SHEET_DATA = '<row r="1"><c r="A1" s="0"><v>1.25</v></c><c r="B1" s="0"><v>2</v></c></row>'
-const CF_STYLES = '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs><dxfs count="2"><dxf><numFmt numFmtId="164" formatCode="0.00"/></dxf><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'
+const CF_STYLES = '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs><dxfs count="2"><dxf><numFmt numFmtId="164" formatCode="0.00"/></dxf><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'
 const CF_AFTER = '<conditionalFormatting sqref="A1:A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="B1:B1"><cfRule type="cellIs" dxfId="1" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting>'
 
 function workerPort(delayedStructure = false) {
@@ -162,7 +162,7 @@ it('worker-shell in-flight g1 is withdrawn before the negative g2 overlay publis
  vi.spyOn(text,'prepareCfWireScope').mockImplementation(async(...args)=>{const out=await prepare(...args);if(out)scopes.push(out);return out})
  const port=workerPort();port.holdCf()
  const rules='<conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule><cfRule type="cellIs" dxfId="1" priority="2" operator="lessThan"><formula>0</formula></cfRule></conditionalFormatting>'
- const styles='<cellXfs count="1"><xf/></cellXfs><dxfs count="2"><dxf><fill><patternFill patternType="solid"><fgColor rgb="FF00FF00"/></patternFill></fill></dxf><dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill></dxf></dxfs>'
+ const styles='<cellXfs count="1"><xf/></cellXfs><dxfs count="2"><dxf><fill><patternFill patternType="solid"><bgColor rgb="FF00FF00"/></patternFill></fill></dxf><dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFF0000"/></patternFill></fill></dxf></dxfs>'
  const bytes=xlsxBytes({sheetData:CF_SHEET_DATA+'<row r="2"><c r="A2"><v>2</v></c></row>',styles,afterSheetData:rules})
  const ui=render(<OfficeFile data={new Blob([new Uint8Array(bytes).buffer])} interactiveSheets viewerWorker={()=>port}/>)
  try{

@@ -64,6 +64,57 @@ describe('viewport adapters run the data path and bind hashes', () => {
     const again = await compareCfCase(c, 'paged', { rootDir: REPO_ROOT })
     expect(again.outputHash).toBe(res.outputHash)
   }, 60000)
+
+  it('interactive adapter fails when expected fill is mismatched (changed rendered fill fails gate)', async () => {
+    const manifest = loadManifest()
+    const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
+    const mutated = {
+      ...c,
+      expected: {
+        ...c.expected,
+        cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ...cell, fillRgb: 'FF0000FF' } : cell),
+      },
+    }
+    const res = await compareCfCase(mutated, 'interactive', { rootDir: REPO_ROOT })
+    expect(res.outcome).toBe('fail')
+    expect(res.reason).toContain('fill mismatch: expected FF0000FF, got FFFFC7CE')
+  }, 60000)
+
+  it('paged adapter fails when expected fill is mismatched (changed rendered fill fails gate)', async () => {
+    const manifest = loadManifest()
+    const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
+    const mutated = {
+      ...c,
+      expected: {
+        ...c.expected,
+        cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ...cell, fillRgb: 'FF0000FF' } : cell),
+      },
+    }
+    const res = await compareCfCase(mutated, 'paged', { rootDir: REPO_ROOT })
+    expect(res.outcome).toBe('fail')
+    expect(res.reason).toContain('fill mismatch: expected FF0000FF, got FFFFC7CE')
+  }, 60000)
+
+  it('adapters fail when control cell receives conditional formatting', async () => {
+    const manifest = loadManifest()
+    const c = manifest.cases.find(entry => entry.id === 'stage1-cellis-literals')!
+    const mutated = {
+      ...c,
+      expected: {
+        ...c.expected,
+        positiveRefs: c.expected.positiveRefs.filter(r => r !== 'B6'),
+        negativeRefs: [...c.expected.negativeRefs, 'B6'],
+        cells: c.expected.cells.map(cell => cell.ref === 'B6' ? { ...cell, matched: false } : cell),
+      },
+    }
+    const resI = await compareCfCase(mutated, 'interactive', { rootDir: REPO_ROOT })
+    expect(resI.outcome).toBe('fail')
+    expect(resI.reason).toContain('Control cell B6 expected matched: false, but CF formatting applied')
+
+    const resP = await compareCfCase(mutated, 'paged', { rootDir: REPO_ROOT })
+    expect(resP.outcome).toBe('fail')
+    expect(resP.reason).toContain('Control cell B6 expected matched: false, but CF formatting applied')
+  }, 60000)
 })
 
 describe('print Paintable carries CF fill', () => {

@@ -19,7 +19,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
-import { parseRangeA1 } from './cf-refs/verify'
+import { parseRangeA1, parseA1 } from './cf-refs/verify'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { verifyCfCase } from './cf-refs/verify'
@@ -95,6 +95,72 @@ function sha256Hex(lines: string[]): string {
  * Pixel diff stays pending without Excel viewport refs; behavior is covered
  * by tests/browser/xlsx-cf.spec.ts.
  */
+export interface ActualCellOutcome {
+  applied: boolean
+  unresolved?: boolean
+  style?: {
+    fillColor?: string
+    color?: string
+    bold?: boolean
+    underline?: string
+    strike?: boolean
+    borders?: { top?: string; bottom?: string; left?: string; right?: string }
+  }
+}
+
+export function verifyCellExpectations(
+  c: CfOracleCase,
+  actualAt: (row: number, col: number) => ActualCellOutcome,
+): string | undefined {
+  for (const exp of c.expected.cells) {
+    const pos = parseA1(exp.ref)
+    if (!pos) return `Invalid cell reference: ${exp.ref}`
+    const actual = actualAt(pos.row, pos.col)
+    if (exp.matched) {
+      if (actual.unresolved) continue
+      if (!actual.applied) {
+        return `Cell ${exp.ref} expected matched: true, but no CF formatting applied`
+      }
+      const style = actual.style ?? {}
+      if (exp.fillRgb !== undefined) {
+        const fill = style.fillColor ? String(style.fillColor).toUpperCase() : undefined
+        if (fill !== exp.fillRgb.toUpperCase()) {
+          return `Cell ${exp.ref} fill mismatch: expected ${exp.fillRgb}, got ${fill ?? 'none'}`
+        }
+      }
+      if (exp.fontRgb !== undefined) {
+        const font = style.color ? String(style.color).toUpperCase() : undefined
+        if (font !== exp.fontRgb.toUpperCase()) {
+          return `Cell ${exp.ref} font mismatch: expected ${exp.fontRgb}, got ${font ?? 'none'}`
+        }
+      }
+      if (exp.bold !== undefined && Boolean(style.bold) !== exp.bold) {
+        return `Cell ${exp.ref} bold mismatch: expected ${exp.bold}, got ${Boolean(style.bold)}`
+      }
+      if (exp.underline !== undefined) {
+        const actualUnderline = style.underline ?? 'none'
+        if (actualUnderline !== exp.underline) {
+          return `Cell ${exp.ref} underline mismatch: expected ${exp.underline}, got ${actualUnderline}`
+        }
+      }
+      if (exp.strikethrough !== undefined && Boolean(style.strike) !== exp.strikethrough) {
+        return `Cell ${exp.ref} strikethrough mismatch: expected ${exp.strikethrough}, got ${Boolean(style.strike)}`
+      }
+      if (exp.borderTop !== undefined && Boolean(style.borders?.top) !== exp.borderTop) {
+        return `Cell ${exp.ref} borderTop mismatch: expected ${exp.borderTop}, got ${Boolean(style.borders?.top)}`
+      }
+      if (exp.borderBottom !== undefined && Boolean(style.borders?.bottom) !== exp.borderBottom) {
+        return `Cell ${exp.ref} borderBottom mismatch: expected ${exp.borderBottom}, got ${Boolean(style.borders?.bottom)}`
+      }
+    } else {
+      if (actual.applied) {
+        return `Control cell ${exp.ref} expected matched: false, but CF formatting applied`
+      }
+    }
+  }
+  return undefined
+}
+
 export async function compareInteractiveViewport(c: CfOracleCase, rootDir: string): Promise<CfCompareResult> {
   const oracleRef = `${c.id} [${c.status}]`
   const workbookHash = c.expected.savedSha256
@@ -180,12 +246,30 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     }
   }
   const peakBytes = peak()
+  const mismatch = verifyCellExpectations(c, (row, col) => {
+    const outcome = outcomes.get(`${row},${col}`)
+    const style = scope ? scope.effectiveStyle(row, col, base as never) : (base as never)
+    const hasStyle = Boolean(style && style !== base && Object.keys(style).length > 0)
+    const desc = scope ? scope.describe(row, col) : undefined
+    const hasWinningDesc = desc !== undefined && desc.key !== 'cf-unavailable'
+    const applied = hasStyle || hasWinningDesc
+    const unresolved = outcome === undefined
+      || outcome.kind === 'unresolved'
+      || (outcome.writes && outcome.writes.length > 0)
+      || desc?.key === 'cf-unavailable'
+    return { applied, unresolved, style: hasStyle ? style : undefined }
+  })
   scope?.dispose()
   if (net() !== 0) return fail(`resident viewport leaked ${net()} bytes`)
   if (scope && peakBytes <= 0) return fail('resident viewport observed no allocation')
+  if (mismatch) return fail(mismatch)
+  const isMeasured = c.status === 'measured'
   return {
-    id: c.id, mode: 'interactive', outcome: 'recipe-pending',
-    reason: 'Viewport data path verified with output hash; pixel diff awaits Excel viewport refs. Behavior covered by tests/browser/xlsx-cf.spec.ts.',
+    id: c.id, mode: 'interactive',
+    outcome: isMeasured ? 'pass' : 'recipe-pending',
+    reason: isMeasured
+      ? `Interactive viewport verified: all ${c.expected.cells.length} cell expectations match.`
+      : `Viewport cell expectations verified (${c.expected.cells.length} cells checked); pixel diff awaits Excel viewport refs.`,
     outputHash: sha256Hex(lines), workbookHash, oracleRef, oracleHash, reads: 1,
   }
 }
@@ -252,10 +336,31 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
         const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify((props as Record<string, unknown>)[k])}`).join('+')
         return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}`
       })
+    const { resolveCfCellStyle } = await import('../src/xlsx/cf/dxf')
+    const base = {}
+    const stateMap = new Map<string, (typeof result.states)[number]>()
+    for (const s of result.states) stateMap.set(`${s.row},${s.col}`, s)
+    const mismatch = verifyCellExpectations(c, (row, col) => {
+      const s = stateMap.get(`${row},${col}`)
+      if (!s) return { applied: false, unresolved: true }
+      const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
+      const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
+      if (!hasProps) return { applied: false, unresolved }
+      const style = resolveCfCellStyle(base as never, { properties: s.properties }, {})
+      return { applied: true, unresolved, style }
+    })
+    const outputHash = sha256Hex(lines)
+    if (mismatch) {
+      return { id: c.id, mode: 'paged', outcome: 'fail', reason: mismatch, outputHash, workbookHash, oracleRef, oracleHash, reads: 1 }
+    }
+    const isMeasured = c.status === 'measured'
     return {
-      id: c.id, mode: 'paged', outcome: 'recipe-pending',
-      reason: 'Viewport data path verified with output hash; pixel diff awaits Excel viewport refs. Behavior covered by tests/browser/xlsx-cf.spec.ts.',
-      outputHash: sha256Hex(lines), workbookHash, oracleRef, oracleHash, reads: 1,
+      id: c.id, mode: 'paged',
+      outcome: isMeasured ? 'pass' : 'recipe-pending',
+      reason: isMeasured
+        ? `Paged viewport verified: all ${c.expected.cells.length} cell expectations match.`
+        : `Viewport cell expectations verified (${c.expected.cells.length} cells checked); pixel diff awaits Excel viewport refs.`,
+      outputHash, workbookHash, oracleRef, oracleHash, reads: 1,
     }
   } finally {
     await session.release()

@@ -253,8 +253,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "c2ddbee2a19ac1e61d94f4611386d7c5c87bd1ca266d802a15b3de41fb4b50ef",
-        "savedSha256": "c2ddbee2a19ac1e61d94f4611386d7c5c87bd1ca266d802a15b3de41fb4b50ef",
+        "inputSha256": "d17df5029c77dc28ac08d2b732578145ff6d8845a01b03c425b44b05699443be",
+        "savedSha256": "d17df5029c77dc28ac08d2b732578145ff6d8845a01b03c425b44b05699443be",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B6",
@@ -716,8 +716,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "535782d206ff9f4e01b2eda335413bf148e30bb934cee4dd145575cf8b7d54d3",
-        "savedSha256": "535782d206ff9f4e01b2eda335413bf148e30bb934cee4dd145575cf8b7d54d3",
+        "inputSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
+        "savedSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -1145,8 +1145,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "8b0d9ddac7dc20385da5727368b67f7b21cb8f677533b4c34ad9c8b391bf8c3e",
-        "savedSha256": "8b0d9ddac7dc20385da5727368b67f7b21cb8f677533b4c34ad9c8b391bf8c3e",
+        "inputSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
+        "savedSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -1596,8 +1596,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "027ab99c7b48bf948dc5279d586a23b80fa6be59c8ec87bb17be579e9dff9dd1",
-        "savedSha256": "027ab99c7b48bf948dc5279d586a23b80fa6be59c8ec87bb17be579e9dff9dd1",
+        "inputSha256": "730bf7cc3b6231780104a2be60d7b81b7b3f1188928d1703b0f9f1cdc4693256",
+        "savedSha256": "730bf7cc3b6231780104a2be60d7b81b7b3f1188928d1703b0f9f1cdc4693256",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B4",
@@ -1922,8 +1922,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "e76b4d77776099a21751f8927f094aae53619c8b162893609c6958b91cd95321",
-        "savedSha256": "e76b4d77776099a21751f8927f094aae53619c8b162893609c6958b91cd95321",
+        "inputSha256": "8d3641a34f7909bbf01727945295e9564f64c742c8bb8796611c9755983f258c",
+        "savedSha256": "8d3641a34f7909bbf01727945295e9564f64c742c8bb8796611c9755983f258c",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B3",
@@ -2214,8 +2214,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "4f854c123eb48d176312e7fba550012026121b0aa78749ba3e5e48c3b2a07f7d",
-        "savedSha256": "4f854c123eb48d176312e7fba550012026121b0aa78749ba3e5e48c3b2a07f7d",
+        "inputSha256": "8a768879f1f4c7c6df8ca6bf4961f2d13585775d912c3d2e1da36b76c1036665",
+        "savedSha256": "8a768879f1f4c7c6df8ca6bf4961f2d13585775d912c3d2e1da36b76c1036665",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B5",
@@ -2643,8 +2643,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "ece69466138055cf787b2c141f0f9a827cd758fbac75fa193732461c9caf0672",
-        "savedSha256": "ece69466138055cf787b2c141f0f9a827cd758fbac75fa193732461c9caf0672",
+        "inputSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
+        "savedSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B4",
@@ -2958,8 +2958,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "02a22ceb63ddf3cb5af29432c26fb44bfc528aeb8b61fde1aafb73a74a6dc6af",
-        "savedSha256": "02a22ceb63ddf3cb5af29432c26fb44bfc528aeb8b61fde1aafb73a74a6dc6af",
+        "inputSha256": "4a0f8da4f3a624c72981e594a8ad50db905a3bfe690768c4ef6715dfab01db97",
+        "savedSha256": "4a0f8da4f3a624c72981e594a8ad50db905a3bfe690768c4ef6715dfab01db97",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3321,8 +3321,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "d4bea566bc108053738bea8f8dd64b8d7b197d31430596f131de359ba537c207",
-        "savedSha256": "d4bea566bc108053738bea8f8dd64b8d7b197d31430596f131de359ba537c207",
+        "inputSha256": "fb0a4b8ba3c2f8c8e4992743643526d944ea407a6152f84c1bd16d8203757beb",
+        "savedSha256": "fb0a4b8ba3c2f8c8e4992743643526d944ea407a6152f84c1bd16d8203757beb",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3585,8 +3585,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "37e77bb68134002d31a834d86af3959fe3bb85f0612de3a1edaa2c34cd7fac07",
-        "savedSha256": "37e77bb68134002d31a834d86af3959fe3bb85f0612de3a1edaa2c34cd7fac07",
+        "inputSha256": "b4d86e8e117258f8cbb3f9f4c64728ab23fe4ac9e17fe610215e28d53d25b53f",
+        "savedSha256": "b4d86e8e117258f8cbb3f9f4c64728ab23fe4ac9e17fe610215e28d53d25b53f",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3669,7 +3669,7 @@
             "ref": "F2",
             "controlRef": "F8",
             "matched": true,
-            "fillRgb": "FFB8CCE4",
+            "fillRgb": "FF8FAADC",
             "borderTop": true,
             "borderBottom": true,
             "note": "theme=4 tint=0.4 DXF fill + top/bottom borders"
@@ -3965,8 +3965,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "770007d72c22af9cea7c913c09c9780044a37ca04d4f6a13df0611682059bbcb",
-        "savedSha256": "770007d72c22af9cea7c913c09c9780044a37ca04d4f6a13df0611682059bbcb",
+        "inputSha256": "29ead656b6ad537cb6c5cc574b79968a179c7f1438f44bb8a2a7708eed8e489c",
+        "savedSha256": "29ead656b6ad537cb6c5cc574b79968a179c7f1438f44bb8a2a7708eed8e489c",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -4151,8 +4151,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "cf43c75ec12805df47367256bfdbe680b059a886373f0ba66b09f8274db60457",
-        "savedSha256": "cf43c75ec12805df47367256bfdbe680b059a886373f0ba66b09f8274db60457",
+        "inputSha256": "fcb09d864c34e38e8fa6ad922f234caf5ddfae01dc39b130b9b73566cda578df",
+        "savedSha256": "fcb09d864c34e38e8fa6ad922f234caf5ddfae01dc39b130b9b73566cda578df",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
