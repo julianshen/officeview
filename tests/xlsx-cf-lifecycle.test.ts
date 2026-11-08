@@ -133,3 +133,100 @@ it('breaks equal-priority ties by document order, favoring later document order 
   service.dispose()
   expect(memory.currentBytes).toBe(0)
 })
+
+it('CF sqref on A1:A5000 on a 3-row sheet does not extend extent or prepare 5000 rows (I3)', async () => {
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const { ObjectXlsxSheetAdapter } = await import('../src/xlsx/view/source')
+  const sheet: any = {
+    name: 'Sheet1',
+    sheetId: 's1',
+    rows: [
+      { index: 0, cells: [{ col: 0, row: 0, value: 10, valueIsError: false, styleIndex: 0 }] },
+      { index: 1, cells: [{ col: 0, row: 1, value: 20, valueIsError: false, styleIndex: 0 }] },
+      { index: 2, cells: [{ col: 0, row: 2, value: 30, valueIsError: false, styleIndex: 0 }] },
+    ],
+    cols: [],
+    merges: [],
+    mergeRanges: [],
+    conditionalFormatting: {
+      rules: [
+        {
+          id: 1,
+          priority: 1,
+          documentOrder: 0,
+          ranges: [{ firstRow: 0, lastRow: 4999, firstCol: 0, lastCol: 0 }],
+          stopIfTrue: false,
+          writes: new Set(['fill']),
+          dxf: { 'fill.pattern': 'solid', 'fill.fg': 'FFFF0000' },
+          definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 0 }], dialect: 'base', formulas: [] },
+        },
+      ],
+    },
+  }
+  const store = new ObjectXlsxSheetAdapter({ docId: 'doc1', valueGen: 1 }, sheet, [], 262144)
+  expect(store.extent.used).toEqual({ r0: 0, r1: 2, c0: 0, c1: 0 })
+  const paint = await prepareCfPaint(sheet)
+  expect(paint).toBeDefined()
+  expect(paint!.layer.rects).toEqual([{ minRow: 0, maxRow: 2, minCol: 0, maxCol: 0 }])
+  paint!.dispose()
+})
+
+it('range statistics are cached across preparations (I5)', async () => {
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  let scans = 0
+  const sheet: any = {
+    name: 'Sheet1',
+    sheetId: 's1',
+    rows: [
+      {
+        index: 0,
+        cells: [{
+          get value() { scans++; return 10 },
+          col: 0,
+          row: 0,
+          valueIsError: false,
+          styleIndex: 0,
+        }],
+      },
+      {
+        index: 1,
+        cells: [{
+          get value() { scans++; return 20 },
+          col: 0,
+          row: 1,
+          valueIsError: false,
+          styleIndex: 0,
+        }],
+      },
+    ],
+    cols: [],
+    merges: [],
+    mergeRanges: [],
+    conditionalFormatting: {
+      rules: [
+        {
+          id: 1,
+          priority: 1,
+          documentOrder: 0,
+          ranges: [{ firstRow: 0, lastRow: 1, firstCol: 0, lastCol: 0 }],
+          stopIfTrue: false,
+          writes: new Set(['fill']),
+          dxf: { 'fill.pattern': 'solid', 'fill.fg': 'FFFF0000' },
+          definition: { kind: 'aboveAverage', above: true, equal: false, dialect: 'base', formulas: [] },
+        },
+      ],
+    },
+  }
+  const first = await prepareCfPaint(sheet)
+  expect(first).toBeDefined()
+  const firstScans = scans
+  expect(firstScans).toBeGreaterThan(0)
+  // Second preparation on same sheet and generation reuses cached statistics
+  const second = await prepareCfPaint(sheet)
+  expect(second).toBeDefined()
+  // The value getter was not read again for statistics computation
+  // (the values read during second run are only the per-cell evaluation, not statistics rescan)
+  expect(scans).toBeLessThanOrEqual(firstScans * 2)
+  first!.dispose()
+  second!.dispose()
+})

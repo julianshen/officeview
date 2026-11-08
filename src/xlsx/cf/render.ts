@@ -132,6 +132,9 @@ function unavailable(sheet: XlsxSheet): undefined {
   if (ds.length < CF_LIMITS.diagnostics && !ds.some(d => d.feature === 'cf-paint-unavailable')) ds.push({ kind: 'unsupported', feature: 'cf-paint-unavailable', message: 'Conditional formatting could not be prepared within the admitted batch; base formatting is shown.' })
   return undefined
 }
+// Retained statistics sessions across preparations / viewport scrolls per (sheet, generation) (Ruling I5)
+const sheetStatsSessions = new WeakMap<object, { session: import('./statistics').CfStatisticsSession; key: string }>()
+
 /** Shared by resident assets and paged callers. paintRects scopes whole-axis
  * rules to the visible/printed source coordinates, including unstored blanks. */
 export async function prepareCfPaint(sheet: XlsxSheet, options: {
@@ -164,7 +167,16 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
   }
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
-  const statistics: CfPaintStatistics = { session: createCfStatistics(memory), stamp, results: new Map() }
+  // Ruling I5: Cache range statistics per (sheet, rule range, data version) across preparations.
+  const currentStatsKey = `${stamp.owner}|${stamp.sheetId}|${stamp.workbookValueGen}|${stamp.structureGen}`
+  let retainedStats = sheetStatsSessions.get(sheet)
+  if (!retainedStats || retainedStats.key !== currentStatsKey) {
+    if (retainedStats) retainedStats.session.dispose()
+    const session = createCfStatistics(memory, { maxEntries: 64 })
+    retainedStats = { session, key: currentStatsKey }
+    sheetStatsSessions.set(sheet, retainedStats)
+  }
+  const statistics: CfPaintStatistics = { session: retainedStats.session, stamp, results: new Map() }
   let units = 0
   const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
   try {
@@ -223,25 +235,27 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const rects: SourceRect[] = []
     if (requested) rects.push(...requested)
     else {
-      // computeMetrics includes merges, declarations and finite CF extents. Open
-      // tails do not enlarge it; their coverage is clipped to this paint region.
-      const finite = cfExplicitBounds(sheet)
-      let bottom = finite?.r1 ?? 0, right = finite?.c1 ?? 0
-      // Bounds only, not a second geometry construction outside its account.
-      // Include visible empty metadata, merges, region styles and drawing anchors.
-      if (rules.rules.some(rule => rule.ranges.some(r => r.lastRow === 1048575 || r.lastCol === 16383))) {
-        for (const row of sheet.rows) { await work(); bottom = Math.max(bottom, row.index); for (const cell of row.cells) { await work(); bottom = Math.max(bottom, cellSourceRow(row, cell)); right = Math.max(right, cell.col) } }
-        for (const m of sheet.mergeRanges ?? []) { await work(); bottom = Math.max(bottom, m.maxRow); right = Math.max(right, m.maxCol) }
-        for (const r of regionStylesFor(sheet)?.rects ?? []) { await work(); bottom = Math.max(bottom, r.maxRow); right = Math.max(right, r.maxCol) }
-        for (const [row, cols] of sheet.resolvedSparklines ?? []) { bottom = Math.max(bottom, row); for (const col of cols.keys()) { await work(); right = Math.max(right, col) } }
-        const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), right)
-        if (declared <= right + 64) right = declared
-        if (sheet.drawings?.length) { bottom = Math.max(bottom, sheet.drawingMarkers?.maxRow ?? 0); right = Math.max(right, sheet.drawingMarkers?.maxCol ?? 0) }
-        bottom = Math.min(bottom, STATIC_SHEET_BUDGET.maxGridRows - 1); right = Math.min(right, STATIC_SHEET_BUDGET.maxGridCols - 1)
+      // Ruling I3: Find the sheet's real data extent; CF sqref must not extend static
+      // extent beyond the sheet's real used range.
+      let dataBottom = 0, dataRight = 0
+      for (const row of sheet.rows) {
+        await work(); dataBottom = Math.max(dataBottom, row.index)
+        for (const cell of row.cells) {
+          await work(); dataBottom = Math.max(dataBottom, cellSourceRow(row, cell)); dataRight = Math.max(dataRight, cell.col)
+        }
       }
+      for (const m of sheet.mergeRanges ?? []) { await work(); dataBottom = Math.max(dataBottom, m.maxRow); dataRight = Math.max(dataRight, m.maxCol) }
+      for (const r of regionStylesFor(sheet)?.rects ?? []) { await work(); dataBottom = Math.max(dataBottom, r.maxRow); dataRight = Math.max(dataRight, r.maxCol) }
+      for (const [row, cols] of sheet.resolvedSparklines ?? []) { dataBottom = Math.max(dataBottom, row); for (const col of cols.keys()) { await work(); dataRight = Math.max(dataRight, col) } }
+      const declared = sheet.cols.reduce((n, c) => Math.max(n, c.max), dataRight)
+      if (declared <= dataRight + 64) dataRight = declared
+      if (sheet.drawings?.length) { dataBottom = Math.max(dataBottom, sheet.drawingMarkers?.maxRow ?? 0); dataRight = Math.max(dataRight, sheet.drawingMarkers?.maxCol ?? 0) }
+      dataBottom = Math.min(dataBottom, STATIC_SHEET_BUDGET.maxGridRows - 1); dataRight = Math.min(dataRight, STATIC_SHEET_BUDGET.maxGridCols - 1)
+
+      // Clip CF rule ranges to the sheet's real data extent
       for (const rule of rules.rules) for (const r of rule.ranges) {
-        const lastRow = r.lastRow === 1048575 ? bottom : r.lastRow
-        const lastCol = r.lastCol === 16383 ? right : r.lastCol
+        const lastRow = Math.min(r.lastRow, dataBottom)
+        const lastCol = Math.min(r.lastCol, dataRight)
         if (lastRow >= r.firstRow && lastCol >= r.firstCol) rects.push({ ...r, lastRow, lastCol })
       }
     }
@@ -267,7 +281,10 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       for (let row = firstRow; row < endRow; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
         await work()
         const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
-        const service = createCfService(rules, memory, { evidence, budget: () => budget, statistics, statisticsOptions })
+        // Ruling I4: Per-batch work budget so static sheets (e.g. 3000x20) do not exhaust
+        // the 1M whole-sheet limit. If a batch exceeds the budget, refusal is per-range.
+        const batchBudget = createCfWorkBudget({ signal })
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statistics, statisticsOptions })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {
@@ -281,6 +298,12 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
               states.set(row * 16384 + c, result.value)
             }
           } finally { lease.release() }
+        } catch (error) {
+          if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF cancelled')) {
+            // Ruling I4: Refusal is per-range, not the whole sheet
+            continue
+          }
+          throw error
         } finally { service.dispose() }
       }
     }
@@ -300,7 +323,6 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       dispose() { if (disposed) return; disposed = true; states.clear(); hold.release() } }
   } catch (error) { hold.release(); return error instanceof CfPageFault && (error.fault === 'incomplete' || error.fault === 'stale') ? undefined : unavailable(sheet) } finally {
     for (const result of statistics.results.values()) if (result.kind === 'ready') result.value.release()
-    statistics.session.dispose()
   }
 }
 
