@@ -1,0 +1,807 @@
+{
+  "status": "RED",
+  "backend": "@napi-rs/canvas",
+  "zoom": 1,
+  "dpr": 1,
+  "corpusFiles": 46,
+  "unitsSeen": 66,
+  "unitsFailed": [
+    {
+      "file": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+      "error": "Corrupted zip: can't find end of central directory"
+    }
+  ],
+  "methods": {
+    "save/0": 1329,
+    "fillStyle": 993,
+    "fillRect/4": 261,
+    "getTransform/0": 351,
+    "translate/2": 344,
+    "setTransform/6": 191,
+    "beginPath/0": 1701,
+    "moveTo/2": 1814,
+    "lineTo/2": 2706,
+    "closePath/0": 740,
+    "fill/0": 62,
+    "restore/0": 1329,
+    "font": 1718,
+    "lang": 861,
+    "letterSpacing": 861,
+    "textAlign": 108,
+    "textBaseline": 353,
+    "globalAlpha": 29,
+    "drawImage/source=image#5": 16,
+    "scale/2": 13,
+    "lineWidth": 1182,
+    "lineCap": 1391,
+    "lineJoin": 47,
+    "miterLimit": 47,
+    "setLineDash/1": 1395,
+    "lineDashOffset": 51,
+    "strokeStyle": 938,
+    "getLineDash/0": 19,
+    "stroke/0": 937,
+    "rect/4": 37,
+    "clip/0": 619,
+    "ellipse/8": 80,
+    "setTransform/1": 8,
+    "rotate/1": 8,
+    "shadowColor": 84,
+    "shadowBlur": 84,
+    "shadowOffsetX": 84,
+    "shadowOffsetY": 84,
+    "fillText/3": 649,
+    "drawImage/source=image#9": 12,
+    "createLinearGradient/4": 10,
+    "createLinearGradient.addColorStop/2": 29,
+    "createLinearGradient.toString/0": 10,
+    "drawImage/source=canvas#5": 3,
+    "createPattern/2": 1,
+    "createPattern.setTransform/1": 1,
+    "createPattern.toString/0": 1,
+    "drawImage/source=canvas#9": 2,
+    "bezierCurveTo/6": 44,
+    "transform/6": 580,
+    "drawImage/source=canvas#3": 580,
+    "measureText/1": 346,
+    "direction": 20
+  },
+  "props": {
+    "fillStyle": {
+      "count": 993,
+      "values": []
+    },
+    "font": {
+      "count": 1718,
+      "values": []
+    },
+    "lang": {
+      "count": 861,
+      "values": []
+    },
+    "letterSpacing": {
+      "count": 861,
+      "values": []
+    },
+    "textAlign": {
+      "count": 108,
+      "values": []
+    },
+    "textBaseline": {
+      "count": 353,
+      "values": []
+    },
+    "globalAlpha": {
+      "count": 29,
+      "values": []
+    },
+    "lineWidth": {
+      "count": 1182,
+      "values": []
+    },
+    "lineCap": {
+      "count": 1391,
+      "values": []
+    },
+    "lineJoin": {
+      "count": 47,
+      "values": []
+    },
+    "miterLimit": {
+      "count": 47,
+      "values": []
+    },
+    "lineDashOffset": {
+      "count": 51,
+      "values": []
+    },
+    "strokeStyle": {
+      "count": 938,
+      "values": []
+    },
+    "shadowColor": {
+      "count": 84,
+      "values": []
+    },
+    "shadowBlur": {
+      "count": 84,
+      "values": []
+    },
+    "shadowOffsetX": {
+      "count": 84,
+      "values": []
+    },
+    "shadowOffsetY": {
+      "count": 84,
+      "values": []
+    },
+    "direction": {
+      "count": 20,
+      "values": []
+    }
+  },
+  "notInSubset": [],
+  "faceResolution": [
+    {
+      "font": "44pt \"Aptos Display\"",
+      "widthNode": 372.41,
+      "widthNapi": 332.23,
+      "relDiff": 0.1079
+    },
+    {
+      "font": "28pt \"Aptos\"",
+      "widthNode": 236.99,
+      "widthNapi": 211.43,
+      "relDiff": 0.1079
+    },
+    {
+      "font": "12pt \"Calibri\"",
+      "widthNode": 101.57,
+      "widthNapi": 90.63,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "14pt \"Calibri\"",
+      "widthNode": 118.49,
+      "widthNapi": 105.67,
+      "relDiff": 0.1082
+    },
+    {
+      "font": "bold 14pt \"Calibri\"",
+      "widthNode": 127.8,
+      "widthNapi": 106.54,
+      "relDiff": 0.1664
+    },
+    {
+      "font": "54pt \"Trebuchet MS\"",
+      "widthNode": 450.02,
+      "widthNapi": 370.51,
+      "relDiff": 0.1767
+    },
+    {
+      "font": "18pt \"Trebuchet MS\"",
+      "widthNode": 150.01,
+      "widthNapi": 123.5,
+      "relDiff": 0.1767
+    },
+    {
+      "font": "33pt \"Calibri Light\"",
+      "widthNode": 279.31,
+      "widthNapi": 249.22,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "bold 24pt \"Calibri Light\"",
+      "widthNode": 219.1,
+      "widthNapi": 182.73,
+      "relDiff": 0.166
+    },
+    {
+      "font": "20pt \"Calibri Light\"",
+      "widthNode": 169.28,
+      "widthNapi": 150.98,
+      "relDiff": 0.1081
+    },
+    {
+      "font": "bold 20pt \"Calibri Light\"",
+      "widthNode": 182.58,
+      "widthNapi": 152.22,
+      "relDiff": 0.1663
+    },
+    {
+      "font": "bold 20pt \"Calibri\"",
+      "widthNode": 182.58,
+      "widthNapi": 152.22,
+      "relDiff": 0.1663
+    },
+    {
+      "font": "13.5pt \"Calibri\"",
+      "widthNode": 114.26,
+      "widthNapi": 101.95,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "20pt \"Calibri\"",
+      "widthNode": 169.28,
+      "widthNapi": 150.98,
+      "relDiff": 0.1081
+    },
+    {
+      "font": "65pt \"Calibri\"",
+      "widthNode": 550.16,
+      "widthNapi": 490.83,
+      "relDiff": 0.1078
+    },
+    {
+      "font": "60pt \"Calibri Light\"",
+      "widthNode": 507.84,
+      "widthNapi": 453.13,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "24pt \"Calibri\"",
+      "widthNode": 203.14,
+      "widthNapi": 181.25,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "44pt \"Calibri Light\"",
+      "widthNode": 372.41,
+      "widthNapi": 332.23,
+      "relDiff": 0.1079
+    },
+    {
+      "font": "18pt \"Century Gothic\"",
+      "widthNode": 152.35,
+      "widthNapi": 135.94,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "28pt \"Calibri\"",
+      "widthNode": 236.99,
+      "widthNapi": 211.43,
+      "relDiff": 0.1079
+    },
+    {
+      "font": "bold 32pt \"Calibri\"",
+      "widthNode": 292.12,
+      "widthNapi": 243.59,
+      "relDiff": 0.1662
+    },
+    {
+      "font": "44pt \"Calibri\"",
+      "widthNode": 372.41,
+      "widthNapi": 332.23,
+      "relDiff": 0.1079
+    },
+    {
+      "font": "11pt \"Calibri Light\"",
+      "widthNode": 93.1,
+      "widthNapi": 83.01,
+      "relDiff": 0.1083
+    },
+    {
+      "font": "bold 24pt \"Poppins\"",
+      "widthNode": 219.1,
+      "widthNapi": 182.73,
+      "relDiff": 0.166
+    },
+    {
+      "font": "18pt \"Calibri\"",
+      "widthNode": 152.35,
+      "widthNapi": 135.94,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "72pt \"Calibri Light\"",
+      "widthNode": 609.41,
+      "widthNapi": 543.75,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "12pt \"Arial\"",
+      "widthNode": 100.41,
+      "widthNapi": 91.52,
+      "relDiff": 0.0885
+    },
+    {
+      "font": "bold 40pt \"Calibri\"",
+      "widthNode": 365.16,
+      "widthNapi": 304.53,
+      "relDiff": 0.166
+    },
+    {
+      "font": "10pt \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 83.67,
+      "widthNapi": 76.24,
+      "relDiff": 0.0888
+    },
+    {
+      "font": "13.3333px Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 83.67,
+      "widthNapi": 76.24,
+      "relDiff": 0.0888
+    },
+    {
+      "font": "11pt \"Cambria\", serif",
+      "widthNode": 90.65,
+      "widthNapi": 83.01,
+      "relDiff": 0.0843
+    },
+    {
+      "font": "bold 10pt \"Arial\", \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 85.02,
+      "widthNapi": 77.59,
+      "relDiff": 0.0874
+    },
+    {
+      "font": "bold 13.3333px Arial, Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 85.02,
+      "widthNapi": 77.59,
+      "relDiff": 0.0874
+    },
+    {
+      "font": "10pt \"Arial\", \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 83.67,
+      "widthNapi": 76.24,
+      "relDiff": 0.0888
+    },
+    {
+      "font": "13.3333px Arial, Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 83.67,
+      "widthNapi": 76.24,
+      "relDiff": 0.0888
+    },
+    {
+      "font": "11pt \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 92.04,
+      "widthNapi": 83.84,
+      "relDiff": 0.0891
+    },
+    {
+      "font": "14.6667px Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+      "widthNode": 92.04,
+      "widthNapi": 83.84,
+      "relDiff": 0.0891
+    },
+    {
+      "font": "11pt \"Calibri\", sans-serif",
+      "widthNode": 93.1,
+      "widthNapi": 83.84,
+      "relDiff": 0.0995
+    },
+    {
+      "font": "12pt \"Noto Sans Arabic UI\", sans-serif",
+      "widthNode": 101.57,
+      "widthNapi": 91.52,
+      "relDiff": 0.0989
+    },
+    {
+      "font": "italic 12pt \"Liberation Serif\", sans-serif",
+      "widthNode": 101.57,
+      "widthNapi": 121.77,
+      "relDiff": 0.1659
+    },
+    {
+      "font": "italic 12pt \"Noto Sans Arabic UI\", sans-serif",
+      "widthNode": 101.57,
+      "widthNapi": 121.34,
+      "relDiff": 0.163
+    },
+    {
+      "font": "12pt \"Liberation Serif\", sans-serif",
+      "widthNode": 101.57,
+      "widthNapi": 90.63,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "18pt \"Aptos\"",
+      "widthNode": 152.35,
+      "widthNapi": 135.94,
+      "relDiff": 0.1077
+    },
+    {
+      "font": "12pt \"Calibri\", sans-serif",
+      "widthNode": 101.57,
+      "widthNapi": 91.52,
+      "relDiff": 0.0989
+    },
+    {
+      "font": "bold 16pt \"Calibri\", sans-serif",
+      "widthNode": 146.06,
+      "widthNapi": 124.17,
+      "relDiff": 0.1499
+    },
+    {
+      "font": "12pt \"Cambria\", serif",
+      "widthNode": 98.9,
+      "widthNapi": 90.63,
+      "relDiff": 0.0836
+    },
+    {
+      "font": "32pt \"Calibri\"",
+      "widthNode": 270.84,
+      "widthNapi": 241.61,
+      "relDiff": 0.1079
+    },
+    {
+      "font": "bold 18pt \"Calibri\"",
+      "widthNode": 164.32,
+      "widthNapi": 137.05,
+      "relDiff": 0.166
+    }
+  ],
+  "recordText": [],
+  "classEvidence": {
+    "shadowBlurSeen": true,
+    "setTransformSeen": true,
+    "createPatternSeen": true,
+    "drawImageCanvasSourceSeen": true
+  },
+  "unitsByClass": [
+    {
+      "file": "lo-airplane-transition.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-bnc591147.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-connector-shape-animations.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-narration.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-ooxtheme.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 2,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 3,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 4,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104788.pptx",
+      "unit": 5,
+      "classes": [
+        "shadowBlur>0",
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf104792-smart-art-animation.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf105739.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 2,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 3,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf115394.pptx",
+      "unit": 4,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf123684.pptx",
+      "unit": 0,
+      "classes": [
+        "shadowBlur>0",
+        "setTransform",
+        "createPattern",
+        "drawImage/source=canvas"
+      ]
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf142915.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform",
+        "drawImage/source=canvas"
+      ]
+    },
+    {
+      "file": "lo-tdf146223.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform",
+        "drawImage/source=canvas"
+      ]
+    },
+    {
+      "file": "lo-tdf149588_transparentSolidFill.pptx",
+      "unit": 0,
+      "classes": [
+        "shadowBlur>0",
+        "setTransform",
+        "drawImage/source=canvas"
+      ]
+    },
+    {
+      "file": "lo-tdf156808.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf44223.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "lo-tdf93868.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-copy-slide-demo.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-crop-to-0.pptx",
+      "unit": 2,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 1,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 2,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-picture-transparency.pptx",
+      "unit": 3,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-table_test.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "poi-text-highlight.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "pypptx-missing_rels_item.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "pypptx-no-core-props.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    },
+    {
+      "file": "pypptx-test_slides.pptx",
+      "unit": 0,
+      "classes": [
+        "shadowBlur>0",
+        "setTransform"
+      ]
+    },
+    {
+      "file": "pypptx-test.pptx",
+      "unit": 0,
+      "classes": [
+        "setTransform"
+      ]
+    }
+  ],
+  "fontStrings": [
+    "44pt \"Aptos Display\"",
+    "28pt \"Aptos\"",
+    "12pt \"Calibri\"",
+    "14pt \"Calibri\"",
+    "bold 14pt \"Calibri\"",
+    "54pt \"Trebuchet MS\"",
+    "18pt \"Trebuchet MS\"",
+    "33pt \"Calibri Light\"",
+    "bold 24pt \"Calibri Light\"",
+    "20pt \"Calibri Light\"",
+    "bold 20pt \"Calibri Light\"",
+    "bold 20pt \"Calibri\"",
+    "13.5pt \"Calibri\"",
+    "20pt \"Calibri\"",
+    "65pt \"Calibri\"",
+    "60pt \"Calibri Light\"",
+    "24pt \"Calibri\"",
+    "44pt \"Calibri Light\"",
+    "18pt \"Century Gothic\"",
+    "28pt \"Calibri\"",
+    "bold 32pt \"Calibri\"",
+    "44pt \"Calibri\"",
+    "11pt \"Calibri Light\"",
+    "bold 24pt \"Poppins\"",
+    "18pt \"Calibri\"",
+    "72pt \"Calibri Light\"",
+    "12pt \"Arial\"",
+    "bold 40pt \"Calibri\"",
+    "10pt \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "13.3333px Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "11pt \"Cambria\", serif",
+    "bold 10pt \"Arial\", \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "bold 13.3333px Arial, Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "10pt \"Arial\", \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "13.3333px Arial, Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "11pt \"Calibri\", Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "14.6667px Calibri, Carlito, Arial, Helvetica, \"Liberation Sans\", sans-serif",
+    "11pt \"Calibri\", sans-serif",
+    "12pt \"Noto Sans Arabic UI\", sans-serif",
+    "italic 12pt \"Liberation Serif\", sans-serif",
+    "italic 12pt \"Noto Sans Arabic UI\", sans-serif",
+    "12pt \"Liberation Serif\", sans-serif",
+    "18pt \"Aptos\"",
+    "12pt \"Calibri\", sans-serif",
+    "bold 16pt \"Calibri\", sans-serif",
+    "12pt \"Cambria\", serif",
+    "32pt \"Calibri\"",
+    "bold 18pt \"Calibri\""
+  ],
+  "note": "1 corpus unit(s) failed to load/paint under the census (RED — every unit must parse)",
+  "gate": "t3",
+  "gitSha": "766abc6544b313b282656e9963124753cc3e575e",
+  "generatedAt": "2026-11-08T09:39:46.410Z"
+}
