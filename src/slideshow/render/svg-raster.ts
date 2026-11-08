@@ -12,6 +12,7 @@
 import { scanSelfContainedSvg } from '../../core/svg'
 import type { PptxShape } from '../../pptx/types'
 import type { CanvasFactory } from '../types'
+import { installedCanvasBackend } from '../../core/canvas-backend'
 
 /** EMU per CSS px. */
 const EMU_PER_PX = 9525
@@ -47,6 +48,8 @@ export function imageDrawSize(nodes: readonly PptxShape[], index: number): { w: 
 type VectorImage = CanvasImageSource & { width: number; height: number }
 
 async function loadSvg(bytes: Uint8Array): Promise<VectorImage> {
+  const backend = installedCanvasBackend()
+  if (backend) return await backend.rasteriseSvg(bytes) as unknown as VectorImage
   if (typeof document !== 'undefined' && typeof createImageBitmap === 'function') {
     const copy = new Uint8Array(bytes.byteLength)
     copy.set(bytes)

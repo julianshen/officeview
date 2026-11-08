@@ -3,9 +3,11 @@
  * pipeline constructs outside the caller's own context. A recorder-pool
  * worker uses exactly one canvas library per process, so the seam is
  * installed process-wide (`installCanvasBackend`) rather than threaded
- * through every painter call. With nothing installed, `defaultBackend`
- * reproduces the historical per-site fallbacks exactly
- * (OffscreenCanvas → DOM → the node `canvas` package).
+ * through every painter call. Each construction site asks
+ * `installedCanvasBackend()` first and otherwise runs its historical
+ * fallback unchanged, so nothing changes until a backend is installed.
+ * `createCanvas` is synchronous because three sites are (scratch surfaces,
+ * pattern tiles, the local text measurer).
  */
 
 /** The 2-D surface shape the painters rely on. */
@@ -21,7 +23,7 @@ export type ImageLike = CanvasImageSource & { width: number; height: number }
 export interface CanvasBackend {
   /** Human-readable id for diagnostics, e.g. '@napi-rs/canvas'. */
   readonly name: string
-  createCanvas(width: number, height: number): CanvasLike | Promise<CanvasLike>
+  createCanvas(width: number, height: number): CanvasLike
   /** Decode raster bytes (png/jpeg/gif/webp/bmp). */
   decodeImage(bytes: Uint8Array, mime?: string): Promise<ImageLike>
   /** Rasterise SVG bytes into an image `drawImage` accepts. */
@@ -45,35 +47,25 @@ export function installedCanvasBackend(): CanvasBackend | undefined {
   return installed
 }
 
-/** The installed backend, else the historical default. */
+/** The installed backend, else `browserBackend`. */
 export function canvasBackend(): CanvasBackend {
-  return installed ?? defaultBackend
+  return installed ?? browserBackend
 }
 
-type NodeCanvas = {
-  createCanvas(w: number, h: number): CanvasLike
-  loadImage(src: Uint8Array): Promise<ImageLike>
-}
-// @vite-ignore: resolved only in node/bun (golden harness, scripts), never bundled
-const nodeCanvas = async () => (await import(/* @vite-ignore */ 'canvas')) as unknown as NodeCanvas
-const nodeBytes = (bytes: Uint8Array) => (typeof Buffer !== 'undefined' ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) : bytes)
-
-/** Today's behaviour, unchanged: browser surfaces first, the node `canvas`
- * package only where no DOM/OffscreenCanvas exists. */
-export const defaultBackend: CanvasBackend = {
-  name: 'default',
-  async createCanvas(width, height) {
+/** Browser default for code that needs a backend with none installed (the
+ * replayer): OffscreenCanvas, else a DOM canvas. Decoding uses
+ * `createImageBitmap`. Headless callers must install a backend. */
+export const browserBackend: CanvasBackend = {
+  name: 'browser',
+  createCanvas(width, height) {
     if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(width, height) as unknown as CanvasLike
     if (typeof document !== 'undefined') return Object.assign(document.createElement('canvas'), { width, height })
-    return (await nodeCanvas()).createCanvas(width, height)
+    throw new Error('no canvas available: install a CanvasBackend (installCanvasBackend)')
   },
   async decodeImage(bytes, mime) {
-    if (typeof createImageBitmap === 'function' && typeof Blob === 'function') {
-      return await createImageBitmap(new Blob([bytes as BlobPart], mime ? { type: mime } : undefined)) as unknown as ImageLike
-    }
-    return (await nodeCanvas()).loadImage(nodeBytes(bytes))
+    return await createImageBitmap(new Blob([bytes as BlobPart], mime ? { type: mime } : undefined)) as unknown as ImageLike
   },
   async rasteriseSvg(bytes) {
-    return (await nodeCanvas()).loadImage(nodeBytes(bytes))
+    return await createImageBitmap(new Blob([bytes as BlobPart], { type: 'image/svg+xml' })) as unknown as ImageLike
   },
 }

@@ -12,6 +12,7 @@ import { setWatermarkMuted } from './watermark'
 import { createLocalTextMeasurer } from './text-metrics'
 import type { HighlightRect } from './overlay'
 import { RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from './text-recording'
+import { installedCanvasBackend } from './canvas-backend'
 
 export interface TextTransform {
   a: number; b: number; c: number; d: number; e: number; f: number
@@ -200,6 +201,8 @@ export function createRecordingContext(
 }
 
 async function createTinyContext(): Promise<CanvasRenderingContext2D> {
+  const installed = installedCanvasBackend()?.createCanvas(4, 4).getContext('2d')
+  if (installed) return installed
   if (typeof document !== 'undefined') {
     const c = document.createElement('canvas')
     c.width = 4
