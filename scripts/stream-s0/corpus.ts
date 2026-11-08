@@ -70,21 +70,31 @@ function corpusKind(name: string): CorpusKind | undefined {
   return undefined
 }
 
-/** `corpus/` files by kind; an empty list when the directory is absent. */
-export function listCorpus(): CorpusFile[] {
+const S0_EXTRA_DIR = path.join(process.cwd(), 'corpus-s0')
+/** The 46 shared-corpus files Stage 0 measured (pinned so a fuller `corpus/`
+ * from `scripts/fetch-corpus.ts` does not change the Stage-0 gates). */
+const S0_BASE: ReadonlySet<string> = new Set(JSON.parse(readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'corpus-base.json'), 'utf8')) as string[])
+
+function documentsIn(dir: string, keep: (name: string) => boolean): CorpusFile[] {
   let entries: string[]
   try {
-    entries = readdirSync(CORPUS_DIR)
+    entries = readdirSync(dir)
   } catch {
     // Directory absent: the caller decides whether to skip or fail.
     return []
   }
   return entries
-    .filter((name) => !name.startsWith('~$'))
+    .filter((name) => !name.startsWith('~$') && keep(name))
     .map((name) => ({ name, kind: corpusKind(name) }))
     .filter((entry): entry is { name: string; kind: CorpusKind } => entry.kind !== undefined)
+    .map(({ name, kind }) => ({ name, kind, path: path.join(dir, name) }))
+}
+
+/** The Stage-0 corpus: the pinned base files present in `corpus/` plus every
+ * document in `corpus-s0/` (`scripts/stream-s0/fetch-extra.ts`), by name. */
+export function listCorpus(): CorpusFile[] {
+  return [...documentsIn(CORPUS_DIR, (name) => S0_BASE.has(name)), ...documentsIn(S0_EXTRA_DIR, () => true)]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map(({ name, kind }) => ({ name, kind, path: path.join(CORPUS_DIR, name) }))
 }
 
 /**
