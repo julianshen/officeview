@@ -16,7 +16,7 @@
 
 - Eager ceiling: **38,720 B** gzip (Node `zlib.gzipSync`, default level) — same constant as `scripts/eager-budget.ts:EAGER_BUDGET`.
 - Main-entry closure baseline: **417,436 B** gzip over `dist/index.js`'s static closure; allowed growth **≤ 16 B**, any growth printed as a diff.
-- Main-entry module-map baseline hash: **`a0669339ada2a01085db11e6ebc77fb8914ff42ff6ee16b19c6437a919674dc3`** (Stage-0 T11 `moduleMapHash`, computed as in `scripts/stream-s0/t11-eager.ts`).
+- Main-entry module identity: the sorted **repo-relative** module ids of `dist/index.js`'s static closure, captured from the Stage-0 build into `scripts/eager-baseline.json` (`bun scripts/core-gates.ts --baseline …`). *Amended during execution:* the T11 `moduleMapHash` hashes absolute paths and content-hashed chunk names, so it cannot match across checkouts or CI.
 - `eager-budget.ts` and `check-eager.ts` keep working unchanged (the main entry keeps its `index.js`-alone check).
 - React stays a peer dependency; `dist/core.js` must contain **no** import of `react`/`react-dom`/`react/*` and no reference to the `document` global.
 - `wss://` URLs must never reach `fetch` (§6.1).

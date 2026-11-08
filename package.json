@@ -63,7 +63,8 @@
     "s0:test": "vitest run --config vitest.stream-s0.config.ts",
     "s0:test:napi": "vitest run --config vitest.stream-s0-napi.config.ts",
     "s0:report": "bun scripts/stream-s0/report.ts",
-    "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts"
+    "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts",
+    "gates:core": "OV_MODULE_MAP=1 bun run build && bun scripts/core-gates.ts"
   },
   "peerDependencies": {
     "react": ">=18"

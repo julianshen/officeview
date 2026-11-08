@@ -17,22 +17,16 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { ModuleMap } from '../../tests/helpers/eager-graph'
+import { staticClosure } from '../../tests/helpers/core-gates'
 import { writeResult } from './results'
 
 const CEILING = 38720
 const DIST = join(import.meta.dir, '..', '..', 'dist')
 
-/** Chunk files in `entry`'s static-import closure (entry included). */
+/** Chunk files in `entry`'s static-import closure (entry included) — the
+ * shared §8.1 helper. */
 export function staticChunkClosure(map: ModuleMap, entry = 'index.js'): string[] {
-  const seen = new Set<string>()
-  const queue = [entry]
-  while (queue.length > 0) {
-    const file = queue.pop()!
-    if (seen.has(file) || !map[file]) continue
-    seen.add(file)
-    queue.push(...map[file].imports)
-  }
-  return [...seen].sort()
+  return staticClosure(map, entry)
 }
 
 function main(): number {
