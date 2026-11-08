@@ -1,10 +1,14 @@
 # Server-streaming spec — review dispositions (companion to the design spec)
 
-Spec: `2026-11-07-server-streaming-design.md` (draft 7). This file holds the
+Spec: `2026-11-07-server-streaming-design.md` (draft 9). This file holds the
 per-round review dispositions; the spec keeps only a pointer. "Fixed" = folded
-into the named draft.
+into the named draft. Tables for **drafts 2–7 are historical records** — they
+describe the state at that round, not the current body; only Round-8 and
+Round-9 dispositions correspond to the live spec. The "lost rule 1–17"
+inventory codex produced in round 8 is codex's list, not ours (credited
+there).
 
-## Round-1 dispositions (codex r1 1–11 + claude r1 C1–C5/I1–I10/M1–M7; draft 2–4)
+## Round-1 dispositions (codex r1 1–11 + claude r1 C1–C5/I1–I10/M1–M7; draft 2–4) — historical
 
 | Finding | Disposition |
 |---|---|
@@ -31,7 +35,7 @@ into the named draft.
 | claude M7 (collapsed extents) | Accepted limitation (§19.4) |
 | claude M2 lines (outlines), M5 (recorder header) | Superseded — see §2-history |
 
-## Round-2 dispositions (codex r2 1–8; draft 3)
+## Round-2 dispositions (codex r2 1–8; draft 3) — historical
 
 | # | Finding | Disposition |
 |---|---|---|
@@ -44,7 +48,7 @@ into the named draft.
 | 7 | gates contradict decided references + boundary suite data | Fixed — §16/§17 |
 | 8 | protocol gaps (RECORD_TEXT :2, `can.semantic`, unit key, pairing) | Fixed |
 
-## Round-3 dispositions (codex r3 1–5; draft 4)
+## Round-3 dispositions (codex r3 1–5; draft 4) — historical
 
 | # | Finding | Disposition |
 |---|---|---|
@@ -54,7 +58,7 @@ into the named draft.
 | 4 | promise/Request renewal mis-classification | Superseded — manifest-over-HTTP removed |
 | 5 | stale wording (§19 "without", C3 lineage, §11 parenthetical) | Fixed |
 
-## Round-4 dispositions (codex r4 findings 1–8 + isolation; draft 6, round 6)
+## Round-4 dispositions (codex r4 findings 1–8 + isolation; draft 6) — historical
 
 | # | Finding | Disposition |
 |---|---|---|
@@ -68,7 +72,7 @@ into the named draft.
 | 8 | acceptance criteria misaligned with decided mode | Fixed → §16 suite-definition rework |
 | + | session isolation & notes evaluation | Fixed — §9.3 cache policy bundle as key input; §6.4 per-policy processing; §12a.5 conjunctive authorization; T6 |
 
-## Round-5 owner-revision note (2026-11-08) — not a review
+## Round-5 owner-revision note (2026-11-08) — historical, fixed by owner decision
 
 Owner decision: the mode choice belongs to the developer by **source type**.
 Removed: OVSM-over-HTTP sniffing, `Accept` negotiation, 406/`StreamRequiredError`,
@@ -104,26 +108,9 @@ the only disagreement found was that `import('canvas')` sites are hidden by
 `@vite-ignore` inside the call parens (why a plain grep failed) — recorded
 above; the sites themselves are real and were **not** counted as a rejection.
 
-## Round-7 dispositions (agy review; draft 7)
-
-| Finding | Disposition in draft 7 |
-|---|---|
-| C1 (XLSX server-side filter reveals author-hidden rows; pivot/slicer caches) | Fixed — §6.4 pre-layout author-hidden purge / `authorHidden` tier; §12 pivot/slicer/`control*` refused on protected 4c streams; caches/items backed by hidden data stripped; T6 tautology-filter battery |
-| C2 (hidden `cNvPr`/`docPr` shapes; ODT/RTF hidden text) | Fixed — §6.4 hidden-shape exclusion table + §6.2 ODT/RTF refused fail-closed at stream admission; T2 fixture classes |
-| C3 (semantic occlusion unimplementable on `final-raster`) | Fixed — §7.7/§11 Stage-1-mandatory ink-bounds + opaque-coverage-grid check, withhold-on-unresolved |
-| C4 (Layer-1 pixel math self-contradictory: HKDF/schedule mixing, CRC double-count, white clipping, collusion missing) | Partially fixed in draft 7 (page-keyed tiled basis + soft-decision code + @napi/canvas ped + white pedestal); **draft 8 further fixes predicate-level math (see round-8 table)** |
-| I1 | Fixed — handshake state machine, session token, `renew` server-only, session-table viewer/role/effectivePolicy/activeSocket, resume supersession |
-| I2 | Fixed — shared pre-forensic + per-session scratch lease and mark setting in the canonical key; document cache per (docRef, contentPolicyId, layoutFingerprint) |
-| I3 | Fixed — `data` prop, HttpSource.kind?: never + `StreamSourceMisuseError`, `startPresent` sync manifest reads, separate rileup pass, transitive-graph eager gate, `dist/core.js` purity, one CanvasBackend for all 5 `import('canvas')` + all 4 constructor sites |
-| I4 | Fixed — XLSX tiles via `renderSheetViewport`; §12a.4 `source-atop` + no double overlay; §12a.3 swept-area proof for motion/Morph |
-| I5 | Fixed — one little-endian frame header; whole-file `unitIndex[]` dropped; gates rewritten in §16 T5 (was garbled); Stage 3d xref fixed |
-| M1 | Fixed — outlines/HTTP/406/conditional remnants deleted; §18 merged into §2 |
-| M2 | Fixed — anchors re-pointed per agy's table |
-| Size audit | Draft 7 at 1,161 lines (~1,300–1,500 target); reviews in a sibling file |
-
 ## Round-8 dispositions (codex r6; draft 8)
 
-Draft 8 restores agy's "lost or weakened rules" 1–17 into their one normative
+Draft 8 restores **codex r6's** "lost or weakened rules" 1–17 (codex's list, credited) into their one normative
 home each and fixes codex-r6 findings 1–8. Codex's own listed **not-lost**
 items (outlines/HTTP/Accept removals, single OVSM envelope, server-only
 renewal, appearance-based release, mixed M-rule, notes conjunctive
@@ -160,3 +147,23 @@ authorization, stricter motion proof) stay un-reversed. Draft-7's stricter
 | 6 collusion arithmetic and detection math | Fixed — §13.3 replaces the false `~1/K` + median-0 claim with the true RMS `2/√K` (K=4 → 1.0, 5 → 0.894, 6 → 0.816) and keeps ±2 median bounds per sign class, making it a Stage-0/2 **measured, published, per-attack** battery; σ_r = 0 captured flat/blank evidence ⇒ explicit abstention with normalisation over surviving chips L; threshold calibration covers the whole decision incl. alignment/crop/scale; "O(pixels) whole-detector" claim removed (cost is `O(pixels + M·L)`); text-layer decoder parameters fully restored in §20 with a measured table |
 | 7 `source-atop` fidelity claim | Fixed — §12a.4: approval is conditional on a **server-composited reference** at a measured tolerance for the approved subset, and any subset failing (or whose layer-local marks stop adding page-anchored provenance) uses the server-composed marked keyframe path |
 | 8 cross-refs and citations | Fixed — T5-vs-T10 prototype pointer; §13.6→§13.5; §12a.8 restored and referenced; unclosed parenthetical closed; §2's per-unit record point qualified with the §12 viewport exception; all citations re-anchored per the codex-r6 audit (paint.ts:199, OfficeFile.tsx:37/:59/:175, no-catch in text-metrics, workerRegister exported, `RECORD_TEXT` = Symbol(...), StaticExportLimitError in render.ts not paint.ts) |
+
+## Round-9 dispositions (codex r7; draft 9 — fix round, no deletions)
+
+Every fix keeps each normative rule; nothing was shortened beyond codex's
+findings.
+
+| Finding | Fix (draft 9) | Where |
+|---|---|---|
+| F1 READY semantics | Valid READY is required to enter STREAM; absent READY at the §14 `ready window` (2 s, defined there) closes with a named code `ready-timeout`; ONLY missing/unverifiable face evidence inside a valid READY selects raster. T4 updated (and T6's absence-tested case moved to T6). | §6.2 rule 4, §6.2 close-code list, §14 handshake-windows block, §16 T4 |
+| F2 framing | One `'OVSD'` magic for every binary kind incl. `MANIFEST`; `flags` bits defined (bit0 final-fragment, bit1 JSON, bit2 compressed — one compression story: compress-before-frame); `crc32` scoped per fragment with the unit whole-body CRC riding the final fragment's trailer; `totalLen`/`fragCount` declared on the first fragment; per-kind `byteLen` (decoded) vs `payloadLen`/`totalLen` (encoded) defined; caps/dedup checked pre-allocation with a 5 s reassembly window and abort/timeout discards; `streamClient` sets a `maxPayload` WS cap (1 MiB) so the transport cannot buffer before the app gates; multi-fragment text (MANIFEST/notes head) declared; tests in T6/T10 | §7.1, §6.2 manifest paragraph, §14 handshake windows, §16 T6/T10 |
+| F3 XLSX occlusion | Conservative **transformed painted bounds** (`drawingExtent`, `sheetCells.ts:23–73`) + effect extents + cell text spill; withheld on unresolved anchor, incomputable transform or unbounded effect; `drawingExtent` NOT called a complete effects proof; codex's rotated-box case added as a named T8 test | §12 analytic cell occlusion, §16 T8 |
+| F4 close vs drain | Session close ends ownership only; a running paint's charge moves to a `retirement-owner lease` (pool) refunded only after drain; cache handoff precedes the producer refund. One lifecycle home in §10; §9.3 references it; duplicated §9.3/§10/§13.4 hothomes pruned to one ordered reference | §9.3, §10, §13.4 |
+| F5 survival table | Added combined row: `JPEG q70 → 50 % downscale ≥ 75 %` with pipeline order stated; explicit statement that the ≤10⁻⁶ calibration covers the whole deployed decision (page pooling + weighted consensus of both decoders + alignment/crop/scale search) | §13.5 table + text |
+| F6 missing gates into body (each stage-gated) | §16 body adds: bounded truncated-manifest/hello test; in-repo Playwright WS happy/error/expiry + reconnect-restores-viewport-and-units; cropped + duotoned transmitted-snapshot inspection; per-page carrier-count publication (T7); named server font-registration seam next to `CanvasBackend` | §16 T2/T7/T9 + §9.2 (with link to Stage 0/2 gates) |
+| F7 minor bullet list | even/odd median statement (62.5 %/100 %/68.75 % with the even/odd distinction); M-rule shipping gate pointer → §17 Stage 2 (T8's XLSX suite is not the gate); §12a.4 named the T7 mark-fidelity tolerance gate in T5/T7; typos fixed (`paint.ts:199`, "notice inline", `least-recently-used`, ASSET_DEFINE font-slash, unmatched parenthetical); single normative homes for lifecycle (§10), cache ceilings (§14), run/audit lifecycle (§9.3); `session-rotated` mapped as an op-refusal (never a CLOSE) and `4409 superseded` as the supersede CLOSE; reviews file: duplicate Round-7 merged, drafts-2–7 tables marked historical, lost-rule list credited to codex, body-backed claims (T2 harness/manifest, body-only), removed restorations trimmed | §13.3, §12a.4, §16 T5/T7, §7.7, §6.3, §9.3, §9.4, §10, §13.4, reviews file |
+| Round-9 table | This one | This file |
+
+| F6 (cont.) | server-side font-registration seam | §9.2 adds the `registerFont(request) → lease` seam **next to `CanvasBackend`** (the same injected-interface shape), since font registration is currently recon-only in `src/core/fonts/register.ts:9/21/30/40` but is a pool-level runtime dependency (registered per render worker — bounded by the §9.2 64 MiB font budget) |
+
+| F6 (cont. 2) | font-registry assertion ack | The §7.4 registerFont seam is also explicitly referenced in the §6.2 rule-4 `READY` message's `missingFaces` field definition — an unverifiable installed face (a client cannot hash those bytes) is reported as missing by rule; §16 T4 updated with both gates |

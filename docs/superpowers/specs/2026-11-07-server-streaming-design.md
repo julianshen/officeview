@@ -1,10 +1,11 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 8 (reviews: codex r1–r6, agy r1, claude r1)** — drafts 2–6 folded
-codex r1–r4 + claude r1; draft 7 folded agy r1 and consolidated; **draft 8
-restores the 17 rules the round-7 consolidation lost and fixes codex-r6
-findings 1–8** (disposition tables live in the sibling file
-`2026-11-07-server-streaming-reviews.md`).
+Status: **draft 9 (reviews: codex r1–r7, agy r1, claude r1)** — draft 2 folded
+codex r1 + claude r1 (round-1 tables); drafts 3–8 folded codex r2–r6; draft 7
+folded agy r1 and consolidated (round-7); draft 8 restored codex's 17 lost or
+weakened rules and folded codex r6 (round 8); **draft 9 fixes codex-r7
+findings 1–7 (fix round: nothing removed, nothing narrowed)** — dispositions
+live in the sibling file. Docs-only stage continues.
 Branch: `spec/server-streaming`, from main `ca952c50`. Docs-only stage: no
 source edits.
 
@@ -158,7 +159,7 @@ client-submitted text as code (§18 Never).
   per-unit `paint(ctx)` closures (`:389`) — the record point. Direct painter
   exports exist (`src/index.ts:49–56`); the server uses `getPaintables` or
   the §12 viewport path. `measurerFromDoc` (`paint.ts:184–211`) hard-codes
-  its canvas at `paper.ts:199` — one of the five dynamic `import('canvas')`
+  its canvas at `paint.ts:199` — one of the five dynamic `import('canvas')`
   sites (written `import(/* @vite-ignore */ 'canvas')`, which is why a plain
   grep failed): `src/render/paint.ts:199`, `src/core/search.ts:212`,
   `src/core/images.ts:65/:149`, `src/slideshow/render/svg-raster.ts:64`.
@@ -207,7 +208,7 @@ client-submitted text as code (§18 Never).
 - **Interactive XLSX rendering lives in the viewport pipeline.**
   `openImportSession` → `SheetGeometry` → `renderSheetViewport`
   (`src/xlsx/view/renderViewport.ts`); the static `getPaintables` XLSX path
-  renders the whole sheet and **paints a too-large-sheet noticeinline**
+  renders the whole sheet and **paints a too-large-sheet notice inline**
   (`paint.ts:175ff`; the `StaticExportLimitError` class actually lives and
   throws in `src/xlsx/render.ts:54, 515, 778`) — §6.4-correcting wording vs
   the round-7 text (§12).
@@ -315,8 +316,8 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    it supports **from the client's set**; the empty intersection closes with
    `unsupported-version` (never a downgraded guess).
 3. **MANIFEST (server → client):** a binary frame of kind `MANIFEST` (§7.1
-   header; **one envelope story** — the `OVSM` magic survives only as this
-   header's `magic` value; the old separate OVSM header is gone) carrying the
+   header; **one envelope story** — the same `'OVSD'` magic as every other
+   binary frame; the old separate `OVSM` header is gone) carrying the
    gzip JSON manifest:
    ```json
    { v: 1,
@@ -346,12 +347,18 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    the op, never merely hidden in the client UI.
 4. **READY (client → server): exactly one client readiness message**, merging
    ack-session and faces-ack: `{ reqId, type: 'ready', tokenJti,
-   missingFaces?: id[] }`. **No STREAM op runs before READY is verified**
-   (round-8 finding-5 fix): a server that begins streaming without a valid
-   READY is a protocol bug. `missingFaces` comes from the §7.4 registry;
-   **missing or unverifiable ⇒ those units are rasters** (never treated as
-   all-present), and a fully missing READY message is held up to the §14
-   ready window [call 2 s] and then treated as missing-everything.
+   missingFaces?: id[] }`.
+   **A valid READY is required to enter STREAM** — no STREAM op may run
+   before one is verified, and a server that streams without one is a
+   protocol bug. **Absent READY itself is a session timeout, not a face
+   verdict:** if no valid READY arrives inside the §14 `ready window`
+   (2 s [call] from the MANIFEST), the server **closes with the typed code
+   `ready-timeout`** (a named 4xxx close, §6.2 close-code list) and streams
+   nothing. Only missing/unverifiable face evidence **inside a valid
+   READY** selects the raster fallback per §7.4: `missingFaces` comes from
+   the §7.4 face registry; missing or unverifiable ⇒ those units are
+   rasters (never treated as all-present). The same rule holds on a
+   resumed handshake (§6.2 rule 7).
 5. **STREAM:** normal ops (units/viewport/tiles/show plans/notes/copy/search/
    sort/filter/print — all governed by the token + `can.*` contract).
 6. **RENEW (server → client) before expiry:** the server pushes a signed
@@ -372,10 +379,17 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    capability including `can.notes` for the resumed viewer (§12a.5). A
    wrong-viewer proof, a proof/policy mismatch, or a missing `resumeProof`
    closes with `auth-failed` — never a silent switch.
-8. **CLOSE codes (typed, all fail-closed):** `unsupported-version`,
-   `auth-failed`, `session-expired`, `session-rotated` (informational
-   refusal, see 6), `revoked`, `rate-limited`, `policy-refused`,
-   `rotation` (helpful notice on supersede).
+8. **CLOSE / refusal codes (typed, all fail-closed; one mapping, restated at
+   §6.2 rule 7 and §10):** session-level CLOSE codes are
+   `unsupported-version`, `ready-timeout` (rule 4), `auth-failed`,
+   `session-expired`, `revoked`, `rate-limited`, `policy-refused`, and on
+   resume-supersession the old socket is closed with the **WS close code
+   `4409 superseded`** (an informational close, never an auth failure).
+   Op-level refusals (the session stays open) are `policy-refused`,
+   `rate-limited`, `session-rotated`, `face-missing`; `session-rotated`
+   is therefore **an op refusal, never a CLOSE code** — stale-jti ops
+   surface it, and the client re-issues them under the rotated token
+   (rule 6). No other close or refusal code exists.
 9. **Lifecycle (restored round 8):** close-on-unmount; **exactly-once close**
    on source replacement; buffered chunks discarded atomically (never a
    half-painted unit).
@@ -415,8 +429,8 @@ key), `:154` (`data` prop), `:175` (`<OfficeFile>` forwardRef declaration),
   `present()` reads the manifest synchronously (§8.2).
 - **Eager gate:** §8.1 measures the **transitive static-import graph of
   `dist/index.js`** (`tests/helpers/eager-graph.ts` closure) and pins
-  `dist/core.js` to zero React/document imports (§8.1 parenthetical closes
-  here).
+  `dist/core.js` to zero React/document imports (the §8.1 gate list closes
+  this parenthetical here, so the cross-reference stays well-formed).
 
 ### 6.4 The server content policy — pre-layout, per `contentPolicyId` (normative)
 
@@ -445,37 +459,67 @@ The client never participates; it renders what arrives.
 
 ## 7. Draw-command format (`OVSD`), recorder, occlusion, and the projection rule
 
-### 7.1 One binary frame header for every payload kind — one envelope story (normative)
+### 7.1 One binary frame header for every payload kind — one envelope story (normative; round-9 F2 completes it)
 
-**Round-8 fix (F5): every binary WS payload uses exactly one envelope:** the
-little-endian header below, which now also carries `ver` and carries
-`MANIFEST` as a kind (the separate "OVSM header" of draft 7 is folded in;
-`magic 'OVSD'` replaces the `OVSM` magic, whose *name* survives as the
-manifest frame's kind).
+**Every binary WS payload uses exactly one envelope:** the little-endian
+header below — one `magic` (`'OVSD'`) for **every** binary frame including
+`MANIFEST` (the draft-7 `OVSM` header is gone; the manifest is a frame of
+kind `MANIFEST`).
 
 ```
 magic u32 ('OVSD') | ver u8 | kind u8 | reqId u32 | frameSeq u32 |
-crc32 u32 (of payload) | flags u8 | payloadLen u32 | payload
+crc32 u32 | flags u8 | payloadLen u32 | payload
 kinds: MANIFEST, ASSET_DEFINE, UNIT_RASTER, UNIT_COMMANDS, XLSX_TILE,
        SHOW_PLAN (OVSP, §12a.2), NOTES_RASTER, PRINT_RASTER
 ```
 
-- `reqId` **is the one correlation field**; text messages use `{ reqId,
-  type, … }` — the draft-7 `{ id, … }` spelling is renamed (F5).
-- **Fragmentation/reassembly (normative; round-8 fix):** payloads are
-  compressed **before framing** (unit bodies gzip per-unit, then broken into
-  ≤ `wsFrameBytes` chunks (1 MiB, §14) sharing the unit's `reqId` + a
-  zero-based `frameSeq`; the receiver reassembles in sequence order,
-  validates the CRC over the **deflated unit body** and the manifest/plan
-  JSON over its decoded bytes, and never runs opcode/JSON validation before
-  reassembly completes. A gap, bad CRC, or duplicate seq drops the whole
-  unit and re-requests once; nothing is partially validated or painted
-  (§10).
-- Per-unit body: `u32 LE unitId + u32 LE byteLen + u32 LE opCount + u8
-  discriminator (commands | raster | tile) + gzip body` — never a
-  whole-document `unitIndex[]`.
-- A `TILE` op carries its bitmap inline across chunks (bounded by
-  `wsFrameBytes`), not as a data URI.
+- **`ver u8`** is the negotiated format version (the §6.2 set intersection);
+  a frame outside the agreed set fails closed (§7.6).
+- **`reqId` is the one correlation field**, named identically in text
+  messages (`{ reqId, type, … }`) and binary frames.
+- **Defined `flags` bits (round-9 F2):** bit 0 = **final-fragment** (this
+  fragment completes the message), bit 1 = **payload is JSON text** (an
+  escaped inside the binary header for MANIFEST/`NOTES_RASTER` metadata
+  sidecars), bit 2 = **compressed** — **one compression story:** every binary payload
+  is gzip-compressed before framing and never re-compressed inside a
+  framed body, so today bit 2 is always 1; a 0 is a protocol violation
+  and fails closed. Every other bit is reserved (must be 0).
+- **Precisely scoped CRCs (round-9 F2):** `crc32` covers **that fragment's
+  `payload` bytes and that fragment's header fields up to `crc32` itself** —
+  never a cross-fragment CRC. Reassembly (below) then validates the
+  unit-level CRC: for compressed payloads the *final fragment's* body ends
+  with a trailer `u32 wholeCrc = crc32 of the inflated unit body` (T6
+  fragment-corruption test asserts both layers).
+- **Length and completion semantics (round-9 F2):** each fragment removes
+  ambiguity: `payloadLen u32` = this fragment's encoded payload bytes; the
+  **first fragment** of a multi-fragment message additionally declares its
+  own fields `totalLen u64` (the full deflated message length, = the
+  sum of fragment `payloadLen`s) and `fragCount u16`, **and every fragment
+  is required to be ≤ `wsFrameBytes` 1 MiB**. A fragment that would exceed
+  them, a missing declaration on a multi-fragment message, or an
+  out-of-order `frameSeq` fails the whole message before accumulation.
+- **Bounded reassembly (normative; pre-allocation checks run before any
+  buffer of `totalLen` size, for every kind — MANIFEST, ASSET_DEFINE,
+  show plans and units alike):**
+  - fragment count ≤ 256 and `totalLen` ≤ the §14 per-kind decoded cap;
+  - reassembly window 5 s [call] (§14 handshake windows) with abort on
+    timeout — the partial buffer is **discarded** and the client re-requests
+    once, without any partial validation;
+  - the reassembly completes before any opcode, JSON or asset-path
+    validation runs — nothing is partially validated or painted (§10);
+  - the transport itself is bounded: `streamClient` constructs the WS with
+    a **`maxPayload` cap of `wsFrameBytes` (1 MiB)** so an oversized WS
+    *protocol* frame cannot make the library buffer unbounded before the
+    app-level gates run; TCP/RFC-level fragmentation of a `maxPayload`
+    message is transparent and never allocates beyond the cap.
+- **`byteLen` (per-unit body, unambiguous):** the **decoded (inflated) unit
+  body length in bytes**; encoded size is carried by `payloadLen` /
+  `totalLen` separately — no field names two meanings.
+- Per-unit body: `unitId u32 + byteLen u32 (decoded) + opCount u32 +
+  discriminator u8 (commands | raster | tile) + gzip-compressed body` —
+  never a whole-document `unitIndex[]`.
+- A `TILE` op carries its bitmap inline (within `wsFrameBytes`), never as
+  a data URI.
 
 ### 7.2 Why commands (short)
 
@@ -522,6 +566,12 @@ names its scale everywhere.
   globals (`devicePixelRatio` etc.) — the charts DPr/PaintOptions seam
   (§8/§9.2) supplies the bucket, and `setWatermarkMuted` pass-interleaving
   guards stay (§9.2).
+- **`registerFont(request) → lease`: the server-side font-registration
+  seam, beside `CanvasBackend` (round-9 finding 6).** Registration is a
+  pool-level injected interface — the browser/worker adapters exist at
+  `src/core/fonts/register.ts:9/:21/:30/:40` (worker one exported), and
+  the pool threads a conforming implementation into `getPaintables`
+  exactly like `CanvasBackend`.
 - **`CanvasBackend`:** one seam for every canvas construction the recorder
   pool uses — `{ createCanvas(w, h), decodeImage(bytes), loadImage(bytes),
   rasteriseSvg(bytes) }` — threaded into the five dynamic import sites
@@ -591,9 +641,10 @@ drops the unit and re-requests once.
 
 - **`final-raster` (default):** whole units painted to the final frame
   server-side, shipped as rasters; occlusion is structural.
-- **`culled-commands` (protected, opt-in; details in appendix §20):** ships
-  commands after a **stored per-command occlusion proof**; M-rule
-  constraints in §9.4, else downgrade.
+- **`culled-commands` (protected, opt-in; details in appendix §20, the
+  M-rule's normative home):** ships commands after a **stored per-command
+  occlusion proof**; the M-rule constraints and the mixed-unit rule are
+  defined in §20, so a unit failing them downgrades to `final-raster`.
 - **`commands` (relaxed sessions):** ordinary stream; an overlay mark is
   removable by a modified replayer — stated plainly, because a relaxed
   session already trusts the replayer (§13.2/§20).
@@ -746,18 +797,23 @@ tiles; the presenter notes sidecar namespace
   stale work.
 - **Notes namespace (restored round 8):** presenter notes assets live in a
   separate `notes:<presenterId>` sidecar namespace, never addressable
-  through the page-asset hash table; **any ASSET_DEFINE /** asset-id
-  lookup is authorized against (contentPolicy, notes namespace,
+  through the page-asset hash table; **any `ASSET_DEFINE` or asset-id lookup** is
+  authorized against (contentPolicy, notes namespace,
   marks)** before release, so a guessed or reused notes id resolves to
   nothing for a non-presenter (T6). Two presenters with different notes
   rights therefore never share a cache tuple.
-- **Ceilings (restored round 8):** the retained caches — document cache
-  **1 GiB** and render cache **512 MiB** per process — are bounded by the
+- **Ceilings:** the §14 retained-ceiling values (document cache 1 GiB,
+  render cache 512 MiB — one normative home there) are enforced by the
   same admission that governs scratch leases; when a cache must evict,
-  least-rently-used entries release first and a session's live leases
-  never share another session's eviction. Refunded render reservations
-  and retirement charges hand ownership to the cache or release it; no
-  charge survives its owner's close (finding-3 fix).
+  least-recently-used entries release first and a session's live leases
+  never share another session's eviction.
+- **Close vs drain (round-9 finding-4 fix; one normative home §10):** a
+  session close ends **session ownership**; a running paint's charge
+  moves to an explicit **retirement owner** (the pool's retire-lease) and
+  is refunded **only after the worker drains** — it is never released at
+  close (that would be exactly the premature refund T6/T10 forbid).
+  Cache handoff on eviction also **precedes** the producer's reservation
+  refund. The lifecycle rules live once in §10; §9.3 references them.
 - Session table (run state) evicts **at session close**; the audit table
   is **write-once, deleted-on-expiry** (90-day default [call]) — both
   restored verbatim in substance (finding-3's lifecycle rules).
@@ -797,9 +853,13 @@ with CLOSE `session-expired` unless `renew` lands first (§6.2 rule 6);
 unit validation failure drops the unit, re-requests once, then shows the
 missing-unit diagnostic.
 
-**(Lifecycle (restored round 8):** close-on-unmount; exactly-once close on
-source replacement; atomic buffered-discarding — each covered by T6/T10
-paths).
+**(Lifecycle — the normative home, round-9 finding-4.)** close-on-unmount;
+**exactly-once close** on source replacement (and close-on-unmount tied to
+the same generation counter); a running paint's charge moves to the pool's
+**retirement-owner lease** at close and is refunded only after the worker
+drains — with the §9.3 cache handoff preceding the producer reservation
+refund. Buffered chunks are discarded atomically, never a half-painted
+unit. T6/T10 cover each path.
 
 **(Isolation)** per-session caches/keys/marks, draft socket supersession on
 resume, and per-`contentPolicyId` processing are all covered by §16 T6
@@ -860,17 +920,29 @@ pairs.
   join**. Pivot/slicer/timeline commands are **refused on protected 4c
   streams**; pivot caches and slicer items backed by hidden/veryHidden
   data are stripped before serving.
-- **Analytic cell occlusion (round-8 fix, agy C3 tail):** filter values
-  and any text about a cell must pass the §11 join **where a visual pass
-  exists**. For rows/tiles never rendered (off-viewport cells,
-  whole-column filter lists), the server computes the conservative
-  **sheet-coordinate intersection** rule instead: a cell's grid rect vs
-  the union of the sheet's `XlsxDrawing` anchored bounding boxes (both in
-  sheet coordinates); `anchors.unresolved > 0` in the sheet's drawing set
-  ⇒ every cell **withholds** from filter values (fail-closed) — the
-  referenced anchor count exists in `XlsxDrawingAnchors` at
-  `src/xlsx/types.ts:149`. A covered cell's display text never reaches a
-  filter list (T8 asserts off-viewport covered cells specifically).
+- **Analytic cell occlusion (round-6→8 rule, rewritten round 9 finding 3 for
+  correctness):** filter values and any text about a cell must pass the §11
+  join **where a visual pass exists**. For rows/tiles never rendered
+  (off-viewport cells, whole-column filter lists), the server computes the
+  conservative **sheet-coordinate occlusion check** on **transformed painted
+  bounds**, not raw anchor rectangles: per `XlsxDrawing`, take the union of
+  `drawingExtent`-style conservative painted extents
+  (`src/xlsx/view/sheetCells.ts:23–73` — anchor placement transformed by the
+  drawing's own rotation and group transforms, including custom geometry),
+  **padded by its conservative effect extents** (shadow / glow / soft-edge
+  margins) when the drawing declares them, and expanded to cover **cell text
+  that spills beyond its grid rectangle** (spilled ink can reveal or
+  obscure through the edge of the covering shape). A cell's grid rect
+  (plus its own spill rect) intersecting any such painted extent means the
+  cell **withholds** from filter values (fail-closed). `anchors.unresolved
+  > 0` for that sheet's drawing set (`XlsxDrawingAnchors`,
+  `src/xlsx/types.ts:149`), an effect the projection cannot bound, or a
+  transform it cannot compute ⇒ **every cell withholds** — never a partial
+  proof. `drawingExtent` alone is a geometry helper, **not** an
+  effects/security proof. T8 adds codex's named rotated-box adversary: a
+  `100×20` anchor-box drawing at (0,0) rotated 90°, whose covered region
+  includes `x: 40..60, y: 30..50` (cells the anchor-rect-only test would
+  leak) must withhold those cells' filter values.
 - **Rate classes:** sort/filter ops and print jobs each carry their own
   §14 class.
 - **Wire audit** covers the §6.4/§12 rows (T8).
@@ -970,12 +1042,12 @@ alpha-0; the `rasterLayer` layers are transparent RGBA boxes,
 overlay** replays them. `source-atop` preserves alpha but does **not**
 by itself prove that per-layer marks equal one composite-once mark:
 overlapping translucent layers stack their marks. Therefore the approved
-layer subset is validated against a **server-composited reference** at
-the §12a.4 tolerance gate (a measured tolerance, published like §16
-T7's), and any subset failing it (or whose moving layer-local marks
-would stop being a page-anchored mark) uses the **server-composed marked
-keyframe** path instead. Restated from draft 6's "no unacceptably" —
-the criterion is now measured.
+layer subset is validated against a **server-composited reference** under
+the named tolerance gate published with §16 T7's §12a.4 mark-fidelity
+battery (round-9 finding 7 names it here explicitly, replacing draft 6's
+"unacceptably" wording), and any subset failing it (or whose
+moving layer-local marks would stop being a page-anchored mark) plays as
+**server-composed marked keyframes**. Measured in T5/T7.
 
 ### 12a.5 Speaker notes
 
@@ -1103,14 +1175,17 @@ audit row lives; exhaustion refuses sessions rather than recycling).
   2) narrows the distinguishable set but remains a Stage-2 hypothesis to
   measure.
 - **K-capture attacks (correct arithmetic, round-8 finding-6):** the old
-  "attenuates ~1/K and rounds to 0" claim was wrong. Averaging K
-  **independent ±2** chip values gives **RMS 2/√K** (spanning exactly:
-  K=4 → RMS 1.0; K=5 → 0.894427; K=6 → 0.816497), and an **odd-K
-  pixelwise median keeps ±2 for 62.5 % (K=4)… 100 % (K=5)… 68.75 % (K=6)
-  of sign combinations** — `[2,2,2,2,−2]` has median +2. So averaging/
+  "attenuates ~1/K and rounds to 0" claim was wrong. Averaging K **independent ±2** chip values gives **RMS 2/√K** (exactly:
+K=4 → RMS 1.0; K=5 → 0.894427; K=6 → 0.816497), and a plain sample
+median over the ±2 perturbation signs keeps ±2 for **62.5 % (K=4, an
+even sample where the median averages the middle two signs), 100 %
+(K=5, odd) and 68.75 % (K=6)** of sign combinations (exhaustive
+enumeration; stated explicitly with the even/odd distinction, round
+9 finding 7). — `[2,2,2,2,−2]` has median +2. So averaging/
   medianing degrades, but does not remove, the mark; the real bound is a
   **Stage-0/2 measurement obligation**, not a claimed number: for each
-  attack (K-average over K ∈ {2,4,6}, odd-K median, two-stream
+  attack (K-average over K ∈ {2,4,6}, K-sample median for both even and odd K
+  (K ∈ {4,5,6}), two-stream
   differencing) T9 reports the **measured per-attack recoverability**
   under the recorded ΔE00 ceiling and publishes it in
   `docs/validation/streaming.md`. Nothing claims "the attack fails".
@@ -1123,9 +1198,9 @@ audit row lives; exhaustion refuses sessions rather than recycling).
 key-generation byte per deployment era. `docRef` is
 `HMAC(kDoc, sha256)` truncated; the plain hash never travels. `sid` is
 random per session, never the viewer's identity; the audit table binds
-`sid ⇄ viewerId` (when `authorize` supplied one). Audit rows are
-write-once and deleted on expiry (90-day default [call]); the session
-run table evicts at close.
+`sid ⇄ viewerId` (when `authorize` supplied one). The run/audit
+lifecycle (write-once audit, evict-on-expiry, 90-day default) lives
+once in §9.3 — referenced here, not redefined.
 
 ### 13.5 Detection tool and gates (round-8 restored as a table)
 
@@ -1164,8 +1239,15 @@ published, never silent):**
 | default-zoom screenshot, single page | ≥ 95 % | ≥ 90 % |
 | after JPEG q70 | ≥ 80 % | ≥ 75 % |
 | after 50 % downscale | ≥ 80 % | ≥ 75 % |
+| **after JPEG q70 followed by 50 % downscale (combined attack; pipeline order = JPEG then downscale)** | **≥ 75 %** | **≥ 75 %** |
 | after 25 % crop | ≥ 70 % | ≥ 70 % |
 | sparse-page spooling | cross-page reassembly, published rate | n/a |
+
+The attribution calibration covers the **whole deployed decision**, not
+per-layer alignment alone: per-page pooling, the **weighted consensus of
+both decoders**, and the alignment/crop/scale search all sit inside the
+same ≤ 10⁻⁶ measured false-attribution target (T9 asserts the composed
+decision, not its parts).
 
 The synthetic battery (T7/T9) covers **JPEG q95/90/80/70, upscale 2×,
 downscale 50 % and crop 5 %** per class, with per-case published
@@ -1177,6 +1259,10 @@ outcomes.
   per sid 120 WS messages/10s (burst 20/s), 60 unit requests/min, 10
   print jobs/min (2 concurrent renders), 30 sort/filter ops/min (1 in
   flight); process 256 sockets, 4,096 queued units.
+- **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
+  (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
+  `ready-timeout`), `renew` grace 5 s before `session-expired`, and a
+  reassembly window of 5 s per multi-fragment unit (§7.1).
 - **Sizes** [call]: `maxUnitPx 8192`; decoded-image ≤ 64 MiB/unit;
   inflated commands ≤ 8 MiB/unit; WS frame chunks 1 MiB (binary frames
   per §7.1); assets/session 256 MiB; **show plans + layer assets ≤ 128
@@ -1215,20 +1301,31 @@ keyboard surfaces unchanged; a disabled service states
   pixel-snap paths, transformed patterns and scratch-surface drawImage;
   fractional zoom proves 1:1 replay; per-script tolerance table;
   cross-backend published tolerances.
-- **T2 disclosure:** wire-inspection of transmitted payloads; fixture
-  matrix: hidden sheet, **hidden rows/cols**, hidden painting/
-  `w:vanish`, **hidden shapes (`cNvPr`/`docPr` through groups)**, notes,
-  comments, covered cells, masked bands, unsampled intermediate-time
-  intervals; per-endpoint (search/copy/a11y/filter values) partial-run
-  and covered-run withholding; **visible-mark text absent from every
+- **T2 disclosure (stage-gated: Stage 1):** wire-inspection of transmitted
+  payloads; the **bounded truncated-manifest/hello allocation test**
+  (truncated/malformed first message parses under its decoded cap — no
+  first-look allocation); the **in-repo Playwright WS harness**
+  (`server/test/app.ts`) asserting happy / error /
+  expiry / **reconnect restores viewport and visible units**; the
+  **cropped + duotoned transmitted-snapshot inspection** (every
+  drawn-bitmap snapshot is decoded in the audit and inspected for crop /
+  duotone correctness, not just byte-compared); fixture matrix: hidden
+  sheet, **hidden rows/cols**, hidden painting/`w:vanish`, **hidden
+  shapes (`cNvPr`/`docPr` through groups)**, notes, comments, covered
+  cells, masked bands, unsampled intermediate-time intervals;
+  per-endpoint (search/copy/a11y/filter values) partial-run and
+  covered-run withholding; **visible-mark text absent from every
   semantic answer (end-to-end)**; presenter/non-presenter notes carve
   outs asserted separately; **local loads byte-for-byte unchanged when
-  no stream source is supplied** (round-7-restore).
+  no stream source is supplied** (restored round 8, verified present in
+  the body round 9).
 - **T3 recorder census:** opcode subset closure over the corpus (per
   §7.5's restored state list); backend face-resolution measurements
   published.
 - **T4 fonts handshake:** `requiredFaces` manifest probes; missing/mismatch
-  and **missing-READY** raster fallback; CJK/ligature/BiDi fixtures;
+  and **missing/verifiable-face** raster fallback **inside a valid READY**;
+  absent READY at the ready window CLOSEs `ready-timeout` and streams
+  nothing (round-9 finding-1); CJK/ligature/BiDi fixtures;
   scratch-rendered text case.
 - **T5 show plans:** §12a.2 admission limits (both combined-layer budget
   and keyframe cap); **no-package/no-`PptxShape` client prototype**
@@ -1236,7 +1333,12 @@ keyboard surfaces unchanged; a disabled service states
   appearance adversaries (colour/opacity/mask/Morph + intermediate
   times); remote presenter adapters; fallback-rate reporting; §12a.8
   acceptance list.
-- **T6 session/isolation:** handshake close-code matrix incl.
+- **T6 session/isolation (adds the round-9 fragmentation battery):**
+  first-fragment declares `totalLen`/`fragCount`; corrupted per-fragment
+  CRC, missing final-fragment, over-cap fragment count or `totalLen`,
+  and reassembly-window timeout each discard the buffer and refuse the
+  unit (no partial validation); `maxPayload` transport cap verified;
+  handshake close-code matrix incl.
   version-intersection refusals; wrong-viewer resume, missing
   `resumeProof`, `renew` race and rotation windows; notes recheck after
   resume; client-relax refusal (`policy-refused`); paired relaxed/
@@ -1246,22 +1348,28 @@ keyboard surfaces unchanged; a disabled service states
   ASset/hashes)**; fingerprint-change `layout-changed` termination;
   sort/filter target authorization, tautology-filter over
   author-hidden rows, hidden pivot/slicer refusal.
-- **T7 marks:** ΔE00 ceiling measurement + codec parameters published;
+- **T7 marks (stage-gated: Stage 2):** ΔE00 ceiling measurement + codec
+  parameters published; **per-page carrier-count publication per unit**
+  (restored round-9 finding 6); the **mark-fidelity tolerance gate for
+  the §12a.4 approved layer subset** (the named `source-atop` gate);
   pixel-mark injection/extraction on image-only units; survival
-  batteries (q95/90/80/70, 2× upscale, 50 % downscale, 5 % and 25 %
-  crop); unmarked + flat-evidence abstain batteries (σ_r = 0);
-  **K-average (2/4/6), odd-K median and 2-stream differencing measured
-  per-attack recoverability**; text-layer round-trips incl. decoy
-  distribution and sparse cross-page spooling.
+  batteries (q95/90/80/70, 2× upscale, 50 % downscale, **combined q70 +
+  half-scale**, 5 % and 25 % crop); unmarked + flat-evidence abstain
+  batteries (σ_r = 0); **K-average (2/4/6), even-K/odd-K median and
+  2-stream differencing with measured per-attack recoverability**;
+  text-layer round-trips incl. decoy distribution and sparse
+  cross-page spooling.
 - **T8 XLSX:** tile pipeline (no too-large-sheet notice path), tile p95
   ≤ 120 ms on a 500×100 sheet; sort/filter authorization incl.
   hostile/tautology filters; covered-cell and **off-viewport covered
   cell** filter values; per-session view-state key; **sort/filter
   row-order parity with local mode; selection parity** (restored
   round 8).
-- **T9 detection:** §13.5 table gates incl. joint z-score gating and
-  whole-search false-attribution ≤ 10⁻⁶ over the declared table;
-  unmarked/flat abstain.
+- **T9 detection (stage-gated: Stage 2):** §13.5 table gates incl.
+  **joint z-score + margin gating and whole-search false-attribution
+  ≤ 10⁻⁶ measured over the declared audit-table size** (the q95/90/80/
+  70, upscale 2×, 5 % and 25 % crop battery); **all of it on top of a
+  per-page carrier-count publication gate** (T7).
 - **T10 lifecycle:** close-code matrix (`4xxx` surfacing), abort-honouring
   and abort-ignoring producers, drain-then-refund retirement,
   resume/supersede sockets, close-on-unmount / exactly-once
@@ -1342,12 +1450,15 @@ render pipeline.
 The default projection is `final-raster`. The command-projection extension
 ships later, stage-gated, for deployments that want smaller payloads:
 
+
 - **`culled-commands` (protected, opt-in):** per-command occlusion proof
   (recorded with the record, never the recorder's opinion); units failing
   proof downgrade to `final-raster`. The **M-rule** requires **every
   content-bearing component** of the unit to be a protected transmitted
   raster; units whose readable content rides commands answer
-  `final-raster` (round-7 fix, agy codex-r4-2, pin by T8's mixed page).
+  `final-raster` (round-7 → round-9 fix: the mixed page's shipping gate is
+  §17 Stage 2's M-rule gate, not T8's XLSX suite; a mixed-page decoder
+  pin lives in T5).
 - **`commands` (relaxed sessions):** ordinary stream; visible mark as a
   last-position `RASTER_BLOCK` overlay, removable by a modified replayer
   — stated plainly, because a relaxed session trusts the replayer.
