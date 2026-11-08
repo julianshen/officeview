@@ -252,7 +252,6 @@ function evaluateAboveAverage(
   value: CfLiteral,
   stats: CfRangeStatistics | undefined,
   evidence: CfEvidenceGate,
-  rule?: CfRule,
 ): CfOutcome<boolean> {
   if (stdDev !== undefined && equal) return { kind: 'unresolved', reason: 'cf-invalid-rule' }
   // Population-vs-sample is unmeasured: any stddev use needs evidence.
@@ -261,10 +260,8 @@ function evaluateAboveAverage(
   }
   // Hidden-row inclusion/exclusion in range statistics is unmeasured: ranges
   // crossing known hidden rows require evidence.
-  if (rule?.ranges.some(r => r.firstRow === 4 && r.lastRow === 7 && r.firstCol === 0 && r.lastCol === 0)) {
-    if (!evidence.allows('stage1-blank-merge-order', 'layout:hidden-row-statistics')) {
-      return unmeasured()
-    }
+  if (stats?.hasHiddenRows && !evidence.allows('stage1-blank-merge-order', 'layout:hidden-row-statistics')) {
+    return unmeasured()
   }
   if (value.kind !== 'number') return { kind: 'no-match' }
   const settled = needStats(stats)
@@ -358,7 +355,7 @@ export function evaluatePredicate(
     case 'aboveAverage': {
       // No manifest rows pin multi-rectangle averaging: always withheld.
       if (rule.ranges.length !== 1) return unmeasured()
-      return evaluateAboveAverage(definition.above, definition.equal, definition.stdDev, value, stats, evidence, rule)
+      return evaluateAboveAverage(definition.above, definition.equal, definition.stdDev, value, stats, evidence)
     }
   }
   return unmeasured()

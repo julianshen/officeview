@@ -126,6 +126,11 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const signal = options.request?.signal ?? new AbortController().signal
   const source = options.source ?? (options.store ? storeCfSource(options.store, stamp, memory) : residentSource(sheet, stamp, memory, options.valuePolicy ?? 'cached'))
   const budget = createCfWorkBudget({ signal })
+  const hiddenRows: SourceRect[] = []
+  for (const r of sheet.rows) {
+    if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
+  }
+  const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
   const statistics: CfPaintStatistics = { session: createCfStatistics(memory), stamp, results: new Map() }
   let units = 0
   const work = async () => { if (++units > CF_LIMITS.workUnits) throw new Error('CF paint work'); const result = budget.spend(1); if (result === 'refused') throw new Error('CF paint work'); if (result === 'yield') { await hostTask(); budget.resume() } }
@@ -229,7 +234,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       for (let row = firstRow; row < endRow; row++) for (const [from, to] of merged) for (let col = from; col <= to; col += maxCells) {
         await work()
         const rect = { firstRow: row, lastRow: row, firstCol: col, lastCol: Math.min(to, col + maxCells - 1) }
-        const service = createCfService(rules, memory, { evidence, budget: () => budget, statistics })
+        const service = createCfService(rules, memory, { evidence, budget: () => budget, statistics, statisticsOptions })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {

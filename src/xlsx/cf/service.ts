@@ -6,7 +6,7 @@ import { resolveCfCellStyle } from './dxf'
 import { CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
-import { createCfStatistics, type CfRangeStatistics, type CfStatisticsSession } from './statistics'
+import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
 const quota = () => new PackageError('resource-limit', 'CF preparation exceeds its admitted batch')
 const cancel = () => new PackageError('cancelled', 'CF preparation cancelled or superseded')
 const blank: CfLiteral = Object.freeze({ kind: 'blank' })
@@ -55,7 +55,7 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
-  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statistics?: CfPaintStatistics } = {}) {
+  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -128,7 +128,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
           if (await source.bounds(stamp.sheetId, budget, signal) === undefined) return snapshot('cf-pending-data')
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
-            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, budget, { signal })
+            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, budget, { signal, ...options.statisticsOptions })
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
           }

@@ -62,6 +62,8 @@ export interface CfRangeStatistics {
   readonly spanCells: number
   /** Distinct stored cells visited (post overlap-dedup). */
   readonly storedCells: number
+  /** Whether the scope rectangle intersects any hidden row. */
+  readonly hasHiddenRows?: boolean
 }
 
 export interface CfStatisticsOptions {
@@ -627,6 +629,12 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       let freqBytes = 0
       for (const [k, v] of frequencies) freqBytes += 64 + k.length * 2 + 8 + `${v}`.length * 2
       const bytes = 256 + retained.length * 8 + freqBytes
+      const hasHiddenRows = hiddenRows.length > 0 && hiddenRows.some(hr =>
+        clamped.some(cr =>
+          hr.firstRow <= cr.lastRow && hr.lastRow >= cr.firstRow &&
+          hr.firstCol <= cr.lastCol && hr.lastCol >= cr.firstCol
+        )
+      )
       const stats: CfRangeStatistics = {
         scopeKey: key,
         numericCount,
@@ -640,6 +648,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         declaredCells,
         spanCells,
         storedCells: stored,
+        hasHiddenRows,
       }
       // Atomically transfer the workspace peak into the adopted candidate:
       // no refund-then-rereserve window where the result sits uncharged.
@@ -890,10 +899,17 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               throw error
             }
             if (clamped.length === 0 || span === 0) {
+              const hasHiddenRows = hiddenRows.length > 0 && hiddenRows.some(hr =>
+                scope.some(sr =>
+                  hr.firstRow <= sr.lastRow && hr.lastRow >= sr.firstRow &&
+                  hr.firstCol <= sr.lastCol && hr.lastCol >= sr.firstCol
+                )
+              )
               const empty: CfRangeStatistics = {
                 scopeKey: key, numericCount: 0, sum: 0, mean: undefined, min: undefined, max: undefined,
                 stddevPop: undefined, sortedAsc: new Float64Array(0), frequencies: new Map(),
                 declaredCells: declared, spanCells: span, storedCells: 0,
+                hasHiddenRows,
               }
               if (!checkCap(256)) {
                 return { kind: 'unresolved', reason: 'cf-resource-limit' }

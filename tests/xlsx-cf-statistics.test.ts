@@ -193,9 +193,26 @@ describe('CF statistics preparation', () => {
     // Different policies are different cache entries even over identical cells.
     expect(included[0]!.value.value.numericCount).toBe(10)
     expect(excluded[0]!.value.value.numericCount).toBe(5)
+    expect(included[0]!.value.value.hasHiddenRows).toBe(true)
+    expect(excluded[0]!.value.value.hasHiddenRows).toBe(true)
     expect(stats.size).toBe(2)
     included[0]!.value.release()
     excluded[0]!.value.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('identifies when statistics scopes do not intersect hidden rows', async () => {
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < 10; r++) cells.push(cell(r, 0, 1))
+    const { source } = arraySource(cells)
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const hidden = [rect(0, 4)]
+    const disjoint = await stats.prepareStatistics([[rect(5, 9)]], stamp(1), source, frozenBudget(), { hidden: 'include', hiddenRows: hidden })
+    expect(disjoint[0]!.kind).toBe('ready')
+    if (disjoint[0]!.kind !== 'ready') throw new Error('expected ready statistics')
+    expect(disjoint[0]!.value.value.hasHiddenRows).toBe(false)
+    disjoint[0]!.value.release()
     expect(memory.currentBytes).toBe(0)
   })
 

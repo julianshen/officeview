@@ -386,6 +386,26 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(std1below, at, num(-2), popBelow, allowGate)).toMatchObject({ kind: 'ready', value: true })
   })
 
+  it('aboveAverage on statistics crossing hidden rows gates on layout:hidden-row-statistics on any range', () => {
+    // Non-fixture range B10:B15 (rows 9..14, col 1):
+    const at = { row: 10, col: 1 }
+    const r = rule({ kind: 'aboveAverage', above: true, equal: false }, [rect(9, 14, 1, 1)])
+    const statsWithHidden: CfRangeStatistics = {
+      scopeKey: 'h', numericCount: 5, sum: 150, mean: 30, min: 10, max: 50, stddevPop: 10,
+      sortedAsc: Float64Array.from([10, 20, 30, 40, 50]), frequencies: new Map(), declaredCells: 6, spanCells: 6, storedCells: 5,
+      hasHiddenRows: true,
+    }
+    const statsWithoutHidden: CfRangeStatistics = {
+      ...statsWithHidden,
+      hasHiddenRows: false,
+    }
+    // Gated when hasHiddenRows is true
+    expect(evaluatePredicate(r, at, num(40), statsWithHidden, denyGate)).toMatchObject({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+    expect(evaluatePredicate(r, at, num(40), statsWithHidden, allowGate)).toMatchObject({ kind: 'ready', value: true })
+    // Ungated when hasHiddenRows is false (even with denyGate)
+    expect(evaluatePredicate(r, at, num(40), statsWithoutHidden, denyGate)).toMatchObject({ kind: 'ready', value: true })
+  })
+
   it('duplicateValues and uniqueValues follow the manifest sets', () => {
     // Manifest stage1-duplicate-scope singles: numeric 1/1 duplicate.
     // Text equivalence is gated below; blanks and errors never match.
