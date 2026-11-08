@@ -1,6 +1,6 @@
 # Server-streamed Office rendering: design
 
-Status: **draft 11 — APPROVED by codex r10 (reviews: codex r1–r10, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
+Status: **draft 12 — Stage-0 owner rulings folded (§2 item 14; §6.4, §7.4, §8.1, §17); draft 11 APPROVED by codex r10 (reviews: codex r1–r10, agy r1, claude r1)** — draft 11 folded codex r9 (byte-grammar codes, fragment cap, aggregate admission, close forms); — drafts 2–8
 folded codex r1–r6, claude r1 and agy r1; draft 9 folded codex r7; **draft 10
 folded codex r8 (narrow fixes: §6.2 close-code registry, §7.1 byte grammar and
 transport caps, §14 decoded admission, §16 stage-labelled gates)** — nothing
@@ -113,6 +113,17 @@ everything they once covered.
 13. **Canvas backend.** Skia via `@napi-rs/canvas` for the server pool; Stage
     0 confirms; **one `CanvasBackend` seam for every canvas-construction site**
     (§9.2).
+14. **Stage-0 rulings (2026-11-08, after `docs/validation/streaming.md`).**
+    (a) **T2:** the six constructs today's renderer draws (hidden/veryHidden
+    sheets, `w:vanish`, a hidden shape inside a docx group, a hidden pptx
+    shape, a hidden slide) are confirmed as the server strip list (§6.4),
+    and the strip **fails closed**: an unrecognised hidden flag is not drawn
+    (§6.4). The Stage-0 RED is the expected baseline; T2 conformance gates
+    Stage 1. (b) **T11:** fix the eager closure, keep the 38,720 B
+    transitive ceiling — the worker re-export moves to a subpath entry as
+    Stage 1's first item (§8.1). (c) **T4:** a server-pinned open font pack
+    of metric-compatible faces (§7.4 rule 6). (d) **Corpus:** top up DOCX to
+    the minimum and hand-certify image-heavy units; T9 re-runs on those.
 
 History (3 lines): drafts 1–4 routed streams through an HTTP-manifest sniff
 with `Accept`/406 negotiation, then a per-document "stream-required" flag,
@@ -476,6 +487,7 @@ session (§18 Never carries the same qualification).
 | Chart text (`src/charts/describe.ts:40–62` reads model data) | model-based text | visible-projection only: painted names/labels/categories, never model value ranges (`policy.semantic`) |
 | Pivot tables / slicers / timelines (`src/worker/viewerProtocol.ts:31` lists `pivot*`/`control*`) | interactive, pre-cache | **refused on protected 4c streams** until a scoped design lands; pivot caches and slicer items backed by hidden/veryHidden sheets or hidden rows/cols are **stripped before serving** |
 | ODT / RTF inputs | parsed into DocxDocument locally (`loadOfficeSource.ts:67–68`) | **refused fail-closed at stream admission** (`unsupported-format`) until hidden-text filters exist (§19.3) |
+| **Any other hidden/visibility flag** the parser sees but this table does not name (e.g. a new `hidden`/`vanish`/`state` attribute value, `visibility="hidden"` in DrawingML extensions) | as authored | **fails closed** (owner ruling §2 item 14a): the element is not drawn, indexed, copied or exposed to a11y, and a `hidden-unrecognised` diagnostic is recorded; recognising it later is a policy change, not a default |
 
 The client never participates; it renders what arrives.
 
@@ -702,6 +714,19 @@ whose hashes the client confirmed:
    same backend, same pinned faces) is the zero-diff claim; renderer
    fidelity to the local hinted painter is a published tolerance per
    script family (T4 fixtures).
+6. **Pinned open font pack (owner ruling §2 item 14c).** The server pins a
+   set of open (OFL) faces and lays out with them; the client package
+   carries the same bytes as a lazy asset (never in the eager closure,
+   §8.1), so rule 3's hash match succeeds. A document family maps to a pack
+   face **only when the pack face is metric-compatible** (same advances), so
+   line breaks match the authored layout: Calibri → Carlito, Cambria →
+   Caladea, Arial/Helvetica → Liberation Sans, Times New Roman → Liberation
+   Serif, Courier New → Liberation Mono, plus those open families
+   themselves. Families with no metric-compatible open face (Calibri Light,
+   Aptos, Trebuchet MS, Century Gothic, …) stay rule 4 rasters unless the
+   document embeds them. The alias table is versioned in the manifest with
+   the face hashes. Stage-0 T4: raster rate 72.7 % (48/66 units) without the
+   pack, 28.8 % (19/66) with it; Calibri Light alone is 14 of the 19.
 
 ### 7.5 Asset table and op list
 
@@ -769,11 +794,20 @@ drops the unit and re-requests once.
   `eager-budget.ts:16` only gzips `dist/index.js` today):
   1. **Transitive-graph budget:** sum gzipped bytes over `dist/index.js`'s
      static-import closure (`tests/helpers/eager-graph.ts` closure) —
-     ceiling 38,720 B unchanged.
+     ceiling 38,720 B unchanged. Stage-0 T11 measured 417,436 B because
+     `src/index.ts:43` re-exports `handleWorkerRequest`/`renderPageBitmap`/
+     `isWorkerRenderSupported` from `./worker/office-worker`, pulling the
+     380 KB worker chunk into the static closure (`index.js` alone:
+     35,978 B). **Stage 1's first item** (owner ruling §2 item 14b) moves
+     those exports to a subpath entry (`officeview/worker`, name [call]) —
+     a breaking change for direct importers, shipped in a minor release with
+     a migration note — before any other Stage-1 work lands.
   2. **`dist/core.js` purity assert:** zero `react`/`document` imports.
   3. **Main-bundle module-map identity:** `dist/index.js`'s map identical
      to the pre-branch build (± the branch's own discriminant); growth
-     ≤ 16 B gzip recorded as a diff.
+     ≤ 16 B gzip recorded as a diff. The pre-branch baseline is taken
+     **after** the worker-subpath move above, which is the one recorded
+     intentional map change.
 
 ### 8.2 Component surfaces
 
@@ -1562,7 +1596,7 @@ Each stage a PR; gates by §16 suite IDs; measured, not narrated.
 | Stage | Scope | Done when |
 |---|---|---|
 | **0** | the **Stage-0 feasibility subsets** of T1–T9 as labelled in §16 (full T2/T7/T9 integration is gated at the stage each names) (including ΔE00 + coding parameters, §12a prototype, backend confirm, fonts probes, appearance-eligibility rate) **plus T11 (eager/core-entry gates) and T12 (resource probe) green before any wire implementation** (round-8 restore) | all gates green **with published numbers** in `docs/validation/streaming.md`; any gate failing reports to the owner rather than silently switching choices |
-| **1** | core entry + eager gates; recorder + replay; WS handshake + typed closes; RemoteOfficeDoc branch; **Stage-1-mandatory semantic occlusion evidence (§7.7/§11 — implemented in this stage; the command-culling store is the only Stage-2 deferral)**; demo WS-only server (pool, default-protected sessions, marks, per-session print wiring); local-vs-others byte-for-byte test | corpus zero local-backend diff; T2's local-vs-stream tests; handshake close-code matrix; T11 gates green |
+| **1** | **first: the worker-subpath move (§8.1, §2 item 14b);** core entry + eager gates; server hidden-content strip incl. the fail-closed row (§6.4); pinned font pack (§7.4 rule 6); recorder + replay; WS handshake + typed closes; RemoteOfficeDoc branch; **Stage-1-mandatory semantic occlusion evidence (§7.7/§11 — implemented in this stage; the command-culling store is the only Stage-2 deferral)**; demo WS-only server (pool, default-protected sessions, marks, per-session print wiring); local-vs-others byte-for-byte test | corpus zero local-backend diff; T2's local-vs-stream tests **including zero ink for all 13 Stage-0 hidden constructs on the stream path**; handshake close-code matrix; T11 gates green |
 | **2** | marks + per-§13 policy, occlusion **store** (command-culling; the Stage-1 evidence remains mandatory), per-session scratch lease; audit table + retention/key rotation; detection tool; M-rule prototype (decided scope) **with its shipping gate** | T6/T7/T9 green incl. false-attribution ≤ 10⁻⁶ over the declared table; marks-off sessions audit-recorded; M-rule protected-command tests green before any `culled-commands` ships |
 | **3** | §11 semantic services + print (§2 item 9); notes presenter surfaces | T2 notes variants; T8 partial; print audit |
 | **3b/3c/3d** | stream presentation per §12a (static+notes; animation; optional media = §12a.6) | §12a.8 lists (restored round 8); T5 green; 3c further blocked on the T5 prototype gates |
