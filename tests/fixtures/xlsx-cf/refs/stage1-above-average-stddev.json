@@ -49,13 +49,14 @@
     18
   ],
   "geometrySource": "excel-measured",
-  "resavedByExcel": false,
+  "resavedByExcel": true,
+  "resaveSavedSha256": "bacfb45060a7c997fdd48cefc30b3b1e80665388f2c46a7c7e7e045e05f222ca",
   "sheet": "Sheet1",
   "range": "A1:M25",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
-  "pngSha256": "c070daf8ac85b6da28955c233084362c71a77ef4b3767a61bd0ebf96a80683e9",
-  "capturedAt": "2026-11-08T12:27:01.483Z",
+  "savedSha256": "bacfb45060a7c997fdd48cefc30b3b1e80665388f2c46a7c7e7e045e05f222ca",
+  "pngSha256": "222126d0b5fb0c34409cd3ba9ca325ff29c65765340e6db977fd33c3e4a18ab8",
+  "capturedAt": "2026-11-08T18:12:29.195Z",
   "observedCells": [
     {
       "ref": "B3",
@@ -987,31 +988,31 @@
       "controlRef": "M17",
       "bgRgb": [
         255,
-        255,
-        255
+        235,
+        156
       ],
       "controlBgRgb": [
         255,
         255,
         255
       ],
-      "bgContrastDelta": 0,
-      "interiorMaxDelta": 0,
+      "bgContrastDelta": 99,
+      "interiorMaxDelta": 145,
       "inkPixelCount": 36,
       "inkWeight": 0.03214285714285714,
       "inkRgb": [
-        21,
-        21,
-        21
+        159,
+        106,
+        6
       ],
       "controlInkPixelCount": 36,
       "controlInkWeight": 0.03214285714285714,
       "glyphRowCount": 7,
       "glyphColumnTransitions": 28,
-      "borderTopDelta": 43,
-      "borderTopVsControlDelta": 0,
-      "borderBottomDelta": 43,
-      "borderBottomVsControlDelta": 0,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 99,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 99,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "11",

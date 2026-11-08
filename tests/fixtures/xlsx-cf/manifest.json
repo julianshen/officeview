@@ -1601,7 +1601,7 @@
       ],
       "expected": {
         "inputSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
-        "savedSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
+        "savedSha256": "fdcf7af5ce1077ea27832ce5d465633740541fbfe91ffb0e7239d3c26877eeb0",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B4",
@@ -1808,17 +1808,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json",
+          "pngSha256": "5735c901b6f9e5af33fe48bce477d9d061763f81f02c2ae76b748466690c2946"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window to distinguish local vs UTC date boundary",
+      "reason": "Capture verification failed (clock-fixture-expired): Clock fixture anchorLocalDate=2026-11-06 (serial 46332) does not match capture local date 2026-11-09 (excelTodaySerial=46335); regenerate with --refresh-clock-date",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T18:10:00.851Z",
+        "excelVersion": "16.114",
+        "inputSha256": "81c0c169476388de9a1403f90f62ac53ebc843b93e3ef41efc5a6587a3b31bfe",
+        "savedSha256": "fdcf7af5ce1077ea27832ce5d465633740541fbfe91ffb0e7239d3c26877eeb0",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-timeperiod-today-clock-2",
@@ -1927,7 +1935,7 @@
       ],
       "expected": {
         "inputSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
-        "savedSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
+        "savedSha256": "94bb86bc2c4280beaa727bf025ec93c2cda895dc33096f71bb5e085b122f0b4c",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B3",
@@ -2042,17 +2050,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json",
+          "pngSha256": "00d83ccfd075d56325e1224be3b55920f36e13dad4affcedb18a316e664c6ab5"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window for 1904 date-system verification",
+      "reason": "Capture verification failed (clock-fixture-expired): Clock fixture anchorLocalDate=2026-11-06 (serial 44870) does not match capture local date 2026-11-09 (excelTodaySerial=44873); regenerate with --refresh-clock-date",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T18:10:05.713Z",
+        "excelVersion": "16.114",
+        "inputSha256": "875ae7b1562dc78912ecd675876b65adcfda945b77019ee9efd25cdfb05951a9",
+        "savedSha256": "94bb86bc2c4280beaa727bf025ec93c2cda895dc33096f71bb5e085b122f0b4c",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-top10-rank-edge",
@@ -2219,7 +2235,7 @@
       ],
       "expected": {
         "inputSha256": "8a768879f1f4c7c6df8ca6bf4961f2d13585775d912c3d2e1da36b76c1036665",
-        "savedSha256": "8a768879f1f4c7c6df8ca6bf4961f2d13585775d912c3d2e1da36b76c1036665",
+        "savedSha256": "652f37ee580f1d3d3f0f321b423c598a06bd242322ab045ce621a8a79fd38a42",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B5",
@@ -2436,17 +2452,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json",
+          "pngSha256": "7332e436768e9daf9b2b754efb15aead9e3239bd497aadef5f166925fc20787b"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell F6 (screen) background (198,239,206) unexpectedly differs from control F16 (255,255,255) by 57",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T18:10:10.498Z",
+        "excelVersion": "16.114",
+        "inputSha256": "8a768879f1f4c7c6df8ca6bf4961f2d13585775d912c3d2e1da36b76c1036665",
+        "savedSha256": "652f37ee580f1d3d3f0f321b423c598a06bd242322ab045ce621a8a79fd38a42",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-above-average-stddev",
@@ -2645,7 +2669,7 @@
       ],
       "expected": {
         "inputSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
-        "savedSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
+        "savedSha256": "bacfb45060a7c997fdd48cefc30b3b1e80665388f2c46a7c7e7e045e05f222ca",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B4",
@@ -2871,17 +2895,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json",
+          "pngSha256": "222126d0b5fb0c34409cd3ba9ca325ff29c65765340e6db977fd33c3e4a18ab8"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Cell F5 (screen) expected fill FFC6EFCE (198,239,206), but observed background RGB (255,255,255) (delta 57)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T18:10:15.144Z",
+        "excelVersion": "16.114",
+        "inputSha256": "9ffaa8d3bd2204f02e97e5b2d1cbf98d28435ab4825c6ada0f249c724093abdf",
+        "savedSha256": "bacfb45060a7c997fdd48cefc30b3b1e80665388f2c46a7c7e7e045e05f222ca",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-duplicate-scope",
@@ -3337,7 +3369,7 @@
       ],
       "expected": {
         "inputSha256": "c7d1b234f082685379b5a82354f57a183f16813ad961ea7b4fa3814b21c2119e",
-        "savedSha256": "c7d1b234f082685379b5a82354f57a183f16813ad961ea7b4fa3814b21c2119e",
+        "savedSha256": "9a3d2ba56c066b80c98cbba5f0418e8c259a8b0b3dd01c699ed81c14bcf0d51e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -3485,17 +3517,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json",
+          "pngSha256": "d16181f6946a90fd580a3a20f7828df79a9a9656ab0b94d0b3ee4da341eeb37a"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Cell E2 (screen) expected fill FFFFC7CE (255,199,206), but observed background RGB (198,239,206) (delta 57)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-08T18:10:19.710Z",
+        "excelVersion": "16.114",
+        "inputSha256": "c7d1b234f082685379b5a82354f57a183f16813ad961ea7b4fa3814b21c2119e",
+        "savedSha256": "9a3d2ba56c066b80c98cbba5f0418e8c259a8b0b3dd01c699ed81c14bcf0d51e",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-dxf-layering",

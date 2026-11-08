@@ -28,13 +28,14 @@
     18
   ],
   "geometrySource": "excel-measured",
-  "resavedByExcel": false,
+  "resavedByExcel": true,
+  "resaveSavedSha256": "9a3d2ba56c066b80c98cbba5f0418e8c259a8b0b3dd01c699ed81c14bcf0d51e",
   "sheet": "Sheet1",
   "range": "A1:G10",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "fb0a4b8ba3c2f8c8e4992743643526d944ea407a6152f84c1bd16d8203757beb",
-  "pngSha256": "5f2ba8e6d4e2939937d4477d6f767dc45b3fc04a8bb1bd68cce44d8e702a0e12",
-  "capturedAt": "2026-11-08T12:27:43.583Z",
+  "savedSha256": "9a3d2ba56c066b80c98cbba5f0418e8c259a8b0b3dd01c699ed81c14bcf0d51e",
+  "pngSha256": "d16181f6946a90fd580a3a20f7828df79a9a9656ab0b94d0b3ee4da341eeb37a",
+  "capturedAt": "2026-11-08T18:13:10.554Z",
   "observedCells": [
     {
       "ref": "B2",
@@ -153,7 +154,7 @@
       "bgRgb": [
         255,
         199,
-        206
+        205
       ],
       "controlBgRgb": [
         255,
