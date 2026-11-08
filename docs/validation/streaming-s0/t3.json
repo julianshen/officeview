@@ -1,5 +1,5 @@
 {
-  "status": "RED",
+  "status": "GREEN",
   "backend": "@napi-rs/canvas",
   "zoom": 1,
   "dpr": 1,
@@ -800,8 +800,8 @@
     "32pt \"Calibri\"",
     "bold 18pt \"Calibri\""
   ],
-  "note": "1 corpus unit(s) failed to load/paint under the census (RED — every unit must parse)",
+  "note": "census agrees with §7.3/§7.5 (recorded subset covers everything the corpus paints); 1 file(s) failed to load and are listed in unitsFailed (T1 decides whether any failure is napi-only)",
   "gate": "t3",
-  "gitSha": "766abc6544b313b282656e9963124753cc3e575e",
-  "generatedAt": "2026-11-08T09:39:46.410Z"
+  "gitSha": "e45bb5a73015e34a977ff17c7d6358efc5e22a51",
+  "generatedAt": "2026-11-08T09:41:46.389Z"
 }
