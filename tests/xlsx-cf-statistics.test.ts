@@ -441,7 +441,7 @@ describe('CF statistics preparation', () => {
     expect(memory.currentBytes).toBe(0)
   })
 
-  it('frequencies count every kind once overlapping cells are deduplicated', async () => {
+  it('frequencies count every kind across rectangles and deduplicate stored cells', async () => {
     // Reviewer probe: [1,1,2] must count n:1 twice (not an empty map).
     const numCells = [cell(0, 0, 1), cell(1, 0, 1), cell(2, 0, 2)]
     const { memory: m1, source: s1 } = arraySource(numCells)
@@ -458,16 +458,17 @@ describe('CF statistics preparation', () => {
     expect(evaluatePredicate(dup, { row: 2, col: 0 }, { kind: 'number', value: 2 }, numOut!.value.value, allowGate))
       .toMatchObject({ kind: 'no-match' })
     numOut!.value.release()
-    // Reviewer probe: overlapping A1:A2 A1 counts 'a' once, not twice.
+    // Review-final-r1 note: Excel counts cell values across each overlapping rectangle
+    // in the sqref list (e.g. A1:A2 A1 counts 'a' twice, so 'a' matches duplicateValues).
     const strCells = [cell(0, 0, 'a'), cell(1, 0, 'b')]
     const { memory: m2, source: s2 } = arraySource(strCells)
     const stats2 = createCfStatistics(m2)
     const [strOut] = await stats2.prepareStatistics([[rect(0, 1), rect(0, 0)]], stamp(1), s2, frozenBudget())
     expect(strOut!.kind).toBe('ready')
     if (strOut!.kind !== 'ready') throw new Error('expected ready statistics')
-    expect([...strOut!.value.value.frequencies.entries()].sort()).toEqual([['s:a', 1], ['s:b', 1]])
+    expect([...strOut!.value.value.frequencies.entries()].sort()).toEqual([['s:a', 2], ['s:b', 1]])
     expect(evaluatePredicate(dup, { row: 0, col: 0 }, { kind: 'string', value: 'a' }, strOut!.value.value, allowGate))
-      .toMatchObject({ kind: 'no-match' })
+      .toMatchObject({ kind: 'ready', value: true })
     strOut!.value.release()
     expect(m1.currentBytes).toBe(0)
     expect(m2.currentBytes).toBe(0)

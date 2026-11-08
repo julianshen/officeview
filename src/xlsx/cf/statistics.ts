@@ -514,34 +514,9 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               }
               if (hidden === 'exclude' && inRects(row, col, hiddenRows)) continue
               const value = items[i]!
-              // Overlap dedup covers every stored kind including explicit
-              // blanks, so overlapping rects count each position once.
-              // Each new id grows the dedup set and is admitted first.
-              if (needsDedup) {
-                const id = row * 16384 + col
-                if (seen!.has(id)) continue
-                if (!growHold(64)) {
-                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
-                }
-                seen!.add(id)
-              }
-              // Distinct, non-excluded stored cells (blanks included).
-              stored++
-              if (value.kind === 'blank') continue
+              // In Excel, duplicateValues/uniqueValues counts frequency across all
+              // rectangles in the sqref list (e.g. H2:H4 H3:H5 counts H3 in both ranges).
               if (value.kind === 'number') {
-                if (!(await ensureCapacity(numericCount + 1))) {
-                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
-                }
-                values[numericCount++] = value.value
-                // Neumaier update.
-                const t = sum + value.value
-                if (Math.abs(sum) >= Math.abs(value.value)) compensation += sum - t + value.value
-                else compensation += value.value - t + sum
-                sum = t
-                if (value.value < min) min = value.value
-                if (value.value > max) max = value.value
-                // Duplicate detection counts numbers too: admit the slot and
-                // the short 'n:<digits>' key before constructing it.
                 const nkey = 'n:' + String(value.value)
                 if (!frequencies.has(nkey)) {
                   if (!growHold(128)) {
@@ -550,7 +525,6 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                 }
                 frequencies.set(nkey, (frequencies.get(nkey) ?? 0) + 1)
               } else if (value.kind === 'string' || value.kind === 'boolean') {
-                // Admit the key text before constructing it.
                 const textLen = value.kind === 'string' ? value.value.length : 0
                 if (!growHold(64 + textLen * 2 + 16)) {
                   return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -575,6 +549,33 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                 }
               } else if (value.kind === 'error') {
                 hasErrors = true
+              }
+
+              // Overlap dedup covers stored positions and numeric arrays so
+              // values are not added multiple times to mean/sum/sortedAsc.
+              if (needsDedup) {
+                const id = row * 16384 + col
+                if (seen!.has(id)) continue
+                if (!growHold(64)) {
+                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                }
+                seen!.add(id)
+              }
+              // Distinct, non-excluded stored cells (blanks included).
+              stored++
+              if (value.kind === 'blank') continue
+              if (value.kind === 'number') {
+                if (!(await ensureCapacity(numericCount + 1))) {
+                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                }
+                values[numericCount++] = value.value
+                // Neumaier update.
+                const t = sum + value.value
+                if (Math.abs(sum) >= Math.abs(value.value)) compensation += sum - t + value.value
+                else compensation += value.value - t + sum
+                sum = t
+                if (value.value < min) min = value.value
+                if (value.value > max) max = value.value
               }
               // Error values are never counted: not numeric, not frequency keys.
             }
