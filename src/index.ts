@@ -41,6 +41,9 @@ export { withFallbackFonts, REGIONAL_FALLBACKS } from './core/fonts/fallback'
 export type { FallbackFontsOptions, CjkFallbackRegion } from './core/fonts/fallback'
 // Worker render-to-bitmap protocol + client (worker bundle at dist/worker.js)
 export { handleWorkerRequest, renderPageBitmap, isWorkerRenderSupported } from './worker/office-worker'
+// Stream sources (spec §6.1); the stream runtime itself ships as officeview/core
+export { isStreamSource, StreamSourceMisuseError } from './stream/source'
+export type { StreamSource } from './stream/source'
 export type { WorkerRenderRequest, WorkerRenderResponse, WorkerRenderKind, WorkerRenderFormat, WorkerRenderOptions } from './worker/office-worker'
 export { workerRegister } from './core/fonts/register'
 // Text search (also used internally by <OfficeDoc>)

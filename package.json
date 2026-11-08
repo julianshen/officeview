@@ -33,6 +33,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core-entry.d.ts",
+      "import": "./dist/core.js"
+    },
     "./worker": {
       "types": "./dist/worker/office-worker.d.ts",
       "import": "./dist/worker.js"
@@ -43,7 +47,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --noEmit && vite build && tsc -p tsconfig.build.json",
+    "build": "tsc --noEmit && vite build && vite build -c vite.core.config.ts && tsc -p tsconfig.build.json",
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",

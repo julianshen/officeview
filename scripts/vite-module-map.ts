@@ -6,7 +6,7 @@
 import type { Plugin } from 'vite'
 import type { ModuleMap } from '../tests/helpers/eager-graph'
 
-export function moduleMap(): Plugin {
+export function moduleMap(fileName = '.module-map.json'): Plugin {
   return {
     name: 'officeview-module-map',
     generateBundle(_options, bundle) {
@@ -15,7 +15,7 @@ export function moduleMap(): Plugin {
         if (out.type !== 'chunk') continue
         map[file] = { modules: Object.keys(out.modules), imports: [...out.imports], dynamicImports: [...out.dynamicImports] }
       }
-      this.emitFile({ type: 'asset', fileName: '.module-map.json', source: JSON.stringify(map, null, 2) })
+      this.emitFile({ type: 'asset', fileName, source: JSON.stringify(map, null, 2) })
     },
   }
 }
