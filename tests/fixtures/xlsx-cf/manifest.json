@@ -3096,8 +3096,6 @@
             "controlRef": "B23",
             "matched": true,
             "fillRgb": "FFFFC7CE",
-            "fontRgb": "FF9C0006",
-            "bold": true,
             "note": "empty string duplicates blank cell in Excel"
           },
           {
