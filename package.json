@@ -1,7 +1,7 @@
 {
   "name": "officeview",
   "version": "0.10.0",
-  "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> — pixel-faithful, not HTML translation. Works on desktop and mobile.",
+  "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> \u2014 pixel-faithful, not HTML translation. Works on desktop and mobile.",
   "keywords": [
     "react",
     "canvas",
@@ -58,7 +58,8 @@
     "site:typecheck": "tsc -p site/tsconfig.json",
     "s0:test": "vitest run --config vitest.stream-s0.config.ts",
     "s0:test:napi": "vitest run --config vitest.stream-s0-napi.config.ts",
-    "s0:report": "bun scripts/stream-s0/report.ts"
+    "s0:report": "bun scripts/stream-s0/report.ts",
+    "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts"
   },
   "peerDependencies": {
     "react": ">=18"

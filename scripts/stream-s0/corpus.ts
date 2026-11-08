@@ -6,15 +6,23 @@
  * (@napi-rs/canvas) while a plain run resolves the real `canvas` package.
  * Probes therefore render with the backend under test without touching `src/`.
  *
- * Font registration is deliberately not part of Task 1 (Task 4 owns font
- * probes): units with embedded faces acquire a backend fallback family under
- * the default `acquireFonts` path, which is enough for renderability.
+ * Font registration is NOT silently defaulted: `loadUnits(file, opts)` threads
+ * `PaintOptions` through to `getPaintables`, and with no `registerFont`
+ * provided, an explicit headless registrar records `font-load-failed` per
+ * embedded face (so Task 4 can pass its own node-side `registerFont` adapter
+ * and see which faces loaded).
+ *
+ * Note for later tasks: never `savePng` from `src/test/pixel-diff.ts` as a
+ * Stage-0 tool — its PNG IO path is a native `require('canvas')`
+ * (`src/test/pixel-diff.ts:63–64`) which neither the vitest napi alias nor
+ * the bun preload can intercept (it imports the real `canvas` package), so a
+ * "napi" PNG could silently be node-canvas pixels. Use `renderUnit` above.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { createCanvas } from 'canvas'
 import { loadOfficeFile } from '../../src/components/OfficeFile'
-import { getPaintables, type Paintable, type PaintableArray } from '../../src/render/paint'
+import { getPaintables, type Paintable, type PaintableArray, type PaintOptions } from '../../src/render/paint'
 
 export type CorpusKind = 'docx' | 'xlsx' | 'pptx'
 
@@ -42,6 +50,9 @@ export interface Bitmap {
 
 /** Render result: a unit over 8192 px/side at the requested scale skips. */
 export type RenderResult = Bitmap | { skipped: 'oversize' }
+
+/** Consistent LSB-tolerant ceil: absorbs float error (round 10 finding 7). */
+export const sizeCeil = (value: number): number => Math.ceil(value - 1e-9)
 
 const CORPUS_DIR = path.join(process.cwd(), 'corpus')
 /** Office lock files (`~$name`) are never documents. */
@@ -77,44 +88,61 @@ export function listCorpus(): CorpusFile[] {
 }
 
 /**
- * All paintable units of one corpus file.
+ * All paintable units of one corpus file, with the diagnosis plumbing
+ * (`PaintOptions`) from `getPaintables` and **no silent registrar fallback**:
+ * with `opts.registerFont` unset, an explicit headless registrar records
+ * `font-load-failed` for every embedded face instead of falling through to
+ * the browser registrar.
  *
- * Implementation note: each unit is painted through the corpus-file's actual
- * bytes, loaded once per call; if repeated probes re-load the same file they
- * re-pay the parse (deterministic, kept simple — Task 2's probe wires reuse).
- * The file must still parse: an unparseable corpus file **throws** here and
- * callers (Task 2) count it as a render failure of the backend under test.
+ * (round-10 loadUnits doc comment: paint closures stay live for late reads;
+ * the file bytes come from `readFileSync` per call; disposal is per-unit set
+ * via the returned array's non-enumerable `dispose` — a caller cannot
+ * accidentally forget the writer's lease.)
  */
-export async function loadUnits(file: CorpusFile): Promise<Unit[]> {
+export async function loadUnits(file: CorpusFile, opts?: PaintOptions): Promise<HeadlessUnits> {
   const bytes = readFileSync(file.path)
+  const paintOpts: PaintOptions = {
+    // Explicit headless registrar: acquireFonts catches this and records a
+    // `font-load-failed` diagnostic per embedded face (no silent fallback).
+    registerFont: (request) => {
+      throw new Error(
+        `stream-s0: no registerFont provided — embedded ${request.face?.family ?? 'unknown'} cannot load headlessly`,
+      )
+    },
+    ...(opts as Partial<PaintOptions> | undefined),
+  }
   const doc = await loadOfficeFile(bytes)
-  const paintables = await getPaintables(doc)
+  const paintables = await getPaintables(doc, paintOpts)
   // Keep the lease alive as long as any paint closure remains reachable;
-  // each unit closes over this array so `disposeUnits` can release it.
-  const units: Unit[] = paintables.map((paintable: Paintable, index: number) => ({
+  // each unit closes over this array so `dispose` releases it.
+  const units: HeadlessUnits = paintables.map((paintable: Paintable, index: number) => ({
     index,
     widthPx: paintable.spec.widthPx,
     heightPx: paintable.spec.heightPx,
     paint: (ctx: CanvasRenderingContext2D) => paintable.paint(ctx),
   }))
-  paintablesLeases.set(units, paintables)
-  return units
-}
-
-/**
- * Lease table: renderUnit-driven callers release a file's leases via
- * `disposeUnits` after rendering; a paint after disposal is undefined
- * behaviour, as documented by `getPaintables`.
- */
-const paintablesLeases = new WeakMap<ReadonlyArray<Unit>, PaintableArray>()
-
-/** Release the leases behind one file's units (Task 2+ ownership glue). */
-export function disposeUnits(units: ReadonlyArray<Unit>): void {
-  const lease = paintablesLeases.get(units)
-  if (lease) {
-    paintablesLeases.delete(units)
-    lease.dispose()
+  // The lease/plan surface is attached via non-enumerable properties so array
+  // copies cannot silently lose it (round-10 finding: disposal by array
+  // identity is fragile with WeakMaps).
+  Object.defineProperty(units, 'dispose', {
+    value: () => paintables.dispose(),
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  Object.defineProperty(units, 'fontDiagnostics', {
+    value: paintables.fontDiagnostics,
+    enumerable: false,
+    configurable: true,
+  })
+  if (paintables.chartDiagnostics) {
+    Object.defineProperty(units, 'chartDiagnostics', {
+      value: paintables.chartDiagnostics,
+      enumerable: false,
+      configurable: true,
+    })
   }
+  return units
 }
 
 /**
@@ -124,8 +152,8 @@ export function disposeUnits(units: ReadonlyArray<Unit>): void {
  * instead of a downscaled write (Task 2 counts skips, never hides them).
  */
 export async function renderUnit(unit: Unit, scale: number): Promise<RenderResult> {
-  const width = Math.max(1, Math.ceil(unit.widthPx * scale))
-  const height = Math.max(1, Math.ceil(unit.heightPx * scale))
+  const width = sizeCeil(Math.max(1, unit.widthPx * scale))
+  const height = sizeCeil(Math.max(1, unit.heightPx * scale))
   if (Math.max(width, height) > 8192) return { skipped: 'oversize' }
   const canvas = createCanvas(width, height)
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
@@ -136,11 +164,11 @@ export async function renderUnit(unit: Unit, scale: number): Promise<RenderResul
   return { width: canvas.width, height: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data }
 }
 
-/** Unused-but-typed helper guard so tree-shaking cannot claim a wrong export. */
-export function corpusFileIsRegular(file: CorpusFile): boolean {
-  try {
-    return statSync(file.path).isFile()
-  } catch {
-    return false
-  }
+interface HeadlessUnits extends Array<Unit> {
+  /** Releases the writer's lease (Task 2+ ownership glue). */
+  dispose(): void
+  /** Font-load diagnostics from `getPaintables` (`font-load-failed` etc.). */
+  fontDiagnostics: unknown[]
+  /** Chart diagnostics surfaces when charts are prepared (optional). */
+  chartDiagnostics?: unknown
 }
