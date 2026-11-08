@@ -97,7 +97,7 @@ export const PACK_ALIASES: Record<string, string> = {
 }
 
 /** Pack faces present on disk: family → hash96 of the pinned bytes. */
-export function packFaces(dir = path.join(process.cwd(), 'scripts', 'stream-s0', 'fontpack')): Map<string, string> {
+export function packFaces(dir = path.join(process.cwd(), 'fontpack')): Map<string, string> {
   const out = new Map<string, string>()
   for (const [family, file] of Object.entries(PACK_ALIASES)) {
     const at = path.join(dir, file)
