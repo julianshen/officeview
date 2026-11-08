@@ -1351,7 +1351,7 @@ published, never silent):**
 | after JPEG q70 | ≥ 80 % | ≥ 75 % |
 | after 50 % downscale | ≥ 80 % | ≥ 75 % |
 | **after JPEG q70 followed by 50 % downscale (combined attack; pipeline order = JPEG then downscale)** | **≥ 75 %** | **≥ 75 %** |
-| after 25 % crop | ≥ 70 % | ≥ 70 % |
+| after 25 % crop (**25 % removed from each axis**, ≈ 44 % of the area; owner ruling 2026-11-08) | ≥ 70 % | ≥ 70 % |
 | sparse-page spooling | cross-page reassembly, published rate | n/a |
 
 The attribution calibration covers the **whole deployed decision**, not
