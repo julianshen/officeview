@@ -1133,17 +1133,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // notifications and settle timeouts, but a persistently refused key gives
   // up instead of re-reading forever. A new key resets the budget.
   const cfTextRetries = useRef<{ key: string; count: number }>({ key: '', count: 0 })
-  // In-flight deduplication: at most one preparation runs per key. Re-runs
-  // for the same key (notifications, viewport churn) must not abort it or
-  // start duplicates; only a key change supersedes, and unmount cancels.
-  const inflightCfTextKey = useRef<string | null>(null)
-  const inflightCfTextAbort = useRef<AbortController | null>(null)
+  // In-flight ownership: one explicitly owned operation per key, independent
+  // of the published cfText state (which is null while a preparation is
+  // pending). The op id is minted when the preparation starts and is the
+  // single authority for cancellation and publication; a superseded or
+  // stale operation can never publish or clear a newer one.
+  interface CfTextOp { id: number; key: string; abort: AbortController }
+  const cfTextOp = useRef<CfTextOp | null>(null)
+  const cfTextOpSeq = useRef(0)
   const cfTextMounted = useRef(true)
   useEffect(() => {
     cfTextMounted.current = true
     return () => {
       cfTextMounted.current = false
-      inflightCfTextAbort.current?.abort()
+      const op = cfTextOp.current
+      if (op) { op.abort.abort(); cfTextOp.current = null }
     }
   }, [])
   const latestCfTextKey = useRef<string | undefined>(undefined)
@@ -1165,20 +1169,34 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // refusal fails closed instead of re-reading forever. The bound covers
     // load churn plus viewport changes (zoom/scroll keep the same key but
     // need fresh attempts as pages load for the new viewport). Concurrent
-    // duplicates are suppressed: one preparation per key runs at a time.
+    // duplicates are suppressed by operation ownership, independent of the
+    // published cfText state (which is null while a preparation is pending).
     if (cfText?.key === cfTextKey && (cfText.scope || (cfText as { empty?: boolean } | null)?.empty)) return
-    if (cfText?.key === cfTextKey && cfTextKey === inflightCfTextKey.current) return
+    const cleanup = () => {
+      if (cfTextKey !== latestCfTextKey.current) {
+        const op = cfTextOp.current
+        if (op?.key === cfTextKey) {
+          op.abort.abort()
+          cfTextOp.current = null
+        }
+      }
+    }
+    const op = cfTextOp.current
+    if (op && op.key === cfTextKey && cfTextOpSeq.current === op.id) return cleanup
+    if (cfTextOp.current && cfTextOp.current.key !== cfTextKey) {
+      cfTextOp.current.abort.abort()
+      cfTextOp.current = null
+    }
     if (cfText?.key === cfTextKey) {
       if (cfTextRetries.current.key !== cfTextKey) cfTextRetries.current = { key: cfTextKey, count: 0 }
       if (++cfTextRetries.current.count > 10) return
     } else {
       cfTextRetries.current = { key: cfTextKey, count: 0 }
     }
-    const runKey = cfTextKey
-    let cancelled = false
+    const runId = ++cfTextOpSeq.current
     const abort = new AbortController()
-    inflightCfTextKey.current = runKey
-    inflightCfTextAbort.current = abort
+    const ownedOp: CfTextOp = { id: runId, key: cfTextKey, abort }
+    cfTextOp.current = ownedOp
     const sheet = entry.sheet, sheetId = activeSheetId
     void (async () => {
       // A refused preparation (budget pressure) leaves base text rather than
@@ -1193,8 +1211,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       } catch {
         scope = undefined
       }
-      if (inflightCfTextKey.current === runKey) inflightCfTextKey.current = null
-      if (cancelled || !cfTextMounted.current) { scope?.dispose(); return }
+      // Only the owning operation may clear itself or publish; a superseded
+      // (key-changed/unmounted) or stale operation discards its result.
+      if (cfTextOp.current?.id !== runId) { scope?.dispose(); return }
+      cfTextOp.current = null
+      if (abort.signal.aborted || !cfTextMounted.current || cfTextKey !== latestCfTextKey.current) {
+        scope?.dispose()
+        return
+      }
       // Equivalent states commit nothing: without this guard every failed
       // preparation would re-render and immediately re-prepare in a hot loop.
       // Deterministically empty sheets are marked so notifications stop
@@ -1202,16 +1226,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const next = empty ? { key: cfTextKey, scope, empty: true as const } : { key: cfTextKey, scope }
       setCfText(previous => (previous?.key === next.key && previous?.scope === next.scope && (previous as typeof next).empty === next.empty) ? previous : next)
     })()
-    return () => {
-      // Abort only superseded work: a bail-out or duplicate-suppressed re-run
-      // for the same key must not kill the in-flight preparation (unmount is
-      // handled separately and always cancels via the mounted flag + abort).
-      if (runKey !== latestCfTextKey.current) {
-        cancelled = true
-        abort.abort()
-        if (inflightCfTextKey.current === runKey) inflightCfTextKey.current = null
-      }
-    }
+    return cleanup
     // CF-only work: helpers are render-scoped closures over the same inputs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, scroll, viewport, cfTextKey, cfText, activeSheetId, loadTick])

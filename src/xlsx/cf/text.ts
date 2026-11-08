@@ -342,6 +342,7 @@ export async function awaitSettled(
     let done = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let unsub: (() => void) | undefined
+    let abortAdded = false
     const onAbort = (): void => {
       finish('settled')
     }
@@ -355,23 +356,28 @@ export async function awaitSettled(
       const release = unsub
       unsub = undefined
       release?.()
-      signal.removeEventListener('abort', onAbort)
+      if (abortAdded) {
+        signal.removeEventListener('abort', onAbort)
+        abortAdded = false
+      }
       resolve(value)
     }
     unsub = subscribe(() => {
       if (isSettled() || signal.aborted) finish('settled')
     })
-    signal.addEventListener('abort', onAbort)
-    timer = setTimeout(() => finish('timeout'), timeoutMs)
-    // A synchronous notification may have finished before handles existed;
-    // release the orphaned subscription (finish already resolved above).
-    if (done && unsub) {
+    // A synchronous notification may have finished during subscription; in
+    // that case finish ran before the abort listener/timer existed, so only
+    // release the (now-assigned) subscription and install nothing further.
+    if (done) {
       const release = unsub
       unsub = undefined
-      release()
-    } else if (isSettled() || signal.aborted) {
-      finish('settled')
+      release?.()
+      return
     }
+    signal.addEventListener('abort', onAbort)
+    abortAdded = true
+    timer = setTimeout(() => finish('timeout'), timeoutMs)
+    if (isSettled() || signal.aborted) finish('settled')
   })
 }
 
