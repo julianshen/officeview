@@ -66,3 +66,61 @@ Task-owned `git diff --check` passed. No whole-product build claimed.
 8. **Null experiment:** exact unmarked captures abstain and have no Z variance; the requested unmarked null distribution uses unmarked white pages with 0/−1 byte acquisition noise, no embed/pedestal. Wrong-key inputs use 12 other basis keys on the same white page. Fixed seeded real BCH candidates and deterministic noise; scores pooled over all candidates. This is marginal-Z smoke evidence, not the full alignment/crop/scale search maxima tail proof required by Task 8.
 9. **Attack conventions:** JPEG quality is integer 1..100, napi encode('jpeg', q) then napi decode. Scale rounds dimensions, uses high-quality image smoothing. Crop frac removes that fraction of **each axis**, not area; anchors top-left/center/bottom-right retain the named part, integer-floor offsets. Compose is async and ordered left-to-right. Average and median operate in encoded byte RGB/alpha with final clamped rounding; even median averages the two middle values. Difference is signed a−b about byte 128 with opaque alpha (not a claimed best reconstruction attack). Dimension mismatch/empty image sets refuse.
 10. **Fixture and scope:** a deterministic in-memory napi-rendered text page (14 rows plus a coloured rectangle) is the single Task 7 fixture. No corpus fidelity, all-white crop localisation, arbitrary rotation, attack survival percentages, collusion success or complete-decision false-attribution threshold is inferred from its pass. Existing xorshift/key conventions from Task 6 are unchanged. No Task 8 work performed.
+
+## Fix round 1 — I1–I3 and minors
+
+Uncommitted; no source/harness/census edits. Measurement HEAD `766abc6544b313b282656e9963124753cc3e575e` (concurrent harness commits may advance the branch).
+
+### Files
+
+- scripts/stream-s0/mark/register.ts
+- scripts/stream-s0/mark/detect.ts
+- tests/stream-s0/mark-detect.test.ts
+- docs/validation/streaming-s0/task7.md
+- docs/validation/streaming-s0/task7-fix1-before-0.25-0.5.json
+- docs/validation/streaming-s0/task7-fix1-before-0.05-0.5.json
+- docs/validation/streaming-s0/task7-fix1-before-0.25-2.json
+- docs/validation/streaming-s0/task7-fix1-after-0.25-0.5.json
+- docs/validation/streaming-s0/task7-fix1-after-0.05-0.5.json
+- docs/validation/streaming-s0/task7-fix1-after-0.25-2.json
+- docs/validation/streaming-s0/task7-fix1-null.json
+- docs/validation/streaming-s0/task7-fix1-bench.json
+
+### Verification and changes
+
+Tests first: odd-size crop cases plus prepared matrix ownership. RED: 4 failed / 8 passed. Both crop-before-half-scale cases returned none; crop-before-double-scale returned none with no pose; prepareCandidates did not exist. Existing scale-before-crop tests retained unchanged.
+
+I1 resolved: registration now supports both operation orders. Crop-then-scale searches integer offsets in ORIGINAL reference pixels (therefore half-pixel scaled offsets at f=0.5), considers the integer crop extents consistent with rounded capture size, and actually crops/resamples the reference using napi for final alignment. Coarse phase-correlation peaks seed the search. Approximate bilinear errors on ~256 samples rank each extent's candidates; the best eight are rendered with the real high-quality napi scaler and compared on ~4096 samples. Scale-then-crop retains its prior search. The returned reference is aligned to capture dimensions; scaleX/scaleY explicitly account for dimension rounding. Detector sampling uses original-index chips and this transform, without out-of-bounds reads. This remains a bounded heuristic registration search, not an exhaustive rotation/subpixel search.
+
+I2 resolved: dimensional admission permits ceil(factor) slack below the nominal 75%-extent bound, covering crop-before-scale rounding. Captures larger than the full scaled reference remain rejected because there is no real support to sample. Extent inversion uses Math.round's half-up rule. Added 601×777, quarter-centre-crop → 2× regression.
+
+I3 resolved: prepareCandidates validates and copies into one contiguous privately owned Int8Array (M×512), exposed through an immutable CandidateMatrix handle. WeakMap ownership prevents callers modifying the validated storage; invalid handles refuse. scoreCapture/detect accept that handle with O(1) lookup, keeping the old array signature as a wrapper that prepares each call. Tests mutate all caller arrays after preparation and check identical scores/attribution; repeated decisions never reread input codes. M=65,536 matrix owns 33,554,432 bytes and should be reused across decisions. Factory cost is paid once and storage is GC-released with the handle.
+
+Minor resolved: removed the raw-reference-identical shortcut that tried to determine whether marking occurred. The shared pedestal is always subtracted on admitted support. For an unmarked page with spatially varying hypothetical pedestal, this can create structured residual and inflate sigma (or dilute genuine signal); the full null calibration must include it. Truly flat corrected residual still abstains. Added four odd-size crop/rescale captures per class with 1024 real BCH candidates, including white regions requiring pedestal, exercising registration rather than just same-size pages.
+
+**Deviations:** the planned 5×5 box band-pass was dropped per the review-derived brief because filtering residual alone mismatches the unfiltered template; reference subtraction plus consistent pedestal subtraction/support centring is used instead. No unmatched band-pass is applied.
+
+### Before / after evidence
+
+On the committed test's 601×777 deterministic text page (different from the reviewer's fixture, so before Z differs from its 3.3/2.7):
+
+| Attack order | Correct-candidate Z before | Correct-candidate Z after | Result |
+|---|---:|---:|---|
+| crop 25% centre → 0.5× | 1.8828767269 (best wrong score 3.2250240387) | 17.0399331581 | attributed 73 |
+| crop 5% bottom-right → 0.5× | 2.9940391359 | 21.3486344327 | attributed 73 |
+| crop 25% centre → 2× | no registration / zero support | 16.9404185353 | attributed 73 |
+
+Registration-search nulls (4096 candidate scores per class): unmarked mean 0.0023574266, std **1.0006656168**; wrong-key mean 0.0042948453, std **1.0414416676**. Both std gates 0.8–1.25 pass. These are marginal-score checks, not Task 8's decision-maxima false-attribution calibration.
+
+M=65,536 performance, Node v22.22.3, same-size text page, distinct real BCH candidates: one-time preparation 165.20 ms; 2 warmups + 7 measured decisions, **median 67.2155 ms**, min 66.9077 / max 67.4347 ms. Exactly 65,536 outer input reads during preparation and no further reads across all nine decisions. Shared-machine context only; no timing assertion. Registration-heavy crop decisions may cost more; no comparison to the reviewer's 350 ms is claimed as a controlled benchmark.
+
+Reproduce:
+`S0_MARK_FIX_RESULTS=after S0_MARK_FIX_BENCH=1 bunx vitest run --config vitest.stream-s0.config.ts tests/stream-s0/mark-*.test.ts`
+
+```
+Test Files  2 passed (2)
+     Tests  21 passed (21)
+  Duration  7.60s (transform 101ms, setup 0ms, import 321ms, tests 8.03s, environment 0ms)
+```
+
+The benchmark test is opt-in; the normal command runs 20 and skips that measurement. Focused TypeScript and task-owned diff whitespace checks pass. No Task 8 implementation, no new dependencies, no commits.

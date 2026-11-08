@@ -76,3 +76,80 @@ it('2x scale and crop retain original carrier indexing', () => {
   const capture = crop(scale(marked, 2), 0.25, 'center')
   expect(detect(capture, reference, chips, candidates, p, tau)).toMatchObject({ kind: 'attributed', index: 73 })
 })
+
+function oddPage(background = '#eeeeee'): Bitmap {
+  const c = createCanvas(601, 777), ctx = c.getContext('2d')
+  ctx.fillStyle = background; ctx.fillRect(0, 0, 601, 777)
+  ctx.fillStyle = '#333333'; ctx.font = '17px sans-serif'
+  for (let i = 0; i < 31; i++) ctx.fillText(`Odd reference row ${i}: ${i * 739} office text`, 13 + i % 7 * 11, 29 + i * 23)
+  ctx.fillStyle = '#758ca3'; ctx.fillRect(415, 260, 115, 173)
+  return { width: 601, height: 777, data: new Uint8ClampedArray(ctx.getImageData(0, 0, 601, 777).data) }
+}
+const oddReference = oddPage(), oddChips = basis(new Uint8Array(32).fill(7), 601, 777, p)
+const oddMarked = embed(oddReference, oddChips, candidates[73]!, p)
+for (const [frac, anchor, factor] of [[0.25, 'center', 0.5], [0.05, 'bottom-right', 0.5], [0.25, 'center', 2]] as const) {
+  it(`odd crop ${frac} ${anchor} before scale ${factor} attributes`, () => {
+    const capture = scale(crop(oddMarked, frac, anchor), factor)
+    const scores = scoreCapture(capture, oddReference, oddChips, candidates, p)
+    if (process.env.S0_MARK_FIX_RESULTS) writeFileSync(new URL(`../../docs/validation/streaming-s0/task7-fix1-${process.env.S0_MARK_FIX_RESULTS}-${frac}-${factor}.json`, import.meta.url), JSON.stringify({ targetZ: scores.scores[73] ?? null, bestZ: Math.max(...scores.scores), support: scores.support }, null, 2))
+    expect(detect(capture, oddReference, oddChips, candidates, p, tau)).toMatchObject({ kind: 'attributed', index: 73 })
+  }, 30_000)
+}
+it('prepared candidate matrix owns validated symbols once', async () => {
+  const { prepareCandidates } = await import('../../scripts/stream-s0/mark/detect')
+  const input = candidates.map(c => c.slice())
+  const matrix = prepareCandidates(input)
+  for (const c of input) c.fill(0) // independent ownership, not a validation cache on mutable input
+  expect(detect(marked, reference, chips, matrix, p, tau)).toMatchObject({ kind: 'attributed', index: 73 })
+  expect(scoreCapture(marked, reference, chips, matrix, p).scores).toEqual(scoreCapture(marked, reference, chips, candidates, p).scores)
+  expect(() => prepareCandidates([new Int8Array(512)])).toThrow()
+})
+
+it('registration-search null Z remains bounded after crop then rescale', async () => {
+  const { prepareCandidates } = await import('../../scripts/stream-s0/mark/detect')
+  const ref = oddPage('#ffffff'), carrier = basis(new Uint8Array(32).fill(9), ref.width, ref.height, p)
+  const matrix = prepareCandidates(candidates), groups: number[][] = [[], []]
+  let seed = 12345
+  const next = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed >>> 0 }
+  for (let k = 0; k < 4; k++) {
+    const noisy = { ...ref, data: ref.data.slice() }
+    for (let i = 0; i < noisy.data.length; i += 4) { const delta = next() % 5 - 2; for (let ch = 0; ch < 3; ch++) noisy.data[i + ch] += delta }
+    const wrong = embed(ref, basis(new Uint8Array(32).fill(20 + k), ref.width, ref.height, p), candidates[k]!, p)
+    for (const [index, input] of [noisy, wrong].entries()) {
+      const capture = scale(crop(input, k % 2 ? 0.05 : 0.25, k % 2 ? 'bottom-right' : 'center'), 0.5)
+      const result = scoreCapture(capture, ref, carrier, matrix, p)
+      expect(result.registration?.factor).toBe(0.5)
+      expect(result.support).toBeGreaterThan(200)
+      expect(result.flat).toBe(false)
+      groups[index]!.push(...result.scores)
+    }
+  }
+  const measurements = groups.map((z, i) => {
+    const mean = z.reduce((a, b) => a + b, 0) / z.length
+    const std = Math.sqrt(z.reduce((a, b) => a + (b - mean) ** 2, 0) / z.length)
+    expect(std).toBeGreaterThanOrEqual(0.8); expect(std).toBeLessThanOrEqual(1.25)
+    return { kind: i ? 'wrong-key-search' : 'unmarked-search', samples: z.length, mean, std }
+  })
+  if (process.env.S0_MARK_FIX_RESULTS) writeFileSync(new URL('../../docs/validation/streaming-s0/task7-fix1-null.json', import.meta.url), JSON.stringify(measurements, null, 2))
+}, 60_000)
+
+it.runIf(process.env.S0_MARK_FIX_BENCH === '1')('prepared M=65536 decisions never reread code inputs', async () => {
+  const { prepareCandidates } = await import('../../scripts/stream-s0/mark/detect')
+  const codes = Array.from({ length: 65536 }, (_, i) => extendedCodeword(codeword40(i, 0)))
+  let inputReads = 0
+  const counted = new Proxy(codes, { get(target, key, receiver) { if (typeof key === 'string' && /^\d+$/.test(key)) inputReads++; return Reflect.get(target, key, receiver) } })
+  const start = performance.now(), matrix = prepareCandidates(counted), prepareMs = performance.now() - start
+  expect(inputReads).toBe(65536)
+  const capture = embed(reference, chips, codes[73]!, p)
+  const times: number[] = []
+  for (let i = 0; i < 9; i++) {
+    const at = performance.now()
+    const decision = detect(capture, reference, chips, matrix, p, tau)
+    const ms = performance.now() - at
+    expect(decision).toMatchObject({ kind: 'attributed', index: 73 })
+    if (i >= 2) times.push(ms)
+  }
+  expect(inputReads).toBe(65536)
+  times.sort((a, b) => a - b)
+  writeFileSync(new URL('../../docs/validation/streaming-s0/task7-fix1-bench.json', import.meta.url), JSON.stringify({ gate: 'T9-prepared-candidates', status: 'REPORTED', gitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), generatedAt: new Date().toISOString(), backend: '@napi-rs/canvas', runtime: process.version, M: 65536, ownedBytes: matrix.bytes, inputReads, prepareMs, warmups: 2, decisionMs: times, medianMs: times[3], note: 'Shared-machine wall time, not an assertion or full-search calibration; same-size capture, real distinct BCH candidates' }, null, 2))
+}, 60_000)
