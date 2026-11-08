@@ -1,0 +1,12 @@
+{
+  "gate": "t11",
+  "status": "RED",
+  "transitiveGzipBytes": 417436,
+  "ceiling": 38720,
+  "moduleMapHash": "6e2c7a5af9edcf1caa054876ae897be1ac706306a0d193c4d0009148f688fc64",
+  "checkEager": "eager modules: 155\neager graph ok",
+  "gitSha": "13fbdda9",
+  "generatedAt": "2026-11-08T11:31:00.966Z",
+  "backend": "@napi-rs/canvas",
+  "note": "build succeeded via vite (tsc --noEmit failed on pre-existing stream-s0 script TS errors); gzip sum is of closure chunks (417436 > ceiling 38720) — ceiling interpretation unclear; baseline eager modules 155 unchanged"
+}
