@@ -805,7 +805,9 @@ function buildRuleBody(
     case 'colorScale':
     case 'dataBar':
     case 'iconSet': {
-      const slot = new Set([type])
+      // Ruling I1: colorScale occupies the fill slot in addition to colorScale so
+      // unresolved colorScale taints/blocks lower-priority fills.
+      const slot = new Set(type === 'colorScale' ? ['colorScale', 'fill'] : [type])
       if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', withDxf(slot))
       if (inputs.iconProblem) return finishUnresolved(inputs.iconProblem, withDxf(slot))
       return finishUnresolved('cf-unsupported-rule', withDxf(slot))

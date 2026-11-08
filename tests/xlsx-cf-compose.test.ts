@@ -22,6 +22,14 @@ describe('CF atomic composition', () => {
     const state = await compose([rule(0, {}, ['dataBar']), rule(1, { 'font.bold': true })], [unknown, yes])
     expect(state.properties).toEqual({ 'font.bold': true }); expect(state.unresolvedWrites?.has('dataBar')).toBe(true)
   })
+  it('unresolved colorScale blocks lower-priority fill while allowing font (I1)', async () => {
+    const scale = rule(0, {}, ['colorScale', 'fill'])
+    const cellIs = rule(1, { 'fill.fg': 'FFFF0000', 'font.bold': true }, ['fill', 'font.bold'])
+    const state = await compose([scale, cellIs], [unknown, yes])
+    expect(state.properties).toEqual({ 'font.bold': true })
+    expect(state.unresolvedWrites?.has('fill')).toBe(true)
+    expect(state.unresolvedWrites?.has('colorScale')).toBe(true)
+  })
   it('bare true stop halts; no-match and false do not; earlier explicit clears win atomically', async () => {
     const r = [rule(0, {}, [], true), rule(1, { 'font.bold': true })]
     expect((await compose(r, [yes, yes])).properties).toEqual({})

@@ -81,6 +81,7 @@ describe('CF rule parsing: all 18 types', () => {
     const scale = ruleByPriority(value.rules, 3)
     expect(scale.definition).toMatchObject({ kind: 'unresolved', type: 'colorScale' })
     expect(scale.writes.has('colorScale')).toBe(true)
+    expect(scale.writes.has('fill')).toBe(true)
 
     const bad = parse(
       `<conditionalFormatting sqref="B2:B3">` +
