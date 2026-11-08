@@ -16,7 +16,7 @@ export interface AuthDecision {
 export type Authorize = (req: AuthRequest) => Promise<AuthDecision | null>
 /** Which document this viewer opens. The server has no file route; this hook
  * is the only way bytes enter a session. */
-export type ResolveDocument = (req: AuthRequest, decision: AuthDecision) => Promise<Uint8Array | null>
+export type ResolveDocument = (req: AuthRequest, decision: AuthDecision) => Promise<{ bytes: Uint8Array; name?: string } | null>
 
 export interface EffectivePolicy {
   contentPolicy: 'visible-only' | 'full'
