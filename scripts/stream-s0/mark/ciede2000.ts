@@ -1,4 +1,4 @@
-import { checkBitmap, type Bitmap } from './types'
+import { checkBitmap, type Chip, type Bitmap } from './types'
 type Lab = [number, number, number]
 const rad = Math.PI / 180
 const cos = (d: number) => Math.cos(d * rad)
@@ -45,7 +45,7 @@ export function srgbToLab(r: number, g: number, b: number): Lab {
 }
 /** Exact nearest-rank p95 over all pixels, composited onto white for alpha.
  * Stage-0 measurement: O(pixels) storage, O(pixels log pixels) sort. */
-export function pageDeltaE(a: Bitmap, b: Bitmap): { mean: number; p95: number; max: number } {
+export function pageDeltaE(a: Bitmap, b: Bitmap, chips: readonly Chip[] = (b as Bitmap & { chipSupport?: Chip[] }).chipSupport ?? []): { mean: number; p95: number; max: number; chipPixelsP95: number } {
   checkBitmap(a); checkBitmap(b)
   if (a.width !== b.width || a.height !== b.height) throw new Error('Bitmap dimensions differ')
   const values = new Float64Array(a.width * a.height)
@@ -54,7 +54,11 @@ export function pageDeltaE(a: Bitmap, b: Bitmap): { mean: number; p95: number; m
     return srgbToLab(data[i]! * alpha + 255 * (1 - alpha), data[i + 1]! * alpha + 255 * (1 - alpha), data[i + 2]! * alpha + 255 * (1 - alpha))
   }
   let sum = 0, max = 0
-  for (let i = 0; i < values.length; i++) { const d = deltaE00(lab(a.data, 4 * i), lab(b.data, 4 * i)); values[i] = d; sum += d; max = Math.max(max, d) }
+  for (let i = 0; i < values.length; i++) { const at = 4 * i; const same = a.data[at] === b.data[at] && a.data[at + 1] === b.data[at + 1] && a.data[at + 2] === b.data[at + 2] && a.data[at + 3] === b.data[at + 3]; const d = same ? 0 : deltaE00(lab(a.data, at), lab(b.data, at)); values[i] = d; sum += d; max = Math.max(max, d) }
+  const support = new Set<number>()
+  for (const chip of chips) for (let y = chip.y; y < chip.y + chip.cell; y++) for (let x = chip.x; x < chip.x + chip.cell; x++) { if (x < 0 || y < 0 || x >= a.width || y >= a.height) throw new Error("Invalid chip support"); support.add(y * a.width + x) }
+  const selected = [...support].map(i => values[i]!).sort((a, b) => a - b)
+  const chipPixelsP95 = selected.length ? selected[Math.ceil(selected.length * 0.95) - 1]! : 0
   values.sort()
-  return { mean: sum / values.length, p95: values[Math.ceil(values.length * 0.95) - 1]!, max }
+  return { mean: sum / values.length, p95: values[Math.ceil(values.length * 0.95) - 1]!, max, chipPixelsP95 }
 }

@@ -2,9 +2,8 @@
   "gate": "T7-codec-subset",
   "status": "GREEN",
   "backend": "in-memory RGBA; no canvas",
-  "gitSha": "f739bd1d901d5446fe7ea469c7cd1f6494bdc23c",
-  "generatedAt": "2026-11-08T08:45:09.306Z",
-  "uncommitted": true,
+  "gitSha": "767e26ec88dec38550a5f755b2377861a3896c6c",
+  "generatedAt": "2026-11-08T09:08:19.052Z",
   "params": {
     "nChips": 512,
     "cellPx": 4,
@@ -12,22 +11,27 @@
     "amplitude": 2,
     "pedestal": 2
   },
-  "sharmaPairs": [
-    2.0424596801565738,
-    2.3668588191717523,
-    27.14923130074626
-  ],
-  "empiricalDistance": {
-    "pairs": 1000,
-    "seed": "0x12345678",
-    "minimum": 219
+  "sharma": {
+    "pairs": 34,
+    "tolerance": 0.0001,
+    "result": "passed"
+  },
+  "bch": {
+    "membershipMessages": 100,
+    "roots": [
+      1,
+      190
+    ],
+    "linearityPairs": 100,
+    "designedDistance": 191
   },
   "white": {
-    "meanAbsoluteChipDelta": 1.9921875,
+    "centredModulation": 1.999969482421875,
     "deltaE": {
       "mean": 0.04953837075989174,
       "p95": 0.7957222220882249,
-      "max": 0.7957222220882249
+      "max": 0.7957222220882249,
+      "chipPixelsP95": 0.7957222220882249
     },
     "metadata": {
       "variant": "white-pedestal",
@@ -42,5 +46,5 @@
       }
     }
   },
-  "scope": "Codec subset only, not corpus/survival/detection approval"
+  "scope": "Codec subset only; no corpus, survival or detector calibration claim"
 }
