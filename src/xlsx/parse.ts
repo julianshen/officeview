@@ -632,6 +632,7 @@ async function parseSheet(
         )
         cf.attachCfSheetRules(sheet, lease)
         for (const diagnostic of lease.value.diagnostics) {
+          if ((sheet.diagnostics?.length ?? 0) >= 64) break
           if (!sheet.diagnostics?.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) {
             (sheet.diagnostics ??= []).push(diagnostic)
           }
@@ -639,7 +640,9 @@ async function parseSheet(
       }
     } catch {
       // No partial attachment above: cells paint with their stored formatting.
-      (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'cf-parser-unavailable', message: 'Conditional formatting could not be parsed; cells paint with their stored formatting' })
+      if ((sheet.diagnostics?.length ?? 0) < 64) {
+        (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'cf-parser-unavailable', message: 'Conditional formatting could not be parsed; cells paint with their stored formatting' })
+      }
     }
   }
   // Excel's column pixel model; set before drawings are placed against the grid.

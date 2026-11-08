@@ -596,6 +596,16 @@ describe('CF resident workbook integration', () => {
     expect(sheet.conditionalFormatting).toBeUndefined()
     expect(sheet.tableStyleSource).toBeUndefined()
   })
+
+  it('caps sheet.diagnostics at 64 per sheet (M4)', async () => {
+    // Generate over 70 distinct rules to emit diagnostics
+    const rules = Array.from({ length: 80 }, (_, i) => `<cfRule type="expression" priority="${i + 1}"><formula>A1</formula></cfRule>`).join('')
+    const pkg = await OfficePackage.load(xlsxBytes({ afterSheetData: `<conditionalFormatting sqref="A1">${rules}</conditionalFormatting>` }))
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets[0]!
+    expect(sheet.diagnostics).toBeDefined()
+    expect(sheet.diagnostics!.length).toBe(64)
+  })
 })
 
 describe('CF fix round 1: review-t3-r1 findings', () => {

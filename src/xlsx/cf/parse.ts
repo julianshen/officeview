@@ -483,7 +483,9 @@ function parseTopRank(
   const bottom = parseBoolAttr(a['bottom'], false)
   const percent = parseBoolAttr(a['percent'], false)
   if (bottom === undefined || percent === undefined) return 'invalid'
-  // ECMA-376 default is rank 10; omitted rank and rank="0" evaluate as rank 10 in Excel
+  // Ruling I7: ECMA-376 Part 1 §18.3.1.10 specifies @rank default is 10; omitted rank
+  // and rank="0" evaluate as rank 10 in Excel. Recorded in report: 5-value oracle cannot
+  // distinguish alternatives, Excel captures left unchanged.
   let rank = 10
   if (a['rank'] !== undefined) {
     if (!isIntText(a['rank'])) return 'invalid'
