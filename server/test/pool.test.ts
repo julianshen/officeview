@@ -63,6 +63,18 @@ describe('render pool (§9.2/§14)', () => {
     expect(pool.stats().workers[affinity.deck!]!.parses).toBe(2)
   }, 30_000)
 
+  it('a dropped parse re-parses on demand; a forgotten document is refused', async () => {
+    const pool = mk({ workers: 1 })
+    await pool.open('deck', deck, 'visible-only')
+    await pool.render('s1', job('deck'), 1024)
+    pool.dropParsed('deck', 'visible-only')
+    await pool.render('s1', job('deck'), 1024)
+    expect(pool.stats().workers[0]!.parses).toBe(2)
+    pool.forget('deck')
+    await expect(pool.render('s1', job('deck'), 1024)).rejects.toThrow(/not registered/)
+    expect(pool.stats().reserved).toBe(0)
+  }, 30_000)
+
   it('worker refusals surface with their code', async () => {
     const pool = mk({ workers: 1 })
     await pool.open('deck', deck, 'visible-only')

@@ -182,14 +182,22 @@ export class Pool {
     this.attach(slot)
   }
 
-  /** Forgets a document everywhere (session ended, cache eviction). */
-  forget(docRef: string): void {
-    this.sources.delete(docRef)
+  /** Releases a parse (document-ledger eviction); the bytes stay, so a later
+   * request re-parses on the same worker. */
+  dropParsed(docRef: string, policy: 'visible-only' | 'full'): void {
     const i = this.affinity.get(docRef)
-    this.affinity.delete(docRef)
     if (i === undefined) return
-    const slot = this.slots[i]!
-    for (const [k, docKey] of slot.docs) if (k.startsWith(`${docRef}|`)) { slot.docs.delete(k); void this.exclusive(slot, () => this.post(slot, { type: 'drop', id: this.nextId++, docKey })) }
+    const slot = this.slots[i]!, k = `${docRef}|${policy}`, docKey = slot.docs.get(k)
+    if (!docKey) return
+    slot.docs.delete(k)
+    void this.exclusive(slot, () => this.post(slot, { type: 'drop', id: this.nextId++, docKey }))
+  }
+
+  /** Forgets a document everywhere (no session references it any more). */
+  forget(docRef: string): void {
+    this.dropParsed(docRef, 'visible-only'); this.dropParsed(docRef, 'full')
+    this.sources.delete(docRef)
+    this.affinity.delete(docRef)
   }
 
   stats() {
