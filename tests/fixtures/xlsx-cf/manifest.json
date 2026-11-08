@@ -501,11 +501,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-cellis-literals.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-cellis-literals.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-cellis-literals.json",
+          "pngSha256": "1a0566a1f60870e9f146452a1a1b0bc5eb7d831873dc11d15c76f5ac6241d6b4"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B5 (screen) interior unexpectedly differs from control B18 by 223",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -920,11 +921,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-text-predicates.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-text-predicates.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-text-predicates.json",
+          "pngSha256": "2206db4e000a774b41c503f902b64612757e3675244fe28f37077b5d3619afa7"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B4 (screen) interior unexpectedly differs from control B13 by 229",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -1410,11 +1412,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.json",
+          "pngSha256": "cc43b90067013b87c13c81faaf5c00bed73e42f7dde9edb3547451145ca2ba3d"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B6 (screen) interior unexpectedly differs from control B15 by 227",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -1825,11 +1828,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock.json",
+          "pngSha256": "e01187be9e87aca607c9970d5e49295d5f4c6555685adbe8edfd0ffbd0c5e0ef"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window to distinguish local vs UTC date boundary",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2059,11 +2063,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-timeperiod-today-clock-2.json",
+          "pngSha256": "7105cc2f89c84a00f3dc5be6f41dae76cf8c27f28cf5762b09c57f8303df06a4"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display in 00:05-07:55 Asia/Taipei window for 1904 date-system verification",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2453,11 +2458,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-top10-rank-edge.json",
+          "pngSha256": "7332e436768e9daf9b2b754efb15aead9e3239bd497aadef5f166925fc20787b"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -2886,11 +2892,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-above-average-stddev.json",
+          "pngSha256": "c070daf8ac85b6da28955c233084362c71a77ef4b3767a61bd0ebf96a80683e9"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -3124,11 +3131,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-duplicate-scope.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-duplicate-scope.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-duplicate-scope.json",
+          "pngSha256": "3a1a3c3526658fed113c2c02293502d9520f7ab949d61ccab4f5800f2a518fe4"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Cell B6 (screen) expected bold text exceeding control B18, but observed inkWeight=0.022 vs control 0.021",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -3498,11 +3506,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-priority-composition.json",
+          "pngSha256": "5f2ba8e6d4e2939937d4477d6f767dc45b3fc04a8bb1bd68cce44d8e702a0e12"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -3697,7 +3706,7 @@
             "ref": "F2",
             "controlRef": "F8",
             "matched": true,
-            "fillRgb": "FF46B1E1",
+            "fillRgb": "FF8FAADC",
             "borderTop": true,
             "borderBottom": true,
             "note": "theme=4 tint=0.4 DXF fill + top/bottom borders"
@@ -3714,11 +3723,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-dxf-layering.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-dxf-layering.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-dxf-layering.json",
+          "pngSha256": "4bb0e08c4ec09d949446ab38d88f17d953def9cfee502d608bcd5d58c9feb59e"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Cell B2 (screen) expected bottom border, but observed borderBottomDelta=0, borderBottomVsControlDelta=57",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -4110,11 +4120,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-blank-merge-order.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-blank-merge-order.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-blank-merge-order.json",
+          "pngSha256": "756ec166e348a907267585f2b807942e2716a82734b499af545232b36d27a82d"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 copy-picture capture",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Cell A4 (screen) expected rendered glyph text, but no valid glyph ink observed (inkCount=0, glyphRows=0, colTrans=0)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -4270,16 +4281,18 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility.json",
+          "pngSha256": "fef91a59308df532d044e25480455f7421b3959db650bfcbcc6bffd90617b9a5"
         },
         {
           "appearance": "printer",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility-printer.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility-printer.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-numfmt-accessibility-printer.json",
+          "pngSha256": "170e80deabbc7b333fb6c07e44ca449badc8245fee958aee31e27da1ed146dc8"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Awaiting unlocked macOS display session for Excel 16.114 screen and printer copy-picture captures",
+      "reason": "Capture verification failed (cell-expectation-mismatch): Unmatched cell B4 (screen) border unexpectedly differs from control C4",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
