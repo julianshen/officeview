@@ -315,9 +315,10 @@ export function resolveCfCellStyle(
     else Object.assign(out, { [key]: v })
   }
   if ('font.color' in p) out.color = color(p['font.color'])
-  if ('fill.pattern' in p || 'fill.fg' in p || 'fill.bg' in p) {
-    // Differential solid fills use bgColor (unlike ordinary cell fills).
-    out.fillColor = p['fill.pattern'] === 'none' || p['fill.pattern'] === null ? undefined : color(p['fill.bg'] ?? p['fill.fg'])
+  if ('fill.pattern' in p || 'fill.bg' in p) {
+    // Differential solid fills use bgColor only (unlike ordinary cell fills).
+    // A dxf solid fill with only fgColor paints no fill (Ruling T11-B).
+    out.fillColor = p['fill.pattern'] === 'none' || p['fill.pattern'] === null ? undefined : color(p['fill.bg'])
   }
   for (const side of ['left', 'right', 'top', 'bottom'] as const) {
     const path = `border.${side}`

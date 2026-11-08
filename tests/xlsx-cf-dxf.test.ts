@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getChildren, parseXml, type XmlNode } from '../src/core/xml'
 import type { SheetColorContext } from '../src/xlsx/sheetColors'
-import { parseCfDxf } from '../src/xlsx/cf/dxf'
+import { parseCfDxf, resolveCfCellStyle } from '../src/xlsx/cf/dxf'
 
 const colors: SheetColorContext = {}
 
@@ -37,6 +37,31 @@ describe('CF strict dxf parsing', () => {
     expect(writes.has('font.color')).toBe(true)
     expect(writes.has('fill')).toBe(true)
     expect(writes.has('font.italic')).toBe(false)
+  })
+
+  it('a dxf solid fill with only fgColor paints no fill (Ruling T11-B)', () => {
+    const { properties, unsupported } = parseCfDxf(
+      dxfNode(`<fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill>`),
+      colors,
+    )
+    expect(unsupported).toEqual([])
+    expect(properties['fill.pattern']).toBe('solid')
+    expect(properties['fill.fg']).toBe('FFFFC7CE')
+    expect('fill.bg' in properties).toBe(false)
+    const style = resolveCfCellStyle(undefined, { properties }, colors)
+    expect(style.fillColor).toBeUndefined()
+  })
+
+  it('a dxf solid fill with bgColor paints fill (Ruling T11-B)', () => {
+    const { properties, unsupported } = parseCfDxf(
+      dxfNode(`<fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill>`),
+      colors,
+    )
+    expect(unsupported).toEqual([])
+    expect(properties['fill.pattern']).toBe('solid')
+    expect(properties['fill.bg']).toBe('FFFFC7CE')
+    const style = resolveCfCellStyle(undefined, { properties }, colors)
+    expect(style.fillColor).toBe('FFFFC7CE')
   })
 
   it('preserves explicit clears versus omission', () => {
