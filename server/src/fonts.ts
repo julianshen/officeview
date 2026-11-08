@@ -10,8 +10,11 @@ import type { Pack, PackFace } from '../../scripts/stream-s1/fontpack-lock'
 
 export const PACK_DIR = resolve(import.meta.dir, '../../fontpack')
 
+const packs = new Map<string, Pack>()
 export function loadPack(dir = PACK_DIR): Pack {
-  return JSON.parse(readFileSync(join(dir, 'pack.json'), 'utf8')) as Pack
+  let p = packs.get(dir)
+  if (!p) { p = JSON.parse(readFileSync(join(dir, 'pack.json'), 'utf8')) as Pack; packs.set(dir, p) }
+  return p
 }
 
 interface FontRegistry { registerFromPath(path: string, alias?: string): unknown }
