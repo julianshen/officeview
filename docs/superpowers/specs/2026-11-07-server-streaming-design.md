@@ -808,9 +808,8 @@ drops the unit and re-requests once.
   2. **`dist/core.js` purity assert:** zero `react`/`document` imports.
   3. **Main-bundle module-map identity:** `dist/index.js`'s map identical
      to the pre-branch build (± the branch's own discriminant); growth
-     ≤ 16 B gzip recorded as a diff. The pre-branch baseline is taken
-     **after** the worker-subpath move above, which is the one recorded
-     intentional map change.
+     ≤ 16 B gzip recorded as a diff. The pre-branch baseline is the Stage-0
+     build (`feature/streaming-s0`, T11 `moduleMapHash`).
 
 ### 8.2 Component surfaces
 
