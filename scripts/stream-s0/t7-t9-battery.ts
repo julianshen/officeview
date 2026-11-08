@@ -52,7 +52,7 @@ const attacks: {name:string; target:number|null; apply:(b:Bitmap)=>Bitmap|Promis
 ]
 const empty=():Scores=>({scores:new Float64Array(),support:0,flat:true})
 function summary(s:Scores){let best=-Infinity,second=-Infinity;for(const z of s.scores){if(z>best){second=best;best=z}else if(z>second)second=z}return {best,margin:Number.isFinite(second)?best-second:0}}
-interface Options {candidateCount?:number;nullCount?:number;tokens?:number;params?:MarkParams[];progress?:(s:string)=>void}
+interface Options {candidateCount?:number;nullCount?:number;tokens?:number;params?:MarkParams[];progress?:(s:string)=>void;/** reuse a calibrated tau (subset runs); nullCount should then be 0 */tau?:{abs:number;margin:number}}
 export async function runBattery(pages:Page[],options:Options={}) {
   const M=options.candidateCount??65536,N=options.nullCount??2000,tokens=options.tokens??5,log=options.progress??console.log
   if(!pages.length||M<6||M>2**24)throw new Error('Invalid battery size')
@@ -100,7 +100,7 @@ export async function runBattery(pages:Page[],options:Options={}) {
   }
   // Per-class fits protect the rarest class from being hidden by pooled fits.
   const fits=['all','unmarked','wrong-key','out-of-table'].map(kind=>({kind,...calibrate(kind==='all'?nulls:nulls.filter(x=>x.kind===kind),M)}))
-  const tau={abs:Math.max(...fits.map(f=>f.tau.abs)),margin:Math.max(...fits.map(f=>f.tau.margin))}
+  const tau=options.tau??{abs:Math.max(...fits.map(f=>f.tau.abs)),margin:Math.max(...fits.map(f=>f.tau.margin))}
   log(`calibration: full-M=${scored}/${N} attempts=${nulls.length} tau=${JSON.stringify(tau)}`)
   // Full multi-hit rule: exactly one threshold crossing, followed by margin.
   // Only top two are needed to re-evaluate that rule after calibration.
