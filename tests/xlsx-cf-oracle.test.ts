@@ -590,7 +590,7 @@ describe('CF oracle verifier', () => {
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length)
     expect(CF_STAGE2_CASES).toHaveLength(8)
     for (const c of manifest.cases.filter(c => c.stage === 2)) {
-      expect(['recipe-pending', 'unsupported']).toContain(c.status)
+      expect(['recipe-pending', 'unsupported', 'measured']).toContain(c.status)
       expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
       expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
     }
@@ -1244,10 +1244,11 @@ describe('CF oracle verifier', () => {
     expect(parseExcelColorToArgb('248,105,107')).toBe(EXCEL_RED)
     expect(parseExcelColorToArgb('{248, 105, 107}')).toBe(EXCEL_RED)
     expect(parseExcelColorToArgb([248, 105, 107])).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('99, 190, 123')).toBe(EXCEL_GREEN)
 
-    // Reconstructed concatenated channel strings from run 2 (previously misparsed as VBA BGR integers)
-    expect(parseExcelColorToArgb('248105107')).toBe(EXCEL_RED)
-    expect(parseExcelColorToArgb('99190123')).toBe(EXCEL_GREEN)
+    // Undelimited channel strings are ambiguous and must be refused as unparseable null
+    expect(parseExcelColorToArgb('248105107')).toBeNull()
+    expect(parseExcelColorToArgb('99190123')).toBeNull()
   })
 
   it('refuses with no-cells-checked when zero colour cells are verified', async () => {
@@ -1347,6 +1348,125 @@ describe('CF oracle verifier', () => {
 
     const res = verifyCfCase(testCase, { rootDir: dir })
     expect(res).toMatchObject({
+      kind: 'refusal',
+      code: 'no-cells-checked',
+    })
+  })
+
+  it('skips fill-vs-pixel comparison for hidden cells and marks them hidden: true without counting towards checked cells', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-hidden-cell-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:hidden-cell-test',
+      sqref: 'B2:B4',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFFC7CE', 'FF63BE7B'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B4"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFFC7CE"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    // B2 is rendered red (#ffc7ce); B4 is hidden (row height 0) so it has no pixels
+    const validPng = makeCapturePng(true)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    writeFileSync(
+      join(dir, 'scale.json'),
+      JSON.stringify({
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18, 0], // row 4 has height 0 (hidden)
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: xlsxHash,
+        sheet: 'Sheet1',
+        range: 'A1:B4',
+        savedSha256: xlsxHash,
+        pngSha256: validPngHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: [
+          { ref: 'B2', fillSource: 'excel-display-format', fillRgb: 'FFFFC7CE' },
+          { ref: 'B4', fillSource: 'excel-display-format', fillRgb: 'FF63BE7B' }, // disagrees with white pixel
+        ],
+      }),
+    )
+
+    const testCase: CfOracleCase = {
+      id: 'scale-hidden-cell-case',
+      stage: 2,
+      question: 'Scale hidden cell handling',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B4',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: ['B2', 'B4'],
+        negativeRefs: [],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, scaleApplied: true, fillSource: 'excel-display-format' },
+          { ref: 'B4', controlRef: 'A4', matched: true, scaleApplied: true, fillSource: 'excel-display-format' },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    }
+
+    // 1. Verification succeeds because B4's fill-vs-pixel mismatch is skipped
+    const res = verifyCfCase(testCase, { rootDir: dir })
+    expect(res.kind).toBe('verified')
+
+    // 2. If all scale cells are hidden (e.g. only B4), verifyCfCase must refuse with no-cells-checked
+    const allHiddenCase: CfOracleCase = {
+      ...testCase,
+      expected: {
+        ...testCase.expected,
+        positiveRefs: ['B4'],
+        cells: [
+          { ref: 'B4', controlRef: 'A4', matched: true, scaleApplied: true, fillSource: 'excel-display-format' },
+        ],
+      },
+    }
+    const allHiddenRes = verifyCfCase(allHiddenCase, { rootDir: dir })
+    expect(allHiddenRes).toMatchObject({
       kind: 'refusal',
       code: 'no-cells-checked',
     })

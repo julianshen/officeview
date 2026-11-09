@@ -92,14 +92,11 @@ export function parseExcelColorToArgb(raw: unknown): string | null {
       return channelsToArgb(r, g, b)
     }
 
-    // Numeric decimal integer string (e.g. VBA Color Long "13551615" or concatenated 8-bit channels "248105107")
+    // Numeric decimal integer string (e.g. VBA Color Long "13551615" <= 16777215)
     if (/^\d+$/.test(trimmed)) {
       const num = Number(trimmed)
-      if (num > 16777215) {
-        const channels = tryDecodeConcatenatedChannels(trimmed)
-        if (channels) return channelsToArgb(channels[0], channels[1], channels[2])
-      }
-      return integerToArgb(num)
+      if (num <= 16777215) return integerToArgb(num)
+      return null
     }
 
     // Hex string (e.g. "#FFC7CE" or "FFFFC7CE")
@@ -118,31 +115,6 @@ export function parseExcelColorToArgb(raw: unknown): string | null {
   return null
 }
 
-function tryDecodeConcatenatedChannels(s: string): [number, number, number] | null {
-  if (s.length === 9) {
-    const r = Number(s.slice(0, 3))
-    const g = Number(s.slice(3, 6))
-    const b = Number(s.slice(6, 9))
-    if (r <= 255 && g <= 255 && b <= 255) return [r, g, b]
-  }
-  if (s.length === 8) {
-    for (const [l1, l2] of [[2, 3], [3, 2], [3, 3]]) {
-      const r = Number(s.slice(0, l1))
-      const g = Number(s.slice(l1, l1 + l2))
-      const b = Number(s.slice(l1 + l2))
-      if (r <= 255 && g <= 255 && b <= 255) return [r, g, b]
-    }
-  }
-  if (s.length === 7) {
-    for (const [l1, l2] of [[2, 2], [2, 3], [3, 2], [1, 3]]) {
-      const r = Number(s.slice(0, l1))
-      const g = Number(s.slice(l1, l1 + l2))
-      const b = Number(s.slice(l1 + l2))
-      if (r <= 255 && g <= 255 && b <= 255) return [r, g, b]
-    }
-  }
-  return null
-}
 
 function channelsToArgb(r: number, g: number, b: number): string {
   // Check if channels are 16-bit (AppleScript standard 0..65535)
@@ -580,9 +552,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         else if (utcObs && utcObs.bgContrastDelta >= 16) observedTodayBranch = 'utc'
       }
 
-      if (!verifyOnly) {
-        writeFileSync(
-          sidecarAbs,
+      writeFileSync(
+        sidecarAbs,
           JSON.stringify(
             {
               excelVersion: sidecarExcelVersion,
@@ -617,7 +588,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             2,
           ) + '\n',
         )
-      }
       capturedCount++
       return { ...cap, pngSha256 }
     })
@@ -680,8 +650,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   }
 
-  if (!verifyOnly) {
-    writeFileSync(CF_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n')
-  }
+  writeFileSync(CF_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n')
   console.log(`[cf-refs/capture] processed ${capturedCount} capture files`)
 }
