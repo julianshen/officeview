@@ -1,7 +1,7 @@
 {
   "name": "officeview",
   "version": "0.10.0",
-  "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> — pixel-faithful, not HTML translation. Works on desktop and mobile.",
+  "description": "React components that render Office documents (Word, PowerPoint, Excel) on <canvas> \u2014 pixel-faithful, not HTML translation. Works on desktop and mobile.",
   "keywords": [
     "react",
     "canvas",
@@ -33,6 +33,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core-entry.d.ts",
+      "import": "./dist/core.js"
+    },
     "./worker": {
       "types": "./dist/worker/office-worker.d.ts",
       "import": "./dist/worker.js"
@@ -42,12 +46,16 @@
   "files": [
     "dist"
   ],
+  "workspaces": [
+    "server"
+  ],
   "scripts": {
-    "build": "tsc --noEmit && vite build && tsc -p tsconfig.build.json",
+    "build": "tsc --noEmit && vite build && vite build -c vite.core.config.ts && tsc -p tsconfig.build.json",
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "playwright test --config playwright.viewer.config.ts",
+    "test:browser:stream": "playwright test --config playwright.viewer.config.ts --project stream",
     "bench:viewer": "bun scripts/bench-interactive-viewer.ts",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "lint": "tsc --noEmit",
@@ -55,7 +63,14 @@
     "site:samples": "bun scripts/build-site-samples.ts",
     "site:dev": "bun run site:samples && vite --config vite.site.config.ts",
     "site:build": "bun run site:samples && vite build --config vite.site.config.ts",
-    "site:typecheck": "tsc -p site/tsconfig.json"
+    "site:typecheck": "tsc -p site/tsconfig.json",
+    "s0:test": "vitest run --config vitest.stream-s0.config.ts",
+    "s0:test:napi": "vitest run --config vitest.stream-s0-napi.config.ts",
+    "s0:report": "bun scripts/stream-s0/report.ts",
+    "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts",
+    "gates:core": "OV_MODULE_MAP=1 bun run build && bun scripts/core-gates.ts",
+    "test:server": "cd server && bun test",
+    "stream:demo": "bun --preload ./scripts/stream-s0/napi-preload.ts server/src/main.ts --demo --doc-dir corpus"
   },
   "peerDependencies": {
     "react": ">=18"
@@ -68,6 +83,7 @@
     "pako": "1.0.11"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.1.0",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/react": "^16.3.3",

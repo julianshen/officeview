@@ -1,0 +1,268 @@
+/**
+ * Render pool (§9.2): Bun Workers with document affinity, admission through
+ * the shared AdmissionModel (§14 caps), a 2 s render deadline with
+ * drain-then-refund retirement, and recycling after 256 pages.
+ *
+ * [call] Stage 1 parses in the render worker that owns a docRef (affinity);
+ * §9.2's separate parse worker is Stage 2. Stage 1 registers no embedded
+ * fonts (the throwing registrar in render.ts), so the 64 MiB font-budget
+ * recycle trigger cannot fire yet; the page trigger is live.
+ */
+import { availableParallelism } from 'node:os'
+import { resolve } from 'node:path'
+import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
+import type { MarkSpec, OpenResult, Projection, RenderedUnit } from './render'
+import type { WorkerReply, WorkerRequest } from './worker/render-worker'
+
+export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
+export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
+export class RenderFailed extends Error { constructor(m: string, readonly refusal?: string) { super(m); this.name = 'RenderFailed' } }
+
+export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'full'; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
+export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number }
+
+const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
+const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
+export const defaultWorkers = () => Math.max(1, Math.min(8, Math.floor(availableParallelism() / 2)))
+
+interface Slot {
+  index: number
+  worker: Worker
+  busy: boolean
+  queue: Array<() => void>
+  pending: Map<number, { ok: (r: WorkerReply) => void }>
+  /** Set once the current worker's `close` event fired (terminate or death). */
+  closed: boolean
+  /** Resolves when the current worker's `close` event fires. */
+  whenClosed: Promise<void>
+  docs: Map<string, string>       // docRef|policy → docKey on this worker
+  pages: number
+  parses: number
+  generation: number
+}
+
+export class Pool {
+  readonly admission: AdmissionModel
+  private slots: Slot[] = []
+  private affinity = new Map<string, number>()             // docRef → slot index
+  private sources = new Map<string, Uint8Array>()          // docRef → bytes (re-open after recycle)
+  private nextId = 1
+  private retired = 0
+  private recycled = 0
+  private readonly recyclePages: number
+  private readonly openDeadlineMs: number
+  private readonly now: () => number
+  private readonly testHooks: boolean
+  private disposed = false
+  /** Queued admission jobs waiting to start: resolve(true) = started, resolve(false) = cancelled. */
+  private waiters = new Map<number, (started: boolean) => void>()
+
+  constructor(opts: PoolOptions = {}) {
+    this.admission = new AdmissionModel(opts.caps ?? DEFAULT_CAPS)
+    this.recyclePages = opts.recyclePages ?? 256
+    this.openDeadlineMs = opts.openDeadlineMs ?? 30_000
+    this.now = opts.now ?? (() => performance.now())
+    this.testHooks = opts.testHooks ?? false
+    for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
+      const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false } as unknown as Slot
+      this.attach(slot)
+      this.slots.push(slot)
+    }
+  }
+
+  private static failure(error: string): WorkerReply { return { id: -1, ok: false, error, stats: { parses: 0, pages: 0, docs: 0 } } }
+
+  /** Settles every in-flight post on `slot` with a failure reply. */
+  private settle(slot: Slot, error: string) {
+    const pending = [...slot.pending.values()]
+    slot.pending.clear()
+    for (const p of pending) p.ok(Pool.failure(error))
+  }
+
+  /** Starts a worker for `slot`; replies resolve the slot's pending map; an
+   * unexpected death settles its posts (nothing waits forever). */
+  private attach(slot: Slot): void {
+    const worker = new Worker(WORKER_URL, { preload: [PRELOAD] } as WorkerOptions)
+    slot.worker = worker
+    slot.closed = false
+    let markClosed!: () => void
+    slot.whenClosed = new Promise<void>((r) => { markClosed = r })
+    worker.onmessage = (e: MessageEvent<WorkerReply>) => {
+      if (slot.worker !== worker) return
+      const p = slot.pending.get(e.data.id)
+      if (!p) return
+      slot.pending.delete(e.data.id)
+      slot.pages = e.data.stats.pages; slot.parses = e.data.stats.parses
+      p.ok(e.data)
+    }
+    worker.addEventListener('close', () => {
+      markClosed()
+      if (slot.worker !== worker) return
+      slot.closed = true
+      slot.docs.clear()
+      this.settle(slot, 'worker died')
+    })
+  }
+
+  /** Runs `fn` when the slot is idle; one in-flight message per worker. */
+  private async exclusive<T>(slot: Slot, fn: () => Promise<T>): Promise<T> {
+    if (slot.busy) await new Promise<void>((r) => slot.queue.push(r))
+    slot.busy = true
+    try {
+      if (this.disposed) throw new RenderFailed('pool disposed')
+      if (slot.closed) await this.replace(slot)
+      return await fn()
+    } finally {
+      slot.busy = false
+      slot.queue.shift()?.()
+    }
+  }
+
+  /** Posts and waits at most `ms`; on timeout the worker is retired (the
+   * caller learns via 'timeout'). */
+  private async post(slot: Slot, msg: WorkerRequest, ms?: number): Promise<WorkerReply | 'timeout'> {
+    const reply = new Promise<WorkerReply>((ok) => { slot.pending.set(msg.id, { ok }); slot.worker.postMessage(msg) })
+    if (ms === undefined) return reply
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<'timeout'>((r) => { timer = setTimeout(() => r('timeout'), ms) })
+    try { return await Promise.race([reply, timeout]) } finally { clearTimeout(timer) }
+  }
+
+  private pick(docRef: string): Slot {
+    const known = this.affinity.get(docRef)
+    if (known !== undefined) return this.slots[known]!
+    const slot = [...this.slots].sort((a, b) => (a.docs.size - b.docs.size) || (Number(a.busy) - Number(b.busy)) || a.index - b.index)[0]!
+    this.affinity.set(docRef, slot.index)
+    return slot
+  }
+
+  /** Opens (parses) under its own deadline; a wedged parse retires the worker. */
+  private async ensureOpen(slot: Slot, docRef: string, policy: 'visible-only' | 'full', force = false): Promise<{ docKey: string; open?: OpenResult }> {
+    const k = `${docRef}|${policy}`, docKey = slot.docs.get(k)
+    if (docKey && !force) return { docKey }
+    const bytes = this.sources.get(docRef)
+    if (!bytes) throw new RenderFailed('document not registered')
+    const reply = await this.post(slot, { type: 'open', id: this.nextId++, docRef, bytes, contentPolicy: policy }, this.openDeadlineMs)
+    if (reply === 'timeout') { await this.replace(slot); this.retired++; throw new RenderTimeout() }
+    if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
+    const open = reply.result as OpenResult
+    slot.docs.set(k, open.docKey)
+    return { docKey: open.docKey, open }
+  }
+
+  /** Registers the bytes and parses on the docRef's worker. */
+  async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    this.sources.set(docRef, bytes)
+    const slot = this.pick(docRef)
+    return this.exclusive(slot, async () => (await this.ensureOpen(slot, docRef, contentPolicy, true)).open!)
+  }
+
+  /** Admits, waits for the worker, renders under the deadline. Every exit
+   * path refunds exactly once: here for normal ends, in `renderOn` (after the
+   * worker is gone) for a retired job, in `admission.cancel` for a queued job
+   * that never started. */
+  async render(sessionId: string, job: RenderJob, bytesEstimate: number): Promise<RenderedUnit> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    const slot = this.pick(job.docRef)
+    try {
+      return await this.exclusive(slot, () => this.renderOn(slot, admitted, job))
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  private finish(job: Job): void {
+    const started = this.admission.finish(job, this.now())
+    if (this.disposed) return
+    for (const j of started) { this.waiters.get(j.id)?.(true); this.waiters.delete(j.id) }
+  }
+
+  private async renderOn(slot: Slot, admitted: Job, job: RenderJob): Promise<RenderedUnit> {
+    const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+    const msg: WorkerRequest = { type: 'render', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, projection: job.projection, mark: job.mark, ...(job.missingFaces ? { missingFaces: job.missingFaces } : {}), ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
+    // The deadline covers the paint only (the worker is idle when we post).
+    admitted.startedAt = this.now()
+    const reply = await this.post(slot, msg, this.admission.caps.renderDeadlineMs + 1)
+    if (reply === 'timeout') {
+      // Retirement owner: only THIS job retires; its charge stays reserved
+      // until the worker is gone, then is refunded once.
+      admitted.state = 'retiring'; admitted.timedOut = true
+      await this.replace(slot)
+      this.retired++
+      this.finish(admitted)
+      throw new RenderTimeout()
+    }
+    if (!reply.ok && reply.id === -1) {
+      // The worker is going away (dispose, death): the paint may still be
+      // running, so the charge moves to a retirement owner and is refunded
+      // only once the worker has closed (review r2-4).
+      admitted.state = 'retiring'
+      await slot.whenClosed
+      this.finish(admitted)
+      throw new RenderFailed(reply.error)
+    }
+    if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
+    if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+    return reply.result as RenderedUnit
+  }
+
+  /** Terminates and respawns a slot; its documents re-open on demand.
+   * Resolves only after the old worker is gone (drain-then-refund, §10). */
+  private async replace(slot: Slot): Promise<void> {
+    const old = slot.worker
+    this.settle(slot, 'worker retired')
+    if (!slot.closed) {
+      const closed = slot.whenClosed
+      old.terminate()
+      await closed
+    }
+    slot.docs.clear(); slot.pages = 0; slot.parses = 0; slot.generation++
+    if (!this.disposed) this.attach(slot)
+  }
+
+  /** Releases a parse (document-ledger eviction); the bytes stay, so a later
+   * request re-parses on the same worker. */
+  dropParsed(docRef: string, policy: 'visible-only' | 'full'): void {
+    const i = this.affinity.get(docRef)
+    if (i === undefined) return
+    const slot = this.slots[i]!, k = `${docRef}|${policy}`, docKey = slot.docs.get(k)
+    if (!docKey) return
+    slot.docs.delete(k)
+    void this.exclusive(slot, () => this.post(slot, { type: 'drop', id: this.nextId++, docKey })).catch(() => {})
+  }
+
+  /** Forgets a document everywhere (no session references it any more). */
+  forget(docRef: string): void {
+    this.dropParsed(docRef, 'visible-only'); this.dropParsed(docRef, 'full')
+    this.sources.delete(docRef)
+    this.affinity.delete(docRef)
+  }
+
+  stats() {
+    return {
+      workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
+      reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
+      retired: this.retired, recycled: this.recycled, affinity: Object.fromEntries(this.affinity),
+    }
+  }
+
+  /** Shuts down: queued jobs are cancelled (refunded, rejected), in-flight
+   * posts settle as failures (their callers refund), slot waiters wake and
+   * reject; no worker is respawned. */
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    for (const [id, wake] of this.waiters) { this.admission.cancel(id); wake(false) }
+    this.waiters.clear()
+    for (const s of this.slots) {
+      this.settle(s, 'pool disposed')
+      s.worker.terminate()
+      for (const wake of s.queue.splice(0)) wake()
+    }
+  }
+}

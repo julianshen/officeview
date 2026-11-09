@@ -58,11 +58,14 @@ function slideshowOnly(): boolean {
 }
 
 const SLIDESHOW_SPECS = /slideshow-.*\.spec\.ts/
+// Stage 1d stream specs need server/test/app.ts (the second webServer below).
+const STREAM_SPECS = /(^|[\\/])stream-[^\\/]*\.spec\.ts$/
+const STREAM_PORT = Number(process.env.OV_STREAM_PORT ?? 4181)
 const projects: Project[] = [
-  { name: 'chromium', testIgnore: SLIDESHOW_SPECS, use: { ...devices['Desktop Chrome'] } },
+  { name: 'chromium', testIgnore: [SLIDESHOW_SPECS, STREAM_SPECS], use: { ...devices['Desktop Chrome'] } },
 ]
 if (engineInstalled('webkit-')) {
-  projects.push({ name: 'webkit', testIgnore: SLIDESHOW_SPECS, use: { ...devices['Desktop Safari'] } })
+  projects.push({ name: 'webkit', testIgnore: [SLIDESHOW_SPECS, STREAM_SPECS], use: { ...devices['Desktop Safari'] } })
 } else if (process.env.OV_PW_SLIDESHOW_ONLY !== '1' && !slideshowOnly()) {
   console.warn('[playwright.viewer.config] WebKit is not installed (bunx playwright install webkit): running chromium only')
 }
@@ -74,6 +77,8 @@ projects.push({
     launchOptions: { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
   },
 })
+
+projects.push({ name: 'stream', testMatch: STREAM_SPECS, use: { ...devices['Desktop Chrome'] } })
 
 export default defineConfig({
   testDir: 'tests/browser',
@@ -88,12 +93,19 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects,
-  webServer: {
+  webServer: [{
     command: `bunx vite --config vite.harness.config.ts --port ${PORT} --strictPort --host 127.0.0.1`,
     url: HARNESS_ID_URL,
     // A reused server is accepted only if the spec's identity check passes
     // (same commit and checkout); a stale or foreign server fails that check.
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
-  },
+  }, {
+    // The stream harness (server/test/app.ts): only the stream project's specs talk to it.
+    command: `bun --preload ./scripts/stream-s0/napi-preload.ts server/test/app.ts`,
+    url: `http://127.0.0.1:${STREAM_PORT + 1}/__stream-harness`,
+    env: { OV_STREAM_PORT: String(STREAM_PORT), IV_HARNESS_PORT: String(PORT) },
+    reuseExistingServer: false,
+    timeout: 60_000,
+  }],
 })

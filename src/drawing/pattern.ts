@@ -1,3 +1,4 @@
+import { installedCanvasBackend } from '../core/canvas-backend'
 /** DrawingML pattern presets and Canvas 2D tile rasterizer. */
 
 export const SUPPORTED_PATTERN_PRESETS: ReadonlySet<string> = new Set([
@@ -135,6 +136,8 @@ interface TileSurface {
 }
 
 function createTileSurface(ctx: CanvasRenderingContext2D, size: number): TileSurface | undefined {
+  const backend = installedCanvasBackend()
+  if (backend) return backend.createCanvas(size, size) as unknown as TileSurface
   if (typeof OffscreenCanvas !== 'undefined') {
     try {
       return new OffscreenCanvas(size, size)

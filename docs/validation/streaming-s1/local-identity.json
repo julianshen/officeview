@@ -1,0 +1,250 @@
+{
+ "source": "ca952c50 (merge-base of origin/main and feature/streaming-s1)",
+ "files": {
+  "lo-airplane-transition.pptx": [
+   "1280x720:6db72e41d1fd3f7a2b678fa04d368c87ca32134776669a24d9ae1b4714b8ba99"
+  ],
+  "lo-bnc591147.pptx": [
+   "960x720:1711b6b65af066bbd817c303bc489d118bf7a692ccfdde994d55ff62d3140ceb",
+   "960x720:181aaa05ede92339359bb59b0fe98aeaf061ec426b1ced2ebc2ab8589c2f3513"
+  ],
+  "lo-calc-Pivot2_Row_Compact.xlsx": [
+   "243x120:065cfc0009579b3384bb91f7bb9be86af71391a2bad1182cc8b9e5544ba528da",
+   "260x220:c690414c37761c6f8465d9397dcc56866301006a31f79ef2244028188241e4b1"
+  ],
+  "lo-calc-Pivot2_Row_Grand_Subtotals.xlsx": [
+   "243x120:065cfc0009579b3384bb91f7bb9be86af71391a2bad1182cc8b9e5544ba528da",
+   "219x240:c2006fbf4ac91bb0737ae54091c0ab4b46d940cd916e420e9db258088e966c8d"
+  ],
+  "lo-calc-Pivot3_Column_Grand_Subtotals.xlsx": [
+   "243x120:065cfc0009579b3384bb91f7bb9be86af71391a2bad1182cc8b9e5544ba528da",
+   "495x120:bb4fa3680aadcb836cfd05967a12ba9edebfe82fc1b4f23602576b08412299e6"
+  ],
+  "lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx": [
+   "243x120:065cfc0009579b3384bb91f7bb9be86af71391a2bad1182cc8b9e5544ba528da",
+   "469x120:6d9f0273cbd4229e99ed1e78c7d9a24d71b47313cd794bff3215818478386cb3"
+  ],
+  "lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx": [
+   "915x520:7dea082a8e750a0a3405b07e8f3a3defbcb39bce80903c18cab6a7efd115b8d1"
+  ],
+  "lo-calc-PivotTableFormatsSubTotals.xlsx": [
+   "477x540:18f9ed80b0bf0ab178e99669eb89ec59e83c8e0030ad9cbac538f3af0a9d99a9",
+   "256x140:01ffd0d4f37f167ca2313ff59afa7bc0683eba30a20021cfad6f5e5c26829fb2"
+  ],
+  "lo-calc-PivotTableWithNoSourceData.xlsx": [
+   "1636x420:8205a6496d058baa6b053a09809177fe26ff2b049696d19bb2c1c8767ebff23b"
+  ],
+  "lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx": [
+   "149x120:a377469cc783313e8c3885a0769c78d895e095ace0ee372f5a4d9d474394c9ce",
+   "128x100:5fe4088465baec7339ec0819c403f33ab309f9ac05bc51a595a6875d43ccfc10"
+  ],
+  "lo-calc-TableStyleTest.xlsx": [
+   "192x200:f6089b74f6280b653e431a029cbfb8e3c12682f777f9fcd971f1fdb3cb94f21c"
+  ],
+  "lo-calc-calcfields.xlsx": [
+   "720x461:e40fd28db8f2cadae3ab979fb107164d6c2acff56b182c3bdddfe27108c3cf2e",
+   "712x114:d7c70c43156f55fa6c34af1f6a405f27c2c49f218b71e199c19f9ad1e4a3e900"
+  ],
+  "lo-calc-pivot_dark1.xlsx": [
+   "787x120:a73636dcee613e17cec712087b76883f3b869d1ded3de55e07a7cd6fca5796f5"
+  ],
+  "lo-calc-pivotcompact.xlsx": [
+   "955x520:e8ce93302945cee6543bbe9c9d4142c3adae4bf2f917cf570997e0bbb658cbe3"
+  ],
+  "lo-calc-pivottable_date_field_filter.xlsx": [
+   "394x103:77adfeaa1720a75ec67551ce00ec0f29bed10bfe45402eb3d0acbc061b26afb3",
+   "652x84:4c2338ffc48a3c90686b563d02432c357942b4db242ca2179495d214d0223bb6"
+  ],
+  "lo-calc-pivottable_outline_mode.xlsx": [
+   "655x160:5947d89412ca0948dcdea56f9a4fc843a279cc252dbae589c7236c0062425b1d"
+  ],
+  "lo-calc-pivottable_rowcolpage_field_filter.xlsx": [
+   "517x123:58ba32dec06ce3638bb14ec7e347bbf12757e3b5be62a4b61b99d86d7538db3a",
+   "718x84:9212aa1402df63d9263191817a981e19f2b894db5f77a2df0a1c46a65e0ed7d2"
+  ],
+  "lo-calc-pivottable_tabular_mode.xlsx": [
+   "779x260:cb1d38399e95537f00616e6083ed5e651a0e4dcae6193191c630173cefa1d4c9",
+   "755x645:555a8941b01d3b56a828502c6678bbf534eab103e18405fc05426fd8a1027022"
+  ],
+  "lo-calc-shared-dategroup.xlsx": [
+   "1191x500:e184e402fbb8c6f3fa9daa121dee31130641d806d03047db8b3482f53dfc4d79",
+   "654x180:3e27f2584a1377d66b190db2cbc25a8c53bd77139b00ab57bf1051295c92aafd"
+  ],
+  "lo-calc-shared-numgroup.xlsx": [
+   "1191x500:e184e402fbb8c6f3fa9daa121dee31130641d806d03047db8b3482f53dfc4d79",
+   "658x180:fe0df30e202c1220710db4cdc594b8dc8ea809e0d954574d7f7460b9a2b67a9f"
+  ],
+  "lo-calc-tableStyleInnerBorders.xlsx": [
+   "213x160:2d63df9e3f9eaa3303ff70f3322e7b30ed8e1910c1cce994848f8391daa9c2e3"
+  ],
+  "lo-calc-tdf162963_TableWithTotalsEnabled.xlsx": [
+   "128x120:bdfcc9d3eb1450a9b7cf0d4583d3dc8c1be06a72f246acf41e1ebb940966a0e8"
+  ],
+  "lo-calc-two-data-fields.xlsx": [
+   "275x240:d1b75f843540ead301d49fabefe8d34eecab3d177dfa1aff4c3938ba498f7cc9",
+   "192x180:42a1d1da93046a0cc2515cae6de65d7c6a892786dc9c32cb5795d9deaff32de1"
+  ],
+  "lo-connector-shape-animations.pptx": [
+   "1280x720:5951b42ca1d07bb39d72ceb5036f9c20b140ff2844b0acab888220f32327a038"
+  ],
+  "lo-narration.pptx": [
+   "1280x720:ce1e61013d1744a57842ab4bffc7f512e00f558b16b7d56479039d48dcb75763"
+  ],
+  "lo-ooxtheme.pptx": [
+   "1280x720:1ed49fc8640e0110fcdb8ae9d623f5ef3b768c1ca31129c1cabb542a940eaa21"
+  ],
+  "lo-tdf104788.pptx": [
+   "960x720:451606ce1faed0d884d18c5021a9681b68ab2909842646b561dce12aba51f17e",
+   "960x720:451606ce1faed0d884d18c5021a9681b68ab2909842646b561dce12aba51f17e",
+   "960x720:451606ce1faed0d884d18c5021a9681b68ab2909842646b561dce12aba51f17e",
+   "960x720:451606ce1faed0d884d18c5021a9681b68ab2909842646b561dce12aba51f17e",
+   "960x720:451606ce1faed0d884d18c5021a9681b68ab2909842646b561dce12aba51f17e",
+   "960x720:4e9b00027c3de09b0eca3877ada75c93a22fd51689e5a601e67d33eae4979008"
+  ],
+  "lo-tdf104792-smart-art-animation.pptx": [
+   "1280x720:b1014889ef0e6aca301daec44410ee7e45f5147722fec9954805f1eacc537609"
+  ],
+  "lo-tdf105739.pptx": [
+   "1280x720:9aba11193697c61b0013036c831baf584990701e32c7ca24a73c8da640fa1f14"
+  ],
+  "lo-tdf115394.pptx": [
+   "1280x720:37396896737c561494f4459c678135a9a3a80f2a2ef1625b0aa60aa182a99687",
+   "1280x720:19824f96baf2f9be73ff682dd0cb1041d278cba1cb55dee452368008cbc96cbc",
+   "1280x720:61497d5f6359be765833e7fc68687cb0fb3b997ed7d8b1cbc243589dd20eb74b",
+   "1280x720:ef9cbb66d504900dc22a9ff27e7711c9b4a475f33f2c39ae8c44b3517a1d1b95",
+   "1280x720:06607e502f5568fa02f911e4388d5b2bff7f09a638be03f87fc46a0058b17389"
+  ],
+  "lo-tdf123684.pptx": [
+   "1280x720:adbd9791f9d61d211155d18ce74bcb9565383b3a5dc3c7066a9e33bceced877d"
+  ],
+  "lo-tdf142915.pptx": [
+   "1280x720:af09a4f32084a8fe32935bfe31db1546074e3555e9be5d6951b238f49054dba6",
+   "1280x720:28bef88dd411af5701c3b2d96c0e8d354f06f2e9d769547f2979006e3304fce8"
+  ],
+  "lo-tdf146223.pptx": [
+   "960x720:a903045b44bedc642086e259221bde2971957d88d2386f63e130edc6b3464edf",
+   "960x720:c9f2a1d46b48cd106b8e3f85f6e82dcb6b2597a986a76aaacc08143c384f56ad"
+  ],
+  "lo-tdf149588_transparentSolidFill.pptx": [
+   "1280x720:26febd11d22a5d6a04676fc6d4b6ccf44f84fe9f5243ae3c3540deba1c16b064"
+  ],
+  "lo-tdf156808.pptx": [
+   "1280x720:771fa16b358e3195e00973cb8baa582a84f3c38d9ab2218742169515211b9889"
+  ],
+  "lo-tdf44223.pptx": [
+   "1280x720:b80b3f7d50332ec083d39e030ee7c04990deb0ccc431fd66f69c97a9ae9a1b0c",
+   "1280x720:f4376fe1a54f750b9a2b227dcd75c2c6838b53228c5de76f876f7c5c3716785d"
+  ],
+  "lo-tdf93868.pptx": [
+   "960x720:8510742bb00f4667e0b7cb626a1e0b5238e147380ca7505f183fe6e407d1cb24"
+  ],
+  "poi-47889.xlsx": [
+   "192x100:09062f092795157c71ec87b4867a8be0a37c48a12b42990dc1120b60254a84b6",
+   "64x20:e4fb897e0c3e5614d6b97d3707ff924162f3ec81226f001d7c7aa2ac33ca531e",
+   "64x20:e4fb897e0c3e5614d6b97d3707ff924162f3ec81226f001d7c7aa2ac33ca531e"
+  ],
+  "poi-55733.docx": [
+   "816x1056:44cf4710b03d2faf7af958baac41f0f6b6999f6bf651c1a1eb94742f98a16199"
+  ],
+  "poi-56295.xlsx": [
+   "180x187:f0b8489340f67f19a8d831a38bff77c66ef79f56759f192830953b01f4daa855"
+  ],
+  "poi-59021.xlsx": [
+   "512x40:4269c792f328eae236f9aa17e84643665e46060076b1a4908b9ac8f7ae03c5f1"
+  ],
+  "poi-59746_NoRowNums.xlsx": [
+   "704x300:1287c73ef53cb5d33c8c956aa909b5f94510700ea065381cb4d9c41031b2d4ea"
+  ],
+  "poi-62272.xlsx": [
+   "81x17:619c0db8cabd0809897d43d23ec23641c637eafaa6395470eb91dd8a4aa2309d"
+  ],
+  "poi-64508.xlsx": [
+   "448x100:68f62f77e14ba9049a7a2a5b2a7405738ebcaaa42e06941b8563afc652a9b603"
+  ],
+  "poi-66365.xlsx": [
+   "176x40:2dec365c90530172e9d37350ca16de81c6293997bcb16d33c0bcfa7fcbf2185d"
+  ],
+  "poi-Bug66263-table.docx": [
+   "816x1056:dc0bcf8584b56365e9010c2c53cbe618419d9ce161e1f26f4c70d9e330b6c263"
+  ],
+  "poi-ExcelPivotTableSample.xlsx": [
+   "448x80:b293caf4a06d0d56f9532e005a5dde3242968e5dc55d2e3078945344119b7d42",
+   "589x140:1ee8150e853a8e0eb169aa0823c1bbb4501312b265cc173f47b47fedc7db8409",
+   "308x120:d5b282785eaad06b25874ac9a01bc83d3ad8250b4bec5b35068c4295e98dcc51"
+  ],
+  "poi-ExcelTables.xlsx": [
+   "724x160:7ba73458c21f7ca4b8c65cef0ef753928abc0be58ac725eb91c65aede925f828"
+  ],
+  "poi-comment.docx": [
+   "794x1123:c4d6dbcfe52ab889eec0fcf667bcb8404627a53a3caf82d90e528d273c345c2a"
+  ],
+  "poi-copy-slide-demo.pptx": [
+   "1280x720:1b04eef3bc9e33d80e65a2abc8891f9099704d42e3859b504a887153be79735b"
+  ],
+  "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx": [
+   "error:Error:Corrupted zip: can't find end of central directory"
+  ],
+  "poi-crop-to-0.pptx": [
+   "1280x720:c1a278749cec50862b38ddd306291242df759ab458eaf3ba194604ac2756128a",
+   "1280x720:c1a278749cec50862b38ddd306291242df759ab458eaf3ba194604ac2756128a",
+   "1280x720:22f84bb2bd5d7fe387ad0c3fee7ba1b20d2e9ec3b2f7e5c577226084e5490892"
+  ],
+  "poi-link-external-workbook-a.xlsx": [
+   "128x20:b2c9faa0ae9c48d2fc367819a81091f3ac04c6bc61a2cccf1d40a47f4d6de0e0"
+  ],
+  "poi-picture-transparency.pptx": [
+   "1058x595:d1df0e33b2594f8ded523fa1d17b01c37c167be98c716c575260038e4310b19b",
+   "1058x595:557344cad60806ffb9259f6bf0dbca82fc195da5a41eaf9beee2c2e0d0013cd7",
+   "1058x595:d3d5348b3b50d74337613213fcfa8a382774fd23fd3a0863be9567784ab19738",
+   "1058x595:e775b31ab50e2e7c1964a7da9a496627f3ba25e99a9d545715c2ef54a56d95a0"
+  ],
+  "poi-rtl.docx": [
+   "794x1123:57341ac63474619eb97cef75f667ac72d3fd212252ce6b45e4d996254fb5fc18"
+  ],
+  "poi-table-indent.docx": [
+   "794x1123:d1328edde68e17e37409e6f439efa534eb40465bafef947d225956b36eb77a56"
+  ],
+  "poi-tableStyle.xlsx": [
+   "332x140:3dbbdf0b4518f0cbccfa73bff81093ca2c424bc0610009c0b10aa51d701646ec"
+  ],
+  "poi-table_test.pptx": [
+   "1280x720:f222ceda23b8a492b4e0c045e58780776507bf7e7f64b1f52bf77e9cceb55b8f"
+  ],
+  "poi-text-highlight.pptx": [
+   "1280x720:41846ffaca3b27155d8e47aa45203264e228b8df2d3a9aa50617241a09f2505b"
+  ],
+  "poi-unicode-path.docx": [
+   "816x1056:2eb1c544d914f1346cc3ec4ef6c4916190dc86359ef7ae66dbeb578d6bee47b5"
+  ],
+  "poi-xlsx-jdbc.xlsx": [
+   "192x40:6e8bf523123b119de1073f53f91a2efc1157c20664c5d7d324d629d7b8266f49"
+  ],
+  "pydocx-blk-inner-content.docx": [
+   "816x1056:57bed47639b7d16d7b353aff68412c7e5ee62378ed43cf51c98c89842db8f2a1"
+  ],
+  "pydocx-having-images.docx": [
+   "816x1056:ca303417a4b07fa3d457be0a004972b5fa14d26b5695933105a89e982db6dae7"
+  ],
+  "pydocx-sct-inner-content.docx": [
+   "816x1056:57bed47639b7d16d7b353aff68412c7e5ee62378ed43cf51c98c89842db8f2a1",
+   "816x1056:07fca1cadb390a3a4be16675bae7ecd8f9d432d32dd103dbad3b76565138d7e4",
+   "816x1056:f7c0d417d06f0f7adb1899f07547afebe50b2626736fb8a1e999db259c94726a"
+  ],
+  "pydocx-test.docx": [
+   "816x1056:201cf9c626aa9922e98f190b7cedc0b1fb294e0e8e5bb51c27fe222931104be9"
+  ],
+  "pypptx-minimal.pptx": [],
+  "pypptx-missing_rels_item.pptx": [
+   "960x720:2fb24855b392a7c11349ead82aea2cf548ed395fd2f9813f572e0bf802072ce0"
+  ],
+  "pypptx-no-core-props.pptx": [
+   "960x720:10ab9d8e6dd02226a5fb20db3d088172ab5a596606cf3f118ec7a161f53757f2"
+  ],
+  "pypptx-test.pptx": [
+   "960x720:2fb24855b392a7c11349ead82aea2cf548ed395fd2f9813f572e0bf802072ce0"
+  ],
+  "pypptx-test_slides.pptx": [
+   "960x720:8fc8a4b2f635373ed8117ff35c275f4b07bd7744872fa7c4f96fd4bf975c4c0b"
+  ]
+ }
+}

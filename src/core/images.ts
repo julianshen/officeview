@@ -8,6 +8,7 @@
  * hostile primary fallback behind a preferred (but failing) safe svgBlip.
  */
 import { guardSvgBytes, looksLikeSvg, scanSelfContainedSvg, type ImageSelection, type SvgCandidate, type SvgVerdict } from './svg'
+import { installedCanvasBackend } from './canvas-backend'
 
 export type DecodedImage = CanvasImageSource & { width: number; height: number }
 
@@ -60,6 +61,8 @@ export function duotonePixels(data: Uint8ClampedArray, dark: Duotone['dark'], li
 type Surface = { width: number; height: number; getContext(type: '2d'): unknown }
 /** A canvas from the same backend `decodeImage` decodes with. */
 async function surface(width: number, height: number): Promise<Surface> {
+  const backend = installedCanvasBackend()
+  if (backend) return backend.createCanvas(width, height) as unknown as Surface
   if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(width, height) as unknown as Surface
   if (typeof document !== 'undefined' && typeof createImageBitmap === 'function') return Object.assign(document.createElement('canvas'), { width, height })
   const mod = (await import(/* @vite-ignore */ 'canvas')) as unknown as { createCanvas: (w: number, h: number) => Surface }
@@ -139,6 +142,8 @@ function svgRejection(bytes: Uint8Array, mime?: string, pathHint?: string): stri
 export async function decodeImage(bytes: Uint8Array, mimeHint?: string): Promise<DecodedImage> {
   const rejected = svgRejection(bytes, mimeHint)
   if (rejected) throw new Error(`svg-rejected:${rejected}`)
+  const backend = installedCanvasBackend()
+  if (backend) return await backend.decodeImage(bytes, mimeHint) as unknown as DecodedImage
   if (typeof document !== 'undefined' && typeof createImageBitmap === 'function') {
     const copy = new Uint8Array(bytes.byteLength)
     copy.set(bytes)

@@ -23,6 +23,7 @@ import { ensureTableStyleEngine } from '../xlsx/tableStyleLoader'
 import type { PptxDocument } from '../pptx/types'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 import type { ImageSelection } from '../core/svg'
+import { installedCanvasBackend } from '../core/canvas-backend'
 
 export interface PageSpec {
   widthPx: number
@@ -185,9 +186,9 @@ function refusalPaintable(sheet: XlsxSheet, limits: readonly StaticExportLimit[]
 
 async function measurerFromDoc(resolve: (family: string) => string): Promise<ReturnType<typeof createMeasurer>> {
   // headless-safe: DOM canvas when available (browser/jsdom), node-canvas fallback
-  let ctx: CanvasRenderingContext2D | null = null
+  let ctx: CanvasRenderingContext2D | null = installedCanvasBackend()?.createCanvas(4, 4).getContext('2d') ?? null
   try {
-    if (typeof document !== 'undefined') {
+    if (!ctx && typeof document !== 'undefined') {
       const c = document.createElement('canvas')
       c.width = 4
       c.height = 4

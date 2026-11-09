@@ -1,0 +1,6 @@
+fe7819867029c39b2ba217287a6c56b5fe05b9f9f5c7403320469b3e209fcb6c  scripts/stream-s0/mark/register.ts
+75eaab12a96112c280c66db72682d5ca46dbe0872252878b82692f9b9dde7d8c  scripts/stream-s0/mark/detect.ts
+ef239c34b3987a0198bef1e4b035f62611f376cbb52968896e10c5202a07ba8d  scripts/stream-s0/t7-t9-battery.ts
+66d33916f0ae6c3064d4ccf47180a8d04ff8c6b25d00c841e1d20abbd49865c4  scripts/stream-s0/t5-showplan.ts
+8c5a328c65845a9e7c597d2834bac62860aea60a16f5793930f59b3a57d76c6f  tests/stream-s0/registration.test.ts
+fb167d41b6310ec829b40393f32a7e8d3c9f7bd6bc358240130bd0426446a09e  tests/stream-s0/battery.test.ts

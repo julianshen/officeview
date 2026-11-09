@@ -1,0 +1,2566 @@
+{
+  "status": "GREEN",
+  "threshold": {
+    "imageShare": 0.3,
+    "textureShare": 0.3,
+    "blockPx": 8,
+    "blockLumaStd": 4
+  },
+  "minimum": 5,
+  "method": "paint twice (drawImage on/off): share of differing pixels (lower bound); plus share of 8x8 blocks with luma std >= 4",
+  "unitCounts": {
+    "docx": 58,
+    "xlsx": 11,
+    "pptx": 190
+  },
+  "certified": [
+    {
+      "id": "poi-aptia.pptx#0",
+      "imageShare": 0.9679,
+      "textureShare": 0.3231
+    },
+    {
+      "id": "poi-60810.pptx#10",
+      "imageShare": 0.8919,
+      "textureShare": 0.4177
+    },
+    {
+      "id": "poi-60810.pptx#24",
+      "imageShare": 0.8919,
+      "textureShare": 0.4177
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#18",
+      "imageShare": 0.6477,
+      "textureShare": 0.4282
+    },
+    {
+      "id": "poi-60810.pptx#25",
+      "imageShare": 0.523,
+      "textureShare": 0.3001
+    },
+    {
+      "id": "poi-keyframes.pptx#0",
+      "imageShare": 0.4479,
+      "textureShare": 0.4705
+    },
+    {
+      "id": "poi-keyframes.pptx#26",
+      "imageShare": 0.4479,
+      "textureShare": 0.4136
+    },
+    {
+      "id": "poi-keyframes.pptx#27",
+      "imageShare": 0.4479,
+      "textureShare": 0.5523
+    },
+    {
+      "id": "poi-keyframes.pptx#1",
+      "imageShare": 0.4477,
+      "textureShare": 0.4477
+    },
+    {
+      "id": "poi-keyframes.pptx#14",
+      "imageShare": 0.4477,
+      "textureShare": 0.401
+    },
+    {
+      "id": "poi-keyframes.pptx#25",
+      "imageShare": 0.4477,
+      "textureShare": 0.401
+    },
+    {
+      "id": "poi-keyframes.pptx#2",
+      "imageShare": 0.4456,
+      "textureShare": 0.5137
+    },
+    {
+      "id": "poi-keyframes.pptx#24",
+      "imageShare": 0.4454,
+      "textureShare": 0.5369
+    },
+    {
+      "id": "poi-keyframes.pptx#13",
+      "imageShare": 0.4452,
+      "textureShare": 0.4696
+    },
+    {
+      "id": "poi-keyframes.pptx#15",
+      "imageShare": 0.445,
+      "textureShare": 0.5093
+    },
+    {
+      "id": "poi-keyframes.pptx#3",
+      "imageShare": 0.4434,
+      "textureShare": 0.5525
+    },
+    {
+      "id": "poi-keyframes.pptx#11",
+      "imageShare": 0.4425,
+      "textureShare": 0.5791
+    },
+    {
+      "id": "poi-keyframes.pptx#16",
+      "imageShare": 0.4425,
+      "textureShare": 0.4697
+    },
+    {
+      "id": "poi-keyframes.pptx#17",
+      "imageShare": 0.4425,
+      "textureShare": 0.4725
+    },
+    {
+      "id": "poi-keyframes.pptx#18",
+      "imageShare": 0.4425,
+      "textureShare": 0.4655
+    },
+    {
+      "id": "poi-keyframes.pptx#19",
+      "imageShare": 0.4425,
+      "textureShare": 0.4765
+    },
+    {
+      "id": "poi-keyframes.pptx#20",
+      "imageShare": 0.4425,
+      "textureShare": 0.4819
+    },
+    {
+      "id": "poi-keyframes.pptx#21",
+      "imageShare": 0.4425,
+      "textureShare": 0.5091
+    },
+    {
+      "id": "poi-keyframes.pptx#22",
+      "imageShare": 0.4425,
+      "textureShare": 0.5058
+    },
+    {
+      "id": "poi-keyframes.pptx#23",
+      "imageShare": 0.4425,
+      "textureShare": 0.4751
+    },
+    {
+      "id": "poi-keyframes.pptx#4",
+      "imageShare": 0.4423,
+      "textureShare": 0.5156
+    },
+    {
+      "id": "poi-keyframes.pptx#6",
+      "imageShare": 0.4423,
+      "textureShare": 0.5313
+    },
+    {
+      "id": "poi-keyframes.pptx#7",
+      "imageShare": 0.4423,
+      "textureShare": 0.541
+    },
+    {
+      "id": "poi-keyframes.pptx#8",
+      "imageShare": 0.4423,
+      "textureShare": 0.4854
+    },
+    {
+      "id": "poi-keyframes.pptx#9",
+      "imageShare": 0.4423,
+      "textureShare": 0.4936
+    },
+    {
+      "id": "poi-keyframes.pptx#10",
+      "imageShare": 0.4423,
+      "textureShare": 0.4682
+    },
+    {
+      "id": "poi-keyframes.pptx#12",
+      "imageShare": 0.4423,
+      "textureShare": 0.5087
+    },
+    {
+      "id": "poi-keyframes.pptx#5",
+      "imageShare": 0.4402,
+      "textureShare": 0.5161
+    },
+    {
+      "id": "poi-60810.pptx#13",
+      "imageShare": 0.4211,
+      "textureShare": 0.3384
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#33",
+      "imageShare": 0.3989,
+      "textureShare": 0.4682
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#23",
+      "imageShare": 0.3897,
+      "textureShare": 0.5186
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#12",
+      "imageShare": 0.3716,
+      "textureShare": 0.3784
+    },
+    {
+      "id": "poi-60810.pptx#27",
+      "imageShare": 0.3257,
+      "textureShare": 0.4831
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#11",
+      "imageShare": 0.3203,
+      "textureShare": 0.3587
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#7",
+      "imageShare": 0.3185,
+      "textureShare": 0.3591
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#27",
+      "imageShare": 0.309,
+      "textureShare": 0.4091
+    }
+  ],
+  "units": [
+    {
+      "id": "lo-airplane-transition.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-bnc591147.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-bnc591147.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0009,
+      "textureShare": 0.0014,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-connector-shape-animations.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0139,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-narration.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0.0015,
+      "textureShare": 0.0022,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-ooxtheme.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0698,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104788.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0.1006,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104788.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0.1006,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104788.pptx#2",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0.1006,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104788.pptx#3",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0.1006,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104788.pptx#4",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0.1006,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104788.pptx#5",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.7004,
+      "textureShare": 0.1909,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf104792-smart-art-animation.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0386,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf105739.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf115394.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0201,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf115394.pptx#1",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.023,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf115394.pptx#2",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0196,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf115394.pptx#3",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0197,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf115394.pptx#4",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0187,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf123684.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0.9902,
+      "textureShare": 0.0683,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf142915.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0008,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf142915.pptx#1",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0013,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf146223.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.9959,
+      "textureShare": 0.0292,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf146223.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf149588_transparentSolidFill.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0.0026,
+      "textureShare": 0.0053,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf156808.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 1,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf44223.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0187,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf44223.pptx#1",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.021,
+      "imageHeavy": false
+    },
+    {
+      "id": "lo-tdf93868.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0657,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1695,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2091,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#2",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2094,
+      "textureShare": 0.22,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#3",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1504,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#4",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1843,
+      "textureShare": 0.1135,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#5",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1252,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#6",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2169,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#7",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.178,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#8",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1771,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#9",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2768,
+      "textureShare": 0.4032,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#10",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1729,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#11",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3203,
+      "textureShare": 0.3587,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#12",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3716,
+      "textureShare": 0.3784,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#13",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3158,
+      "textureShare": 0.2678,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#14",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1544,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#15",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2054,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#16",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.3988,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#17",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2305,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#18",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.6477,
+      "textureShare": 0.4282,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#19",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1783,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#20",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2206,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#21",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1842,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#22",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2157,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#23",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2547,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#24",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2133,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#25",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2351,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#26",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2697,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#27",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.309,
+      "textureShare": 0.4091,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#28",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1906,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#29",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.252,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#30",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2236,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#31",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2635,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#32",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.272,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#33",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1966,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#34",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2517,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#35",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2316,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#36",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2367,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#37",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2339,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#38",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.231,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#39",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2186,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#40",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1888,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#41",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2181,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#42",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1693,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#43",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.106,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#44",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.2032,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#45",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1356,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#46",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.1123,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#47",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1707,
+      "textureShare": 0.3855,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-47889.xlsx#0",
+      "kind": "xlsx",
+      "width": 192,
+      "height": 100,
+      "imageShare": 0,
+      "textureShare": 0.6007,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-47889.xlsx#1",
+      "kind": "xlsx",
+      "width": 64,
+      "height": 20,
+      "imageShare": 0,
+      "textureShare": 0.5625,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-47889.xlsx#2",
+      "kind": "xlsx",
+      "width": 64,
+      "height": 20,
+      "imageShare": 0,
+      "textureShare": 0.5625,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-55733.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0007,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-56295.xlsx#0",
+      "kind": "xlsx",
+      "width": 180,
+      "height": 187,
+      "imageShare": 0,
+      "textureShare": 0.587,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-59021.xlsx#0",
+      "kind": "xlsx",
+      "width": 512,
+      "height": 40,
+      "imageShare": 0,
+      "textureShare": 0.8281,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-59746_NoRowNums.xlsx#0",
+      "kind": "xlsx",
+      "width": 704,
+      "height": 300,
+      "imageShare": 0,
+      "textureShare": 0.8363,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.1221,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2974,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#2",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0,
+      "textureShare": 0.1647,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#3",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0,
+      "textureShare": 0.1761,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#4",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.3134,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#5",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.4087,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#6",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2235,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#7",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.4429,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#8",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2526,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#9",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2774,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#10",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.8919,
+      "textureShare": 0.4177,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-60810.pptx#11",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2852,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#12",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.4061,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#13",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.4211,
+      "textureShare": 0.3384,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-60810.pptx#14",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2346,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#15",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2669,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#16",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2485,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#17",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2312,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#18",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2984,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#19",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.2601,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#20",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.0153,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#21",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.3097,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#22",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.1704,
+      "textureShare": 0.3767,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#23",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.267,
+      "textureShare": 0.3759,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#24",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.8919,
+      "textureShare": 0.4177,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-60810.pptx#25",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.523,
+      "textureShare": 0.3001,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-60810.pptx#26",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.0031,
+      "textureShare": 0.1991,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-60810.pptx#27",
+      "kind": "pptx",
+      "width": 960,
+      "height": 540,
+      "imageShare": 0.3257,
+      "textureShare": 0.4831,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-62272.xlsx#0",
+      "kind": "xlsx",
+      "width": 81,
+      "height": 17,
+      "imageShare": 0,
+      "textureShare": 1,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-64508.xlsx#0",
+      "kind": "xlsx",
+      "width": 448,
+      "height": 100,
+      "imageShare": 0,
+      "textureShare": 0.875,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-66365.xlsx#0",
+      "kind": "xlsx",
+      "width": 176,
+      "height": 40,
+      "imageShare": 0,
+      "textureShare": 0.6182,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.9679,
+      "textureShare": 0.3231,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-aptia.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2275,
+      "textureShare": 0.2676,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#2",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2287,
+      "textureShare": 0.299,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#3",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2271,
+      "textureShare": 0.2896,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#4",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2274,
+      "textureShare": 0.3324,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#5",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2257,
+      "textureShare": 0.3631,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#6",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2232,
+      "textureShare": 0.4213,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#7",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2229,
+      "textureShare": 0.3269,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-aptia.pptx#8",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.9939,
+      "textureShare": 0.1881,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.058,
+      "textureShare": 0.1469,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0479,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#2",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1428,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#3",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2516,
+      "textureShare": 0.2162,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#4",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0919,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#5",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0344,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#6",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.2366,
+      "textureShare": 0.2587,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#7",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3185,
+      "textureShare": 0.3591,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#8",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1929,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#9",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0323,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#10",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1969,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#11",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.261,
+      "textureShare": 0.3919,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#12",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.3119,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#13",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0439,
+      "textureShare": 0.2742,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#14",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3473,
+      "textureShare": 0.1697,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#15",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0251,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#16",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0592,
+      "textureShare": 0.1801,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#17",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0466,
+      "textureShare": 0.1466,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#18",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1014,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#19",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0547,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#20",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0859,
+      "textureShare": 0.1563,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#21",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0045,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#22",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0533,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#23",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3897,
+      "textureShare": 0.5186,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#24",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0513,
+      "textureShare": 0.0954,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#25",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0865,
+      "textureShare": 0.2326,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#26",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1132,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#27",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0228,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#28",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.2486,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#29",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.1725,
+      "textureShare": 0.2537,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#30",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.155,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#31",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1578,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#32",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.1734,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#33",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.3989,
+      "textureShare": 0.4682,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2563,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#1",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3496,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#2",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3395,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#3",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3267,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#4",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3381,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#5",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3449,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#6",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3385,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#7",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3331,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#8",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3441,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#9",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3408,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#10",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3456,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#11",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3506,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#12",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2978,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#13",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3439,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#14",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1143,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2167,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#1",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2267,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#2",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1614,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#3",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2299,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#4",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1957,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#5",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1565,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug51170.docx#6",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1146,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-Bug66263-table.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0028,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-comment.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-copy-slide-demo.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0139,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-crop-to-0.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-crop-to-0.pptx#1",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-crop-to-0.pptx#2",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0.0109,
+      "textureShare": 0.0094,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1584,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#1",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2469,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#2",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0.0059,
+      "textureShare": 0.3017,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#3",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3758,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#4",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3838,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#5",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.5255,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#6",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0.0078,
+      "textureShare": 0.4398,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#7",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3499,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#8",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0.0327,
+      "textureShare": 0.2224,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#9",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3934,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#10",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3587,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#11",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.399,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#12",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3928,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#13",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3814,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#14",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0.0078,
+      "textureShare": 0.3499,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#15",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.337,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#16",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3845,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#17",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3986,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#18",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3939,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#19",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.3888,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-drawing.docx#20",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.398,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-heading123.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.1797,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-issue_51265_1.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0.0473,
+      "textureShare": 0.0449,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-keyframes.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4479,
+      "textureShare": 0.4705,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#1",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4477,
+      "textureShare": 0.4477,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#2",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4456,
+      "textureShare": 0.5137,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#3",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4434,
+      "textureShare": 0.5525,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#4",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.5156,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#5",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4402,
+      "textureShare": 0.5161,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#6",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.5313,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#7",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.541,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#8",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.4854,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#9",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.4936,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#10",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.4682,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#11",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.5791,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#12",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4423,
+      "textureShare": 0.5087,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#13",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4452,
+      "textureShare": 0.4696,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#14",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4477,
+      "textureShare": 0.401,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#15",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.445,
+      "textureShare": 0.5093,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#16",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.4697,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#17",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.4725,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#18",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.4655,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#19",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.4765,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#20",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.4819,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#21",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.5091,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#22",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.5058,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#23",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4425,
+      "textureShare": 0.4751,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#24",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4454,
+      "textureShare": 0.5369,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#25",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4477,
+      "textureShare": 0.401,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#26",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4479,
+      "textureShare": 0.4136,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-keyframes.pptx#27",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.4479,
+      "textureShare": 0.5523,
+      "imageHeavy": true
+    },
+    {
+      "id": "poi-link-external-workbook-a.xlsx#0",
+      "kind": "xlsx",
+      "width": 128,
+      "height": 20,
+      "imageShare": 0,
+      "textureShare": 0.75,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-picture-transparency.pptx#0",
+      "kind": "pptx",
+      "width": 1058,
+      "height": 595,
+      "imageShare": 0.0016,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-picture-transparency.pptx#1",
+      "kind": "pptx",
+      "width": 1058,
+      "height": 595,
+      "imageShare": 0.0016,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-picture-transparency.pptx#2",
+      "kind": "pptx",
+      "width": 1058,
+      "height": 595,
+      "imageShare": 0.0016,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-picture-transparency.pptx#3",
+      "kind": "pptx",
+      "width": 1058,
+      "height": 595,
+      "imageShare": 0,
+      "textureShare": 0,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-rtl.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.0785,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-table_test.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0607,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-table-indent.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0,
+      "textureShare": 0.2155,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-text-highlight.pptx#0",
+      "kind": "pptx",
+      "width": 1280,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0331,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-unicode-path.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0004,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-VariousPictures.docx#0",
+      "kind": "docx",
+      "width": 794,
+      "height": 1123,
+      "imageShare": 0.036,
+      "textureShare": 0.0245,
+      "imageHeavy": false
+    },
+    {
+      "id": "poi-xlsx-jdbc.xlsx#0",
+      "kind": "xlsx",
+      "width": 192,
+      "height": 40,
+      "imageShare": 0,
+      "textureShare": 0.8333,
+      "imageHeavy": false
+    },
+    {
+      "id": "pydocx-blk-inner-content.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0202,
+      "imageHeavy": false
+    },
+    {
+      "id": "pydocx-having-images.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0.0497,
+      "textureShare": 0.0581,
+      "imageHeavy": false
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0202,
+      "imageHeavy": false
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#1",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0189,
+      "imageHeavy": false
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#2",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.0015,
+      "imageHeavy": false
+    },
+    {
+      "id": "pydocx-test.docx#0",
+      "kind": "docx",
+      "width": 816,
+      "height": 1056,
+      "imageShare": 0,
+      "textureShare": 0.01,
+      "imageHeavy": false
+    },
+    {
+      "id": "pypptx-missing_rels_item.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0362,
+      "imageHeavy": false
+    },
+    {
+      "id": "pypptx-no-core-props.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0387,
+      "imageHeavy": false
+    },
+    {
+      "id": "pypptx-test_slides.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0.0152,
+      "textureShare": 0.0859,
+      "imageHeavy": false
+    },
+    {
+      "id": "pypptx-test.pptx#0",
+      "kind": "pptx",
+      "width": 960,
+      "height": 720,
+      "imageShare": 0,
+      "textureShare": 0.0362,
+      "imageHeavy": false
+    }
+  ],
+  "failures": [
+    {
+      "id": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+      "reason": "Corrupted zip: can't find end of central directory"
+    }
+  ],
+  "gate": "image-heavy",
+  "backend": "@napi-rs/canvas",
+  "gitSha": "810d2ce4f0c36ba95bc1320b7856cf046bdd0cb3",
+  "generatedAt": "2026-11-08T14:21:14.429Z"
+}

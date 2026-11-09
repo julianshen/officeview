@@ -1,3 +1,4 @@
+import { installedCanvasBackend } from '../core/canvas-backend'
 /** DrawingML painting in local pixels; adapters own placement/rotation/flips. */
 import type { ResolvedCommand, ResolvedGeometry, ResolvedPath } from './geometry'
 import { resolveDrawingColor, computeShadowOffset, type ArrowEnd, type DrawingColor, type DrawingFill, type DrawingLine, type DrawingStyle, type DrawingIssue } from './style'
@@ -114,6 +115,8 @@ export interface PaintSurface { width: number; height: number; getContext(kind: 
 /** Shared host-neutral offscreen-surface strategy (OffscreenCanvas, owning document,
  * or a node-canvas owner). Used by radial shading and the warp raster painter. */
 export function scratchSurface(ctx: CanvasRenderingContext2D, width: number, height: number): PaintSurface | undefined {
+  const backend = installedCanvasBackend()
+  if (backend) return backend.createCanvas(width, height)
   // OffscreenCanvas needs no document. node-canvas exposes its own Canvas constructor.
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height)
   const owner = ctx.canvas.ownerDocument

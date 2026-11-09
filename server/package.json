@@ -1,0 +1,17 @@
+{
+  "name": "@officeview/stream-server",
+  "private": true,
+  "type": "module",
+  "description": "WS-only demo stream server for officeview (spec 2026-11-07 \u00a79).",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.1.0",
+    "jszip": "^3.10.2",
+    "fast-xml-parser": "^5.11.1"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.0"
+  }
+}

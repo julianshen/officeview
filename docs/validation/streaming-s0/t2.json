@@ -1,0 +1,180 @@
+{
+  "status": "RED",
+  "perFixture": [
+    {
+      "id": "xlsx-hidden-sheet",
+      "kind": "xlsx",
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 2,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sheets[1].rows[0].cells[0].value"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "xlsx-veryhidden-sheet",
+      "kind": "xlsx",
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 2,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sheets[1].rows[0].cells[0].value"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "xlsx-hidden-rows",
+      "kind": "xlsx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sheets[0].rows[1].cells[0].value"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "xlsx-hidden-cols",
+      "kind": "xlsx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sheets[0].rows[0].cells[1].value"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "docx-vanish",
+      "kind": "docx",
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sections[0].paragraphs[1].runs[0].text",
+        "sections[0].blocks[1].paragraph.runs[0].text"
+      ],
+      "exposureCount": 2
+    },
+    {
+      "id": "docx-hidden-shape-docPr",
+      "kind": "docx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [],
+      "exposureCount": 0
+    },
+    {
+      "id": "docx-hidden-shape-in-group",
+      "kind": "docx",
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "sections[0].paragraphs[1].images[0].drawing.paragraphs[0].runs[0].text",
+        "sections[0].paragraphs[1].inline[0].image.drawing.paragraphs[0].runs[0].text",
+        "sections[0].blocks[1].paragraph.images[0].drawing.paragraphs[0].runs[0].text",
+        "sections[0].blocks[1].paragraph.inline[0].image.drawing.paragraphs[0].runs[0].text"
+      ],
+      "exposureCount": 4
+    },
+    {
+      "id": "pptx-hidden-shape-cNvPr",
+      "kind": "pptx",
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "slides[0].shapes[1].textBody.paragraphs[0].runs[0].text"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "pptx-hidden-shape-in-group",
+      "kind": "pptx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "slides[0].shapes[1].children[0].textBody.paragraphs[0].runs[0].text"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "pptx-hidden-slide",
+      "kind": "pptx",
+      "status": "leak",
+      "controlDrawn": true,
+      "hiddenDrawn": true,
+      "unitsWith": 2,
+      "unitsWithout": 1,
+      "modelExposure": [
+        "slides[1].shapes[0].textBody.paragraphs[0].runs[0].text"
+      ],
+      "exposureCount": 1
+    },
+    {
+      "id": "pptx-notes",
+      "kind": "pptx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [],
+      "exposureCount": 0
+    },
+    {
+      "id": "xlsx-comment",
+      "kind": "xlsx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [],
+      "exposureCount": 0
+    },
+    {
+      "id": "docx-comment",
+      "kind": "docx",
+      "status": "clean",
+      "controlDrawn": true,
+      "hiddenDrawn": false,
+      "unitsWith": 1,
+      "unitsWithout": 1,
+      "modelExposure": [],
+      "exposureCount": 0
+    }
+  ],
+  "totals": {
+    "fixtures": 13,
+    "leaks": 6,
+    "invalid": 0,
+    "clean": 7
+  },
+  "gate": "t2",
+  "backend": "@napi-rs/canvas",
+  "gitSha": "13fbdda9148ea04511bba777d46238eac670492b",
+  "generatedAt": "2026-11-08T11:28:18.661Z"
+}

@@ -46,6 +46,8 @@ import {
 } from '../core/zoom'
 
 export type OfficeDocSource = import('../docx/types').DocxDocument | import('../xlsx/types').XlsxDocument | import('../pptx/types').PptxDocument
+  /** A server stream session's document (§6.3, §8.3); painted by the lazy remote viewer. */
+  | import('../stream/remote/remote-doc').RemoteOfficeDoc
 
 export interface OfficeDocProps {
   document: OfficeDocSource
@@ -292,7 +294,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   onSlideShowDiagnostic,
   __presentPlatform = defaultPlatform,
   __presentSource,
-}: OfficeDocProps, ref: Ref<OfficeViewerHandle>): ReactElement {
+}: OfficeDocProps & { document: LocalDocSource }, ref: Ref<OfficeViewerHandle>): ReactElement {
   const instance = useId()
   // The slideshow host (spec 4.1): always mounted, empty and hidden, so full
   // screen can be requested on it synchronously inside the gesture. A start
@@ -943,14 +945,21 @@ const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 // A spreadsheet viewer is never presentable: the ref still gets a handle that says so (PR #18 review 3).
 const SHEET: OfficeViewerHandle = { present: () => Promise.reject(new SlideShowError('not-presentable')) }
 
+// §6.3 dispatch: a remote document never reaches the local painters.
+const RemoteDocView = lazy(() => import('./remote/RemoteDocView').catch((e) => (warnChunk(e), { default: () => null as never })))
+type LocalDocSource = Exclude<OfficeDocSource, import('../stream/remote/remote-doc').RemoteOfficeDoc>
+
 export const OfficeDoc = forwardRef(function OfficeDoc(props: OfficeDocProps, ref: Ref<OfficeViewerHandle>): ReactElement {
-  const { interactiveSheets = false, document, ...rest } = props
+  const { interactiveSheets = false, document: source, ...rest } = props
+  const remote = (source as { kind?: unknown }).kind === 'remote' ? source as import('../stream/remote/remote-doc').RemoteOfficeDoc : undefined
+  const document = source as LocalDocSource
   // A worker-backed (paged) shell document carries its source (S5.4) and has no
   // rows on the main thread: only the interactive viewer can show it.
   const paged = pagedWorkbookOf(document)
-  const sheet = (interactiveSheets || paged) && 'sheets' in document
-  // The spreadsheet's handle; the legacy viewer sets its own.
-  useImperativeHandle(sheet ? ref : null, () => SHEET)
+  const sheet = !remote && (interactiveSheets || paged) && 'sheets' in document
+  // The spreadsheet's (or remote document's) handle; the legacy viewer sets its own.
+  useImperativeHandle(sheet || remote ? ref : null, () => SHEET)
+  if (remote) return <Suspense><RemoteDocView {...rest} document={remote} /></Suspense>
   if (sheet) {
     return (
       <Suspense fallback={<SheetStatus theme={props.theme} text="Loading spreadsheet viewer…" />}>

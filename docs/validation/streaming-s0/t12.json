@@ -1,0 +1,54 @@
+{
+  "status": "GREEN",
+  "synthetic": true,
+  "caps": {
+    "perSessionOutstanding": 8,
+    "perSessionQueue": 32,
+    "sessionTransientBytes": 100663296,
+    "renderReservationBytes": 536870912,
+    "processQueuedUnits": 4096,
+    "renderDeadlineMs": 2000
+  },
+  "requests": {
+    "total": 1500,
+    "admitted": 159,
+    "queued": 1016,
+    "refused": 325,
+    "refusalsByReason": {
+      "session-queue": 325,
+      "process-queue": 0,
+      "too-large": 0
+    }
+  },
+  "peak": {
+    "reservedBytes": 536371200,
+    "sessionReservedBytes": 28569600,
+    "sessionRunning": 8,
+    "sessionQueued": 32,
+    "processQueued": 1016,
+    "rssBytes": 952680448
+  },
+  "timeouts": 0,
+  "paintFailures": [],
+  "latencyMs": {
+    "p50": 312.61400000000003,
+    "p95": 503.84537500000005,
+    "max": 529.08275,
+    "completed": 1175
+  },
+  "workers": {
+    "count": 4,
+    "backends": [
+      "@napi-rs/canvas",
+      "@napi-rs/canvas",
+      "@napi-rs/canvas",
+      "@napi-rs/canvas"
+    ]
+  },
+  "unitsUsed": 6,
+  "note": "Synthetic in-process model of §14/§9.2 admission (no server at Stage 0); paints are real @napi-rs/canvas renders in worker threads. Latency is request→finish wall clock and depends on machine load.",
+  "gate": "t12",
+  "backend": "@napi-rs/canvas",
+  "gitSha": "e09acfd52574ce2fb71851994d504e8bf2a1b351",
+  "generatedAt": "2026-11-08T12:21:33.836Z"
+}

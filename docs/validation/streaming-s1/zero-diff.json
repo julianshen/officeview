@@ -1,0 +1,5209 @@
+{
+  "status": "GREEN",
+  "backend": "@napi-rs/canvas",
+  "scales": [
+    1,
+    2
+  ],
+  "totals": {
+    "captures": 519,
+    "zero": 518,
+    "diff": 0,
+    "tile": 0,
+    "error": 0,
+    "skipped": 1
+  },
+  "tileReasons": {},
+  "rows": [
+    {
+      "id": "lo-airplane-transition.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 90,
+      "assets": 0,
+      "opBytes": 1048,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-airplane-transition.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 90,
+      "assets": 0,
+      "opBytes": 1048,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-bnc591147.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-bnc591147.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-bnc591147.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-bnc591147.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-connector-shape-animations.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 298,
+      "assets": 0,
+      "opBytes": 3909,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-connector-shape-animations.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 289,
+      "assets": 0,
+      "opBytes": 3567,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-narration.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-narration.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-ooxtheme.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 579,
+      "assets": 0,
+      "opBytes": 8694,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-ooxtheme.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 571,
+      "assets": 0,
+      "opBytes": 8518,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 87,
+      "assets": 1,
+      "opBytes": 1075,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 87,
+      "assets": 1,
+      "opBytes": 1075,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 87,
+      "assets": 1,
+      "opBytes": 1075,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 87,
+      "assets": 1,
+      "opBytes": 1075,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 587,
+      "assets": 5,
+      "opBytes": 8754,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104788.pptx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 598,
+      "assets": 5,
+      "opBytes": 9116,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104792-smart-art-animation.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 140,
+      "assets": 0,
+      "opBytes": 1739,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf104792-smart-art-animation.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 140,
+      "assets": 0,
+      "opBytes": 1739,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf105739.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 90,
+      "assets": 1,
+      "opBytes": 1034,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf105739.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 90,
+      "assets": 1,
+      "opBytes": 1034,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2326,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2326,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2328,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2328,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2326,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2326,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 170,
+      "assets": 0,
+      "opBytes": 3244,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 170,
+      "assets": 0,
+      "opBytes": 3244,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2324,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf115394.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 128,
+      "assets": 0,
+      "opBytes": 2324,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf123684.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 331,
+      "assets": 7,
+      "opBytes": 4949,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf123684.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 331,
+      "assets": 7,
+      "opBytes": 4949,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf142915.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 105,
+      "assets": 0,
+      "opBytes": 1325,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf142915.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 105,
+      "assets": 0,
+      "opBytes": 1325,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf142915.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 105,
+      "assets": 0,
+      "opBytes": 1325,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf142915.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 105,
+      "assets": 0,
+      "opBytes": 1325,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf146223.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 300,
+      "assets": 1,
+      "opBytes": 5279,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf146223.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 296,
+      "assets": 1,
+      "opBytes": 5191,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf146223.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 126,
+      "assets": 2,
+      "opBytes": 1493,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf146223.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 126,
+      "assets": 2,
+      "opBytes": 1493,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf149588_transparentSolidFill.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 6647,
+      "assets": 6,
+      "opBytes": 91523,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf149588_transparentSolidFill.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 6647,
+      "assets": 6,
+      "opBytes": 91523,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf156808.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf156808.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 838,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf44223.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 87,
+      "assets": 0,
+      "opBytes": 1208,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf44223.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 87,
+      "assets": 0,
+      "opBytes": 1208,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf44223.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 83,
+      "assets": 0,
+      "opBytes": 1104,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf44223.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 83,
+      "assets": 0,
+      "opBytes": 1104,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf93868.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 610,
+      "assets": 1,
+      "opBytes": 9952,
+      "backingDiffers": 0
+    },
+    {
+      "id": "lo-tdf93868.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 610,
+      "assets": 1,
+      "opBytes": 9952,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 264,
+      "assets": 1,
+      "opBytes": 3789,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 264,
+      "assets": 1,
+      "opBytes": 3789,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 797,
+      "assets": 1,
+      "opBytes": 12474,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 797,
+      "assets": 1,
+      "opBytes": 12474,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 82,
+      "assets": 2,
+      "opBytes": 1063,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 82,
+      "assets": 2,
+      "opBytes": 1063,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 251,
+      "assets": 1,
+      "opBytes": 3684,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 251,
+      "assets": 1,
+      "opBytes": 3684,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 82,
+      "assets": 2,
+      "opBytes": 1063,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 82,
+      "assets": 2,
+      "opBytes": 1063,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 182,
+      "assets": 1,
+      "opBytes": 2564,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 182,
+      "assets": 1,
+      "opBytes": 2564,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 491,
+      "assets": 1,
+      "opBytes": 7593,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 491,
+      "assets": 1,
+      "opBytes": 7593,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 383,
+      "assets": 1,
+      "opBytes": 5863,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 383,
+      "assets": 1,
+      "opBytes": 5863,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 347,
+      "assets": 1,
+      "opBytes": 5235,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 347,
+      "assets": 1,
+      "opBytes": 5235,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#9",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 149,
+      "assets": 2,
+      "opBytes": 2031,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#9",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 149,
+      "assets": 2,
+      "opBytes": 2031,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#10",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 257,
+      "assets": 1,
+      "opBytes": 3805,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#10",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 257,
+      "assets": 1,
+      "opBytes": 3805,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#11",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 177,
+      "assets": 2,
+      "opBytes": 2319,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#11",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 170,
+      "assets": 2,
+      "opBytes": 2193,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#12",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 310,
+      "assets": 2,
+      "opBytes": 4504,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#12",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 310,
+      "assets": 2,
+      "opBytes": 4504,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#13",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 279,
+      "assets": 2,
+      "opBytes": 4033,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#13",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 279,
+      "assets": 2,
+      "opBytes": 4033,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#14",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 299,
+      "assets": 1,
+      "opBytes": 4474,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#14",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 299,
+      "assets": 1,
+      "opBytes": 4474,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#15",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 464,
+      "assets": 1,
+      "opBytes": 7234,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#15",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 464,
+      "assets": 1,
+      "opBytes": 7234,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#16",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2307,
+      "assets": 1,
+      "opBytes": 30383,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#16",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2307,
+      "assets": 1,
+      "opBytes": 30383,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#17",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 668,
+      "assets": 1,
+      "opBytes": 10427,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#17",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 668,
+      "assets": 1,
+      "opBytes": 10427,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#18",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 164,
+      "assets": 2,
+      "opBytes": 2270,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#18",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 164,
+      "assets": 2,
+      "opBytes": 2270,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#19",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 263,
+      "assets": 1,
+      "opBytes": 3850,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#19",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 263,
+      "assets": 1,
+      "opBytes": 3850,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#20",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 422,
+      "assets": 1,
+      "opBytes": 6519,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#20",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 422,
+      "assets": 1,
+      "opBytes": 6519,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#21",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 365,
+      "assets": 1,
+      "opBytes": 5745,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#21",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 365,
+      "assets": 1,
+      "opBytes": 5745,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#22",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 411,
+      "assets": 1,
+      "opBytes": 6258,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#22",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 411,
+      "assets": 1,
+      "opBytes": 6258,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#23",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 548,
+      "assets": 1,
+      "opBytes": 8509,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#23",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 548,
+      "assets": 1,
+      "opBytes": 8509,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#24",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 533,
+      "assets": 1,
+      "opBytes": 8278,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#24",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 533,
+      "assets": 1,
+      "opBytes": 8278,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#25",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 701,
+      "assets": 1,
+      "opBytes": 10966,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#25",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 701,
+      "assets": 1,
+      "opBytes": 10966,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#26",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 701,
+      "assets": 1,
+      "opBytes": 11032,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#26",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 701,
+      "assets": 1,
+      "opBytes": 11032,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#27",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 138,
+      "assets": 2,
+      "opBytes": 1819,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#27",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 131,
+      "assets": 2,
+      "opBytes": 1693,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#28",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 305,
+      "assets": 1,
+      "opBytes": 4551,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#28",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 305,
+      "assets": 1,
+      "opBytes": 4551,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#29",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 605,
+      "assets": 1,
+      "opBytes": 9484,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#29",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 605,
+      "assets": 1,
+      "opBytes": 9484,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#30",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 512,
+      "assets": 1,
+      "opBytes": 7888,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#30",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 512,
+      "assets": 1,
+      "opBytes": 7888,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#31",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 692,
+      "assets": 1,
+      "opBytes": 10833,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#31",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 692,
+      "assets": 1,
+      "opBytes": 10833,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#32",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 854,
+      "assets": 1,
+      "opBytes": 13584,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#32",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 854,
+      "assets": 1,
+      "opBytes": 13584,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#33",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 395,
+      "assets": 1,
+      "opBytes": 5972,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#33",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 395,
+      "assets": 1,
+      "opBytes": 5972,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#34",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 584,
+      "assets": 1,
+      "opBytes": 9052,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#34",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 584,
+      "assets": 1,
+      "opBytes": 9052,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#35",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 728,
+      "assets": 1,
+      "opBytes": 11801,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#35",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 728,
+      "assets": 1,
+      "opBytes": 11801,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#36",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 575,
+      "assets": 1,
+      "opBytes": 8990,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#36",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 575,
+      "assets": 1,
+      "opBytes": 8990,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#37",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 536,
+      "assets": 1,
+      "opBytes": 8319,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#37",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 536,
+      "assets": 1,
+      "opBytes": 8319,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#38",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 434,
+      "assets": 1,
+      "opBytes": 6688,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#38",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 434,
+      "assets": 1,
+      "opBytes": 6688,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#39",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 743,
+      "assets": 1,
+      "opBytes": 12779,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#39",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 743,
+      "assets": 1,
+      "opBytes": 12779,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#40",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 350,
+      "assets": 1,
+      "opBytes": 5252,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#40",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 350,
+      "assets": 1,
+      "opBytes": 5252,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#41",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 587,
+      "assets": 1,
+      "opBytes": 9976,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#41",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 587,
+      "assets": 1,
+      "opBytes": 9976,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#42",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 335,
+      "assets": 1,
+      "opBytes": 5012,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#42",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 335,
+      "assets": 1,
+      "opBytes": 5012,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#43",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 107,
+      "assets": 1,
+      "opBytes": 1350,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#43",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 107,
+      "assets": 1,
+      "opBytes": 1350,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#44",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 410,
+      "assets": 1,
+      "opBytes": 6234,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#44",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 410,
+      "assets": 1,
+      "opBytes": 6234,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#45",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 137,
+      "assets": 1,
+      "opBytes": 1890,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#45",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 137,
+      "assets": 1,
+      "opBytes": 1890,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#46",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 122,
+      "assets": 1,
+      "opBytes": 1591,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#46",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 122,
+      "assets": 1,
+      "opBytes": 1591,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#47",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1667,
+      "assets": 1,
+      "opBytes": 27793,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-2411-Performance_Up.pptx#47",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1667,
+      "assets": 1,
+      "opBytes": 27793,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-47889.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 141,
+      "assets": 0,
+      "opBytes": 5503,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-47889.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 141,
+      "assets": 0,
+      "opBytes": 5503,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-47889.xlsx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 41,
+      "assets": 0,
+      "opBytes": 564,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-47889.xlsx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 41,
+      "assets": 0,
+      "opBytes": 564,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-47889.xlsx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 41,
+      "assets": 0,
+      "opBytes": 564,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-47889.xlsx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 41,
+      "assets": 0,
+      "opBytes": 564,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-55733.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 35,
+      "assets": 0,
+      "opBytes": 496,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-55733.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 35,
+      "assets": 0,
+      "opBytes": 496,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-56295.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 252,
+      "assets": 0,
+      "opBytes": 5345,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-56295.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 252,
+      "assets": 0,
+      "opBytes": 5345,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-59021.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 182,
+      "assets": 0,
+      "opBytes": 5787,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-59021.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 182,
+      "assets": 0,
+      "opBytes": 5787,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-59746_NoRowNums.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 8399,
+      "assets": 0,
+      "opBytes": 132268,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-59746_NoRowNums.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 8399,
+      "assets": 0,
+      "opBytes": 132268,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1051,
+      "assets": 1,
+      "opBytes": 16616,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1051,
+      "assets": 1,
+      "opBytes": 16616,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2851,
+      "assets": 1,
+      "opBytes": 47508,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2851,
+      "assets": 1,
+      "opBytes": 47508,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1340,
+      "assets": 0,
+      "opBytes": 21720,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1340,
+      "assets": 0,
+      "opBytes": 21720,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1496,
+      "assets": 0,
+      "opBytes": 25304,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1496,
+      "assets": 0,
+      "opBytes": 25304,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2926,
+      "assets": 1,
+      "opBytes": 48893,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2926,
+      "assets": 1,
+      "opBytes": 48893,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2916,
+      "assets": 1,
+      "opBytes": 49046,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2916,
+      "assets": 1,
+      "opBytes": 49046,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1756,
+      "assets": 1,
+      "opBytes": 29066,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1756,
+      "assets": 1,
+      "opBytes": 29066,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 4181,
+      "assets": 1,
+      "opBytes": 68434,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 4132,
+      "assets": 1,
+      "opBytes": 67552,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2920,
+      "assets": 1,
+      "opBytes": 48604,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2920,
+      "assets": 1,
+      "opBytes": 48604,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#9",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2473,
+      "assets": 1,
+      "opBytes": 43596,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#9",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2473,
+      "assets": 1,
+      "opBytes": 43596,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#10",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4260,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#10",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4260,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#11",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2212,
+      "assets": 1,
+      "opBytes": 36754,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#11",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2212,
+      "assets": 1,
+      "opBytes": 36754,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#12",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3798,
+      "assets": 1,
+      "opBytes": 66964,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#12",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3798,
+      "assets": 1,
+      "opBytes": 66964,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#13",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 207,
+      "assets": 3,
+      "opBytes": 2853,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#13",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 207,
+      "assets": 3,
+      "opBytes": 2853,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#14",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2425,
+      "assets": 1,
+      "opBytes": 41436,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#14",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2425,
+      "assets": 1,
+      "opBytes": 41436,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#15",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2401,
+      "assets": 1,
+      "opBytes": 39877,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#15",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2401,
+      "assets": 1,
+      "opBytes": 39877,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#16",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1981,
+      "assets": 1,
+      "opBytes": 32771,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#16",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1981,
+      "assets": 1,
+      "opBytes": 32771,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#17",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 37249,
+      "assets": 1,
+      "opBytes": 792963,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#17",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 37249,
+      "assets": 1,
+      "opBytes": 792963,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#18",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2617,
+      "assets": 1,
+      "opBytes": 43541,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#18",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2617,
+      "assets": 1,
+      "opBytes": 43541,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#19",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1894,
+      "assets": 1,
+      "opBytes": 31408,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#19",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1894,
+      "assets": 1,
+      "opBytes": 31408,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#20",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 139,
+      "assets": 1,
+      "opBytes": 1806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#20",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 139,
+      "assets": 1,
+      "opBytes": 1806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#21",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 11826,
+      "assets": 1,
+      "opBytes": 202060,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#21",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 11826,
+      "assets": 1,
+      "opBytes": 202060,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#22",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 189,
+      "assets": 3,
+      "opBytes": 2627,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#22",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 189,
+      "assets": 3,
+      "opBytes": 2627,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#23",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 226,
+      "assets": 4,
+      "opBytes": 3112,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#23",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 226,
+      "assets": 4,
+      "opBytes": 3112,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#24",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4260,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#24",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 315,
+      "assets": 4,
+      "opBytes": 4260,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#25",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 376,
+      "assets": 4,
+      "opBytes": 6488,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#25",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 376,
+      "assets": 4,
+      "opBytes": 6488,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#26",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2905,
+      "assets": 1,
+      "opBytes": 49791,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#26",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2905,
+      "assets": 1,
+      "opBytes": 49791,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#27",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1008,
+      "assets": 2,
+      "opBytes": 16053,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-60810.pptx#27",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1008,
+      "assets": 2,
+      "opBytes": 16053,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-62272.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 0,
+      "opBytes": 913,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-62272.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 0,
+      "opBytes": 913,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-64508.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 366,
+      "assets": 0,
+      "opBytes": 11558,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-64508.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 366,
+      "assets": 0,
+      "opBytes": 11558,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-66365.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 71,
+      "assets": 0,
+      "opBytes": 1822,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-66365.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 71,
+      "assets": 0,
+      "opBytes": 1822,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 398,
+      "assets": 1,
+      "opBytes": 6579,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 398,
+      "assets": 1,
+      "opBytes": 6579,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 405,
+      "assets": 1,
+      "opBytes": 6040,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 405,
+      "assets": 1,
+      "opBytes": 6040,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1329,
+      "assets": 1,
+      "opBytes": 26308,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1329,
+      "assets": 1,
+      "opBytes": 26308,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 663,
+      "assets": 1,
+      "opBytes": 10170,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 663,
+      "assets": 1,
+      "opBytes": 10170,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 952,
+      "assets": 1,
+      "opBytes": 13726,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 952,
+      "assets": 1,
+      "opBytes": 13726,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2232,
+      "assets": 1,
+      "opBytes": 40473,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2232,
+      "assets": 1,
+      "opBytes": 40473,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1636,
+      "assets": 1,
+      "opBytes": 26012,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1636,
+      "assets": 1,
+      "opBytes": 26012,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 942,
+      "assets": 1,
+      "opBytes": 14808,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 942,
+      "assets": 1,
+      "opBytes": 14808,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 148,
+      "assets": 2,
+      "opBytes": 1863,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-aptia.pptx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 148,
+      "assets": 2,
+      "opBytes": 1863,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 593,
+      "assets": 3,
+      "opBytes": 9555,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 593,
+      "assets": 3,
+      "opBytes": 9555,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 290,
+      "assets": 0,
+      "opBytes": 4567,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 290,
+      "assets": 0,
+      "opBytes": 4567,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1023,
+      "assets": 0,
+      "opBytes": 16802,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1023,
+      "assets": 0,
+      "opBytes": 16802,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 117,
+      "assets": 1,
+      "opBytes": 1597,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 117,
+      "assets": 1,
+      "opBytes": 1597,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1548,
+      "assets": 0,
+      "opBytes": 29464,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1548,
+      "assets": 0,
+      "opBytes": 29464,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 227,
+      "assets": 0,
+      "opBytes": 3507,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 227,
+      "assets": 0,
+      "opBytes": 3507,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 352,
+      "assets": 1,
+      "opBytes": 5415,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 352,
+      "assets": 1,
+      "opBytes": 5415,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 914,
+      "assets": 2,
+      "opBytes": 16546,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 914,
+      "assets": 2,
+      "opBytes": 16546,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 702,
+      "assets": 0,
+      "opBytes": 11717,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 702,
+      "assets": 0,
+      "opBytes": 11717,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#9",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 182,
+      "assets": 0,
+      "opBytes": 2765,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#9",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 182,
+      "assets": 0,
+      "opBytes": 2765,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#10",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 567,
+      "assets": 0,
+      "opBytes": 9517,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#10",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 567,
+      "assets": 0,
+      "opBytes": 9517,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#11",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1062,
+      "assets": 3,
+      "opBytes": 19331,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#11",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1062,
+      "assets": 3,
+      "opBytes": 19331,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#12",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 987,
+      "assets": 0,
+      "opBytes": 17145,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#12",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 987,
+      "assets": 0,
+      "opBytes": 17145,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#13",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 898,
+      "assets": 1,
+      "opBytes": 16048,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#13",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 898,
+      "assets": 1,
+      "opBytes": 16048,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#14",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 589,
+      "assets": 1,
+      "opBytes": 9635,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#14",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 589,
+      "assets": 1,
+      "opBytes": 9635,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#15",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 188,
+      "assets": 0,
+      "opBytes": 2844,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#15",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 188,
+      "assets": 0,
+      "opBytes": 2844,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#16",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 680,
+      "assets": 4,
+      "opBytes": 10282,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#16",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 680,
+      "assets": 4,
+      "opBytes": 10282,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#17",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 760,
+      "assets": 1,
+      "opBytes": 15174,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#17",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 760,
+      "assets": 1,
+      "opBytes": 15174,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#18",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 468,
+      "assets": 0,
+      "opBytes": 7487,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#18",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 468,
+      "assets": 0,
+      "opBytes": 7487,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#19",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 312,
+      "assets": 0,
+      "opBytes": 4799,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#19",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 312,
+      "assets": 0,
+      "opBytes": 4799,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#20",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 477,
+      "assets": 2,
+      "opBytes": 7590,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#20",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 469,
+      "assets": 2,
+      "opBytes": 7282,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#21",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 273,
+      "assets": 3,
+      "opBytes": 4404,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#21",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 259,
+      "assets": 3,
+      "opBytes": 3784,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#22",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 246,
+      "assets": 0,
+      "opBytes": 3620,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#22",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 246,
+      "assets": 0,
+      "opBytes": 3620,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#23",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2017,
+      "assets": 3,
+      "opBytes": 27974,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#23",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2017,
+      "assets": 3,
+      "opBytes": 27974,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#24",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 256,
+      "assets": 1,
+      "opBytes": 3681,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#24",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 256,
+      "assets": 1,
+      "opBytes": 3681,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#25",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 482,
+      "assets": 2,
+      "opBytes": 7599,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#25",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 482,
+      "assets": 2,
+      "opBytes": 7599,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#26",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 477,
+      "assets": 0,
+      "opBytes": 7740,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#26",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 477,
+      "assets": 0,
+      "opBytes": 7740,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#27",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 218,
+      "assets": 0,
+      "opBytes": 3332,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#27",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 218,
+      "assets": 0,
+      "opBytes": 3332,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#28",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1728,
+      "assets": 0,
+      "opBytes": 31926,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#28",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1728,
+      "assets": 0,
+      "opBytes": 31926,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#29",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1126,
+      "assets": 1,
+      "opBytes": 20728,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#29",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1126,
+      "assets": 1,
+      "opBytes": 20728,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#30",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 948,
+      "assets": 0,
+      "opBytes": 17561,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#30",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 948,
+      "assets": 0,
+      "opBytes": 17561,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#31",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1026,
+      "assets": 0,
+      "opBytes": 19088,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#31",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1026,
+      "assets": 0,
+      "opBytes": 19088,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#32",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1023,
+      "assets": 0,
+      "opBytes": 18995,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#32",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1023,
+      "assets": 0,
+      "opBytes": 18995,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#33",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 507,
+      "assets": 3,
+      "opBytes": 7912,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx#33",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 507,
+      "assets": 3,
+      "opBytes": 7912,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1090,
+      "assets": 4,
+      "opBytes": 21137,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1090,
+      "assets": 4,
+      "opBytes": 21137,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1760,
+      "assets": 0,
+      "opBytes": 30729,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1760,
+      "assets": 0,
+      "opBytes": 30729,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1632,
+      "assets": 0,
+      "opBytes": 28801,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1632,
+      "assets": 0,
+      "opBytes": 28801,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1655,
+      "assets": 0,
+      "opBytes": 30141,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1655,
+      "assets": 0,
+      "opBytes": 30141,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1656,
+      "assets": 0,
+      "opBytes": 29423,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1656,
+      "assets": 0,
+      "opBytes": 29423,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1663,
+      "assets": 0,
+      "opBytes": 30450,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1663,
+      "assets": 0,
+      "opBytes": 30450,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1695,
+      "assets": 0,
+      "opBytes": 30449,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1695,
+      "assets": 0,
+      "opBytes": 30449,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1637,
+      "assets": 0,
+      "opBytes": 31035,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1637,
+      "assets": 0,
+      "opBytes": 31035,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1594,
+      "assets": 0,
+      "opBytes": 28909,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1594,
+      "assets": 0,
+      "opBytes": 28909,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#9",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1680,
+      "assets": 0,
+      "opBytes": 30710,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#9",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1680,
+      "assets": 0,
+      "opBytes": 30710,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#10",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1718,
+      "assets": 0,
+      "opBytes": 31800,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#10",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1718,
+      "assets": 0,
+      "opBytes": 31800,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#11",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1627,
+      "assets": 0,
+      "opBytes": 30573,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#11",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1627,
+      "assets": 0,
+      "opBytes": 30573,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#12",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1577,
+      "assets": 0,
+      "opBytes": 27955,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#12",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1577,
+      "assets": 0,
+      "opBytes": 27955,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#13",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1879,
+      "assets": 0,
+      "opBytes": 32451,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#13",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1879,
+      "assets": 0,
+      "opBytes": 32451,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#14",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 673,
+      "assets": 0,
+      "opBytes": 11722,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-bib-chernigovka.netdo.ru_download_docs_17459.docx#14",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 673,
+      "assets": 0,
+      "opBytes": 11722,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1035,
+      "assets": 0,
+      "opBytes": 26136,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1035,
+      "assets": 0,
+      "opBytes": 26136,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1111,
+      "assets": 0,
+      "opBytes": 28135,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1111,
+      "assets": 0,
+      "opBytes": 28135,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 813,
+      "assets": 0,
+      "opBytes": 20437,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 813,
+      "assets": 0,
+      "opBytes": 20437,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1219,
+      "assets": 0,
+      "opBytes": 30728,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1219,
+      "assets": 0,
+      "opBytes": 30728,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1013,
+      "assets": 0,
+      "opBytes": 25481,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1013,
+      "assets": 0,
+      "opBytes": 25481,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 837,
+      "assets": 0,
+      "opBytes": 20968,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 837,
+      "assets": 0,
+      "opBytes": 20968,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 599,
+      "assets": 0,
+      "opBytes": 14864,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug51170.docx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 599,
+      "assets": 0,
+      "opBytes": 14864,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug66263-table.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 53,
+      "assets": 0,
+      "opBytes": 949,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-Bug66263-table.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 53,
+      "assets": 0,
+      "opBytes": 949,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-comment.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 32,
+      "assets": 0,
+      "opBytes": 414,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-comment.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 32,
+      "assets": 0,
+      "opBytes": 414,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-copy-slide-demo.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 150,
+      "assets": 0,
+      "opBytes": 2086,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-copy-slide-demo.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 150,
+      "assets": 0,
+      "opBytes": 2086,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+      "scale": 0,
+      "status": "skipped",
+      "detail": "malformed fuzzer input: Corrupted zip: can't find end of central directory"
+    },
+    {
+      "id": "poi-crop-to-0.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 64,
+      "assets": 0,
+      "opBytes": 768,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-crop-to-0.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 64,
+      "assets": 0,
+      "opBytes": 768,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-crop-to-0.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 64,
+      "assets": 0,
+      "opBytes": 768,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-crop-to-0.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 64,
+      "assets": 0,
+      "opBytes": 768,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-crop-to-0.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-crop-to-0.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 65,
+      "assets": 1,
+      "opBytes": 806,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 551,
+      "assets": 0,
+      "opBytes": 15222,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 551,
+      "assets": 0,
+      "opBytes": 15222,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 824,
+      "assets": 0,
+      "opBytes": 22573,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 824,
+      "assets": 0,
+      "opBytes": 22573,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1119,
+      "assets": 1,
+      "opBytes": 30572,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1119,
+      "assets": 1,
+      "opBytes": 30572,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1809,
+      "assets": 0,
+      "opBytes": 49462,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1809,
+      "assets": 0,
+      "opBytes": 49462,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1796,
+      "assets": 0,
+      "opBytes": 49349,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1796,
+      "assets": 0,
+      "opBytes": 49349,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2279,
+      "assets": 0,
+      "opBytes": 62560,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2279,
+      "assets": 0,
+      "opBytes": 62560,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1750,
+      "assets": 1,
+      "opBytes": 48014,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1750,
+      "assets": 1,
+      "opBytes": 48014,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1267,
+      "assets": 0,
+      "opBytes": 35088,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1267,
+      "assets": 0,
+      "opBytes": 35088,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 716,
+      "assets": 3,
+      "opBytes": 19275,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 716,
+      "assets": 3,
+      "opBytes": 19275,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#9",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1426,
+      "assets": 0,
+      "opBytes": 39297,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#9",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1426,
+      "assets": 0,
+      "opBytes": 39297,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#10",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1356,
+      "assets": 0,
+      "opBytes": 37168,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#10",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1356,
+      "assets": 0,
+      "opBytes": 37168,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#11",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1460,
+      "assets": 0,
+      "opBytes": 40225,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#11",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1460,
+      "assets": 0,
+      "opBytes": 40225,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#12",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1466,
+      "assets": 0,
+      "opBytes": 40149,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#12",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1466,
+      "assets": 0,
+      "opBytes": 40149,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#13",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1479,
+      "assets": 0,
+      "opBytes": 40468,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#13",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1479,
+      "assets": 0,
+      "opBytes": 40468,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#14",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1233,
+      "assets": 1,
+      "opBytes": 33654,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#14",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1233,
+      "assets": 1,
+      "opBytes": 33654,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#15",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1361,
+      "assets": 0,
+      "opBytes": 36948,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#15",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1361,
+      "assets": 0,
+      "opBytes": 36948,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#16",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1539,
+      "assets": 0,
+      "opBytes": 41871,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#16",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1539,
+      "assets": 0,
+      "opBytes": 41871,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#17",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1533,
+      "assets": 0,
+      "opBytes": 41916,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#17",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1533,
+      "assets": 0,
+      "opBytes": 41916,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#18",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1559,
+      "assets": 0,
+      "opBytes": 42495,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#18",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1559,
+      "assets": 0,
+      "opBytes": 42495,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#19",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1449,
+      "assets": 0,
+      "opBytes": 39745,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#19",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1449,
+      "assets": 0,
+      "opBytes": 39745,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#20",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1529,
+      "assets": 0,
+      "opBytes": 41705,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-drawing.docx#20",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1529,
+      "assets": 0,
+      "opBytes": 41705,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-heading123.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1070,
+      "assets": 0,
+      "opBytes": 27194,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-heading123.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1070,
+      "assets": 0,
+      "opBytes": 27194,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-issue_51265_1.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 45,
+      "assets": 1,
+      "opBytes": 546,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-issue_51265_1.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 45,
+      "assets": 1,
+      "opBytes": 546,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2274,
+      "assets": 4,
+      "opBytes": 40014,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2215,
+      "assets": 4,
+      "opBytes": 38125,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2070,
+      "assets": 6,
+      "opBytes": 36582,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2026,
+      "assets": 6,
+      "opBytes": 35134,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2311,
+      "assets": 4,
+      "opBytes": 39429,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2289,
+      "assets": 4,
+      "opBytes": 38705,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2079,
+      "assets": 4,
+      "opBytes": 35481,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2057,
+      "assets": 4,
+      "opBytes": 34757,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#4",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1919,
+      "assets": 4,
+      "opBytes": 32383,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#4",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1897,
+      "assets": 4,
+      "opBytes": 31659,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#5",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1949,
+      "assets": 4,
+      "opBytes": 32980,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#5",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1927,
+      "assets": 4,
+      "opBytes": 32256,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#6",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2060,
+      "assets": 4,
+      "opBytes": 34854,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#6",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2038,
+      "assets": 4,
+      "opBytes": 34130,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#7",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2414,
+      "assets": 4,
+      "opBytes": 40779,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#7",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2392,
+      "assets": 4,
+      "opBytes": 40055,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#8",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1972,
+      "assets": 4,
+      "opBytes": 33364,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#8",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1950,
+      "assets": 4,
+      "opBytes": 32640,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#9",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1846,
+      "assets": 4,
+      "opBytes": 30997,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#9",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1824,
+      "assets": 4,
+      "opBytes": 30273,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#10",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1633,
+      "assets": 4,
+      "opBytes": 27526,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#10",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1611,
+      "assets": 4,
+      "opBytes": 26802,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#11",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3809,
+      "assets": 4,
+      "opBytes": 65046,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#11",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 3765,
+      "assets": 4,
+      "opBytes": 63598,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#12",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2362,
+      "assets": 4,
+      "opBytes": 39743,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#12",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2340,
+      "assets": 4,
+      "opBytes": 39019,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#13",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1578,
+      "assets": 4,
+      "opBytes": 26988,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#13",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 1556,
+      "assets": 4,
+      "opBytes": 26264,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#14",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 969,
+      "assets": 4,
+      "opBytes": 17089,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#14",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 947,
+      "assets": 4,
+      "opBytes": 16365,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#15",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2805,
+      "assets": 4,
+      "opBytes": 48787,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#15",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2761,
+      "assets": 4,
+      "opBytes": 47339,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#16",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2665,
+      "assets": 4,
+      "opBytes": 46343,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#16",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2621,
+      "assets": 4,
+      "opBytes": 44895,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#17",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2893,
+      "assets": 4,
+      "opBytes": 50276,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#17",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2849,
+      "assets": 4,
+      "opBytes": 48828,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#18",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2611,
+      "assets": 4,
+      "opBytes": 45463,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#18",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2567,
+      "assets": 4,
+      "opBytes": 44015,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#19",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2671,
+      "assets": 4,
+      "opBytes": 46418,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#19",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2627,
+      "assets": 4,
+      "opBytes": 44970,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#20",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2626,
+      "assets": 4,
+      "opBytes": 45722,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#20",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2582,
+      "assets": 4,
+      "opBytes": 44274,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#21",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2878,
+      "assets": 4,
+      "opBytes": 49740,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#21",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2834,
+      "assets": 4,
+      "opBytes": 48292,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#22",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2738,
+      "assets": 4,
+      "opBytes": 47384,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#22",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2694,
+      "assets": 4,
+      "opBytes": 45936,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#23",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2635,
+      "assets": 4,
+      "opBytes": 45868,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#23",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2591,
+      "assets": 4,
+      "opBytes": 44420,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#24",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2766,
+      "assets": 4,
+      "opBytes": 48201,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#24",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2722,
+      "assets": 4,
+      "opBytes": 46753,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#25",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 969,
+      "assets": 4,
+      "opBytes": 17089,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#25",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 947,
+      "assets": 4,
+      "opBytes": 16365,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#26",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2046,
+      "assets": 4,
+      "opBytes": 36066,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#26",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2002,
+      "assets": 4,
+      "opBytes": 34618,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#27",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2689,
+      "assets": 4,
+      "opBytes": 48468,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-keyframes.pptx#27",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 2645,
+      "assets": 4,
+      "opBytes": 47020,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-link-external-workbook-a.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 59,
+      "assets": 0,
+      "opBytes": 1392,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-link-external-workbook-a.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 59,
+      "assets": 0,
+      "opBytes": 1392,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#3",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-picture-transparency.pptx#3",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 48,
+      "assets": 1,
+      "opBytes": 610,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-rtl.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 565,
+      "assets": 0,
+      "opBytes": 14412,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-rtl.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 565,
+      "assets": 0,
+      "opBytes": 14412,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-table_test.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 488,
+      "assets": 0,
+      "opBytes": 5677,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-table_test.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 488,
+      "assets": 0,
+      "opBytes": 5677,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-table-indent.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 789,
+      "assets": 0,
+      "opBytes": 10202,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-table-indent.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 789,
+      "assets": 0,
+      "opBytes": 10202,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-text-highlight.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 424,
+      "assets": 0,
+      "opBytes": 6330,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-text-highlight.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 424,
+      "assets": 0,
+      "opBytes": 6330,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-unicode-path.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 35,
+      "assets": 0,
+      "opBytes": 507,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-unicode-path.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 35,
+      "assets": 0,
+      "opBytes": 507,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-VariousPictures.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 85,
+      "assets": 2,
+      "opBytes": 1784,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-VariousPictures.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 85,
+      "assets": 2,
+      "opBytes": 1784,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-xlsx-jdbc.xlsx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 104,
+      "assets": 0,
+      "opBytes": 2765,
+      "backingDiffers": 0
+    },
+    {
+      "id": "poi-xlsx-jdbc.xlsx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 104,
+      "assets": 0,
+      "opBytes": 2765,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-blk-inner-content.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 137,
+      "assets": 0,
+      "opBytes": 1719,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-blk-inner-content.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 137,
+      "assets": 0,
+      "opBytes": 1719,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-having-images.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 44,
+      "assets": 3,
+      "opBytes": 689,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-having-images.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 44,
+      "assets": 3,
+      "opBytes": 689,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 135,
+      "assets": 0,
+      "opBytes": 1671,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 135,
+      "assets": 0,
+      "opBytes": 1671,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#1",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 63,
+      "assets": 0,
+      "opBytes": 867,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#1",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 63,
+      "assets": 0,
+      "opBytes": 867,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#2",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 39,
+      "assets": 0,
+      "opBytes": 599,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-sct-inner-content.docx#2",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 39,
+      "assets": 0,
+      "opBytes": 599,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-test.docx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 58,
+      "assets": 0,
+      "opBytes": 1106,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pydocx-test.docx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 58,
+      "assets": 0,
+      "opBytes": 1106,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-missing_rels_item.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 165,
+      "assets": 0,
+      "opBytes": 2324,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-missing_rels_item.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 165,
+      "assets": 0,
+      "opBytes": 2324,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-no-core-props.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 180,
+      "assets": 0,
+      "opBytes": 2579,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-no-core-props.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 180,
+      "assets": 0,
+      "opBytes": 2579,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-test_slides.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 910,
+      "assets": 4,
+      "opBytes": 13765,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-test_slides.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 860,
+      "assets": 4,
+      "opBytes": 12537,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-test.pptx#0",
+      "scale": 1,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 165,
+      "assets": 0,
+      "opBytes": 2324,
+      "backingDiffers": 0
+    },
+    {
+      "id": "pypptx-test.pptx#0",
+      "scale": 2,
+      "status": "zero",
+      "differing": 0,
+      "opCount": 165,
+      "assets": 0,
+      "opBytes": 2324,
+      "backingDiffers": 0
+    }
+  ],
+  "note": "C = direct paint vs record → encodeUnit → OVSD frames (gzip 9, 64 KiB fragments) → Reassembler → decodeUnit → replayUnit; assets in memory (ASSET_DEFINE wire form is Stage 1c). Tiles are reported, not fixed by widening RECORDED_SUBSET.",
+  "gate": "zero-diff",
+  "gitSha": "64a2c180576eafe99eb0f7b3a85c2b6c973c1d77",
+  "generatedAt": "2026-11-08T16:34:05.471Z"
+}
