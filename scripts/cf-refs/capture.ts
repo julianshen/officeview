@@ -58,6 +58,82 @@ function probeLiveExcelClockState(
   }
 }
 
+/**
+ * Converts an Excel AppleScript color return value into an ARGB hex string (`FFFFC7CE`).
+ *
+ * Supported return shapes:
+ * 1. AppleScript RGBColor record/string: `{65535, 51118, 52942}` or `"65535, 51118, 52942"` (16-bit 0..65535 channels)
+ * 2. 8-bit RGB record/string: `{255, 199, 206}` or `"255, 199, 206"`
+ * 3. BGR integer (classic COM/VBA `Interior.Color` Long): `0x00BBGGRR`
+ * 4. Hex string: `#FFC7CE` or `FFFFC7CE`
+ */
+export function parseExcelColorToArgb(raw: unknown): string | null {
+  if (raw === null || raw === undefined || raw === 'none' || raw === '') return null
+
+  // 1. Array of numbers [r, g, b]
+  if (Array.isArray(raw) && raw.length >= 3) {
+    const nums = raw.slice(0, 3).map(Number)
+    if (nums.every(n => Number.isFinite(n) && n >= 0)) {
+      return channelsToArgb(nums[0]!, nums[1]!, nums[2]!)
+    }
+  }
+
+  // 2. String representation
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed || trimmed === 'none' || trimmed === 'missing value') return null
+
+    // Comma-separated channels: "{65535, 51118, 52942}" or "65535, 51118, 52942"
+    const matches = trimmed.match(/\d+/g)
+    if (matches && matches.length >= 3) {
+      const r = Number(matches[0])
+      const g = Number(matches[1])
+      const b = Number(matches[2])
+      return channelsToArgb(r, g, b)
+    }
+
+    // Numeric decimal integer string (e.g. VBA Color Long "13551615")
+    if (/^\d+$/.test(trimmed)) {
+      return integerToArgb(Number(trimmed))
+    }
+
+    // Hex string (e.g. "#FFC7CE" or "FFFFC7CE")
+    const hexMatch = /^#?([0-9a-f]{6}|[0-9a-f]{8})$/i.exec(trimmed)
+    if (hexMatch) {
+      const h = hexMatch[1]!
+      return h.length === 6 ? `FF${h.toUpperCase()}` : h.toUpperCase()
+    }
+  }
+
+  // 3. Number (integer Long from VBA/COM)
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+    return integerToArgb(raw)
+  }
+
+  return null
+}
+
+function channelsToArgb(r: number, g: number, b: number): string {
+  // Check if channels are 16-bit (AppleScript standard 0..65535)
+  const is16Bit = r > 255 || g > 255 || b > 255
+  const to8Bit = (val: number) => {
+    if (!is16Bit) return Math.max(0, Math.min(255, Math.round(val)))
+    return Math.max(0, Math.min(255, Math.round((val * 255) / 65535)))
+  }
+  const r8 = to8Bit(r).toString(16).padStart(2, '0').toUpperCase()
+  const g8 = to8Bit(g).toString(16).padStart(2, '0').toUpperCase()
+  const b8 = to8Bit(b).toString(16).padStart(2, '0').toUpperCase()
+  return `FF${r8}${g8}${b8}`
+}
+
+function integerToArgb(val: number): string {
+  // Classic VBA BGR: red is low byte, blue is high byte
+  const r = (val & 0xff).toString(16).padStart(2, '0').toUpperCase()
+  const g = ((val >> 8) & 0xff).toString(16).padStart(2, '0').toUpperCase()
+  const b = ((val >> 16) & 0xff).toString(16).padStart(2, '0').toUpperCase()
+  return `FF${r}${g}${b}`
+}
+
 export function probeLiveExcelCellObservations(
   c: CfOracleCase,
   savedAbs: string,
@@ -65,7 +141,9 @@ export function probeLiveExcelCellObservations(
 ): {
   cellTexts: Record<string, string>
   cellDecorations: Record<string, { underline: 'none' | 'single' | 'double'; strikethrough: boolean }>
+  cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }>
   geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null
+  colorScaleCriteria?: Record<string, { type: string; value?: string }[]>
 } | null {
   try {
     const name = openWorkbook(savedAbs)
@@ -113,6 +191,72 @@ export function probeLiveExcelCellObservations(
         }
       })
 
+      const colorScriptLines = [
+        `set wb to workbook "${q(name)}"`,
+        `set ws to worksheet "${q(c.sheet)}" of wb`,
+        `set outList to {}`,
+        ...refs.map(
+          r =>
+            `set end of outList to ((color of interior object of display format of range "${q(r)}" of ws as string) & ":::" & (color of interior object of range "${q(r)}" of ws as string))`,
+        ),
+        `set AppleScript's text item delimiters to "|||"`,
+        `return outList as string`,
+      ]
+      const cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }> = {}
+      try {
+        const colorOut = runScript(colorScriptLines, 30_000)
+        const colorParts = colorOut.split('|||')
+        refs.forEach((ref, idx) => {
+          const parts = colorParts[idx]?.split(':::')
+          if (parts && parts.length === 2) {
+            const dfArgb = parseExcelColorToArgb(parts[0])
+            const baseArgb = parseExcelColorToArgb(parts[1])
+            cellColors[ref] = {
+              ...(dfArgb ? { displayFormatFill: dfArgb } : {}),
+              ...(baseArgb ? { baseFill: baseArgb } : {}),
+            }
+          }
+        })
+      } catch {
+        // color query errors leave cellColors empty
+      }
+
+      let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
+      try {
+        const critScriptLines = [
+          `set wb to workbook "${q(name)}"`,
+          `set ws to worksheet "${q(c.sheet)}" of wb`,
+          `set outList to {}`,
+          `repeat with fc in (get format conditions of ws)`,
+          `  try`,
+          `    set csc to color scale criteria of fc`,
+          `    repeat with crit in csc`,
+          `      set cType to (criterion type of crit as string)`,
+          `      set cVal to ""`,
+          `      try`,
+          `        set cVal to (criterion value of crit as string)`,
+          `      end try`,
+          `      set end of outList to (cType & ":::" & cVal)`,
+          `    end repeat`,
+          `  end try`,
+          `end repeat`,
+          `set AppleScript's text item delimiters to "|||"`,
+          `return outList as string`,
+        ]
+        const critOut = runScript(critScriptLines, 30_000)
+        if (critOut.trim()) {
+          const items = critOut.split('|||')
+          colorScaleCriteria = {
+            all: items.map(it => {
+              const [type, value] = it.split(':::')
+              return { type: type ?? '', ...(value ? { value } : {}) }
+            }),
+          }
+        }
+      } catch {
+        // criteria query errors leave colorScaleCriteria undefined
+      }
+
       let geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null = null
       try {
         const geomScriptLines = [
@@ -158,7 +302,7 @@ export function probeLiveExcelCellObservations(
         // geometry query errors leave geometry null
       }
 
-      return { cellTexts, cellDecorations, geometry }
+      return { cellTexts, cellDecorations, cellColors, geometry, colorScaleCriteria }
     } finally {
       closeOwnedWorkbook(name, preExisting)
     }
@@ -199,6 +343,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let activeGeom = geom
     let cellTexts: Record<string, string> | undefined
     let cellDecorations: Record<string, { underline?: 'none' | 'single' | 'double'; strikethrough?: boolean }> | undefined
+    let cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }> | undefined
+    let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
     let sidecarExcelVersion = excelVersion
     let sidecarCapturedAt = new Date().toISOString()
     let sidecarHostTimeZone = 'Asia/Taipei'
@@ -239,6 +385,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                 .filter((o: any) => o.decorationSource === 'excel-display-format')
                 .map((o: any) => [o.ref, { underline: o.underline, strikethrough: o.strikethrough }]),
             )
+            cellColors = Object.fromEntries(
+              sc.observedCells
+                .filter((o: any) => o.fillSource === 'excel-display-format' && typeof o.fillRgb === 'string')
+                .map((o: any) => [o.ref, { displayFormatFill: o.fillRgb }]),
+            )
           }
         } catch {
           // ignore parse errors
@@ -261,6 +412,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           : geom
       cellTexts = liveObs?.cellTexts
       cellDecorations = liveObs?.cellDecorations
+      cellColors = liveObs?.cellColors
+      colorScaleCriteria = liveObs?.colorScaleCriteria
     }
 
     const updatedTemplate = CF_CASES.find(tc => tc.id === c.id)
@@ -308,12 +461,21 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
             })
           : null
 
+      const finalObservedCells = observedCells?.map(obs => {
+        const col = cellColors?.[obs.ref]
+        return {
+          ...obs,
+          ...(col?.displayFormatFill ? { fillSource: 'excel-display-format', fillRgb: col.displayFormatFill } : {}),
+          ...(col?.baseFill ? { baseFillRgb: col.baseFill } : {}),
+        }
+      }) ?? observedCells
+
       let observedTodayBranch = observedTodayBranchFromSidecar
-      if (c.clockRequirement && observedCells) {
-        const localObs = observedCells.find(
+      if (c.clockRequirement && finalObservedCells) {
+        const localObs = finalObservedCells.find(
           o => o.ref.toUpperCase() === c.clockRequirement!.localTodayCellRef.toUpperCase(),
         )
-        const utcObs = observedCells.find(
+        const utcObs = finalObservedCells.find(
           o => o.ref.toUpperCase() === c.clockRequirement!.utcTodayCellRef.toUpperCase(),
         )
         if (localObs && localObs.bgContrastDelta >= 16) observedTodayBranch = 'local'
@@ -350,7 +512,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                     observedTodayBranch,
                   }
                 : {}),
-              ...(observedCells ? { observedCells } : {}),
+              ...(finalObservedCells ? { observedCells: finalObservedCells } : {}),
+              ...(colorScaleCriteria ? { colorScaleCriteria } : {}),
             },
             null,
             2,

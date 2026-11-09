@@ -19,6 +19,7 @@ import {
   type CfOracleCase,
   type CfResaveReceipt,
 } from '../scripts/cf-refs/cases'
+import { parseExcelColorToArgb } from '../scripts/cf-refs/capture'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
 import {
   type ComputeGeometryOptions,
@@ -904,6 +905,43 @@ describe('CF oracle verifier', () => {
     const noFallbackCase = makeCase('unverified')
     manifestFixture.cases[1] = noFallbackCase
     expect(isCapabilityVerified('scale:fill-test', manifestFixture, { rootDir: dir })).toBe(false)
+  })
+
+  it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {
+    const DXF_RED = 'FFFFC7CE'
+
+    // 1. AppleScript 16-bit RGBColor record / list {65535, 51118, 52942}
+    expect(parseExcelColorToArgb([65535, 51118, 52942])).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('{65535, 51118, 52942}')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('65535, 51118, 52942')).toBe(DXF_RED)
+
+    // 2. 8-bit RGB [255, 199, 206]
+    expect(parseExcelColorToArgb([255, 199, 206])).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('{255, 199, 206}')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('255, 199, 206')).toBe(DXF_RED)
+
+    // 3. Classic VBA BGR integer (0xCE_C7_FF = 13551615)
+    expect(parseExcelColorToArgb(13551615)).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('13551615')).toBe(DXF_RED)
+
+    // 4. Hex string #FFC7CE or FFFFC7CE
+    expect(parseExcelColorToArgb('#FFC7CE')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('FFFFC7CE')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('ffc7ce')).toBe(DXF_RED)
+
+    // 5. Extremes and primary colors
+    expect(parseExcelColorToArgb([65535, 0, 0])).toBe('FFFF0000')
+    expect(parseExcelColorToArgb([0, 65535, 0])).toBe('FF00FF00')
+    expect(parseExcelColorToArgb([0, 0, 65535])).toBe('FF0000FF')
+    expect(parseExcelColorToArgb([65535, 65535, 65535])).toBe('FFFFFFFF')
+    expect(parseExcelColorToArgb([0, 0, 0])).toBe('FF000000')
+
+    // 6. Null / none / empty / invalid shapes
+    expect(parseExcelColorToArgb(null)).toBeNull()
+    expect(parseExcelColorToArgb(undefined)).toBeNull()
+    expect(parseExcelColorToArgb('none')).toBeNull()
+    expect(parseExcelColorToArgb('')).toBeNull()
+    expect(parseExcelColorToArgb('missing value')).toBeNull()
   })
 
   it('rejects review-t1-r1 counterexamples: text-only capture, inverted/blue expectations, white printer capture, unbound sidecar, and threshold 100->1000', async () => {
