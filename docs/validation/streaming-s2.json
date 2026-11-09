@@ -1,0 +1,3321 @@
+{
+ "gate": "stage-2a-l1-integration",
+ "status": "GREEN",
+ "gitSha": "bc0d72284c6d9af60924c125150aebc0a45c19d5",
+ "generatedAt": "2026-11-09T15:00:11.955Z",
+ "params": {
+  "nChips": 512,
+  "cellPx": 4,
+  "tilePx": 64,
+  "amplitude": 2,
+  "pedestal": 2
+ },
+ "codec": "l1-bch512x40@1",
+ "candidates": 65536,
+ "tau": {
+  "abs": 7.99,
+  "margin": 3.85
+ },
+ "tauSource": "Stage 0 (not recalibrated)",
+ "units": {
+  "rendered": 141,
+  "marked": 135,
+  "unmarked": 6,
+  "skipped": 6,
+  "byKind": {
+   "docx": {
+    "rendered": 11,
+    "marked": 11,
+    "defaultCorrect": 11
+   },
+   "xlsx": {
+    "rendered": 44,
+    "marked": 38,
+    "defaultCorrect": 38
+   },
+   "pptx": {
+    "rendered": 86,
+    "marked": 86,
+    "defaultCorrect": 86
+   }
+  },
+  "unmarkedReasons": {
+   "capacity": 6,
+   "all-masked": 0
+  }
+ },
+ "carriers": {
+  "min": 418,
+  "p10": 482,
+  "median": 511,
+  "max": 512
+ },
+ "deltaE00": {
+  "max": 1.5902800362396212,
+  "ceiling": 3
+ },
+ "survival": [
+  {
+   "attack": "default",
+   "target": 0.9,
+   "correct": 135,
+   "innocent": 0,
+   "marked": 135,
+   "rate": 1,
+   "served": 141,
+   "servedRate": 0.9574468085106383,
+   "status": "GREEN"
+  },
+  {
+   "attack": "q70",
+   "target": 0.75,
+   "correct": 135,
+   "innocent": 0,
+   "marked": 135,
+   "rate": 1,
+   "served": 141,
+   "servedRate": 0.9574468085106383,
+   "status": "GREEN"
+  },
+  {
+   "attack": "down0.5",
+   "target": 0.75,
+   "correct": 135,
+   "innocent": 0,
+   "marked": 135,
+   "rate": 1,
+   "served": 141,
+   "servedRate": 0.9574468085106383,
+   "status": "GREEN"
+  },
+  {
+   "attack": "q70-down0.5",
+   "target": 0.75,
+   "correct": 135,
+   "innocent": 0,
+   "marked": 135,
+   "rate": 1,
+   "served": 141,
+   "servedRate": 0.9574468085106383,
+   "status": "GREEN"
+  },
+  {
+   "attack": "crop25",
+   "target": 0.7,
+   "correct": 135,
+   "innocent": 0,
+   "marked": 135,
+   "rate": 1,
+   "served": 141,
+   "servedRate": 0.9574468085106383,
+   "status": "GREEN"
+  }
+ ],
+ "nullCheck": {
+  "captures": 270,
+  "attributed": []
+ },
+ "rows": [
+  {
+   "id": "lo-airplane-transition.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 492,
+   "deltaEMax": 1.2345086984545632,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-airplane-transition.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 499,
+   "deltaEMax": 1.2345086984545632,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-bnc591147.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 501,
+   "deltaEMax": 1.2552675884958617,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-bnc591147.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 506,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-bnc591147.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 496,
+   "deltaEMax": 1.2552675884958617,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-bnc591147.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 487,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot2_Row_Compact.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 243,
+   "h": 120,
+   "status": "marked",
+   "carriers": 501,
+   "masked": 11,
+   "pedestalCells": 500,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot2_Row_Compact.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 260,
+   "h": 220,
+   "status": "marked",
+   "carriers": 498,
+   "masked": 14,
+   "pedestalCells": 380,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot2_Row_Grand_Subtotals.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 243,
+   "h": 120,
+   "status": "marked",
+   "carriers": 503,
+   "masked": 9,
+   "pedestalCells": 503,
+   "deltaEMax": 1.5885084649086163,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot2_Row_Grand_Subtotals.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 219,
+   "h": 240,
+   "status": "marked",
+   "carriers": 437,
+   "masked": 75,
+   "pedestalCells": 437,
+   "deltaEMax": 1.5564441261343356,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot3_Column_Grand_Subtotals.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 243,
+   "h": 120,
+   "status": "marked",
+   "carriers": 499,
+   "masked": 13,
+   "pedestalCells": 498,
+   "deltaEMax": 1.5802210922956696,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot3_Column_Grand_Subtotals.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 495,
+   "h": 120,
+   "status": "marked",
+   "carriers": 441,
+   "masked": 71,
+   "pedestalCells": 439,
+   "deltaEMax": 1.5556442546585407,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 243,
+   "h": 120,
+   "status": "marked",
+   "carriers": 501,
+   "masked": 11,
+   "pedestalCells": 500,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 469,
+   "h": 120,
+   "status": "marked",
+   "carriers": 436,
+   "masked": 76,
+   "pedestalCells": 435,
+   "deltaEMax": 1.5556442546585407,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 915,
+   "h": 520,
+   "status": "marked",
+   "carriers": 477,
+   "masked": 35,
+   "pedestalCells": 469,
+   "deltaEMax": 1.5860191176611107,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-PivotTableFormatsSubTotals.xlsx",
+   "kind": "xlsx",
+   "bucket": 0,
+   "status": "skipped",
+   "reason": "Error: unsupported-format: unsupported-format: unowned visibility flag definedName hidden=1 in xl/workbook.xml"
+  },
+  {
+   "id": "lo-calc-PivotTableWithNoSourceData.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 1636,
+   "h": 420,
+   "status": "marked",
+   "carriers": 509,
+   "masked": 3,
+   "pedestalCells": 481,
+   "deltaEMax": 1.589229739300759,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 149,
+   "h": 120,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 304,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 128,
+   "h": 100,
+   "status": "marked",
+   "carriers": 507,
+   "masked": 5,
+   "pedestalCells": 506,
+   "deltaEMax": 1.5888272531517953,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-TableStyleTest.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 192,
+   "h": 200,
+   "status": "marked",
+   "carriers": 504,
+   "masked": 8,
+   "pedestalCells": 247,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-calcfields.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 720,
+   "h": 461,
+   "status": "marked",
+   "carriers": 504,
+   "masked": 8,
+   "pedestalCells": 496,
+   "deltaEMax": 1.5885084649086163,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-calcfields.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 712,
+   "h": 114,
+   "status": "marked",
+   "carriers": 463,
+   "masked": 49,
+   "pedestalCells": 284,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivot_dark1.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 787,
+   "h": 120,
+   "status": "marked",
+   "carriers": 509,
+   "masked": 3,
+   "pedestalCells": 294,
+   "deltaEMax": 1.5860191176611107,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivotcompact.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 955,
+   "h": 520,
+   "status": "marked",
+   "carriers": 506,
+   "masked": 6,
+   "pedestalCells": 484,
+   "deltaEMax": 1.5888272531517953,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivottable_date_field_filter.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 394,
+   "h": 103,
+   "status": "marked",
+   "carriers": 490,
+   "masked": 22,
+   "pedestalCells": 488,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivottable_date_field_filter.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 652,
+   "h": 84,
+   "status": "marked",
+   "carriers": 470,
+   "masked": 42,
+   "pedestalCells": 463,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivottable_outline_mode.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 655,
+   "h": 160,
+   "status": "marked",
+   "carriers": 507,
+   "masked": 5,
+   "pedestalCells": 459,
+   "deltaEMax": 1.589382686413615,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivottable_rowcolpage_field_filter.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 517,
+   "h": 123,
+   "status": "marked",
+   "carriers": 504,
+   "masked": 8,
+   "pedestalCells": 500,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivottable_rowcolpage_field_filter.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 718,
+   "h": 84,
+   "status": "marked",
+   "carriers": 477,
+   "masked": 35,
+   "pedestalCells": 463,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-pivottable_tabular_mode.xlsx",
+   "kind": "xlsx",
+   "bucket": 0,
+   "status": "skipped",
+   "reason": "Error: unsupported-format: unsupported-format: unowned visibility flag pane state=frozen in xl/worksheets/sheet2.xml"
+  },
+  {
+   "id": "lo-calc-shared-dategroup.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 1191,
+   "h": 500,
+   "status": "marked",
+   "carriers": 492,
+   "masked": 20,
+   "pedestalCells": 481,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-shared-dategroup.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 654,
+   "h": 180,
+   "status": "marked",
+   "carriers": 483,
+   "masked": 29,
+   "pedestalCells": 414,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-shared-numgroup.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 1191,
+   "h": 500,
+   "status": "marked",
+   "carriers": 489,
+   "masked": 23,
+   "pedestalCells": 474,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-shared-numgroup.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 658,
+   "h": 180,
+   "status": "marked",
+   "carriers": 496,
+   "masked": 16,
+   "pedestalCells": 408,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-tableStyleInnerBorders.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 213,
+   "h": 160,
+   "status": "marked",
+   "carriers": 496,
+   "masked": 16,
+   "pedestalCells": 252,
+   "deltaEMax": 1.5885084649086163,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-tdf162963_TableWithTotalsEnabled.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 128,
+   "h": 120,
+   "status": "marked",
+   "carriers": 481,
+   "masked": 31,
+   "pedestalCells": 420,
+   "deltaEMax": 1.5888272531517953,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-two-data-fields.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 275,
+   "h": 240,
+   "status": "marked",
+   "carriers": 498,
+   "masked": 14,
+   "pedestalCells": 403,
+   "deltaEMax": 1.589355219199591,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-calc-two-data-fields.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 192,
+   "h": 180,
+   "status": "marked",
+   "carriers": 494,
+   "masked": 18,
+   "pedestalCells": 493,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-connector-shape-animations.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 467,
+   "deltaEMax": 0.8772046771545565,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-connector-shape-animations.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 453,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-narration.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 498,
+   "deltaEMax": 0.9003391988575622,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-narration.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 493,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-ooxtheme.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 380,
+   "deltaEMax": 1.5380469741163294,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-ooxtheme.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 377,
+   "deltaEMax": 1.5380469741163294,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 3,
+   "deltaEMax": 0.8147326717213744,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 4,
+   "deltaEMax": 0.8138345497564734,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#2@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 3,
+   "deltaEMax": 0.8194935197913193,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#3@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 1,
+   "deltaEMax": 0.795148088113354,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#4@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 5,
+   "deltaEMax": 0.8186481469693563,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#5@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 482,
+   "masked": 30,
+   "pedestalCells": 79,
+   "deltaEMax": 1.1199532950793318,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 7,
+   "deltaEMax": 0.8116223457387544,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 4,
+   "deltaEMax": 0.8116223457387544,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#2@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 5,
+   "deltaEMax": 0.8134283423791129,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#3@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 8,
+   "deltaEMax": 0.8147326717213744,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#4@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 2,
+   "deltaEMax": 0.8116223457387544,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104788.pptx#5@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 477,
+   "masked": 35,
+   "pedestalCells": 100,
+   "deltaEMax": 1.1199532950793318,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104792-smart-art-animation.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 383,
+   "deltaEMax": 1.5286314367838363,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf104792-smart-art-animation.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 382,
+   "deltaEMax": 0.8721776029290872,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf105739.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 1,
+   "deltaEMax": 0.7782356258971866,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf105739.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 1,
+   "deltaEMax": 0.7811336664504336,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 506,
+   "masked": 6,
+   "pedestalCells": 494,
+   "deltaEMax": 1.4732916102249582,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 509,
+   "masked": 3,
+   "pedestalCells": 499,
+   "deltaEMax": 1.4732916102249582,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#2@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 505,
+   "masked": 7,
+   "pedestalCells": 492,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#3@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 498,
+   "deltaEMax": 1.397256433185111,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#4@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 493,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 489,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 506,
+   "masked": 6,
+   "pedestalCells": 487,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#2@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 496,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#3@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 493,
+   "deltaEMax": 1.48414176729931,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf115394.pptx#4@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 498,
+   "deltaEMax": 1.3912773725437284,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf123684.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 0,
+   "deltaEMax": 0.7794103189384077,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf123684.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 1,
+   "deltaEMax": 0.7828264389954894,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf142915.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 502,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf142915.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 495,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf142915.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 495,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf142915.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 494,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf146223.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 497,
+   "deltaEMax": 1.1886981473643732,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf146223.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 0,
+   "deltaEMax": 0.6462647953363713,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf146223.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 489,
+   "deltaEMax": 1.0658241843874927,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf146223.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 0,
+   "deltaEMax": 0.6462647953363713,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf149588_transparentSolidFill.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 0,
+   "deltaEMax": 0.6609752759503169,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf149588_transparentSolidFill.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 0,
+   "deltaEMax": 0.7795178914694412,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf156808.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 500,
+   "deltaEMax": 1.2552675884958617,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf156808.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 496,
+   "deltaEMax": 1.2552675884958617,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf44223.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 420,
+   "masked": 92,
+   "pedestalCells": 408,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf44223.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 509,
+   "masked": 3,
+   "pedestalCells": 500,
+   "deltaEMax": 1.5820630703491603,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf44223.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 418,
+   "masked": 94,
+   "pedestalCells": 387,
+   "deltaEMax": 1.5475418768081661,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf44223.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 494,
+   "deltaEMax": 1.5589452774181949,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf93868.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 505,
+   "masked": 7,
+   "pedestalCells": 249,
+   "deltaEMax": 1.5802210922956696,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "lo-tdf93868.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 293,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-47889.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 192,
+   "h": 100,
+   "status": "marked",
+   "carriers": 507,
+   "masked": 5,
+   "pedestalCells": 507,
+   "deltaEMax": 1.5885084649086163,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "abstain",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-47889.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 64,
+   "h": 20,
+   "status": "unmarked",
+   "reason": "capacity"
+  },
+  {
+   "id": "poi-47889.xlsx#2@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 64,
+   "h": 20,
+   "status": "unmarked",
+   "reason": "capacity"
+  },
+  {
+   "id": "poi-55733.docx",
+   "kind": "docx",
+   "bucket": 0,
+   "status": "skipped",
+   "reason": "refused:unsupported-format"
+  },
+  {
+   "id": "poi-56295.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 180,
+   "h": 187,
+   "status": "marked",
+   "carriers": 440,
+   "masked": 72,
+   "pedestalCells": 439,
+   "deltaEMax": 1.5885084649086163,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-59021.xlsx",
+   "kind": "xlsx",
+   "bucket": 0,
+   "status": "skipped",
+   "reason": "refused:unsupported-format"
+  },
+  {
+   "id": "poi-59746_NoRowNums.xlsx",
+   "kind": "xlsx",
+   "bucket": 0,
+   "status": "skipped",
+   "reason": "refused:unsupported-format"
+  },
+  {
+   "id": "poi-62272.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 81,
+   "h": 17,
+   "status": "unmarked",
+   "reason": "capacity"
+  },
+  {
+   "id": "poi-64508.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 448,
+   "h": 100,
+   "status": "marked",
+   "carriers": 488,
+   "masked": 24,
+   "pedestalCells": 486,
+   "deltaEMax": 1.5902086044662616,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-66365.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 176,
+   "h": 40,
+   "status": "unmarked",
+   "reason": "capacity"
+  },
+  {
+   "id": "poi-Bug66263-table.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 506,
+   "deltaEMax": 1.5885084649086163,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-ExcelPivotTableSample.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 448,
+   "h": 80,
+   "status": "marked",
+   "carriers": 502,
+   "masked": 10,
+   "pedestalCells": 372,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-ExcelPivotTableSample.xlsx#1@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 589,
+   "h": 140,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 354,
+   "deltaEMax": 1.5795972352934036,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-ExcelPivotTableSample.xlsx#2@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 308,
+   "h": 120,
+   "status": "marked",
+   "carriers": 494,
+   "masked": 18,
+   "pedestalCells": 494,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-ExcelTables.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 724,
+   "h": 160,
+   "status": "marked",
+   "carriers": 498,
+   "masked": 14,
+   "pedestalCells": 450,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-comment.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 794,
+   "h": 1123,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 497,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-copy-slide-demo.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 493,
+   "deltaEMax": 1.421924930632985,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-copy-slide-demo.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 496,
+   "deltaEMax": 1.1633341435052629,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+   "kind": "docx",
+   "bucket": 0,
+   "status": "skipped",
+   "reason": "refused:unsupported-format"
+  },
+  {
+   "id": "poi-crop-to-0.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 494,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-crop-to-0.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 501,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-crop-to-0.pptx#2@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 508,
+   "masked": 4,
+   "pedestalCells": 492,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-crop-to-0.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 492,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-crop-to-0.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 497,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-crop-to-0.pptx#2@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 506,
+   "masked": 6,
+   "pedestalCells": 482,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-link-external-workbook-a.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 128,
+   "h": 20,
+   "status": "unmarked",
+   "reason": "capacity"
+  },
+  {
+   "id": "poi-picture-transparency.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1058,
+   "h": 595,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 503,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#1@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1058,
+   "h": 595,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 498,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#2@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1058,
+   "h": 595,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 498,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#3@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1058,
+   "h": 595,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 501,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2116,
+   "h": 1190,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 497,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#1@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2116,
+   "h": 1190,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 497,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#2@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2116,
+   "h": 1190,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 496,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-picture-transparency.pptx#3@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2116,
+   "h": 1190,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 495,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-rtl.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 794,
+   "h": 1123,
+   "status": "marked",
+   "carriers": 502,
+   "masked": 10,
+   "pedestalCells": 490,
+   "deltaEMax": 1.5802210922956696,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-table-indent.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 794,
+   "h": 1123,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 504,
+   "deltaEMax": 1.5888272531517953,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-tableStyle.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 332,
+   "h": 140,
+   "status": "marked",
+   "carriers": 449,
+   "masked": 63,
+   "pedestalCells": 160,
+   "deltaEMax": 1.5354496656938876,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-table_test.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 369,
+   "deltaEMax": 0.9123313884749445,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-table_test.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 376,
+   "deltaEMax": 0.9123313884749445,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-text-highlight.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 1280,
+   "h": 720,
+   "status": "marked",
+   "carriers": 506,
+   "masked": 6,
+   "pedestalCells": 488,
+   "deltaEMax": 1.2758049904021063,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-text-highlight.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 2560,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 495,
+   "deltaEMax": 0.9837916512367577,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-unicode-path.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 507,
+   "deltaEMax": 0.8743603975597678,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "poi-xlsx-jdbc.xlsx#0@1",
+   "kind": "xlsx",
+   "bucket": 1,
+   "w": 192,
+   "h": 40,
+   "status": "unmarked",
+   "reason": "capacity"
+  },
+  {
+   "id": "pydocx-blk-inner-content.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 499,
+   "deltaEMax": 1.491093551905152,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pydocx-having-images.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 484,
+   "deltaEMax": 1.5477354212596846,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pydocx-sct-inner-content.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 505,
+   "deltaEMax": 1.491093551905152,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pydocx-sct-inner-content.docx#1@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 503,
+   "deltaEMax": 1.2176497028205304,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pydocx-sct-inner-content.docx#2@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 501,
+   "deltaEMax": 0.9041783520225458,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pydocx-test.docx#0@1",
+   "kind": "docx",
+   "bucket": 1,
+   "w": 816,
+   "h": 1056,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 504,
+   "deltaEMax": 1.5902800362396212,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-missing_rels_item.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 494,
+   "deltaEMax": 1.5275830774577286,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-missing_rels_item.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 510,
+   "masked": 2,
+   "pedestalCells": 490,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-no-core-props.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 505,
+   "masked": 7,
+   "pedestalCells": 492,
+   "deltaEMax": 1.4950552381351232,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-no-core-props.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 485,
+   "deltaEMax": 0.8707721701345396,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-test.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 504,
+   "masked": 8,
+   "pedestalCells": 495,
+   "deltaEMax": 1.4625399492696645,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-test.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 493,
+   "deltaEMax": 1.3361125993015779,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-test_slides.pptx#0@1",
+   "kind": "pptx",
+   "bucket": 1,
+   "w": 960,
+   "h": 720,
+   "status": "marked",
+   "carriers": 512,
+   "masked": 0,
+   "pedestalCells": 475,
+   "deltaEMax": 1.516855420865168,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  },
+  {
+   "id": "pypptx-test_slides.pptx#0@2",
+   "kind": "pptx",
+   "bucket": 2,
+   "w": 1920,
+   "h": 1440,
+   "status": "marked",
+   "carriers": 511,
+   "masked": 1,
+   "pedestalCells": 460,
+   "deltaEMax": 1.5163663011619442,
+   "attacks": {
+    "default": "correct",
+    "q70": "correct",
+    "down0.5": "correct",
+    "q70-down0.5": "correct",
+    "crop25": "correct"
+   },
+   "unmarkedCheck": [
+    "none",
+    "none"
+   ]
+  }
+ ]
+}

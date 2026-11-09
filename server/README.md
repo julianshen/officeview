@@ -32,6 +32,17 @@ base64) and an allowed origin (`--origin` / `OV_STREAM_ORIGINS`).
   Calibri/Cambria/Arial/Helvetica/Times New Roman/Courier New are painted
   with their metric-compatible pack faces. Verify: `bun scripts/stream-s1/fontpack-lock.ts`.
 
+## Forensic mark (Stage 2a)
+
+The render cache holds one canonical PNG per unit; a forensic-on session's
+raster units then go through a per-session pool `encode` job (decode → embed
+the session's 512-sign code over the page-keyed basis → lossless re-encode),
+at most 2 in flight per session. Units too small to carry 512 cells ship with
+the visible mark only and a `diag forensic-unmarked`. Integration proof on
+served bytes (ΔE00, §13.5 survival at the Stage-0 τ, unmarked captures never
+attributing): `docs/validation/streaming-s2.md`. Detection tooling, τ
+recalibration and audit persistence are Stage 2b.
+
 ## The browser side (Stage 1d)
 
 ```tsx
