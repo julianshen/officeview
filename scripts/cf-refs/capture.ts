@@ -134,6 +134,68 @@ function integerToArgb(val: number): string {
   return `FF${r}${g}${b}`
 }
 
+export function buildTextProbeScript(workbookName: string, sheetName: string, cellRefs: readonly string[]): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set outList to {}`,
+    ...cellRefs.map(r => `set end of outList to (string value of range "${q(r)}" of ws as string)`),
+    `set AppleScript's text item delimiters to "|||"`,
+    `return outList as string`,
+  ]
+}
+
+export function buildDecorationProbeScript(workbookName: string, sheetName: string, cellRefs: readonly string[]): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set outList to {}`,
+    ...cellRefs.map(
+      r =>
+        `set end of outList to ((underline of font object of display format of range "${q(r)}" of ws as string) & ":::" & (strikethrough of font object of display format of range "${q(r)}" of ws as string))`,
+    ),
+    `set AppleScript's text item delimiters to "|||"`,
+    `return outList as string`,
+  ]
+}
+
+export function buildColorProbeScript(workbookName: string, sheetName: string, cellRefs: readonly string[]): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set outList to {}`,
+    ...cellRefs.map(
+      r =>
+        `set end of outList to ((color of interior object of display format of range "${q(r)}" of ws as string) & ":::" & (color of interior object of range "${q(r)}" of ws as string))`,
+    ),
+    `set AppleScript's text item delimiters to "|||"`,
+    `return outList as string`,
+  ]
+}
+
+export function buildColorScaleCriteriaProbeScript(workbookName: string, sheetName: string): string[] {
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set outList to {}`,
+    `repeat with fc in (get format conditions of ws)`,
+    `  try`,
+    `    set csc to color scale criteria of fc`,
+    `    repeat with crit in csc`,
+    `      set cType to (color scale criterion type of crit as string)`,
+    `      set cVal to ""`,
+    `      try`,
+    `        set cVal to (color scale criterion value of crit as string)`,
+    `      end try`,
+    `      set end of outList to (cType & ":::" & cVal)`,
+    `    end repeat`,
+    `  end try`,
+    `end repeat`,
+    `set AppleScript's text item delimiters to "|||"`,
+    `return outList as string`,
+  ]
+}
+
 export function probeLiveExcelCellObservations(
   c: CfOracleCase,
   savedAbs: string,
@@ -149,14 +211,7 @@ export function probeLiveExcelCellObservations(
     const name = openWorkbook(savedAbs)
     try {
       const refs = c.expected.cells.map(x => x.ref)
-      const textScriptLines = [
-        `set wb to workbook "${q(name)}"`,
-        `set ws to worksheet "${q(c.sheet)}" of wb`,
-        `set outList to {}`,
-        ...refs.map(r => `set end of outList to (string value of range "${q(r)}" of ws as string)`),
-        `set AppleScript's text item delimiters to "|||"`,
-        `return outList as string`,
-      ]
+      const textScriptLines = buildTextProbeScript(name, c.sheet, refs)
       const textOut = runScript(textScriptLines, 30_000)
       const texts = textOut.split('|||')
       const cellTexts: Record<string, string> = {}
@@ -164,17 +219,7 @@ export function probeLiveExcelCellObservations(
         if (texts[idx] !== undefined) cellTexts[ref] = texts[idx]
       })
 
-      const decScriptLines = [
-        `set wb to workbook "${q(name)}"`,
-        `set ws to worksheet "${q(c.sheet)}" of wb`,
-        `set outList to {}`,
-        ...refs.map(
-          r =>
-            `set end of outList to ((underline of font object of display format of range "${q(r)}" of ws as string) & ":::" & (strikethrough of font object of display format of range "${q(r)}" of ws as string))`,
-        ),
-        `set AppleScript's text item delimiters to "|||"`,
-        `return outList as string`,
-      ]
+      const decScriptLines = buildDecorationProbeScript(name, c.sheet, refs)
       const decOut = runScript(decScriptLines, 30_000)
       const decs = decOut.split('|||')
       const cellDecorations: Record<string, { underline: 'none' | 'single' | 'double'; strikethrough: boolean }> = {}
@@ -191,17 +236,7 @@ export function probeLiveExcelCellObservations(
         }
       })
 
-      const colorScriptLines = [
-        `set wb to workbook "${q(name)}"`,
-        `set ws to worksheet "${q(c.sheet)}" of wb`,
-        `set outList to {}`,
-        ...refs.map(
-          r =>
-            `set end of outList to ((color of interior object of display format of range "${q(r)}" of ws as string) & ":::" & (color of interior object of range "${q(r)}" of ws as string))`,
-        ),
-        `set AppleScript's text item delimiters to "|||"`,
-        `return outList as string`,
-      ]
+      const colorScriptLines = buildColorProbeScript(name, c.sheet, refs)
       const cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }> = {}
       try {
         const colorOut = runScript(colorScriptLines, 30_000)
@@ -223,26 +258,7 @@ export function probeLiveExcelCellObservations(
 
       let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
       try {
-        const critScriptLines = [
-          `set wb to workbook "${q(name)}"`,
-          `set ws to worksheet "${q(c.sheet)}" of wb`,
-          `set outList to {}`,
-          `repeat with fc in (get format conditions of ws)`,
-          `  try`,
-          `    set csc to color scale criteria of fc`,
-          `    repeat with crit in csc`,
-          `      set cType to (criterion type of crit as string)`,
-          `      set cVal to ""`,
-          `      try`,
-          `        set cVal to (criterion value of crit as string)`,
-          `      end try`,
-          `      set end of outList to (cType & ":::" & cVal)`,
-          `    end repeat`,
-          `  end try`,
-          `end repeat`,
-          `set AppleScript's text item delimiters to "|||"`,
-          `return outList as string`,
-        ]
+        const critScriptLines = buildColorScaleCriteriaProbeScript(name, c.sheet)
         const critOut = runScript(critScriptLines, 30_000)
         if (critOut.trim()) {
           const items = critOut.split('|||')
@@ -531,12 +547,25 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       c.resaveReceipt.savedSha256 === savedSha256 &&
       c.resaveReceipt.openedRepairFree === true
 
+    const populatedExpectedCells = currentExpected.cells.map(exp => {
+      const col = cellColors?.[exp.ref]
+      if (col?.displayFormatFill && exp.matched && exp.scaleApplied) {
+        return {
+          ...exp,
+          fillSource: 'excel-display-format' as const,
+          fillRgb: col.displayFormatFill,
+        }
+      }
+      return exp
+    })
+
     const candidate: CfOracleCase = {
       ...cWithUpdatedExpected,
       status: hasResave && hasLiveGeom ? 'measured' : 'recipe-pending',
       captures: updatedCaptures,
       expected: {
         ...currentExpected,
+        cells: populatedExpectedCells,
         provenance: hasResave && hasLiveGeom ? 'excel-observed' : 'seed-hypothesis',
       },
       ...(!hasResave

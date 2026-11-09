@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -20,7 +21,13 @@ import {
   type CfPartMarker,
   type CfResaveReceipt,
 } from '../scripts/cf-refs/cases'
-import { parseExcelColorToArgb } from '../scripts/cf-refs/capture'
+import {
+  buildColorProbeScript,
+  buildColorScaleCriteriaProbeScript,
+  buildDecorationProbeScript,
+  buildTextProbeScript,
+  parseExcelColorToArgb,
+} from '../scripts/cf-refs/capture'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
 import {
   type ComputeGeometryOptions,
@@ -952,6 +959,23 @@ describe('CF oracle verifier', () => {
     const retainedStage1 = genManifest.cases.find(c => c.id === 'stage1-cellis-literals')
     expect(retainedStage1?.expected.inputSha256).toBe('deadbeef11111111111111111111111111111111111111111111111111111111')
   })
+
+  it('compiles all probe AppleScripts under osacompile with zero syntax errors', () => {
+    for (const c of CF_CASES) {
+      const refs = c.expected.cells.map(x => x.ref)
+      const scripts = [
+        buildTextProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        buildDecorationProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        buildColorProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        buildColorScaleCriteriaProbeScript(`${c.id}.xlsx`, c.sheet),
+      ]
+      for (const lines of scripts) {
+        const full = ['tell application "Microsoft Excel"', ...lines, 'end tell'].join('\n')
+        const res = spawnSync('osacompile', ['-o', '/dev/null'], { input: full, encoding: 'utf8' })
+        expect(res.status, `osacompile failed for ${c.id}: ${res.stderr}`).toBe(0)
+      }
+    }
+  }, 30_000)
 
   it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {
     const DXF_RED = 'FFFFC7CE'
