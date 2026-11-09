@@ -18,7 +18,8 @@
  * partial model.
  */
 import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type XmlNode } from '../../core/xml'
-import type { SheetColorContext } from '../sheetColors'
+import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
+import { hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
 import {
@@ -29,18 +30,21 @@ import {
   type CfMemory,
   type CfReservation,
 } from './limits'
-import type {
-  CfCellState,
-  CfDefinition,
-  CfLease,
-  CfLiteral,
-  CfOperator,
-  CfRule,
-  CfRuleOrigin,
-  CfRuleType,
-  CfSheetRules,
-  CfTimePeriod,
-  CfWriteMask,
+import {
+  COLOR_SCALE_WRITES,
+  type CfCellState,
+  type CfDefinition,
+  type CfLease,
+  type CfLiteral,
+  type CfOperator,
+  type CfRule,
+  type CfRuleOrigin,
+  type CfRuleType,
+  type CfScaleBound,
+  type CfScalePoint,
+  type CfSheetRules,
+  type CfTimePeriod,
+  type CfWriteMask,
 } from './model'
 import { X14_MAIN_NS } from '../tableStyles/parseStylesExtras'
 
@@ -607,7 +611,258 @@ interface BodyInputs {
   cfvoMissingType: boolean
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
+  colorScaleNode: XmlNode | undefined
+  ns: string | undefined
   origin: CfRuleOrigin
+}
+
+function parseColorScaleRule(
+  fin: SheetFinalizer,
+  inputs: BodyInputs,
+  finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
+  finishUnresolved: (reason: string, writes: CfWriteMask) => number,
+): number {
+  const slot = COLOR_SCALE_WRITES
+
+  // OD-3 / S2-K: any standalone x14 scale, literal or reference xm:f -> cf-unsupported-rule
+  if (inputs.origin.dialect === 'x14') {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+
+  // S2-C: activePresent="1" -> cf-unsupported-rule
+  if (inputs.origin.activePresent) {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+
+  const host = inputs.colorScaleNode
+  if (!host) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+
+  // S2-C: missing type -> cf-invalid-cfvo
+  if (inputs.cfvoMissingType) {
+    return finishUnresolved('cf-invalid-cfvo', slot)
+  }
+
+  const cfvos = kids(host, 'cfvo', inputs.ns)
+  const colors = kids(host, 'color', inputs.ns)
+
+  // S2-C: exactly 2+2 or 3+3 cfvo/color children; any other count -> cf-invalid-rule
+  if (cfvos.length !== colors.length || (cfvos.length !== 2 && cfvos.length !== 3)) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+
+  const bounds: CfScaleBound[] = []
+  let hasLegacyMinVal0 = false
+  let hasMidlistMinOrMaxFirst = false
+  let hasNum = false
+  let hasPercent = false
+  let hasPercentile = false
+  let hasOutOfBoundsPercent = false
+
+  for (let i = 0; i < cfvos.length; i++) {
+    const cfvoNode = cfvos[i]!
+    const a = attrs(cfvoNode)
+    const cfvoType = a['type']
+    const val = a['val']
+
+    if (!cfvoType) {
+      return finishUnresolved('cf-invalid-cfvo', slot)
+    }
+
+    if (cfvoType === 'formula') {
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+
+    if (
+      cfvoType !== 'min' &&
+      cfvoType !== 'max' &&
+      cfvoType !== 'num' &&
+      cfvoType !== 'percent' &&
+      cfvoType !== 'percentile'
+    ) {
+      return finishUnresolved('cf-invalid-cfvo', slot)
+    }
+
+    // Positional checks (S2-D)
+    if (cfvoType === 'min' && i !== 0) {
+      hasMidlistMinOrMaxFirst = true
+    }
+    if (cfvoType === 'max' && i !== cfvos.length - 1) {
+      hasMidlistMinOrMaxFirst = true
+    }
+
+    // Legacy min val="0" (S2-D)
+    if ((cfvoType === 'min' || cfvoType === 'max') && val !== undefined) {
+      hasLegacyMinVal0 = true
+    }
+
+    if (cfvoType === 'min') {
+      bounds.push({ type: 'min' })
+    } else if (cfvoType === 'max') {
+      bounds.push({ type: 'max' })
+    } else {
+      if (val === undefined) {
+        return finishUnresolved('cf-invalid-cfvo', slot)
+      }
+      const cleanVal = val.trim().replace(/^=/, '').trim()
+      const isNumericLiteral = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(cleanVal)
+      if (!isNumericLiteral) {
+        // Reference or formula val="$A$1" stays cf-unsupported-rule until Stage 5
+        const isFormulaOrRef =
+          /^\$?[A-Za-z]{1,3}\$?\d+$/.test(cleanVal) ||
+          /[A-Za-z_][A-Za-z0-9_]*\(/.test(cleanVal) ||
+          cleanVal.startsWith('$') ||
+          cleanVal.startsWith('=') ||
+          cleanVal === '$A$1'
+        if (isFormulaOrRef) {
+          return finishUnresolved('cf-unsupported-rule', slot)
+        }
+        return finishUnresolved('cf-invalid-cfvo', slot)
+      }
+
+      const numVal = Number(cleanVal)
+      if (!Number.isFinite(numVal)) {
+        return finishUnresolved('cf-invalid-cfvo', slot)
+      }
+
+      if (cfvoType === 'percent' || cfvoType === 'percentile') {
+        if (numVal < 0 || numVal > 100) {
+          hasOutOfBoundsPercent = true
+        }
+      }
+
+      if (cfvoType === 'num') hasNum = true
+      if (cfvoType === 'percent') hasPercent = true
+      if (cfvoType === 'percentile') hasPercentile = true
+
+      bounds.push({ type: cfvoType, value: numVal })
+    }
+  }
+
+  // Refusal evidence gates (S2-D, S2-E)
+  if (hasMidlistMinOrMaxFirst && !hasEvidence('scale:thresholds-min-midlist-max-first')) {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+  if (hasLegacyMinVal0 && !hasEvidence('scale:thresholds-legacy-min-val-0')) {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+  if (hasOutOfBoundsPercent && !hasEvidence('scale:thresholds-percent-percentile-out-of-bounds')) {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+
+  // Resolve endpoint colours (S2-F, Item 12)
+  const points: CfScalePoint[] = []
+  let hasTheme = false
+  let hasIndexed = false
+  let hasAlpha00 = false
+  let hasAuto = false
+
+  for (let i = 0; i < colors.length; i++) {
+    const colorNode = colors[i]!
+    const ca = attrs(colorNode)
+    const isAuto = ca['auto'] === '1' || ca['auto'] === 'true'
+
+    if (isAuto) {
+      hasAuto = true
+      if (!hasEvidence('scale:colors-auto')) {
+        return finishUnresolved('cf-unsupported-rule', slot)
+      }
+    }
+    if (ca['theme'] !== undefined) {
+      hasTheme = true
+      if (!hasEvidence('scale:colors-theme-tint') && !hasEvidence('scale:colors-custom-theme')) {
+        return finishUnresolved('cf-unsupported-rule', slot)
+      }
+    }
+    if (ca['indexed'] !== undefined) {
+      hasIndexed = true
+      if (!hasEvidence('scale:colors-indexed')) {
+        return finishUnresolved('cf-unsupported-rule', slot)
+      }
+    }
+    if (ca['rgb'] !== undefined && ca['rgb'].length === 8 && !ca['rgb'].toUpperCase().startsWith('FF')) {
+      hasAlpha00 = true
+      if (!hasEvidence('scale:colors-alpha-00')) {
+        return finishUnresolved('cf-unsupported-rule', slot)
+      }
+    }
+
+    const resolvedHex = resolveSheetColor(ca, fin.styles.colors)
+    if (!resolvedHex) {
+      // auto / undefined / unknown reference: no #000000 fallback, resolve to unresolved
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+
+    const cleanHex = resolvedHex.toUpperCase()
+    if (cleanHex.length === 8 && !cleanHex.startsWith('FF')) {
+      hasAlpha00 = true
+      if (!hasEvidence('scale:colors-alpha-00')) {
+        return finishUnresolved('cf-unsupported-rule', slot)
+      }
+    }
+
+    const fullHex = cleanHex.length === 6 ? `FF${cleanHex}` : cleanHex
+    const argb = parseInt(fullHex, 16)
+    if (!Number.isFinite(argb)) {
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+
+    points.push({ bound: bounds[i]!, argb })
+  }
+
+  // Check overall scale capability authorization
+  const isSpecPalette =
+    bounds.length === 3 &&
+    bounds[0]?.type === 'min' &&
+    bounds[1]?.type === 'percentile' &&
+    bounds[1].value === 50 &&
+    bounds[2]?.type === 'max' &&
+    points[0]?.argb === 0xfff8696b &&
+    points[1]?.argb === 0xffffeb84 &&
+    points[2]?.argb === 0xff63be7b
+
+  let authorized = false
+  if (isSpecPalette) {
+    authorized = hasEvidence('scale:interpolation-spec-palette') || hasEvidence('scale:thresholds-percentile-inc-exc')
+  } else if (hasTheme && (hasEvidence('scale:colors-theme-tint') || hasEvidence('scale:colors-custom-theme'))) {
+    authorized = true
+  } else if (hasIndexed && hasEvidence('scale:colors-indexed')) {
+    authorized = true
+  } else if (hasAlpha00 && hasEvidence('scale:colors-alpha-00')) {
+    authorized = true
+  } else if (hasAuto && hasEvidence('scale:colors-auto')) {
+    authorized = true
+  } else if (hasPercentile && hasEvidence('scale:thresholds-percentile-inc-exc')) {
+    authorized = true
+  } else if (hasPercent && hasEvidence('scale:thresholds-percent')) {
+    authorized = true
+  } else if (hasNum && (hasEvidence('scale:thresholds-num-bounds') || hasEvidence('scale:interpolation-rounding-ladder'))) {
+    authorized = true
+  } else if (
+    bounds.length === 2 &&
+    ((bounds[0]?.type === 'min' && bounds[1]?.type === 'max') ||
+      (bounds[0]?.type === 'max' && bounds[1]?.type === 'min'))
+  ) {
+    authorized =
+      hasEvidence('scale:thresholds-min-max') ||
+      hasEvidence('scale:interpolation-precondition-probe') ||
+      hasEvidence('scale:interpolation-color-space') ||
+      (hasLegacyMinVal0 && hasEvidence('scale:thresholds-legacy-min-val-0')) ||
+      (hasMidlistMinOrMaxFirst && hasEvidence('scale:thresholds-min-midlist-max-first'))
+  }
+
+  if (!authorized) {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+
+  return finishResolved(
+    {
+      kind: 'colorScale',
+      points: points as [CfScalePoint, CfScalePoint] | [CfScalePoint, CfScalePoint, CfScalePoint],
+    },
+    slot,
+  )
 }
 
 function buildRuleBody(
@@ -708,10 +963,10 @@ function buildRuleBody(
   // single-range sqref. Anything else stays unresolved.
   const anchor = ranges.length === 1 ? anchorOf(ranges[0]!) : undefined
 
-  const finishResolved = (definition: Record<string, unknown>): number => {
+  const finishResolved = (definition: Record<string, unknown>, extraWrites?: CfWriteMask): number => {
     fin.rules.push({
       id: -1, priority, documentOrder, ranges, stopIfTrue: stop,
-      writes: withDxf(), definition: { ...inputs.origin, ...definition } as CfDefinition, dxf: dxfProps,
+      writes: withDxf(extraWrites), definition: { ...inputs.origin, ...definition } as CfDefinition, dxf: dxfProps,
     })
     return actual
   }
@@ -803,12 +1058,12 @@ function buildRuleBody(
       }
       return finishResolved({ kind: 'predicate', type: type as 'duplicateValues' | 'uniqueValues' })
     }
-    case 'colorScale':
+    case 'colorScale': {
+      return parseColorScaleRule(fin, inputs, finishResolved, finishUnresolved)
+    }
     case 'dataBar':
     case 'iconSet': {
-      // Ruling I1: colorScale occupies the fill slot in addition to colorScale so
-      // unresolved colorScale taints/blocks lower-priority fills.
-      const slot = new Set(type === 'colorScale' ? ['colorScale', 'fill'] : [type])
+      const slot = new Set([type])
       if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', withDxf(slot))
       if (inputs.iconProblem) return finishUnresolved(inputs.iconProblem, withDxf(slot))
       return finishUnresolved('cf-unsupported-rule', withDxf(slot))
@@ -881,6 +1136,7 @@ interface VisualFacts {
   cfvoMissingType: boolean
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
+  colorScaleNode?: XmlNode
 }
 
 function scanRuleVisual(
@@ -927,7 +1183,7 @@ function scanRuleVisual(
     const setName = attrs(host)['iconSet']
     if (setName !== undefined && ICON_SETS.get(setName) === undefined) iconProblem = 'cf-unsupported-icon'
   }
-  return { cfvoCount, cfvoMissingType, customIcons, iconProblem }
+  return { cfvoCount, cfvoMissingType, customIcons, iconProblem, ...(type === 'colorScale' ? { colorScaleNode: host } : {}) }
 }
 
 function readRuleInputs(
@@ -952,6 +1208,7 @@ function readRuleInputs(
   let cfvoMissingType = false
   let customIcons = 0
   let iconProblem: 'cf-unsupported-icon' | undefined
+  let colorScaleNode: XmlNode | undefined
   if (VISUAL_TYPES.has(type)) {
     const scan = scanRuleVisual(fin, ruleNode, dialect === 'base' ? ns : X14_MAIN_NS, type)
     if (!scan) return { ok: false, reason: 'cf-resource-limit' }
@@ -959,6 +1216,7 @@ function readRuleInputs(
     cfvoMissingType = scan.cfvoMissingType
     customIcons = scan.customIcons
     iconProblem = scan.iconProblem
+    colorScaleNode = scan.colorScaleNode
   }
   const textAttr = a['text']
   if (textAttr !== undefined && textAttr.length > CF_LIMITS.textUnits) {
@@ -1010,6 +1268,8 @@ function readRuleInputs(
         cfvoMissingType,
         customIcons,
         iconProblem,
+        colorScaleNode,
+        ns: dialect === 'base' ? ns : X14_MAIN_NS,
         origin,
       },
       bound,

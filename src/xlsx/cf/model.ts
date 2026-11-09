@@ -10,6 +10,13 @@ export type CfRuleType = 'cellIs' | 'containsText' | 'notContainsText' | 'begins
 export type CfOperator = 'equal' | 'notEqual' | 'greaterThan' | 'lessThan' | 'greaterThanOrEqual' | 'lessThanOrEqual' | 'between' | 'notBetween'
 export type CfTimePeriod = 'today' | 'yesterday' | 'tomorrow' | 'last7Days' | 'thisWeek' | 'lastWeek' | 'nextWeek' | 'thisMonth' | 'lastMonth' | 'nextMonth'
 export interface CfRuleOrigin { dialect: 'base' | 'x14'; guid?: string; activePresent?: boolean; formulas: readonly string[]; dxfId?: number }
+export type CfScaleBound =
+  | { type: 'min' }
+  | { type: 'max' }
+  | { type: 'num' | 'percent' | 'percentile'; value: number }
+export type CfScalePoint = Readonly<{ bound: CfScaleBound; argb: number }>
+export const COLOR_SCALE_WRITES: ReadonlySet<string> = Object.freeze(new Set(['colorScale', 'fill']))
+export const COLOR_SCALE_WRITE_MASK = COLOR_SCALE_WRITES
 export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'cellIs'; operator: CfOperator; operands: readonly CfLiteral[] }
   | { kind: 'text'; type: 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith'; needle: string }
@@ -17,6 +24,7 @@ export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'timePeriod'; period: CfTimePeriod }
   | { kind: 'top10'; rank?: number; bottom: boolean; percent: boolean }
   | { kind: 'aboveAverage'; above: boolean; equal: boolean; stdDev?: number }
+  | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint] }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }
 /** Presence means a winning override; null explicitly clears a property. */
 export interface CfCellState {
