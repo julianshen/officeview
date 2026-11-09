@@ -66,6 +66,9 @@ export class StreamSession {
   manifest!: Manifest
   /** The current session token (rotated by RENEW, reissued by resume). */
   token = ''
+  /** Settles once when the session ends: the terminal error, or undefined after close(). */
+  readonly ended: Promise<StreamSessionError | undefined>
+  private settleEnded!: (e: StreamSessionError | undefined) => void
   private sock?: StreamClient
   private reasm!: Reassembler
   private gen = 0
@@ -80,7 +83,9 @@ export class StreamSession {
   private handshake?: { resolve: (m: Manifest) => void; reject: (e: unknown) => void }
   private resumeAttempt = 0
 
-  private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {}
+  private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {
+    this.ended = new Promise((r) => { this.settleEnded = r })
+  }
 
   static async open(source: StreamSource, o: SessionOptions = {}): Promise<StreamSession> {
     const s = new StreamSession(source, o)
@@ -305,5 +310,6 @@ export class StreamSession {
     for (const req of [...this.units.values()]) req.reject(err)
     this.admission.drain(err)
     this.setState('closed', error)
+    this.settleEnded(error)
   }
 }

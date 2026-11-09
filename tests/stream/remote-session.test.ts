@@ -161,4 +161,12 @@ describe('StreamSession (scripted socket)', () => {
     await settle()
     expect(sock.units()[0]!.token).toBe(tokenFor('j2'))
   })
+  it('ended resolves once with the terminal error (and undefined after close())', async () => {
+    const a = await opened()
+    a.sock.deliver(new ArrayBuffer(FRAGMENT_CAP + 1))
+    expect((await a.s.ended)?.code).toBe('oversized-frame')
+    const b = await opened()
+    b.s.close()
+    expect(await b.s.ended).toBeUndefined()
+  })
 })

@@ -5,7 +5,7 @@
  * no text layer, search, copy, zoom or presentation for a remote document:
  * the view says "text unavailable in this viewing mode" once.
  */
-import { useEffect, useId, useRef, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { RemoteOfficeDoc } from '../../stream/remote/remote-doc'
 import { themeRootProps, type ThemeMode } from '../theme'
 
@@ -29,6 +29,14 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
   allowPrint = allowPrint && doc.manifest.can.print
   const canvases = useRef<Array<HTMLCanvasElement | null>>([])
   const units = doc.manifest.units.list
+  // §10: a session that ends (revoked, expired, oversized frame…) says so once;
+  // recovery is a host-driven re-open.
+  const [ended, setEnded] = useState<string>()
+  useEffect(() => {
+    let live = true
+    void doc.ended.then((e) => { if (live && e) setEnded(e.code) })
+    return () => { live = false }
+  }, [doc])
   useEffect(() => {
     const painted = new Set<number>(), ac = new AbortController()
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
@@ -36,7 +44,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
       const c = canvases.current[i]
       if (!c || painted.has(i)) return
       painted.add(i)
-      doc.paint(i, 1, dpr, c, ac.signal).catch(() => { painted.delete(i) })
+      doc.paint(i, 1, dpr, c, ac.signal).then(() => { c.dataset.painted = '1' }, () => { painted.delete(i) })
     }
     if (typeof IntersectionObserver !== 'function') { units.forEach((_, i) => paint(i)); return () => ac.abort() }
     const io = new IntersectionObserver((entries) => {
@@ -55,6 +63,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
       <div data-officeview-root="" data-ov-print={allowPrint} role="document" aria-label={title ?? doc.manifest.name}
         style={{ overflow: 'auto', height: '100%', background: background ?? 'var(--ov-color-backdrop)' }}>
         <div role="status" data-officeview-notice="">{TEXT_UNAVAILABLE}</div>
+        {ended ? <div role="alert" data-stream-error={ended}>Viewing session ended ({ended}).</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: pageGapPx, padding: pageGapPx }}>
           {units.map((u, i) => (
             <canvas key={i} data-unit={i} ref={(el) => { canvases.current[i] = el }} aria-hidden="true"

@@ -25,6 +25,7 @@ function fakeDoc(name = 'deck.pptx'): RemoteOfficeDoc & { close: Mock; paint: Mo
     search: () => Promise.reject(new StreamSessionError('policy-refused')),
     copy: () => Promise.reject(new StreamSessionError('policy-refused')),
     close: vi.fn(),
+    ended: new Promise(() => {}),
   } as unknown as RemoteOfficeDoc & { close: Mock; paint: Mock }
 }
 const stream = (url = 'wss://x/stream') => ({ kind: 'stream' as const, url })
@@ -78,5 +79,16 @@ describe('<OfficeFile data={StreamSource}>', () => {
     render(<Probe />)
     await waitFor(() => expect(last?.status).toBe('error'))
     expect(last).toMatchObject({ status: 'error', code: 'auth-failed' })
+  })
+  it('a session that ends after the view is shown surfaces its typed code once', async () => {
+    const doc = fakeDoc()
+    let end!: (e: StreamSessionError) => void
+    ;(doc as { ended: Promise<StreamSessionError> }).ended = new Promise((r) => { end = r })
+    h.open.mockReset(); h.open.mockResolvedValueOnce(doc)
+    const view = render(<OfficeFile data={stream()} />)
+    await waitFor(() => expect(view.container.querySelectorAll('canvas').length).toBe(2))
+    end(new StreamSessionError('revoked'))
+    await waitFor(() => expect(view.container.querySelector('[data-stream-error="revoked"]')).toBeTruthy())
+    expect(view.getAllByRole('alert').length).toBe(1)
   })
 })

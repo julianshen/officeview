@@ -13,6 +13,7 @@ export interface SessionLike {
   readonly manifest: Manifest
   unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitPayload>
   close(): void
+  readonly ended?: Promise<StreamSessionError | undefined>
 }
 
 export interface RemoteOfficeDoc {
@@ -25,6 +26,8 @@ export interface RemoteOfficeDoc {
   search(query: string): Promise<never>
   copy(range: unknown): Promise<never>
   close(): void
+  /** Settles once when the session ends: its typed error, or undefined after close(). */
+  readonly ended: Promise<StreamSessionError | undefined>
 }
 
 /** Smallest bucket ≥ scale × dpr, else the largest (§8.3). */
@@ -75,6 +78,8 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     search: textUnavailable,
     copy: textUnavailable,
     close() { if (closed) return; closed = true; session.close() },
+    ended: session.ended ?? new Promise(() => {}),
   }
+  void doc.ended.then((e) => { if (e) o.onNotice?.({ code: e.code }) })
   return doc
 }

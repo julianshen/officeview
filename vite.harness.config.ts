@@ -46,7 +46,7 @@ function lazyPagedChunks(): Plugin {
     configureServer(s) { server = s },
     transform(_code, id) {
       const page = id.split('?')[0]
-      if (!server || !/\/src\/debug\/(viewer-(e2e|perf)|slideshow-start)\.tsx$/.test(page)) return
+      if (!server || !/\/src\/debug\/(viewer-(e2e|perf)|slideshow-start|stream-viewer)\.tsx$/.test(page)) return
       for (const url of [
         '/src/components/paged/PagedChrome.tsx',
         '/src/components/zoomRouting.ts',
@@ -69,6 +69,9 @@ function lazyPagedChunks(): Plugin {
         // Slide appearance enrichment (getPaintables' dynamic import) and the slideshow chunk.
         '/src/pptx/appearance/index.ts',
         '/src/slideshow/index.ts',
+        // The stream client (useOfficeFile's dynamic import) and the remote view (OfficeDoc's lazy dispatch).
+        '/src/stream/remote/open.ts',
+        '/src/components/remote/RemoteDocView.tsx',
       ]) void server.warmupRequest(url)
     },
   }

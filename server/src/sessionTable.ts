@@ -79,6 +79,8 @@ export class SessionTable {
     this.rows.delete(sid)
   }
   get size() { return this.rows.size }
+  /** Live session ids (operators, test harnesses). */
+  sids(): string[] { return [...this.rows.keys()] }
   private must(sid: string): Session {
     const s = this.rows.get(sid)
     if (!s) throw new Error(`no session ${sid}`)
