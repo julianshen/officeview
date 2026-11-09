@@ -201,6 +201,14 @@ function evaluateBlanks(
   if (value.kind === 'string' && value.value === '') {
     return type === 'containsBlanks' ? { kind: 'ready', value: true } : { kind: 'no-match' }
   }
+  if (value.kind === 'string' && /^\s+$/.test(value.value)) {
+    // Whitespace-only strings: TRIM semantics are unmeasured without a formula.
+    return unmeasured()
+  }
+  if (value.kind === 'string') {
+    // Ordinary nonempty text is non-blank.
+    return type === 'containsBlanks' ? { kind: 'no-match' } : { kind: 'ready', value: true }
+  }
   if (value.kind === 'number' || value.kind === 'boolean' || value.kind === 'error') {
     return type === 'containsBlanks' ? { kind: 'no-match' } : { kind: 'ready', value: true }
   }
