@@ -173,3 +173,12 @@ it('resident duplicate preflight reads only a bounded overflow witness, without 
   expect(reads).toBeLessThan(16)
   lease.release()
 })
+
+describe('regression bot P2: paged CF dateContext', () => {
+  it('keeps local timeZone and epochNowMs in default dateContext', () => {
+    const fs = require('node:fs')
+    const src = fs.readFileSync('src/xlsx/view/pagedSource.ts', 'utf8')
+    expect(src).toMatch(/timeZone: Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone \?\? 'UTC'/)
+    expect(src).toMatch(/epochNowMs: Date\.now\(\)/)
+  })
+})

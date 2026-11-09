@@ -470,3 +470,11 @@ describe('format budget refusal releases descriptor workspace', () => {
     expect(name.length).toBeLessThanOrEqual(128)
   })
 })
+
+describe('regression bot P2: clockGen in cfTextKey', () => {
+  it('includes clockGen in the display text scope key', () => {
+    const fs = require('node:fs')
+    const src = fs.readFileSync('src/components/xlsx/InteractiveSheetDoc.tsx', 'utf8')
+    expect(src).toMatch(/cfTextKeyFor\(\{[^}]*rects: cfTextRects \}\), remote\?\.merges\(activeSheetId\)\.gen \?\? -1, clockGen\]/)
+  })
+})
