@@ -3,7 +3,7 @@ import { createCfStatistics } from './statistics'
 import { sameCfStamp } from './cache'
 import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
-import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory } from './limits'
+import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
 import type { CfCellState, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
 import type { XlsxSheet } from '../types'
@@ -102,14 +102,31 @@ function unavailable(sheet: XlsxSheet): undefined {
   if (ds.length < CF_LIMITS.diagnostics && !ds.some(d => d.feature === 'cf-paint-unavailable')) ds.push({ kind: 'unsupported', feature: 'cf-paint-unavailable', message: 'Conditional formatting could not be prepared within the admitted batch; base formatting is shown.' })
   return undefined
 }
+function recordDiagnostic(sheet: XlsxSheet, feature: string, message: string): void {
+  const ds = sheet.diagnostics ??= []
+  if (ds.length < CF_LIMITS.diagnostics && !ds.some(d => d.feature === feature)) {
+    ds.push({ kind: 'unsupported', feature, message })
+  }
+}
 // Retained statistics sessions across preparations / viewport scrolls per (sheet, generation) (Ruling I5)
 const sheetStatsSessions = new WeakMap<object, { session: import('./statistics').CfStatisticsSession; key: string }>()
+const sheetStatsRefs = new WeakMap<object, number>()
+
+export function retainSheetCfStatistics(sheet: object): void {
+  sheetStatsRefs.set(sheet, (sheetStatsRefs.get(sheet) ?? 0) + 1)
+}
 
 export function disposeSheetCfStatistics(sheet: object): void {
-  const retained = sheetStatsSessions.get(sheet)
-  if (retained) {
-    retained.session.dispose()
-    sheetStatsSessions.delete(sheet)
+  const refs = (sheetStatsRefs.get(sheet) ?? 1) - 1
+  if (refs <= 0) {
+    sheetStatsRefs.delete(sheet)
+    const retained = sheetStatsSessions.get(sheet)
+    if (retained) {
+      retained.session.dispose()
+      sheetStatsSessions.delete(sheet)
+    }
+  } else {
+    sheetStatsRefs.set(sheet, refs)
   }
 }
 
@@ -118,7 +135,9 @@ export function disposeSheetCfStatistics(sheet: object): void {
 export async function prepareCfPaint(sheet: XlsxSheet, options: {
   store?: SourceStore; memory?: CfMemory; request?: CfPrepareRequest; source?: CfValueSource; evidence?: CfEvidenceGate;
   paintRects?: readonly SourceRect[]; valuePolicy?: ValuePolicy; dateContext?: import('./predicates').CfDateContext;
-  viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] }
+  viewport?: { metrics: import('../view/contracts').SheetMetrics; boxes: readonly import('../view/contracts').LogicalCellBox[] };
+  statisticsBudget?: () => CfWorkBudget;
+  statisticsMaxUnits?: number;
 } = {}): Promise<CfPaintBatch | undefined> {
   const rules = sheet.conditionalFormatting
   if (!rules) return undefined
@@ -254,7 +273,10 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         const lastRow = Math.min(r.lastRow, bottom)
         const lastCol = r.lastCol === 16383 ? right : Math.min(r.lastCol, STATIC_SHEET_BUDGET.maxGridCols - 1)
         const rangeWork = Math.max(0, lastRow - r.firstRow + 1) * Math.max(0, lastCol - r.firstCol + 1)
-        if (rangeWork > CF_LIMITS.workUnits) continue // Ruling I4: Refuse per range, never whole sheet
+        if (rangeWork > CF_LIMITS.workUnits) {
+          recordDiagnostic(sheet, 'cf-resource-limit', 'Conditional formatting range exceeds maximum supported cell work units.')
+          continue // Ruling I4: Refuse per range, never whole sheet
+        }
         if (lastRow >= r.firstRow && lastCol >= r.firstCol) rects.push({ ...r, lastRow, lastCol })
       }
     }
@@ -284,7 +306,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         // Ruling I4: Per-batch work budget so static sheets (e.g. 3000x20) do not exhaust
         // the 1M whole-sheet limit. If a batch exceeds the budget, refusal is per-range.
         const batchBudget = createCfWorkBudget({ signal })
-        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statistics, statisticsOptions, dateContext })
+        const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, noTimeLimit: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {
@@ -298,9 +321,18 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
               states.set(row * 16384 + c, result.value)
             }
           } finally { lease.release() }
+          for (const [, outcome] of statistics.results) {
+            if (outcome.kind === 'unresolved' && outcome.reason === 'cf-resource-limit') {
+              recordDiagnostic(sheet, 'cf-resource-limit', 'Conditional formatting statistics range exceeded resource limits.')
+            }
+          }
         } catch (error) {
-          if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF cancelled' || error.message === 'CF paint work' || (error as any).name === 'PackageError' || error.message.includes('resource-limit'))) {
-            // Ruling I4: Refusal is per-range, not the whole sheet
+          if (error instanceof Error && (error.message === 'CF cancelled' || error.name === 'AbortError' || (error as any).code === 'cancelled') || signal?.aborted) {
+            throw error
+          }
+          if (error instanceof Error && (error.message === 'CF work limit' || error.message === 'CF paint work' || (error as any).name === 'PackageError' || error.message.includes('resource-limit'))) {
+            // Ruling I4 & M1: Refusal is per-range, not the whole sheet
+            recordDiagnostic(sheet, 'cf-resource-limit', 'Conditional formatting batch exceeded work budget.')
             continue
           }
           throw error

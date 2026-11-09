@@ -55,7 +55,7 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
-  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext } = {}) {
+  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -126,12 +126,15 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             return result
           }
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
-          if (await source.bounds(stamp.sheetId, budget, signal) === undefined) return snapshot('cf-pending-data')
+          const boundsBudget = createCfWorkBudget({ signal, noTimeLimit: true })
+          if (await source.bounds(stamp.sheetId, boundsBudget, signal) === undefined) return snapshot('cf-pending-data')
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
-            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, budget, { signal, ...options.statisticsOptions })
+            const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
+            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...options.statisticsOptions })
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
           }
+          budget.resume()
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
             const textBytes = value.kind === 'string' ? 256 + value.value.length * 8 : 0
             if (textBytes > CF_LIMITS.scratchBytes) return { kind: 'unresolved', reason: 'cf-resource-limit' }

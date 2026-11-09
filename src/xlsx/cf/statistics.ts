@@ -231,8 +231,9 @@ function isCancel(error: unknown): boolean {
 
 function isBudgetRefusal(error: unknown): boolean {
   return (
-    error instanceof PackageError &&
-    (error.reason === 'memory-budget' || (error.code === 'resource-limit' && error.reason === undefined))
+    (error instanceof PackageError &&
+      (error.reason === 'memory-budget' || (error.code === 'resource-limit' && error.reason === undefined))) ||
+    (error instanceof Error && (error.message === 'CF work limit' || error.message.includes('resource-limit') || (error as any).code === 'resource-limit'))
   )
 }
 
@@ -373,6 +374,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
   const retainEntries = options.retainEntries ?? false
   const sessionCap = CF_LIMITS.statisticsBytes
   const cache = new Map<string, CacheEntry>()
+  const refusalCache = new Map<string, BuiltOutcome & { kind: 'unresolved' }>()
   const inflight = new Map<string, InflightJob>()
   const workspaces = new Map<object, number>()
   // Populated-bounds memo per sheet generation: bounds() rescans the whole
@@ -406,6 +408,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       dropEntry(key, entry)
     }
     cache.clear()
+    refusalCache.clear()
     boundsMemo.clear()
   }
 
@@ -832,6 +835,9 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         }
         return
       }
+      if (built.kind === 'unresolved' && built.reason === 'cf-resource-limit') {
+        refusalCache.set(key, built)
+      }
       if (inflight.get(key) === job) inflight.delete(key)
       const live = [...job.waiters]
       job.waiters.clear()
@@ -853,6 +859,15 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         throw cancelled()
       }
       const key = `${stamp.sheetId}|${stamp.owner}|${stamp.structureGen}|${stamp.workbookValueGen}|${scopeKey(scope)}|${hiddenKey(hidden, hiddenRows)}`
+      const refused = refusalCache.get(key)
+      if (refused !== undefined) {
+        if (!checkLive(stamp)) {
+          out.push({ kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId] })
+        } else {
+          out.push(refused)
+        }
+        continue
+      }
       const hit = cache.get(key)
       if (hit !== undefined) {
         // Warm hit: revalidate the live source before publishing, then share

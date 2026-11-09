@@ -228,20 +228,21 @@ export function createCfCaps(workbook: CfMemory = createCfMemory()) {
 }
 export interface CfWorkBudget { spend(units: number): 'continue' | 'yield' | 'refused'; resume(): void; readonly units: number }
 /** Caller must stop on yield and call resume after its awaited host yield. Idle time is excluded. */
-export function createCfWorkBudget(options: { now?: () => number; signal?: AbortSignal } = {}): CfWorkBudget {
+export function createCfWorkBudget(options: { now?: () => number; signal?: AbortSignal; noTimeLimit?: boolean; maxUnits?: number } = {}): CfWorkBudget {
   const now = options.now ?? (() => performance.now())
+  const maxUnits = options.maxUnits ?? CF_LIMITS.workUnits
   let start = now(), active = 0, units = 0, sliceUnits = 0, paused = false, refused = false
   return {
     get units() { return units },
     spend(n) {
-      if (refused || options.signal?.aborted || !validBytes(n) || n > CF_LIMITS.workUnits - units) { refused = true; return 'refused' }
+      if (refused || options.signal?.aborted || !validBytes(n) || n > maxUnits - units) { refused = true; return 'refused' }
       if (paused) return 'yield'
       units += n; sliceUnits += n
       const elapsed = Math.max(0, now() - start)
-      if (active + elapsed >= CF_LIMITS.activeMs) { refused = true; return 'refused' }
+      if (!options.noTimeLimit && active + elapsed >= CF_LIMITS.activeMs) { refused = true; return 'refused' }
       if (sliceUnits >= CF_LIMITS.checkpointUnits || elapsed >= CF_LIMITS.sliceMs) { active += elapsed; paused = true; return 'yield' }
       return 'continue'
     },
-    resume() { if (paused) { start = now(); sliceUnits = 0; paused = false } },
+    resume() { start = now(); sliceUnits = 0; paused = false },
   }
 }

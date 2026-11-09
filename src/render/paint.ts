@@ -431,7 +431,7 @@ export function getPaintables(
         metadata?.release()
         return withLease(doc.sheets.map((sheet, index): Paintable =>
           sheetPaintable(sheet, { conditionalFormatting: cfBatches[index], images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) }, watermark),
-        ), () => { for (const cf of cfBatches) cf?.dispose(); charts?.release(); lease.dispose() }, lease.diagnostics, decoded, charts || !hasXlsxCharts(drawings) ? metadata : { diagnostics: [CHART_ENGINE_UNAVAILABLE] })
+        ), () => { for (const b of cfBatches) b?.dispose(); if (cf) for (const sheet of doc.sheets) cf.disposeSheetCfStatistics(sheet); charts?.release(); lease.dispose() }, lease.diagnostics, decoded, charts || !hasXlsxCharts(drawings) ? metadata : { diagnostics: [CHART_ENGINE_UNAVAILABLE] })
       } catch (error) { for (const cf of cfBatches) cf?.dispose(); releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
     })
   }

@@ -230,6 +230,185 @@ it('range statistics are cached across preparations with zero rescan visits (I5)
   expect(rescanVisits).toBe(0)
 })
 
+it('a 20,000-cell top10 paints correctly and caches statistics with zero rescan reads (I5)', async () => {
+  const { prepareCfPaint, disposeSheetCfStatistics } = await import('../src/xlsx/cf/render')
+  let readCount = 0
+  const rows: XlsxRow[] = []
+  for (let r = 0; r < 20000; r++) {
+    const val = r === 19999 ? 1_000_000 : r
+    const cell: any = { row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0 }
+    if (r < 19999) {
+      Object.defineProperty(cell, 'value', { get() { readCount++; return val } })
+    } else {
+      cell.value = val
+    }
+    rows.push({ index: r, cells: [cell] })
+  }
+  const sheet: any = {
+    name: 'LargeStats', sheetId: 'large', merges: [], mergeRanges: [], cols: [],
+    rows,
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        ranges: [{ firstRow: 0, lastRow: 19999, firstCol: 0, lastCol: 0 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+        definition: { kind: 'top10', rank: 5, percent: false, bottom: false, dialect: 'base', formulas: [] },
+      }],
+    },
+  }
+  try {
+    // Prepare row 19999 (which holds 1,000,000 - a top-5 value)
+    const req = { sourceRects: [{ firstRow: 19999, lastRow: 19999, firstCol: 0, lastCol: 0 }] }
+    const first = await prepareCfPaint(sheet, { request: req as any })
+    expect(first).toBeDefined()
+    expect(first!.layer.styleAt(19999, 0, undefined)?.fillColor).toBe('FF00FF00')
+    const firstReads = readCount
+    expect(firstReads).toBe(19999)
+
+    // Second preparation of row 19999 must reuse cached statistics with 0 rescan reads
+    const second = await prepareCfPaint(sheet, { request: req as any })
+    expect(second).toBeDefined()
+    expect(second!.layer.styleAt(19999, 0, undefined)?.fillColor).toBe('FF00FF00')
+    const secondReads = readCount - firstReads
+    expect(secondReads).toBe(0)
+    second!.dispose()
+    first!.dispose()
+  } finally {
+    disposeSheetCfStatistics(sheet)
+  }
+})
+
+it('getPaintables dispose releases retained statistics memory to baseline (I5)', async () => {
+  const { getPaintables } = await import('../src/render/paint')
+  const { paintMemoryFor } = await import('../src/xlsx/cf/render')
+  const rows: XlsxRow[] = []
+  for (let r = 0; r < 500; r++) {
+    rows.push({ index: r, cells: [{ row: r, col: 0, ref: `A${r + 1}`, value: r, styleIndex: 0 }] })
+  }
+  const sheet: any = {
+    name: 'S500', sheetId: '500', merges: [], mergeRanges: [], cols: [],
+    rows,
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        ranges: [{ firstRow: 0, lastRow: 499, firstCol: 0, lastCol: 0 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+        definition: { kind: 'top10', rank: 5, percent: false, bottom: false, dialect: 'base', formulas: [] },
+      }],
+    },
+  }
+  const doc: any = { sheets: [sheet] }
+  const memory = paintMemoryFor(doc)
+  const paintables = await getPaintables(doc)
+  expect(memory.currentBytes).toBeGreaterThan(0) // 46,036 B held
+  paintables.dispose()
+  expect(memory.currentBytes).toBe(0) // Must return to 0 after dispose
+})
+
+it('an over-cap statistics range gives 1 scan plus cached refusal plus diagnostic (I5)', async () => {
+  const { prepareCfPaint, disposeSheetCfStatistics } = await import('../src/xlsx/cf/render')
+  let readCount = 0
+  const rows: XlsxRow[] = []
+  // Create 100 rows, but configure range to exceed the statistics scan cap (e.g. 1M cells or memory quota)
+  for (let r = 0; r < 100; r++) {
+    const cell: any = { row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0 }
+    if (r > 0) {
+      Object.defineProperty(cell, 'value', { get() { readCount++; return r } })
+    } else {
+      cell.value = 0
+    }
+    rows.push({ index: r, cells: [cell] })
+  }
+  const sheet: any = {
+    name: 'OverCap', sheetId: 'overcap', merges: [], mergeRanges: [], cols: [],
+    rows,
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        // Range with 2,000,000 cells (exceeds CF_LIMITS.workUnits)
+        ranges: [{ firstRow: 0, lastRow: 1999999, firstCol: 0, lastCol: 0 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+        definition: { kind: 'top10', rank: 5, percent: false, bottom: false, dialect: 'base', formulas: [] },
+      }],
+    },
+  }
+  try {
+    const req = { sourceRects: [{ firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }] }
+    const first = await prepareCfPaint(sheet, { request: req as any, statisticsMaxUnits: 50 })
+    // Range is refused and diagnostic is reported
+    expect(sheet.diagnostics?.some((d: any) => d.feature === 'cf-resource-limit' || d.feature === 'cf-paint-unavailable')).toBe(true)
+    const firstReads = readCount
+    expect(firstReads).toBeGreaterThan(0)
+
+    // Second preparation must reuse cached refusal with 0 additional reads
+    const second = await prepareCfPaint(sheet, { request: req as any, statisticsMaxUnits: 50 })
+    expect(readCount - firstReads).toBe(0)
+    second?.dispose()
+    first?.dispose()
+  } finally {
+    disposeSheetCfStatistics(sheet)
+  }
+})
+
+it('retained statistics use ref-counting across multiple viewers of the same document', async () => {
+  const { prepareCfPaint, retainSheetCfStatistics, disposeSheetCfStatistics } = await import('../src/xlsx/cf/render')
+  let readCount = 0
+  const rows: XlsxRow[] = []
+  for (let r = 0; r < 50; r++) {
+    const cell: any = { row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0 }
+    if (r > 0) {
+      Object.defineProperty(cell, 'value', { get() { readCount++; return r } })
+    } else {
+      cell.value = 0
+    }
+    rows.push({ index: r, cells: [cell] })
+  }
+  const sheet: any = {
+    name: 'MultiViewer', sheetId: 'mv', merges: [], mergeRanges: [], cols: [],
+    rows,
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [{
+        id: 0, priority: 1, documentOrder: 0, stopIfTrue: false,
+        ranges: [{ firstRow: 0, lastRow: 49, firstCol: 0, lastCol: 0 }],
+        writes: new Set(['fill']),
+        dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+        definition: { kind: 'top10', rank: 5, percent: false, bottom: false, dialect: 'base', formulas: [] },
+      }],
+    },
+  }
+  const req = { sourceRects: [{ firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }] }
+
+  // Viewer 1 prepares
+  retainSheetCfStatistics?.(sheet)
+  const p1 = await prepareCfPaint(sheet, { request: req as any })
+  expect(readCount).toBe(49)
+
+  // Viewer 2 prepares the same sheet - must do 0 reads
+  retainSheetCfStatistics?.(sheet)
+  const p2 = await prepareCfPaint(sheet, { request: req as any })
+  expect(readCount).toBe(49)
+
+  // Viewer 1 unmounts / disposes
+  p1?.dispose()
+  disposeSheetCfStatistics(sheet)
+
+  // Viewer 2 prepares again: cache is STILL retained because Viewer 2 still holds a ref!
+  const p2Again = await prepareCfPaint(sheet, { request: req as any })
+  expect(readCount).toBe(49)
+
+  // Viewer 2 unmounts / disposes: now refs drops to 0 and session disposes
+  p2?.dispose()
+  p2Again?.dispose()
+  disposeSheetCfStatistics(sheet)
+})
+
 it('a 3000x20 sheet with one rule keeps its CF without whole-sheet refusal (I4)', async () => {
   const { prepareCfPaint } = await import('../src/xlsx/cf/render')
   const rows: XlsxRow[] = []
