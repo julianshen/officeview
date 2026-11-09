@@ -7,9 +7,9 @@ import { createRemoteDoc, type RemoteOfficeDoc } from './remote-doc'
 import { StreamSession, type StreamClientFactory, type StreamNotice } from './session'
 
 export interface OpenRemoteOptions {
-  client?: StreamClientFactory
+  client?: StreamClientFactory | undefined
   /** Where the host serves the font pack (`pack.json` + TTFs). */
-  fonts?: { baseUrl: string }
+  fonts?: { baseUrl: string } | undefined
   signal?: AbortSignal
   onNotice?: (n: StreamNotice) => void
   /** Tests: the paint backend and a face resolver override. */

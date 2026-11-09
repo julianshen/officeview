@@ -168,6 +168,12 @@
       ],
       "removed": [],
       "gzipDelta": 144
+    },
+    {
+      "reason": "\u00a76.3 stream routing: <OfficeFile>/<OfficeDoc> branch on StreamSource + lazy imports of src/stream/remote/open and src/components/remote/RemoteDocView (no new static modules)",
+      "added": [],
+      "removed": [],
+      "gzipDelta": 332
     }
   ]
 }
