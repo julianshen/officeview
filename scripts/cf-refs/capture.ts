@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
 import { openWorkbook, osa, q, runScript, workbookNames } from '../xlsx-refs/excel'
 import { closeOwnedWorkbook, isDisplayLocked } from './build'
-import { CF_STAGE1_CASES, type CfManifest, type CfOracleCase } from './cases'
+import { CF_CASES, CF_STAGE1_CASES, type CfManifest, type CfOracleCase } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
   computeWorksheetRangeGeometry,
@@ -263,7 +263,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       cellDecorations = liveObs?.cellDecorations
     }
 
-    const updatedTemplate = CF_STAGE1_CASES.find(tc => tc.id === c.id)
+    const updatedTemplate = CF_CASES.find(tc => tc.id === c.id)
     const currentExpected = {
       ...c.expected,
       ...(updatedTemplate

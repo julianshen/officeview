@@ -9,8 +9,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { compareCfCase } from '../scripts/cf-compare'
 import { assertCanCloseWorkbook, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
+  CF_CAPABILITIES,
+  CF_CASES,
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
+  CF_STAGE2_CAPABILITIES,
+  CF_STAGE2_CASES,
   type CfManifest,
   type CfOracleCase,
   type CfResaveReceipt,
@@ -551,10 +555,11 @@ describe('CF oracle verifier', () => {
 
   it('verifies all Stage 1 manifest cases have valid structural markers and honest status', () => {
     const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
-    expect(manifest.cases.map(c => c.id)).toEqual(CF_STAGE1_CASES.map(c => c.id))
-    expect(manifest.cases).toHaveLength(13)
+    const stage1Cases = manifest.cases.filter(c => c.stage === 1 || !c.stage)
+    expect(stage1Cases.map(c => c.id)).toEqual(CF_STAGE1_CASES.map(c => c.id))
+    expect(stage1Cases).toHaveLength(13)
 
-    for (const c of manifest.cases) {
+    for (const c of stage1Cases) {
       expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
       expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
       const result = verifyCfCase(c, { rootDir: REPO_ROOT })
@@ -564,6 +569,20 @@ describe('CF oracle verifier', () => {
       } else {
         expect(result.status).toBe('measured')
       }
+    }
+  })
+
+  it('stage 2 cases join the manifest and stage 1 cases are unchanged', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
+    expect(CF_STAGE1_CAPABILITIES.length).toBeGreaterThanOrEqual(90)
+    expect(CF_STAGE2_CAPABILITIES.length).toBeGreaterThan(0)
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length)
+    expect(CF_STAGE2_CASES).toHaveLength(8)
+    for (const c of manifest.cases.filter(c => c.stage === 2)) {
+      expect(c.status).toBe('recipe-pending')
+      expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
     }
   })
 

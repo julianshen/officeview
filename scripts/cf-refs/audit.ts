@@ -155,12 +155,13 @@ function auditCase(c: CfOracleCase, rootDir: string): Stage1CaseAudit {
 
 export function auditStage1Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage1AuditReport {
   const rootDir = options.rootDir ?? process.cwd()
+  const stage1ManifestCases = manifest.cases.filter(c => c.stage === 1 || (!c.stage && !c.id.startsWith('stage2')))
   const catalogIds = CF_STAGE1_CASES.map(c => c.id)
-  const manifestIds = new Set(manifest.cases.map(c => c.id))
+  const manifestIds = new Set(stage1ManifestCases.map(c => c.id))
   const missingCases = catalogIds.filter(id => !manifestIds.has(id))
   const catalogSet = new Set(catalogIds)
-  const extraCases = manifest.cases.map(c => c.id).filter(id => !catalogSet.has(id))
-  const perCase = manifest.cases.map(c => auditCase(c, rootDir))
+  const extraCases = stage1ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
+  const perCase = stage1ManifestCases.map(c => auditCase(c, rootDir))
   const perCapability: Stage1CapabilityAudit[] = CF_STAGE1_CAPABILITIES.map(entry => {
     const owning = perCase.find(p => p.id === entry.caseId)
     let disposition: Stage1CapabilityAudit['disposition'] = 'unaccounted'

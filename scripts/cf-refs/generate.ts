@@ -16,7 +16,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
 import {
-  CF_STAGE1_CASES,
+  CF_CASES,
   DEFAULT_CLOCK_ANCHOR_DATE,
   isoDateToExcelSerial,
   type CfManifest,
@@ -842,8 +842,282 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
         ].join(''),
       }
 
+    case 'stage2-scale-interpolation': {
+      const headers = ['Val', 'Precondition', 'RoundingLadder', 'ColorSpace', 'SpecPalette']
+      const rows = [
+        { label: 'r2', values: [10, 0, 0, 1] },
+        { label: 'r3', values: [20, 1, 50, 2] },
+        { label: 'r4', values: [30, 3, 100, 3] },
+        { label: 'r5', values: [40, 5, null, 4] },
+        { label: 'r6', values: [50, 255, null, 5] },
+        { label: 'r7', values: [60, 509, null, 5] },
+        { label: 'r8', values: [70, 510, null, 6] },
+        { label: 'r9', values: [null, null, null, 7] },
+        { label: 'r10', values: [null, null, null, 8] },
+        { label: 'r11', values: [null, null, null, 9] },
+      ]
+      return {
+        dimension: 'A1:E22',
+        cells: replicateWithControlBlock(headers, rows, 11),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B8">',
+          '<cfRule type="colorScale" priority="1">',
+          '<colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale>',
+          '</cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C8">',
+          '<cfRule type="colorScale" priority="2">',
+          '<colorScale><cfvo type="num" val="0"/><cfvo type="num" val="510"/><color rgb="FF000000"/><color rgb="FFFFFFFF"/></colorScale>',
+          '</cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D4">',
+          '<cfRule type="colorScale" priority="3">',
+          '<colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF0000FF"/></colorScale>',
+          '</cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E11">',
+          '<cfRule type="colorScale" priority="4">',
+          '<colorScale><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale>',
+          '</cfRule>',
+          '</conditionalFormatting>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case 'stage2-scale-thresholds': {
+      const headers = ['Val', 'MinMax', 'NumBounds', 'Percent', 'PercentileIncExc', 'PercentOOB', 'LegacyMinVal0', 'MidListMin', 'NumValRef']
+      const rows = [
+        { label: 'r2', values: [1, 10, 10, 1, 0, 10, 10, 10] },
+        { label: 'r3', values: [2, 30, 25, 2, 25, 30, 30, 30] },
+        { label: 'r4', values: [3, 50, 50, 3, 50, 50, 50, 50] },
+        { label: 'r5', values: [4, 70, 75, 4, 75, 70, 70, 70] },
+        { label: 'r6', values: [10, 90, 100, 10, 100, 90, 90, 90] },
+      ]
+      return {
+        dimension: 'A1:I12',
+        cells: replicateWithControlBlock(headers, rows, 6),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B6"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C6"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="num" val="20"/><cfvo type="num" val="80"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="percent" val="25"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E6"><cfRule type="colorScale" priority="4"><colorScale><cfvo type="min"/><cfvo type="percentile" val="30"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="F2:F6"><cfRule type="colorScale" priority="5"><colorScale><cfvo type="percent" val="-10"/><cfvo type="percentile" val="150"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="G2:G6"><cfRule type="colorScale" priority="6"><colorScale><cfvo type="min" val="0"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="H2:H6"><cfRule type="colorScale" priority="7"><colorScale><cfvo type="max"/><cfvo type="min"/><color rgb="FF63BE7B"/><color rgb="FFF8696B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="I2:I6"><cfRule type="colorScale" priority="8"><colorScale><cfvo type="num" val="$A$1"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case 'stage2-scale-degenerate': {
+      const headers = ['Val', 'AllEqual', 'SingleCell', 'InvertedNum', 'MidAboveMax', 'OutOfBounds']
+      const rows = [
+        { label: 'r2', values: [5, 42, 10, 10, 5] },
+        { label: 'r3', values: [5, null, 30, 30, 20] },
+        { label: 'r4', values: [5, null, 50, 50, 50] },
+        { label: 'r5', values: [5, null, 70, 70, 80] },
+        { label: 'r6', values: [5, null, 100, 100, 95] },
+      ]
+      return {
+        dimension: 'A1:F12',
+        cells: replicateWithControlBlock(headers, rows, 6),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B6"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="num" val="100"/><cfvo type="num" val="10"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E6"><cfRule type="colorScale" priority="4"><colorScale><cfvo type="min"/><cfvo type="num" val="200"/><cfvo type="num" val="100"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="F2:F6"><cfRule type="colorScale" priority="5"><colorScale><cfvo type="num" val="20"/><cfvo type="num" val="80"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case 'stage2-scale-participation': {
+      const headers = ['Val', 'Types', 'ErrorPresence']
+      const rows = [
+        { label: 'r2', values: [10, 10] },
+        { label: 'r3', values: [50, 20] },
+        { label: 'r4', values: [90, 30] },
+        { label: 'r5', values: [45000, 40], s: 3 }, // date formatted serial
+        { label: 'r6', values: [true, 50] },
+        { label: 'r7', values: [false, 60] },
+        { label: 'r8', values: ['5', 70] },
+        { label: 'r9', values: [{ err: '#N/A' }, { err: '#N/A' }] },
+        { label: 'r10', values: [{ err: '#DIV/0!' }, 80] },
+        { label: 'r11', values: ['', 90] },
+      ]
+      return {
+        dimension: 'A1:C22',
+        cells: replicateWithControlBlock(headers, rows, 11),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B11"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C11"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case 'stage2-scale-colors': {
+      const headers = ['Val', 'ThemeTint', 'Indexed', 'Alpha00', 'Auto', 'CustomTheme']
+      const rows = [
+        { label: 'r2', values: [10, 10, 10, 10, 10] },
+        { label: 'r3', values: [30, 30, 30, 30, 30] },
+        { label: 'r4', values: [50, 50, 50, 50, 50] },
+        { label: 'r5', values: [70, 70, 70, 70, 70] },
+        { label: 'r6', values: [90, 90, 90, 90, 90] },
+      ]
+      return {
+        dimension: 'A1:F12',
+        cells: replicateWithControlBlock(headers, rows, 6),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B6"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color theme="4" tint="0.4"/><color theme="5" tint="-0.4"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C6"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color indexed="10"/><color indexed="12"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="00F8696B"/><color rgb="0063BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E6"><cfRule type="colorScale" priority="4"><colorScale><cfvo type="min"/><cfvo type="max"/><color auto="1"/><color auto="1"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="F2:F6"><cfRule type="colorScale" priority="5"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FF336699"/><color rgb="FF99CC33"/></colorScale></cfRule></conditionalFormatting>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case 'stage2-scale-scope': {
+      const headers = ['Val', 'Disjoint', 'DupeBlock', 'HiddenRow', 'FilterHidden', 'MergeScope', 'WholeCol']
+      const rows = [
+        { label: 'r2', values: [10, 10, 10, 10, 10, 10] },
+        { label: 'r3', values: [20, 20, 20, 20, 20, 20] },
+        { label: 'r4', values: [30, 30, 30, 30, 30, 30] },
+        { label: 'r5', values: [40, 40, 40, 40, 40, 40] },
+        { label: 'r6', values: [50, 50, 50, 50, 50, 50] },
+      ]
+      const cells = replicateWithControlBlock(headers, rows, 11)
+      cells.push({ ref: 'B8', v: 100 })
+      cells.push({ ref: 'C8', v: 100 })
+      cells.push({ ref: 'B9', v: 100 })
+      cells.push({ ref: 'C9', v: 100 })
+      cells.push({ ref: 'B18', v: 100 })
+      cells.push({ ref: 'C18', v: 100 })
+      cells.push({ ref: 'B19', v: 100 })
+      cells.push({ ref: 'C19', v: 100 })
+      return {
+        dimension: 'A1:F20',
+        cells,
+        hiddenRows: [4],
+        merges: ['B8:C9'],
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B4 D2:D4"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="B2:B6"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="4"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="B8:C9"><cfRule type="colorScale" priority="5"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="F1:F1048576"><cfRule type="colorScale" priority="6"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="B2:B6"><cfRule type="colorScale" priority="7"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
+    case 'stage2-scale-composition': {
+      const headers = ['Val', 'DxfP1ScaleP2', 'ScaleP1DxfP2', 'EqualPrio', 'FontDxfMerge', 'MatchStopAhead', 'NonMatchStopAhead', 'ScaleStop', 'Overlapping', 'TextLowerDxf', 'OwnFillTable', 'UnresStub']
+      const rows = [
+        { label: 'v=25', values: [25, 25, 25, 25, 25, 25, 25, 25, 'text', 25, 25] },
+        { label: 'v=15', values: [15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15] },
+        { label: 'v=5', values: [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5] },
+        { label: 'v=0', values: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+      ]
+      return {
+        dimension: 'A1:L10',
+        cells: replicateWithControlBlock(headers, rows, 5),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B5">',
+          '<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>10</formula></cfRule>',
+          '<cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C5">',
+          '<cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '<cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D5">',
+          '<cfRule type="cellIs" dxfId="0" priority="7" operator="greaterThan"><formula>10</formula></cfRule>',
+          '<cfRule type="colorScale" priority="7"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E5">',
+          '<cfRule type="cellIs" dxfId="2" priority="1" operator="greaterThan"><formula>0</formula></cfRule>',
+          '<cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="F2:F5">',
+          '<cfRule type="cellIs" priority="1" stopIfTrue="1" operator="greaterThan"><formula>10</formula></cfRule>',
+          '<cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="G2:G5">',
+          '<cfRule type="cellIs" priority="1" stopIfTrue="1" operator="greaterThan"><formula>100</formula></cfRule>',
+          '<cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="H2:H5">',
+          '<cfRule type="colorScale" priority="1" stopIfTrue="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '<cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>0</formula></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="I2:I5">',
+          '<cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '<cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/><color rgb="FFFFFF00"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="J2:J5">',
+          '<cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '<cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>0</formula></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="K2:K5">',
+          '<cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+          '<conditionalFormatting sqref="L2:L5">',
+          '<cfRule type="expression" dxfId="0" priority="1" stopIfTrue="1"><formula>MOD(L2,2)=1</formula></cfRule>',
+          '<cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule>',
+          '</conditionalFormatting>',
+        ].join(''),
+        dxfsXml: [
+          '<dxfs count="3">',
+          '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>',
+          '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFC6EFCE"/></patternFill></fill></dxf>',
+          '<dxf><font><b/><color rgb="FF006100"/></font></dxf>',
+          '</dxfs>',
+        ].join(''),
+      }
+    }
+
+    case 'stage2-scale-unresolved-shapes': {
+      const headers = ['Val', '2cfvo3colors', 'CfvoNoType', 'FormulaCfvo', 'ActivePresent', 'X14Standalone']
+      const rows = [
+        { label: 'r2', values: [10, 10, 10, 10, 10] },
+        { label: 'r3', values: [30, 30, 30, 30, 30] },
+        { label: 'r4', values: [50, 50, 50, 50, 50] },
+        { label: 'r5', values: [70, 70, 70, 70, 70] },
+        { label: 'r6', values: [90, 90, 90, 90, 90] },
+      ]
+      return {
+        dimension: 'A1:F12',
+        cells: replicateWithControlBlock(headers, rows, 6),
+        legacyCfXml: [
+          '<conditionalFormatting sqref="B2:B6"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="C2:C6"><cfRule type="colorScale" priority="2"><colorScale><cfvo/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="formula" val="SUM(A1:A5)"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+          '<conditionalFormatting sqref="E2:E6"><cfRule type="colorScale" priority="4" activePresent="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>',
+        ].join(''),
+        x14CfXml: [
+          '<x14:conditionalFormattings>',
+          '<x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">',
+          '<x14:cfRule type="colorScale" priority="5" id="{33333333-4444-5555-6666-777777777701}">',
+          '<x14:colorScale><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FFF8696B"/><x14:color rgb="FF63BE7B"/></x14:colorScale>',
+          '</x14:cfRule>',
+          '<xm:sqref>F2:F6</xm:sqref>',
+          '</x14:conditionalFormatting>',
+          '</x14:conditionalFormattings>',
+        ].join(''),
+        dxfsXml: '<dxfs count="0"/>',
+      }
+    }
+
     default:
-      throw new Error(`Unknown Stage 1 CF case id: ${id}`)
+      throw new Error(`Unknown CF case id: ${id}`)
   }
 }
 
@@ -1211,7 +1485,7 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
   }
 
   const cases: CfOracleCase[] = []
-  for (const template of CF_STAGE1_CASES) {
+  for (const template of CF_CASES) {
     const prev = existingManifest?.cases.find(x => x.id === template.id)
     if (onlyCaseId && template.id !== onlyCaseId && prev) {
       // Do not touch other cases when rebuilding a single selected case
@@ -1287,10 +1561,12 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
   return manifest
 }
 
+export const generateAllCases = generateAllStage1
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2)
   const onlyCaseId = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
   const anchorLocalDate = args.includes('--anchor-date') ? args[args.indexOf('--anchor-date') + 1] : undefined
   const manifest = await generateAllStage1({ onlyCaseId, anchorLocalDate })
-  console.log(`[cf-refs/generate] generated ${manifest.cases.length} Stage 1 oracle cases -> ${CF_MANIFEST_PATH}`)
+  console.log(`[cf-refs/generate] generated ${manifest.cases.length} oracle cases -> ${CF_MANIFEST_PATH}`)
 }

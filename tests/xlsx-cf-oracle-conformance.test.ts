@@ -8,7 +8,7 @@
  * Covers all 53 cells withheld and 7 cells painted wrongly in final-r1-oracle-vs-viewer.txt.
  */
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
@@ -230,6 +230,34 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(st?.color, `${caseId}:${ref} should have no CF font color`).toBeUndefined()
       expect(st?.bold, `${caseId}:${ref} should have no CF bold`).toBeUndefined()
       paint!.dispose()
+    }
+  })
+
+  it('asserts Stage 2 colour-scale cells remain withheld until evidence is verified (Lesson 1)', async () => {
+    const stage2Cases = manifest.cases.filter(c => c.stage === 2)
+    for (const c of stage2Cases) {
+      const savedPath = join(REPO_ROOT, c.saved)
+      if (!existsSync(savedPath)) continue
+      const bytes = new Uint8Array(readFileSync(savedPath))
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
+      if (!paint) continue
+
+      for (const exp of c.expected?.cells ?? []) {
+        const { row, col } = refToRowCol(exp.ref)
+        const st = paint.layer.styleAt(row, col, undefined)
+        // Until scale:* capabilities are evidenced and verified,
+        // no CF colour-scale fill may be applied to any Stage 2 cell.
+        if (exp.fillRgb && (exp.scaleApplied ?? exp.matched)) {
+          expect(
+            st?.fillColor,
+            `Stage 2 cell ${c.id}:${exp.ref} colour scale fill must be withheld while unverified`,
+          ).not.toBe(exp.fillRgb)
+        }
+      }
+      paint.dispose()
     }
   })
 })
