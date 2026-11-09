@@ -1000,6 +1000,34 @@ describe('CF oracle verifier', () => {
     }
   })
 
+  it('guards every cell and criterion query inside per-item try blocks in probe AppleScripts', () => {
+    const testRefs = ['B2', 'B8']
+    const colorScript = buildColorProbeScript('wb.xlsx', 'Sheet1', testRefs).join('\n')
+    const decScript = buildDecorationProbeScript('wb.xlsx', 'Sheet1', testRefs).join('\n')
+    const textScript = buildTextProbeScript('wb.xlsx', 'Sheet1', testRefs).join('\n')
+    const critScript = buildColorScaleCriteriaProbeScript('wb.xlsx', 'Sheet1').join('\n')
+
+    // Every cell query in color probe must be guarded by try ... end try with "missing value" fallback
+    for (const ref of testRefs) {
+      expect(colorScript).toMatch(new RegExp(`set dfColor to "missing value"[\\s\\S]*?try[\\s\\S]*?display format of range "${ref}"[\\s\\S]*?end try`))
+      expect(colorScript).toMatch(new RegExp(`set baseColor to "missing value"[\\s\\S]*?try[\\s\\S]*?interior object of range "${ref}"[\\s\\S]*?end try`))
+    }
+
+    // Every cell query in decoration probe must be guarded by try ... end try with "missing value" fallback
+    for (const ref of testRefs) {
+      expect(decScript).toMatch(new RegExp(`set uVal to "missing value"[\\s\\S]*?try[\\s\\S]*?underline of font object of display format of range "${ref}"[\\s\\S]*?end try`))
+      expect(decScript).toMatch(new RegExp(`set sVal to "missing value"[\\s\\S]*?try[\\s\\S]*?strikethrough of font object of display format of range "${ref}"[\\s\\S]*?end try`))
+    }
+
+    // Text probe must also guard string value query per cell
+    for (const ref of testRefs) {
+      expect(textScript).toMatch(new RegExp(`set tVal to ""[\\s\\S]*?try[\\s\\S]*?string value of range "${ref}"[\\s\\S]*?end try`))
+    }
+
+    // Criteria probe must guard criterion type query
+    expect(critScript).toMatch(/set cType to "missing value"[\s\S]*?try[\s\S]*?color scale criterion type of crit[\s\S]*?end try/)
+  })
+
   it('accepts Excel canonical forms for min/max cfvo val omission and alpha normalization', async () => {
     // 1. Thresholds case G2:G6 (type="min" val="0") matches Excel-resaved G2:G6 where val is dropped
     const thresholdsCase = CF_CASES.find(c => c.id === 'stage2-scale-thresholds')!
