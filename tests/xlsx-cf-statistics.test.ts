@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { PackageError } from '../src/core/package-error'
 import { parseXml } from '../src/core/xml'
+import { CfPageFault } from '../src/xlsx/view/pagedSource'
 import type {
   CfDefinition,
+  CfDiagnostic,
   CfLease,
   CfLiteral,
   CfRule,
   CfStamp,
   CfValuePage,
+  CfValueSource,
   SourceRect,
 } from '../src/xlsx/cf/model'
 import type { XlsxCell } from '../src/xlsx/types'
@@ -1496,6 +1499,249 @@ describe('CF statistics preparation', () => {
     // refused (no hidden post-work bulk escapes counting).
     expect(budget.units).toBeLessThanOrEqual(CF_LIMITS.workUnits + 127)
     expect(attempted - budget.units).toBeLessThan(512)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('large-range statistics and uncapped scan (Lesson 3)', async () => {
+    // Percentile/min/max over 20k+ cells must be computed once per generation.
+    // The scan must not be time-sliced away (dedicated count budget without the 50ms batch time limit).
+    // An over-cap refusal (cf-resource-limit) must be cached per (scope, generation) and report a diagnostic.
+    // Include a whole-column test (A:A 1M rows) proving single scan and bounded memory.
+    const rowCount = 25000
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < rowCount; r++) {
+      cells.push(cell(r, 0, (r % 100) + 1))
+    }
+    const counter = makeCounter()
+    const probed = arraySource(cells, counter)
+
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const uncappedBudget = createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 })
+
+    // Whole-column A:A (0..1048575, col 0)
+    const wholeColRect = rect(0, 1048575, 0, 0)
+    const outs = await stats.prepareStatistics([[wholeColRect]], stamp(1), probed.source, uncappedBudget)
+    expect(outs[0]!.kind).toBe('ready')
+    const lease = (outs[0] as { kind: 'ready'; value: CfLease<CfRangeStatistics> }).value
+    expect(lease.value.numericCount).toBe(rowCount)
+    expect(lease.value.min).toBe(1)
+    expect(lease.value.max).toBe(100)
+    expect(lease.value.sortedAsc.length).toBe(rowCount)
+    // Proving single scan: exactly rowCount cells visited
+    expect(counter.cells).toBe(rowCount)
+
+    // Repeat at same generation: computed once per generation, served from cache with 0 new visits
+    const outs2 = await stats.prepareStatistics([[wholeColRect]], stamp(1), probed.source, uncappedBudget)
+    expect(outs2[0]!.kind).toBe('ready')
+    expect(counter.cells).toBe(rowCount)
+    if (outs2[0]!.kind === 'ready') outs2[0]!.value.release()
+    lease.release()
+
+    // Over-cap refusal cached per (scope, generation) and reports diagnostic
+    const tightMem = createCfMemory({ limitBytes: 1024 })
+    const tightStats = createCfStatistics(tightMem)
+    const diags: CfDiagnostic[] = []
+    const refOut1 = await tightStats.prepareStatistics(
+      [[wholeColRect]],
+      stamp(1),
+      probed.source,
+      uncappedBudget,
+      { diagnostics: diags },
+    )
+    expect(refOut1[0]!.kind).toBe('unresolved')
+    if (refOut1[0]!.kind === 'unresolved') expect(refOut1[0]!.reason).toBe('cf-resource-limit')
+    expect(diags).toHaveLength(1)
+    expect(diags[0]!.feature).toBe('cf-resource-limit')
+
+    const beforeCachedCells = counter.cells
+    const refOut2 = await tightStats.prepareStatistics(
+      [[wholeColRect]],
+      stamp(1),
+      probed.source,
+      uncappedBudget,
+      { diagnostics: diags },
+    )
+    expect(refOut2[0]!.kind).toBe('unresolved')
+    if (refOut2[0]!.kind === 'unresolved') expect(refOut2[0]!.reason).toBe('cf-resource-limit')
+    // No new cells visited on cached refusal
+    expect(counter.cells).toBe(beforeCachedCells)
+    expect(diags).toHaveLength(2)
+  })
+
+  it('CF ranges never extend extents (Lesson 4)', async () => {
+    // A whole-column scale on A:A or F:F clamps to data extent and does not expand static, print, or export extents.
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < 50; r++) {
+      cells.push(cell(r, 0, r + 1))
+      cells.push(cell(r, 5, (r + 1) * 2))
+    }
+    const counter = makeCounter()
+    const probed = arraySource(cells, counter)
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+
+    const wholeA = rect(0, 1048575, 0, 0)
+    const wholeF = rect(0, 1048575, 5, 5)
+
+    const outs = await stats.prepareStatistics([[wholeA], [wholeF]], stamp(1), probed.source, frozenBudget())
+    expect(outs[0]!.kind).toBe('ready')
+    expect(outs[1]!.kind).toBe('ready')
+
+    const leaseA = (outs[0] as { kind: 'ready'; value: CfLease<CfRangeStatistics> }).value
+    const leaseF = (outs[1] as { kind: 'ready'; value: CfLease<CfRangeStatistics> }).value
+
+    // Declared is whole column (1,048,576), but span is clamped to data extent (50 rows)
+    expect(leaseA.value.declaredCells).toBe(1048576)
+    expect(leaseA.value.spanCells).toBe(50)
+    expect(leaseF.value.declaredCells).toBe(1048576)
+    expect(leaseF.value.spanCells).toBe(50)
+
+    leaseA.release()
+    leaseF.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('one scan serves scales and top10 on the same 50-row A:A scope', async () => {
+    // One percentile scale, one min/max scale and one top10 rule visit the source at most 50 times
+    // (plus bounded metadata work), and a warm hit in the session cache does zero loops.
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < 50; r++) cells.push(cell(r, 0, r + 1))
+    const counter = makeCounter()
+    const probed = arraySource(cells, counter)
+
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const scope = [rect(0, 1048575, 0, 0)] // A:A
+
+    // 1. Percentile scale on A:A
+    const out1 = await stats.prepareStatistics([scope], stamp(1), probed.source, frozenBudget())
+    expect(out1[0]!.kind).toBe('ready')
+    expect(counter.cells).toBe(50)
+
+    // 2. Min/max scale on A:A (warm cache hit -> 0 new cells visited)
+    const out2 = await stats.prepareStatistics([scope], stamp(1), probed.source, frozenBudget())
+    expect(out2[0]!.kind).toBe('ready')
+    expect(counter.cells).toBe(50)
+
+    // 3. Top10 rule on A:A (warm cache hit -> 0 new cells visited)
+    const out3 = await stats.prepareStatistics([scope], stamp(1), probed.source, frozenBudget())
+    expect(out3[0]!.kind).toBe('ready')
+    expect(counter.cells).toBe(50)
+
+    if (out1[0]!.kind === 'ready') out1[0]!.value.release()
+    if (out2[0]!.kind === 'ready') out2[0]!.value.release()
+    if (out3[0]!.kind === 'ready') out3[0]!.value.release()
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('percentile copy reserves before allocation', async () => {
+    // On a synthetic 100,000-value numeric scope, at requiredBytes - 1
+    // (computed with the Stage 1 byte model) the builder is never called and the result is cf-resource-limit.
+    // A min/max scale on the same scope stays ready with no sorted copy.
+    // Dropping the last lease returns the CF charge to zero.
+    const count = 100000
+    const counter = makeCounter()
+    const src = generatorSource(count, (i) => ({ kind: 'number', value: i + 1 }), counter)
+
+    // Required bytes for percentile: workspace + retained sorted copy
+    const initialWorkspace = estimateStatisticsInitialBytes(count)
+    const tight = createCfMemory({ limitBytes: initialWorkspace - 1 })
+    const stats = createCfStatistics(tight)
+
+    // Percentile / default requires sorted copy:
+    const outPercentile = await stats.prepareStatistics([[rect(0, count - 1)]], stamp(1), src.source, frozenBudget())
+    expect(outPercentile[0]!.kind).toBe('unresolved')
+    if (outPercentile[0]!.kind === 'unresolved') expect(outPercentile[0]!.reason).toBe('cf-resource-limit')
+    expect(counter.cells).toBe(0)
+    expect(tight.currentBytes).toBe(0)
+
+    // Min/max scale on the same scope stays ready with sorted: false (no sorted copy):
+    const minMaxMem = createCfMemory({ limitBytes: 1024 * 1024 })
+    const minMaxStats = createCfStatistics(minMaxMem)
+    const outMinMax = await minMaxStats.prepareStatistics(
+      [[rect(0, count - 1)]],
+      stamp(1),
+      src.source,
+      createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 }),
+      { sorted: false },
+    )
+    expect(outMinMax[0]!.kind).toBe('ready')
+    if (outMinMax[0]!.kind === 'ready') {
+      const lease = outMinMax[0]!.value
+      expect(lease.value.numericCount).toBe(count)
+      expect(lease.value.min).toBe(1)
+      expect(lease.value.max).toBe(count)
+      expect(lease.value.sortedAsc.length).toBe(0) // no sorted copy
+      lease.release()
+    }
+    expect(minMaxMem.currentBytes).toBe(0)
+  })
+
+  it('scale statistics wait for complete pages', async () => {
+    // A source with only the first 10 of 50 rows imported yields pendingSheetIds and never a provisional max.
+    // Cancellation is observed by the next 128-unit checkpoint.
+    let yieldedCells = 0
+    const incompleteSource: CfValueSource = {
+      bounds: async () => ({ firstRow: 0, lastRow: 49, firstCol: 0, lastCol: 0 }),
+      stamp: () => stamp(1),
+      pages: async function* () {
+        // Yield first 10 rows
+        const rows = new Uint32Array(10)
+        const cols = new Uint16Array(10)
+        const values: CfLiteral[] = []
+        for (let i = 0; i < 10; i++) {
+          rows[i] = i
+          cols[i] = 0
+          values.push({ kind: 'number', value: (i + 1) * 10 })
+        }
+        yieldedCells += 10
+        yield {
+          value: { rows, cols, values },
+          bytes: 1000,
+          release() {},
+          transfer(m: any) { return m.reserve(1000).adopt({ rows, cols, values }, 1000) as any },
+        }
+        // Incomplete page fault
+        throw new CfPageFault('incomplete', SHEET, 'Conditional formatting page is still importing; retry when complete')
+      },
+    }
+
+    const memory = createCfMemory({})
+    const stats = createCfStatistics(memory)
+    const out = await stats.prepareStatistics([[rect(0, 49)]], stamp(1), incompleteSource, frozenBudget())
+    expect(out[0]!.kind).toBe('unresolved')
+    if (out[0]!.kind === 'unresolved') expect(out[0]!.reason).toBe('cf-pending-data')
+    expect((out[0] as any).pendingSheetIds).toEqual([SHEET])
+    expect(memory.currentBytes).toBe(0)
+
+    // Cancellation is observed by the next 128-unit checkpoint
+    const aborter = new AbortController()
+    const abortSource: CfValueSource = {
+      bounds: async () => ({ firstRow: 0, lastRow: 999, firstCol: 0, lastCol: 0 }),
+      stamp: () => stamp(1),
+      pages: async function* () {
+        const rows = new Uint32Array(64)
+        const cols = new Uint16Array(64)
+        const values: CfLiteral[] = Array.from({ length: 64 }, () => ({ kind: 'number', value: 1 }))
+        for (let batch = 0; batch < 10; batch++) {
+          if (batch === 1) aborter.abort()
+          yield {
+            value: { rows, cols, values },
+            bytes: 1000,
+            release() {},
+            transfer(m: any) { return m.reserve(1000).adopt({ rows, cols, values }, 1000) as any },
+          }
+        }
+      },
+    }
+    await expect(stats.prepareStatistics(
+      [[rect(0, 999)]],
+      stamp(1),
+      abortSource,
+      frozenBudget({ signal: aborter.signal }),
+      { signal: aborter.signal },
+    )).rejects.toThrow()
     expect(memory.currentBytes).toBe(0)
   })
 })
