@@ -320,41 +320,43 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         else if (utcObs && utcObs.bgContrastDelta >= 16) observedTodayBranch = 'utc'
       }
 
-      writeFileSync(
-        sidecarAbs,
-        JSON.stringify(
-          {
-            excelVersion: sidecarExcelVersion,
-            route: 'copy-picture',
-            appearance: cap.appearance,
-            scale: 1,
-            pxPerPt: 1,
-            width: decoded?.width,
-            height: decoded?.height,
-            colWidthsPt: capGeom?.colWidthsPt,
-            rowHeightsPt: capGeom?.rowHeightsPt,
-            geometrySource: hasLiveGeom ? 'excel-measured' : 'unverified',
-            resavedByExcel: c.resavedByExcel === true,
-            resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
-            sheet: c.sheet,
-            range: c.range,
-            hostTimeZone: sidecarHostTimeZone,
-            savedSha256,
-            pngSha256,
-            capturedAt: sidecarCapturedAt,
-            ...(clockState
-              ? {
-                  excelTodaySerial: clockState.excelTodaySerial,
-                  staleTodayCacheRefreshed: clockState.staleTodayCacheRefreshed,
-                  observedTodayBranch,
-                }
-              : {}),
-            ...(observedCells ? { observedCells } : {}),
-          },
-          null,
-          2,
-        ) + '\n',
-      )
+      if (!verifyOnly) {
+        writeFileSync(
+          sidecarAbs,
+          JSON.stringify(
+            {
+              excelVersion: sidecarExcelVersion,
+              route: 'copy-picture',
+              appearance: cap.appearance,
+              scale: 1,
+              pxPerPt: 1,
+              width: decoded?.width,
+              height: decoded?.height,
+              colWidthsPt: capGeom?.colWidthsPt,
+              rowHeightsPt: capGeom?.rowHeightsPt,
+              geometrySource: hasLiveGeom ? 'excel-measured' : 'unverified',
+              resavedByExcel: c.resavedByExcel === true,
+              resaveSavedSha256: c.resaveReceipt?.savedSha256 ?? (c.resavedByExcel ? savedSha256 : undefined),
+              sheet: c.sheet,
+              range: c.range,
+              hostTimeZone: sidecarHostTimeZone,
+              savedSha256,
+              pngSha256,
+              capturedAt: sidecarCapturedAt,
+              ...(clockState
+                ? {
+                    excelTodaySerial: clockState.excelTodaySerial,
+                    staleTodayCacheRefreshed: clockState.staleTodayCacheRefreshed,
+                    observedTodayBranch,
+                  }
+                : {}),
+              ...(observedCells ? { observedCells } : {}),
+            },
+            null,
+            2,
+          ) + '\n',
+        )
+      }
       capturedCount++
       return { ...cap, pngSha256 }
     })
@@ -405,6 +407,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   }
 
-  writeFileSync(CF_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n')
+  if (!verifyOnly) {
+    writeFileSync(CF_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n')
+  }
   console.log(`[cf-refs/capture] processed ${capturedCount} capture files`)
 }
