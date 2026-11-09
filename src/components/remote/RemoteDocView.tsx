@@ -37,15 +37,26 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
     void doc.ended.then((e) => { if (live && e) setEnded(e.code) })
     return () => { live = false }
   }, [doc])
+  // Printing waits for every unit: a unit never near the viewport has no pixels yet.
+  const [paintedCount, setPaintedCount] = useState(0)
+  const paintAll = useRef<() => Promise<void>>(async () => {})
   useEffect(() => {
-    const painted = new Set<number>(), ac = new AbortController()
+    const painted = new Set<number>(), done = new Set<number>(), ac = new AbortController()
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-    const paint = (i: number) => {
+    setPaintedCount(0)
+    const paint = (i: number): Promise<void> => {
       const c = canvases.current[i]
-      if (!c || painted.has(i)) return
+      if (!c || painted.has(i)) return Promise.resolve()
       painted.add(i)
-      doc.paint(i, 1, dpr, c, ac.signal).then(() => { c.dataset.painted = '1' }, () => { painted.delete(i) })
+      return doc.paint(i, 1, dpr, c, ac.signal).then(() => {
+        if (ac.signal.aborted) return
+        c.dataset.painted = '1'; done.add(i); setPaintedCount(done.size)
+      }, () => { painted.delete(i) })
     }
+    paintAll.current = async () => { await Promise.all(units.map((_, i) => paint(i))) }
+    const beforePrint = () => { void paintAll.current() }
+    window.addEventListener('beforeprint', beforePrint)
+    ac.signal.addEventListener('abort', () => window.removeEventListener('beforeprint', beforePrint))
     if (typeof IntersectionObserver !== 'function') { units.forEach((_, i) => paint(i)); return () => ac.abort() }
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
@@ -61,7 +72,13 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
   return (
     // data-ov-print sits on the themed instance root: the print guard
     // (officeview.css) matches [data-ov-theme-root][data-ov-instance][data-ov-print="false"].
-    <div {...themeRootProps(theme, useId())} data-ov-print={allowPrint} className={className} style={style}>
+    <div {...themeRootProps(theme, useId())} data-ov-print={allowPrint && paintedCount === units.length} className={className} style={style}
+      onKeyDown={(e) => {
+        if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'p') return
+        // Like the local viewer, Ctrl/Cmd+P prints this document — once every unit has pixels.
+        e.preventDefault()
+        if (allowPrint) void paintAll.current().then(() => { requestAnimationFrame(() => window.print()) })
+      }}>
       <div data-officeview-root="" role="document" aria-label={title ?? doc.manifest.name}
         style={{ overflow: 'auto', height: '100%', background: background ?? 'var(--ov-color-backdrop)' }}>
         <div role="status" data-officeview-notice="">{TEXT_UNAVAILABLE}</div>

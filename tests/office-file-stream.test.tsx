@@ -99,4 +99,35 @@ describe('<OfficeFile data={StreamSource}>', () => {
     await waitFor(() => expect(view.container.querySelectorAll('canvas').length).toBe(2))
     expect(view.container.querySelector('[data-ov-theme-root][data-ov-instance][data-ov-print="false"]')).toBeTruthy()
   })
+  it('PR #64: printing stays guarded until every unit is painted; beforeprint paints the off-screen ones', async () => {
+    // An IntersectionObserver that never fires: no unit nears the viewport.
+    vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} })
+    try {
+      const doc = fakeDoc()
+      h.open.mockReset(); h.open.mockResolvedValueOnce(doc)
+      const view = render(<OfficeFile data={stream()} />)
+      await waitFor(() => expect(view.container.querySelectorAll('canvas').length).toBe(2))
+      const root = () => view.container.querySelector('[data-ov-theme-root][data-ov-instance]')!
+      expect(doc.paint).not.toHaveBeenCalled()
+      expect(root().getAttribute('data-ov-print')).toBe('false')
+      window.dispatchEvent(new Event('beforeprint'))
+      await waitFor(() => expect(doc.paint).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(root().getAttribute('data-ov-print')).toBe('true'))
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('PR #64: Ctrl/Cmd+P paints every unit, then prints', async () => {
+    vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} })
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+    try {
+      const doc = fakeDoc()
+      h.open.mockReset(); h.open.mockResolvedValueOnce(doc)
+      const view = render(<OfficeFile data={stream()} />)
+      await waitFor(() => expect(view.container.querySelectorAll('canvas').length).toBe(2))
+      const root = view.container.querySelector('[data-ov-theme-root][data-ov-instance]')!
+      root.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1))
+      expect(doc.paint).toHaveBeenCalledTimes(2)
+      expect(root.getAttribute('data-ov-print')).toBe('true')
+    } finally { vi.unstubAllGlobals() }
+  })
 })

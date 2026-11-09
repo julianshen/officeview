@@ -203,14 +203,36 @@ describe('StreamSession (scripted socket)', () => {
     t.add({ type: 'bitmap', source: 'canvas', w: 1200, h: 1100, rgba: big() })
     const payloads = encodeAssets(t.all())
     expect(payloads.length).toBe(2)
-    const p = s.unit(0, 1)
+    // Observe the rejection up front: the unit fails while the frames are still being delivered.
+    const p = s.unit(0, 1).then(() => undefined, (x) => x)
     await settle()
     for (const id of [0, 1]) {
       const reqId = sock.units()[id]!.reqId
       for (const pl of payloads) sock.frame(2, reqId, pl)
       await settle(400)
     }
-    expect(((await p.then(() => undefined, (x) => x)) as StreamSessionError).code).toBe('unit-failed')
+    expect(((await p) as StreamSessionError).code).toBe('unit-failed')
+  })
+  it('PR #64: a re-issued unit does not count the discarded response\'s assets against its allowance', async () => {
+    const { s, sock } = await opened({ recorder: { ...exampleManifest().recorder, requiredFaces: [], projection: 'commands' } })
+    const t = new AssetTable()
+    t.add({ type: 'bitmap', source: 'image', w: 1200, h: 1100, rgba: new Uint8Array(1200 * 1100 * 4).fill(7) })
+    const [asset] = encodeAssets(t.all())
+    expect(asset!.length * 2).toBeGreaterThan(9 * 1024 * 1024)
+    const ops = new OpWriter().op(Opcode.STATE_PUSH).bytes()
+    const p = s.unit(0, 1)
+    await settle()
+    // First response: the asset, then a unit that fails validation (wrong unit id) → re-issued once.
+    const first = sock.units()[0]!.reqId
+    sock.frame(2, first, asset!)
+    sock.frame(4, first, encodeUnit({ unitId: 1, discriminator: 1, body: ops }))
+    await settle(400)
+    const second = sock.units()[1]!.reqId
+    sock.frame(2, second, asset!)
+    sock.frame(4, second, encodeUnit({ unitId: 0, discriminator: 1, body: ops }))
+    const u = await p
+    if (u.kind !== 'commands') throw new Error('commands')
+    expect(u.assets.size).toBe(1)
   })
   it('review 3: a command unit never overtakes its ASSET_DEFINE', async () => {
     const { s, sock } = await opened({ recorder: { ...exampleManifest().recorder, requiredFaces: [], projection: 'commands' } })

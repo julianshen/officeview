@@ -45,14 +45,22 @@ export class Client {
     this.ws = new WebSocket(url, { headers: { Origin: origin } } as never)
     this.ws.binaryType = 'arraybuffer'
     this.closed = new Promise((ok) => this.ws.addEventListener('close', (e) => { ok({ code: e.code, reason: e.reason }); this.wake() }))
-    this.ws.addEventListener('message', async (e) => {
-      if (typeof e.data === 'string') this.msgs.push({ text: JSON.parse(e.data) })
-      else {
-        const res = await this.r.push(new Uint8Array(e.data as ArrayBuffer))
-        if (res && !res.ok) throw new Error(`frame rejected: ${res.reason}`)
-        if (res?.ok) this.msgs.push({ binary: { kind: res.kind, reqId: res.reqId, payload: res.payload } })
-      }
-      this.wake()
+    // Serial receipt, like the real client's inbox: a fragment never reaches the
+    // reassembler while the previous message is still inflating.
+    let inbox = Promise.resolve()
+    this.ws.addEventListener('message', (e) => {
+      const step = inbox.then(async () => {
+        if (typeof e.data === 'string') this.msgs.push({ text: JSON.parse(e.data) })
+        else {
+          const res = await this.r.push(new Uint8Array(e.data as ArrayBuffer))
+          if (res && !res.ok) throw new Error(`frame rejected: ${res.reason}`)
+          if (res?.ok) this.msgs.push({ binary: { kind: res.kind, reqId: res.reqId, payload: res.payload } })
+        }
+        this.wake()
+      })
+      // A rejected frame still surfaces as an uncaught error; later messages keep flowing.
+      step.catch((err) => setTimeout(() => { throw err }))
+      inbox = step.catch(() => {})
     })
   }
   private wake() { const w = this.waiters; this.waiters = []; for (const f of w) f() }

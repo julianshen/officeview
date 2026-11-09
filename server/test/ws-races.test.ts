@@ -128,4 +128,26 @@ describe('per-kind caps and raster fallback (review r2-8/r2-9)', () => {
     expect(messages.map((x) => x.kind)).toEqual([3])
     c.close(); h.stop()
   }, 30_000)
+  it('PR #64: assets each under 8 MiB but over the 9 MiB client allowance together ship the unit as a raster', async () => {
+    const real = pool()
+    const two = new AssetTable()
+    // Two compressible 5.3 MiB bitmaps: each ASSET_DEFINE passes its caps, the pair exceeds ASSET_ALLOWANCE.
+    for (const source of ['image', 'canvas'] as const) two.add({ type: 'bitmap', source, w: 1200, h: 1100, rgba: new Uint8Array(1200 * 1100 * 4).fill(source === 'image' ? 7 : 9) })
+    const projections: string[] = []
+    const stub = Object.assign(Object.create(real), {
+      render: async (_s: string, job: { projection: string }) => {
+        projections.push(job.projection)
+        const raster = await real.render(_s, job as never, 1024)
+        if (job.projection === 'final-raster') return raster
+        return { kind: 'commands', w: 10, h: 10, ops: new Uint8Array(0), opCount: 0, assets: two.all(), faces: [] } satisfies RenderedUnit
+      },
+    }) as Pool
+    const h = await start({ pool: stub, policy: { projection: 'relaxed' } }), c = new Client(h.url); await c.hello(); await c.ready()
+    c.unit(6)
+    const { unit, messages } = await c.unitMessages(6)
+    expect(projections).toEqual(['commands', 'final-raster'])
+    expect(unit.discriminator).toBe(2)
+    expect(messages.map((x) => x.kind)).toEqual([3])
+    c.close(); h.stop()
+  }, 30_000)
 })

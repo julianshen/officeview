@@ -144,7 +144,7 @@ export class StreamSession {
 
   private issue(req: UnitReq) {
     this.units.delete(req.reqId)
-    req.reqId = this.allocId(); req.assets = new Map()
+    req.reqId = this.allocId(); req.assets = new Map(); req.assetBytes = 0
     this.units.set(req.reqId, req)
     // While resuming, the request waits; resume() re-issues it on the new socket.
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return

@@ -10,6 +10,7 @@ import { encodeMessage } from '../../src/stream/frame'
 import { encodeUnit } from '../../src/stream/unit'
 import { encodeRasterBody } from '../../src/stream/raster'
 import { AssetTooLarge, encodeAssets } from '../../src/stream/asset-wire'
+import { ASSET_ALLOWANCE } from '../../src/stream/remote/reservation'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
 import { AuditTable } from './audit'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
@@ -331,6 +332,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (unit.kind === 'commands') {
       let payloads: Uint8Array[]
       try { payloads = encodeAssets(unit.assets) } catch (e) { if (e instanceof AssetTooLarge) return undefined; throw e }
+      // §14: the client admits at most ASSET_ALLOWANCE asset bytes per request; more would only fail there.
+      if (payloads.reduce((n, p) => n + p.length, 0) > ASSET_ALLOWANCE) return undefined
       const out: Uint8Array[][] = []
       for (const p of payloads) { const f = frame(KIND.ASSET_DEFINE, reqId, p); if (!f) return undefined; out.push(f) }
       const f = frame(KIND.UNIT_COMMANDS, reqId, encodeUnit({ unitId: unitIndex, discriminator: 1, body: unit.ops }))
