@@ -2238,24 +2238,40 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
             structuralValid: true,
           }
         }
-        if (obs.bgContrastDelta > 12) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'cell-expectation-mismatch',
-            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}) by ${obs.bgContrastDelta}`,
-            structuralValid: true,
+        const isScaleCase = c.stage === 2 || c.markers.some(m => m.ruleType === 'colorScale')
+        if (isScaleCase) {
+          const defaultBg: [number, number, number] = [255, 255, 255]
+          const bgDelta = rgbMaxDelta(obs.bgRgb, defaultBg)
+          if (bgDelta > 12) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from default background (${defaultBg.join(',')}) by ${bgDelta}`,
+              structuralValid: true,
+            }
           }
-        }
-        if (obs.interiorMaxDelta > 14) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'cell-expectation-mismatch',
-            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) interior unexpectedly differs from control ${exp.controlRef} by ${obs.interiorMaxDelta}`,
-            structuralValid: true,
+        } else {
+          if (obs.bgContrastDelta > 12) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}) by ${obs.bgContrastDelta}`,
+              structuralValid: true,
+            }
+          }
+          if (obs.interiorMaxDelta > 14) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Unmatched cell ${exp.ref} (${cap.appearance}) interior unexpectedly differs from control ${exp.controlRef} by ${obs.interiorMaxDelta}`,
+              structuralValid: true,
+            }
           }
         }
         passingCellRefs.add(exp.ref.toUpperCase())

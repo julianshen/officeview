@@ -1082,6 +1082,108 @@ describe('CF oracle verifier', () => {
     expect(resComp).toMatchObject({ structuralValid: true })
   })
 
+  it('does not falsely refuse unmatched cells in colour-scale cases when controlRef is a scale cell', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-unmatched-scale-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:unmatched-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFF0000', 'FF00FF00'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    const validPng = makeCapturePng(true)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    writeFileSync(
+      join(dir, 'scale.json'),
+      JSON.stringify({
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: xlsxHash,
+        sheet: 'Sheet1',
+        range: 'A1:B3',
+        savedSha256: xlsxHash,
+        pngSha256: validPngHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: [
+          { ref: 'B2', fillSource: 'excel-display-format', fillRgb: 'FFFF0000' },
+          { ref: 'B3', fillSource: 'excel-display-format', fillRgb: 'FFFFFFFF' },
+        ],
+      }),
+    )
+
+    // Unmatched cell B3 has controlRef pointing to scale cell B2.
+    // The verifier must validate B3 against default background without refusing due to contrast against B2.
+    const testCase: CfOracleCase = {
+      id: 'scale-unmatched-case',
+      stage: 2,
+      question: 'Scale unmatched cell control comparison',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, fillRgb: 'FFFF0000', scaleApplied: true, fillSource: 'excel-display-format' },
+          { ref: 'B3', controlRef: 'B2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    }
+
+    const verified = verifyCfCase(testCase, { rootDir: dir })
+    expect(verified.kind).toBe('verified')
+  })
+
   it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {
     const DXF_RED = 'FFFFC7CE'
 
