@@ -184,7 +184,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
   const dateContext = options.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
-    epochNowMs: sheet.semantics.epochNowMs,
+    epochNowMs: Date.now(),
   } : undefined)
   let units = 0
   const work = async () => {

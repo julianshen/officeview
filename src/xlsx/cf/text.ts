@@ -239,7 +239,7 @@ export async function prepareCfTextScope(
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
-    epochNowMs: sheet.semantics.epochNowMs,
+    epochNowMs: Date.now(),
   } : undefined)
   const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext })
   try {

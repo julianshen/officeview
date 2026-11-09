@@ -990,6 +990,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       }
       const dateContext = options?.dateContext ?? {
         dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
+        epochNowMs: Date.now(),
       }
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
