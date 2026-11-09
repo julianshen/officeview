@@ -7908,7 +7908,7 @@
           "capabilityId": "scale:composition-scale-p1-dxf-p2",
           "sqref": "C2:C5",
           "ruleType": "colorScale",
-          "priority": 1,
+          "priority": 3,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -7931,7 +7931,7 @@
           "capabilityId": "scale:composition-equal-priority",
           "sqref": "D2:D5",
           "ruleType": "colorScale",
-          "priority": 7,
+          "priority": 5,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -7954,7 +7954,7 @@
           "capabilityId": "scale:composition-font-only-dxf",
           "sqref": "E2:E5",
           "ruleType": "colorScale",
-          "priority": 2,
+          "priority": 7,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -7977,7 +7977,7 @@
           "capabilityId": "scale:composition-matching-stopIfTrue-ahead",
           "sqref": "F2:F5",
           "ruleType": "colorScale",
-          "priority": 2,
+          "priority": 9,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -8000,7 +8000,7 @@
           "capabilityId": "scale:composition-non-matching-stopIfTrue-ahead",
           "sqref": "G2:G5",
           "ruleType": "colorScale",
-          "priority": 2,
+          "priority": 11,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -8023,7 +8023,7 @@
           "capabilityId": "scale:composition-scale-stopIfTrue",
           "sqref": "H2:H5",
           "ruleType": "colorScale",
-          "priority": 1,
+          "priority": 12,
           "stopIfTrue": true,
           "formulas": [],
           "scale": {
@@ -8047,7 +8047,7 @@
           "capabilityId": "scale:composition-overlapping-scales",
           "sqref": "I2:I5",
           "ruleType": "colorScale",
-          "priority": 1,
+          "priority": 14,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -8070,7 +8070,7 @@
           "capabilityId": "scale:composition-text-cell-lower-dxf",
           "sqref": "J2:J5",
           "ruleType": "colorScale",
-          "priority": 1,
+          "priority": 16,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -8093,7 +8093,7 @@
           "capabilityId": "scale:composition-own-fill-and-table",
           "sqref": "K2:K5",
           "ruleType": "colorScale",
-          "priority": 1,
+          "priority": 18,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -8116,7 +8116,7 @@
           "capabilityId": "scale:composition-unresolved-expression-stub",
           "sqref": "L2:L5",
           "ruleType": "colorScale",
-          "priority": 2,
+          "priority": 20,
           "formulas": [],
           "scale": {
             "cfvo": [
@@ -8135,8 +8135,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "da86a33bc8eff6fa9c938bfce52a25f608944a5bed21a43dd968404bc7e3a7f7",
-        "savedSha256": "da86a33bc8eff6fa9c938bfce52a25f608944a5bed21a43dd968404bc7e3a7f7",
+        "inputSha256": "fca8c07d037e06eb0b1795f8508b2204562583761e89674919c0031a91ee2f34",
+        "savedSha256": "fca8c07d037e06eb0b1795f8508b2204562583761e89674919c0031a91ee2f34",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",

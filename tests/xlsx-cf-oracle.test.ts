@@ -994,10 +994,47 @@ describe('CF oracle verifier', () => {
 
     // verifyCfCase structural validation must NOT refuse stage2-scale-scope on B4/B15
     const res = verifyCfCase(scopeCase, { rootDir: REPO_ROOT })
-    expect(res.structuralValid).toBe(true)
+    expect(res).toMatchObject({ structuralValid: true })
     if (res.kind === 'refusal') {
       expect(res.code).not.toBe('cell-expectation-mismatch')
     }
+  })
+
+  it('accepts Excel canonical forms for min/max cfvo val omission and alpha normalization', async () => {
+    // 1. Thresholds case G2:G6 (type="min" val="0") matches Excel-resaved G2:G6 where val is dropped
+    const thresholdsCase = CF_CASES.find(c => c.id === 'stage2-scale-thresholds')!
+    const canonThresholdsXml =
+      '<conditionalFormatting sqref="G2:G6"><cfRule type="colorScale" priority="6"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const dir = mkdtempSync(join(tmpdir(), 'cf-canon-'))
+    const canonThresholdsBytes = await makeSyntheticXlsx({ sheetRuleXml: canonThresholdsXml, dxfCount: 0 })
+    writeFileSync(join(dir, 'canon-thresholds.xlsx'), canonThresholdsBytes)
+    const markerLegacy = thresholdsCase.markers.find(m => m.capabilityId === 'scale:thresholds-legacy-min-val-0')!
+    const testCase = {
+      ...thresholdsCase,
+      markers: [markerLegacy],
+      input: 'canon-thresholds.xlsx',
+      saved: 'canon-thresholds.xlsx',
+      expected: { ...thresholdsCase.expected, inputSha256: sha256(canonThresholdsBytes), savedSha256: sha256(canonThresholdsBytes) },
+    }
+    const resThresholds = verifyCfCase(testCase, { rootDir: dir })
+    expect(resThresholds).toMatchObject({ structuralValid: true })
+
+    // 2. Colors case D2:D6 (00F8696B) matches Excel-resaved D2:D6 where alpha is normalized to FFF8696B
+    const colorsCase = CF_CASES.find(c => c.id === 'stage2-scale-colors')!
+    const canonColorsXml =
+      '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const canonColorsBytes = await makeSyntheticXlsx({ sheetRuleXml: canonColorsXml, dxfCount: 0 })
+    writeFileSync(join(dir, 'canon-colors.xlsx'), canonColorsBytes)
+    const markerAlpha = colorsCase.markers.find(m => m.capabilityId === 'scale:colors-alpha-00')!
+    const testColorsCase = {
+      ...colorsCase,
+      markers: [markerAlpha],
+      input: 'canon-colors.xlsx',
+      saved: 'canon-colors.xlsx',
+      expected: { ...colorsCase.expected, inputSha256: sha256(canonColorsBytes), savedSha256: sha256(canonColorsBytes) },
+    }
+    const resColors = verifyCfCase(testColorsCase, { rootDir: dir })
+    expect(resColors).toMatchObject({ structuralValid: true })
   })
 
   it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {

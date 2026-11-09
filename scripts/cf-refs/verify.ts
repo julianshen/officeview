@@ -257,7 +257,17 @@ function scaleColorMatches(colorNode: XmlNode, expected: string): boolean {
   }
   const rgb = attr(colorNode, 'rgb')
   if (rgb !== undefined) {
-    return rgb.toUpperCase() === expected.toUpperCase()
+    if (rgb.toUpperCase() === expected.toUpperCase()) return true
+    // Excel canonicalizes alpha channels: e.g. 00F8696B in marker is resaved by Excel as FFF8696B
+    if (
+      (expected.length === 8 || expected.length === 6) &&
+      (rgb.length === 8 || rgb.length === 6)
+    ) {
+      const expRgb = expected.length === 8 ? expected.slice(2) : expected
+      const actRgb = rgb.length === 8 ? rgb.slice(2) : rgb
+      if (expRgb.toUpperCase() === actRgb.toUpperCase()) return true
+    }
+    return false
   }
   const theme = attr(colorNode, 'theme')
   if (theme !== undefined) {
@@ -351,7 +361,12 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
       if (actualType !== exp.type) return false
       const actualVal = attr(actual, 'val')
       if (exp.val !== undefined) {
-        if (actualVal !== exp.val) return false
+        if (actualVal !== exp.val) {
+          // Excel drops val on min and max when canonicalizing (e.g. min val="0")
+          if (!((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) {
+            return false
+          }
+        }
       } else {
         if (actualVal !== undefined) return false
       }

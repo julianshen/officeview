@@ -3254,7 +3254,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-scale-p1-dxf-p2',
         sqref: 'C2:C5',
         ruleType: 'colorScale',
-        priority: 1,
+        priority: 3,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3267,7 +3267,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-equal-priority',
         sqref: 'D2:D5',
         ruleType: 'colorScale',
-        priority: 7,
+        priority: 5,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3280,7 +3280,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-font-only-dxf',
         sqref: 'E2:E5',
         ruleType: 'colorScale',
-        priority: 2,
+        priority: 7,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3293,7 +3293,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-matching-stopIfTrue-ahead',
         sqref: 'F2:F5',
         ruleType: 'colorScale',
-        priority: 2,
+        priority: 9,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3306,7 +3306,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-non-matching-stopIfTrue-ahead',
         sqref: 'G2:G5',
         ruleType: 'colorScale',
-        priority: 2,
+        priority: 11,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3319,7 +3319,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-scale-stopIfTrue',
         sqref: 'H2:H5',
         ruleType: 'colorScale',
-        priority: 1,
+        priority: 12,
         stopIfTrue: true,
         formulas: [],
         scale: {
@@ -3333,7 +3333,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-overlapping-scales',
         sqref: 'I2:I5',
         ruleType: 'colorScale',
-        priority: 1,
+        priority: 14,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3346,7 +3346,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-text-cell-lower-dxf',
         sqref: 'J2:J5',
         ruleType: 'colorScale',
-        priority: 1,
+        priority: 16,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3359,7 +3359,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-own-fill-and-table',
         sqref: 'K2:K5',
         ruleType: 'colorScale',
-        priority: 1,
+        priority: 18,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
@@ -3372,7 +3372,7 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         capabilityId: 'scale:composition-unresolved-expression-stub',
         sqref: 'L2:L5',
         ruleType: 'colorScale',
-        priority: 2,
+        priority: 20,
         formulas: [],
         scale: {
           cfvo: [{ type: 'min' }, { type: 'max' }],
