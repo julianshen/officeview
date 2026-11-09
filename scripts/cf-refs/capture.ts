@@ -92,9 +92,14 @@ export function parseExcelColorToArgb(raw: unknown): string | null {
       return channelsToArgb(r, g, b)
     }
 
-    // Numeric decimal integer string (e.g. VBA Color Long "13551615")
+    // Numeric decimal integer string (e.g. VBA Color Long "13551615" or concatenated 8-bit channels "248105107")
     if (/^\d+$/.test(trimmed)) {
-      return integerToArgb(Number(trimmed))
+      const num = Number(trimmed)
+      if (num > 16777215) {
+        const channels = tryDecodeConcatenatedChannels(trimmed)
+        if (channels) return channelsToArgb(channels[0], channels[1], channels[2])
+      }
+      return integerToArgb(num)
     }
 
     // Hex string (e.g. "#FFC7CE" or "FFFFC7CE")
@@ -110,6 +115,32 @@ export function parseExcelColorToArgb(raw: unknown): string | null {
     return integerToArgb(raw)
   }
 
+  return null
+}
+
+function tryDecodeConcatenatedChannels(s: string): [number, number, number] | null {
+  if (s.length === 9) {
+    const r = Number(s.slice(0, 3))
+    const g = Number(s.slice(3, 6))
+    const b = Number(s.slice(6, 9))
+    if (r <= 255 && g <= 255 && b <= 255) return [r, g, b]
+  }
+  if (s.length === 8) {
+    for (const [l1, l2] of [[2, 3], [3, 2], [3, 3]]) {
+      const r = Number(s.slice(0, l1))
+      const g = Number(s.slice(l1, l1 + l2))
+      const b = Number(s.slice(l1 + l2))
+      if (r <= 255 && g <= 255 && b <= 255) return [r, g, b]
+    }
+  }
+  if (s.length === 7) {
+    for (const [l1, l2] of [[2, 2], [2, 3], [3, 2], [1, 3]]) {
+      const r = Number(s.slice(0, l1))
+      const g = Number(s.slice(l1, l1 + l2))
+      const b = Number(s.slice(l1 + l2))
+      if (r <= 255 && g <= 255 && b <= 255) return [r, g, b]
+    }
+  }
   return null
 }
 
@@ -178,6 +209,7 @@ export function buildColorProbeScript(workbookName: string, sheetName: string, c
     `set ws to worksheet "${q(sheetName)}" of wb`,
     `set outList to {}`,
     ...cellRefs.flatMap(r => [
+      `set AppleScript's text item delimiters to ","`,
       `set dfColor to "missing value"`,
       `try`,
       `  set dfColor to (color of interior object of display format of range "${q(r)}" of ws as string)`,
@@ -264,7 +296,15 @@ export function probeLiveExcelCellObservations(
       })
 
       const colorScriptLines = buildColorProbeScript(name, c.sheet, refs)
-      const cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }> = {}
+      const cellColors: Record<
+        string,
+        {
+          displayFormatFill?: string
+          baseFill?: string
+          rawDisplayFormatFill?: string
+          rawBaseFill?: string
+        }
+      > = {}
       try {
         const colorOut = runScript(colorScriptLines, 30_000)
         const colorParts = colorOut.split('|||')
@@ -276,6 +316,8 @@ export function probeLiveExcelCellObservations(
             cellColors[ref] = {
               ...(dfArgb ? { displayFormatFill: dfArgb } : {}),
               ...(baseArgb ? { baseFill: baseArgb } : {}),
+              rawDisplayFormatFill: parts[0]?.trim(),
+              rawBaseFill: parts[1]?.trim(),
             }
           }
         })
@@ -386,7 +428,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let activeGeom = geom
     let cellTexts: Record<string, string> | undefined
     let cellDecorations: Record<string, { underline?: 'none' | 'single' | 'double'; strikethrough?: boolean }> | undefined
-    let cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }> | undefined
+    let cellColors:
+      | Record<
+          string,
+          {
+            displayFormatFill?: string
+            baseFill?: string
+            rawDisplayFormatFill?: string
+            rawBaseFill?: string
+          }
+        >
+      | undefined
     let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
     let sidecarExcelVersion = excelVersion
     let sidecarCapturedAt = new Date().toISOString()
@@ -511,6 +563,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           ...obs,
           ...(col?.displayFormatFill ? { fillSource: 'excel-display-format', fillRgb: col.displayFormatFill } : {}),
           ...(col?.baseFill ? { baseFillRgb: col.baseFill } : {}),
+          ...(col?.rawDisplayFormatFill !== undefined ? { rawDisplayFormatFill: col.rawDisplayFormatFill } : {}),
+          ...(col?.rawBaseFill !== undefined ? { rawBaseFill: col.rawBaseFill } : {}),
         }
       }) ?? observedCells
 

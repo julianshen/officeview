@@ -1221,6 +1221,21 @@ describe('CF oracle verifier', () => {
     expect(parseExcelColorToArgb('missing value')).toBeNull()
   })
 
+  it('decodes Excel standard red F8696B and green 63BE7B from raw AppleScript return shapes', () => {
+    const EXCEL_RED = 'FFF8696B'
+    const EXCEL_GREEN = 'FF63BE7B'
+
+    // Comma-delimited list string from AppleScript with text item delimiters set to ","
+    expect(parseExcelColorToArgb('248, 105, 107')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('248,105,107')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('{248, 105, 107}')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb([248, 105, 107])).toBe(EXCEL_RED)
+
+    // Reconstructed concatenated channel strings from run 2 (previously misparsed as VBA BGR integers)
+    expect(parseExcelColorToArgb('248105107')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('99190123')).toBe(EXCEL_GREEN)
+  })
+
   it('rejects review-t1-r1 counterexamples: text-only capture, inverted/blue expectations, white printer capture, unbound sidecar, and threshold 100->1000', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-r1-'))
     dirs.push(dir)
