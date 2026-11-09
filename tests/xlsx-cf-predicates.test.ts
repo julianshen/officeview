@@ -586,4 +586,15 @@ describe('CF predicate evaluation', () => {
     expect(evaluatePredicate(r, { row: 9, col: 9 }, num(100), undefined, denyGate)).toMatchObject({ kind: 'no-match' })
     expect(evaluatePredicate(r, { row: 1, col: 0 }, num(100), undefined, denyGate)).toMatchObject({ kind: 'ready', value: true })
   })
+
+  it('regression: ordinary nonempty text is not blank (bot P2)', () => {
+    const canonical = parsedDefinition('<cfRule type="containsBlanks" priority="1"><formula>LEN(TRIM(B2))=0</formula></cfRule>', 'B2')
+    const r = rule(canonical, [rect(1, 1, 1, 1)])
+    expect(evaluatePredicate(r, { row: 1, col: 1 }, str('hello'), undefined, allowGate)).toMatchObject({ kind: 'no-match' })
+  })
+
+  it('regression: SEARCH wildcard needles are unmeasured (bot P2)', () => {
+    const r = rule({ kind: 'text', type: 'containsText', needle: 'a*' }, [rect(1, 1, 1, 1)])
+    expect(evaluatePredicate(r, { row: 1, col: 1 }, str('abc'), undefined, allowGate).kind).toBe('unresolved')
+  })
 })
