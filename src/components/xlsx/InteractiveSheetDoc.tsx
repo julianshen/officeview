@@ -1264,7 +1264,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // when rules actually change (per render it would dominate scrolling).
 
   const cfTextKey = cfTextRects && entry && activeSheetId
-    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1])
+    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, clockGen])
     : undefined
   const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
   const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
