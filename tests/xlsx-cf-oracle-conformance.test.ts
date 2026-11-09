@@ -7,7 +7,7 @@
  *
  * Covers all 53 cells withheld and 7 cells painted wrongly in final-r1-oracle-vs-viewer.txt.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,59 +52,69 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured') continue
-      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
-      const doc = await parseXlsx(await OfficePackage.load(bytes))
-      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const dateContext = c.clockRequirement ? {
-        clockSerial: c.clockRequirement.anchorSerial,
-        dateSystem: c.clockRequirement.dateSystem,
-      } : undefined
+      if (c.clockRequirement) {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
+      }
+      try {
+        const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+        const doc = await parseXlsx(await OfficePackage.load(bytes))
+        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+        const dateContext = c.clockRequirement ? {
+          clockSerial: c.clockRequirement.anchorSerial,
+          dateSystem: c.clockRequirement.dateSystem,
+        } : undefined
 
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
-      expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
-      if (!paint) continue
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
+        if (!paint) continue
 
-      for (const exp of c.expected?.cells ?? []) {
-        checkedCells++
-        const cellKey = `${c.id}:${exp.ref}`
+        for (const exp of c.expected?.cells ?? []) {
+          checkedCells++
+          const cellKey = `${c.id}:${exp.ref}`
 
-        const { row, col } = refToRowCol(exp.ref)
-        const st = paint.layer.styleAt(row, col, undefined)
-        const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
+          const { row, col } = refToRowCol(exp.ref)
+          const st = paint.layer.styleAt(row, col, undefined)
+          const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
 
-        // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
-        // as withheld rather than skipped silently:
-        if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
-          expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
-          continue
-        }
-        if (cellKey === 'stage1-priority-composition:F2') {
-          // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
-          expect(st?.bold, `${cellKey} bold`).toBe(true)
-          continue
-        }
-        if (cellKey === 'stage1-dxf-layering:D4') {
-          // CF does not match; style returned is base table band (50 <= 100)
-          expect(st?.fillColor, `${cellKey} table band`).toBe('FFC1E5F5')
-          continue
-        }
-
-        if (exp.matched) {
-          expect(gotMatched, `${cellKey} should match CF (${exp.note ?? ''})`).toBe(true)
-          if (exp.fillRgb) {
-            expect(st?.fillColor, `${cellKey} fillRgb`).toBe(exp.fillRgb)
+          // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
+          // as withheld rather than skipped silently:
+          if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
+            expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
+            continue
           }
-          if (exp.fontRgb) {
-            expect(st?.color, `${cellKey} fontRgb`).toBe(exp.fontRgb)
+          if (cellKey === 'stage1-priority-composition:F2') {
+            // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
+            expect(st?.bold, `${cellKey} bold`).toBe(true)
+            continue
           }
-          if (exp.bold !== undefined) {
-            expect(st?.bold, `${cellKey} bold`).toBe(exp.bold)
+          if (cellKey === 'stage1-dxf-layering:D4') {
+            // CF does not match; style returned is base table band (50 <= 100)
+            expect(st?.fillColor, `${cellKey} table band`).toBe('FFC1E5F5')
+            continue
           }
-        } else {
-          expect(gotMatched, `${cellKey} should not match CF (${exp.note ?? ''})`).toBe(false)
+
+          if (exp.matched) {
+            expect(gotMatched, `${cellKey} should match CF (${exp.note ?? ''})`).toBe(true)
+            if (exp.fillRgb) {
+              expect(st?.fillColor, `${cellKey} fillRgb`).toBe(exp.fillRgb)
+            }
+            if (exp.fontRgb) {
+              expect(st?.color, `${cellKey} fontRgb`).toBe(exp.fontRgb)
+            }
+            if (exp.bold !== undefined) {
+              expect(st?.bold, `${cellKey} bold`).toBe(exp.bold)
+            }
+          } else {
+            expect(gotMatched, `${cellKey} should not match CF (${exp.note ?? ''})`).toBe(false)
+          }
+        }
+        paint.dispose()
+      } finally {
+        if (c.clockRequirement) {
+          vi.useRealTimers()
         }
       }
-      paint.dispose()
     }
 
     // Ensures we audited the full Stage 1 cell corpus (220+ cells)
@@ -181,27 +191,37 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     for (const caseId of withheldCases) {
       const c = manifest.cases.find(x => x.id === caseId)!
-      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
-      const doc = await parseXlsx(await OfficePackage.load(bytes))
-      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const dateContext = c.clockRequirement ? {
-        clockSerial: c.clockRequirement.anchorSerial,
-        dateSystem: c.clockRequirement.dateSystem,
-      } : undefined
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
-      expect(paint).toBeDefined()
-
-      for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {
-        const [, ref] = targetKey.split(':')
-        const { row, col } = refToRowCol(ref!)
-        const exp = c.expected!.cells.find(cell => cell.ref === ref)!
-        const st = paint!.layer.styleAt(row, col, undefined)
-        expect(st, `${targetKey} should have matched`).toBeDefined()
-        if (exp.fillRgb) expect(st?.fillColor, `${targetKey} fill`).toBe(exp.fillRgb)
-        if (exp.fontRgb) expect(st?.color, `${targetKey} font`).toBe(exp.fontRgb)
-        if (exp.bold !== undefined) expect(st?.bold, `${targetKey} bold`).toBe(exp.bold)
+      if (c.clockRequirement) {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
       }
-      paint!.dispose()
+      try {
+        const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+        const doc = await parseXlsx(await OfficePackage.load(bytes))
+        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+        const dateContext = c.clockRequirement ? {
+          clockSerial: c.clockRequirement.anchorSerial,
+          dateSystem: c.clockRequirement.dateSystem,
+        } : undefined
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        expect(paint).toBeDefined()
+
+        for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {
+          const [, ref] = targetKey.split(':')
+          const { row, col } = refToRowCol(ref!)
+          const exp = c.expected!.cells.find(cell => cell.ref === ref)!
+          const st = paint!.layer.styleAt(row, col, undefined)
+          expect(st, `${targetKey} should have matched`).toBeDefined()
+          if (exp.fillRgb) expect(st?.fillColor, `${targetKey} fill`).toBe(exp.fillRgb)
+          if (exp.fontRgb) expect(st?.color, `${targetKey} font`).toBe(exp.fontRgb)
+          if (exp.bold !== undefined) expect(st?.bold, `${targetKey} bold`).toBe(exp.bold)
+        }
+        paint!.dispose()
+      } finally {
+        if (c.clockRequirement) {
+          vi.useRealTimers()
+        }
+      }
     }
   })
 
