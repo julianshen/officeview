@@ -29,3 +29,9 @@ export function markRaster(input: MarkRasterInput): MarkRasterResult {
   if (masked === params.nChips) return { unmarked: 'all-masked', png: input.png }
   return { png: encodePng(d.w, d.h, marked.data), carriers: params.nChips - masked, masked, pedestalCells: marked.mark.pedestalCells }
 }
+
+/** Admission estimate for one encode job (§14): decoded RGBA, its marked copy,
+ * filtered scanlines and deflate output (each ≈ 4·w·h; deflate bounded by its
+ * input for real pages), plus the cloned input PNG and the final PNG. Conservative
+ * for rendered pages, not incompressible worst case. */
+export const encodeEstimate = (w: number, h: number, pngBytes: number) => w * h * 4 * 4 + 2 * pngBytes

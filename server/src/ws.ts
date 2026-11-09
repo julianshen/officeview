@@ -14,8 +14,9 @@ import { ASSET_ALLOWANCE } from '../../src/stream/remote/reservation'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
 import { AuditTable, ForensicExhausted, msgHex, type Issued } from './audit'
 import { CODEC_ID } from './mark/params'
+import { encodeEstimate } from './mark/mark-raster'
 import { deriveBasisKey } from './mark/basis'
-import { ScratchLease } from './scratch'
+import { LeaseFull, ScratchLease } from './scratch'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
 import { effectivePolicy, forensicNotices, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
@@ -102,7 +103,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** sid → §14 scratch lease (≤ 2 Layer-1 encodes in flight). */
   const leases = new Map<string, ScratchLease>()
   const forensicStats = { marked: 0, unmarked: 0, carriers: [] as number[], leased: 0 }
-  const leaseFor = (sid: string) => { let l = leases.get(sid); if (!l) leases.set(sid, l = new ScratchLease(2, (d) => { forensicStats.leased += d })); return l }
+  const leaseFor = (sid: string) => { let l = leases.get(sid); if (!l) leases.set(sid, l = new ScratchLease(2, o.pool.admission.caps.perSessionQueue, (d) => { forensicStats.leased += d })); return l }
   const ledger = new DocumentLedger((docRef, policy) => o.pool.dropParsed(docRef, policy === 'full' ? 'full' : 'visible-only'), o.documentCacheBytes)
   const pack = loadPack()
 
@@ -204,7 +205,7 @@ export function createStreamServer(o: StreamServerOptions) {
       const s = table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt: nowSec() })
       sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
-      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: !!forensic, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, forensicLayers: forensic ? ['l1'] : [] })
+      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null })
       ws.data.sid = sid
       committed = true
       sendManifest(ws, reqId, sid, token.token)
@@ -353,6 +354,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (unit.kind === 'raster' && unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
     if (unmarked) send(ws, { reqId, type: 'diag', code: 'forensic-unmarked', unitIndex, reason: unmarked })
     sendFrames(ws, messages)
+    // Recorded only after the frames went to this sid's live socket (never on issuance or a dropped result).
+    if (unit.kind === 'raster' && sd.forensic) audit.noteDelivered(s.sid, unmarked ? 'unmarked' : 'l1')
   }
 
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
@@ -368,10 +371,10 @@ export function createStreamServer(o: StreamServerOptions) {
    * the scratch lease. Unmarkable units ship canonical bytes with a reason. */
   async function markUnit(sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }): Promise<{ unit: RenderedUnit & { kind: 'raster' }; unmarked?: string } | RefusalCode> {
     let release: () => void
-    try { release = await leaseFor(sid).acquire() } catch { return 'policy-refused' }
+    try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
     try {
       const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, `${unitIndex}@${scale}`)
-      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, unit.w * unit.h * 4 * 3)
+      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(unit.w, unit.h, unit.png.length))
       if ('unmarked' in r) { forensicStats.unmarked++; return { unit, unmarked: r.unmarked } }
       forensicStats.marked++
       forensicStats.carriers.push(r.carriers); if (forensicStats.carriers.length > 256) forensicStats.carriers.shift()

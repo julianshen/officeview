@@ -96,3 +96,13 @@ describe('markRaster', async () => {
     expect(r.png).toBe(s.png)
   })
 })
+
+describe('encodeEstimate', () => {
+  it('covers decoded + marked + filtered rows + deflate output, plus the input clone and output PNG', async () => {
+    const { encodeEstimate } = await import('../src/mark/mark-raster')
+    // Codex's probe: opaque random 512x512 → a 917,868-byte PNG.
+    expect(encodeEstimate(512, 512, 917_868)).toBeGreaterThanOrEqual(4 * 512 * 512 * 4 + 2 * 917_868)
+    // The largest corpus unit at bucket 2 still fits one session's 96 MiB transient cap.
+    expect(encodeEstimate(1632, 2112, 198_869)).toBeLessThan(96 * 1024 * 1024)
+  })
+})

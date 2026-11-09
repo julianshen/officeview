@@ -16,12 +16,16 @@ export interface AuditRow {
   /** `forensic` means applied, not requested. */
   markSettings: { visible: 'fixed' | 'viewer' | 'off'; forensic: boolean; forensicRequested: boolean }
   relaxed: boolean
+  /** Issuance (write-once at HELLO): the code this sid's units carry when marked. */
   forensic: ForensicRecord | null
+  /** Layers actually delivered on ≥ 1 unit (append-only, never from issuance alone). */
   forensicLayers: Array<'l1'>
-  /** Both marks off (§19.2): visible off and no forensic layer applied. */
+  /** Raster units delivered marked / shipped unmarked (capacity, all-masked). */
+  delivered: { marked: number; unmarked: number }
+  /** Both marks off (§19.2): visible off and no forensic layer delivered. */
   untraceable: boolean
 }
-export type AuditRowInput = Omit<AuditRow, 'untraceable'>
+export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
 
 export interface Issued { token24: number; salt8: number; msg40: Uint8Array; code: Int8Array }
 
@@ -35,7 +39,9 @@ export const msgHex = (bits: Uint8Array) => Array.from({ length: 5 }, (_, i) => 
 const hexBits = (hex: string) => Array.from({ length: 40 }, (_, i) => (parseInt(hex.slice((i >> 3) * 2, (i >> 3) * 2 + 2), 16) >> (7 - i % 8)) & 1).join('')
 
 export class AuditTable {
-  private rows = new Map<string, AuditRow>()
+  private rows = new Map<string, AuditRowInput>()
+  /** sid → append-only delivery summary (bounded: counters, not per-unit rows). */
+  private applied = new Map<string, { layers: Set<'l1'>; marked: number; unmarked: number }>()
   private nextToken_: number
   /** Live keyed messages, as insertMessage's bit-string ids. */
   private used = new Set<string>()
@@ -54,14 +60,31 @@ export class AuditTable {
 
   record(sid: string, row: AuditRowInput): void {
     if (this.rows.has(sid)) throw new Error(`audit row for ${sid} is write-once`)
-    const untraceable = row.markSettings.visible === 'off' && row.forensicLayers.length === 0
-    this.rows.set(sid, Object.freeze({ ...row, markSettings: Object.freeze({ ...row.markSettings }), forensic: row.forensic && Object.freeze({ ...row.forensic }), forensicLayers: Object.freeze([...row.forensicLayers]) as Array<'l1'>, untraceable }))
+    this.rows.set(sid, { ...row, markSettings: { ...row.markSettings }, forensic: row.forensic && { ...row.forensic } })
+    this.applied.set(sid, { layers: new Set(), marked: 0, unmarked: 0 })
   }
-  get(sid: string): AuditRow | undefined { return this.rows.get(sid) }
+  /** A unit was delivered to `sid`'s socket: marked with `layer`, or unmarked. No-op for an unknown or expired sid. */
+  noteDelivered(sid: string, what: 'l1' | 'unmarked'): void {
+    const a = this.applied.get(sid)
+    if (!a) return
+    if (what === 'unmarked') a.unmarked++
+    else { a.marked++; a.layers.add(what) }
+  }
+  /** Frozen view: issuance plus what has been delivered so far. */
+  get(sid: string): AuditRow | undefined {
+    const r = this.rows.get(sid), a = this.applied.get(sid)
+    if (!r || !a) return undefined
+    const forensicLayers = [...a.layers]
+    return Object.freeze({
+      ...r, markSettings: Object.freeze({ ...r.markSettings, forensic: forensicLayers.length > 0 }), forensic: r.forensic && Object.freeze({ ...r.forensic }),
+      forensicLayers: Object.freeze(forensicLayers) as Array<'l1'>, delivered: Object.freeze({ marked: a.marked, unmarked: a.unmarked }),
+      untraceable: r.markSettings.visible === 'off' && forensicLayers.length === 0,
+    })
+  }
   expire(now: number): number {
     let n = 0
     for (const [sid, r] of this.rows) if (now - r.startedAt >= AUDIT_RETENTION_SEC) {
-      this.rows.delete(sid); n++
+      this.rows.delete(sid); this.applied.delete(sid); n++
       if (r.forensic) this.used.delete(hexBits(r.forensic.msg40))
     }
     return n

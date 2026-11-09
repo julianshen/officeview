@@ -25,7 +25,9 @@ base64) and an allowed origin (`--origin` / `OV_STREAM_ORIGINS`).
   visible mark composited. Each raster unit also carries the session's own
   invisible Layer-1 pixel mark (`l1-bch512x40@1`; `src/mark/`), added per
   session after the shared cache. The audit row records the token, salt and
-  keyed message actually applied. Command units (`projection: 'relaxed'`) carry
+  keyed message issued at HELLO, and separately the layers actually delivered
+  (`forensicLayers`, counts of marked/unmarked raster units); `untraceable` is
+  derived from what was delivered, never from issuance alone. Command units (`projection: 'relaxed'`) carry
   no forensic mark yet (`forensic-commands-unmarked` notice); `forensicMark:
   false` sends `forensic-off`. Audit rows live in memory until Stage 2b.
 - **Fonts.** `fontpack/` (20 OFL faces, `pack.json` pins their hashes);

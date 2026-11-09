@@ -6,7 +6,7 @@ import { extendedCodeword } from '../src/mark/bch'
 import { messageFor } from '../src/mark/message'
 
 const kMsg = Uint8Array.from({ length: 32 }, (_, i) => 200 - i)
-const base: AuditRowInput = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off', forensic: false, forensicRequested: false }, relaxed: false, forensic: null, forensicLayers: [] }
+const base: AuditRowInput = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off', forensic: false, forensicRequested: false }, relaxed: false, forensic: null }
 const hexOf = (bits: Uint8Array) => Array.from({ length: 5 }, (_, i) => bits.subarray(i * 8, i * 8 + 8).reduce((a, b) => a * 2 + b, 0).toString(16).padStart(2, '0')).join('')
 
 describe('AuditTable.issue', () => {
@@ -37,23 +37,33 @@ describe('AuditTable.issue', () => {
   it('expire frees the row msg40 but the token counter never rewinds', () => {
     const t = new AuditTable()
     const f = t.issue(kMsg, 1, () => 3)
-    t.record('s1', { ...base, forensic: { codec: 'l1-bch512x40@1', token24: f.token24, salt8: f.salt8, msg40: hexOf(f.msg40) }, forensicLayers: ['l1'] })
+    t.record('s1', { ...base, forensic: { codec: 'l1-bch512x40@1', token24: f.token24, salt8: f.salt8, msg40: hexOf(f.msg40) } })
+    t.noteDelivered('s1', 'l1')
     expect(t.liveMessages).toBe(1)
     expect(t.expire(91 * 24 * 3600)).toBe(1)
     expect(t.liveMessages).toBe(0)
+    t.noteDelivered('s1', 'l1') // expired: no-op, no throw
+    expect(t.get('s1')).toBeUndefined()
     expect(t.issue(kMsg, 1).token24).toBe(f.token24 + 1)
   })
 })
 
 describe('AuditTable.record', () => {
-  it('derives untraceable from what was applied', () => {
+  it('derives untraceable from what was delivered, not what was issued', () => {
     const t = new AuditTable()
     t.record('a', base)
     expect(t.get('a')!.untraceable).toBe(true)
-    t.record('b', { ...base, forensic: { codec: 'l1-bch512x40@1', token24: 0, salt8: 1, msg40: '0011223344' }, forensicLayers: ['l1'] })
-    expect(t.get('b')!.untraceable).toBe(false)
+    // Issued but nothing delivered yet: no layer applied, still untraceable.
+    t.record('b', { ...base, forensic: { codec: 'l1-bch512x40@1', token24: 0, salt8: 1, msg40: '0011223344' } })
+    expect(t.get('b')).toMatchObject({ forensicLayers: [], markSettings: { forensic: false }, untraceable: true, delivered: { marked: 0, unmarked: 0 } })
+    t.noteDelivered('b', 'unmarked')
+    expect(t.get('b')).toMatchObject({ forensicLayers: [], untraceable: true, delivered: { marked: 0, unmarked: 1 } })
+    t.noteDelivered('b', 'l1')
+    expect(t.get('b')).toMatchObject({ forensicLayers: ['l1'], markSettings: { forensic: true }, untraceable: false, delivered: { marked: 1, unmarked: 1 } })
+    expect(Object.isFrozen(t.get('b'))).toBe(true)
     t.record('c', { ...base, markSettings: { ...base.markSettings, visible: 'fixed' } })
     expect(t.get('c')!.untraceable).toBe(false)
+    t.noteDelivered('gone', 'l1') // unknown sid: no-op
   })
 })
 

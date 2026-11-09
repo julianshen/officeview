@@ -15,13 +15,24 @@ describe('forensic policy', () => {
     expect(forensicNotices(effectivePolicy({ policy: { projection: 'relaxed' } }))).toEqual(['forensic-commands-unmarked'])
     expect(forensicNotices(effectivePolicy({ policy: { forensicMark: false } }))).toEqual(['forensic-off'])
   })
-  it('default HELLO: no forensic-* notice; audit row carries token 0 and layer l1', async () => {
+  it('default HELLO: no forensic-* notice; token 0 issued; l1 recorded only once a marked unit is delivered', async () => {
     const h = await start()
     const c = new Client(h.url), m = await c.hello()
     expect(m.notices.filter((n) => n.startsWith('forensic'))).toEqual([])
     const row = h.stream.audit.get(m.session.sid)!
-    expect(row).toMatchObject({ forensicLayers: ['l1'], markSettings: { forensic: true, forensicRequested: true }, untraceable: false, forensic: { codec: 'l1-bch512x40@1', token24: 0 } })
+    expect(row).toMatchObject({ forensicLayers: [], markSettings: { forensic: false, forensicRequested: true }, forensic: { codec: 'l1-bch512x40@1', token24: 0 } })
     expect(row.forensic!.msg40).toMatch(/^[0-9a-f]{10}$/)
+    await c.ready(); c.unit(10, 0); await c.unitMessages(10)
+    expect(h.stream.audit.get(m.session.sid)).toMatchObject({ forensicLayers: ['l1'], markSettings: { forensic: true }, untraceable: false, delivered: { marked: 1, unmarked: 0 } })
+    c.close(); h.stop()
+  })
+  it('relaxed + visible off: command units only → the row stays untraceable despite an issued code', async () => {
+    const h = await start({ doc: corpus('pypptx-test.pptx'), policy: { projection: 'relaxed', visibleMark: 'off' } })
+    const c = new Client(h.url), m = await c.hello()
+    await c.ready(); c.unit(10, 0)
+    const { unit } = await c.unitMessages(10)
+    expect(unit.discriminator).toBe(1)
+    expect(h.stream.audit.get(m.session.sid)).toMatchObject({ forensic: { token24: 0 }, forensicLayers: [], untraceable: true })
     c.close(); h.stop()
   })
   it('relaxed projection: forensic-commands-unmarked', async () => {
