@@ -1530,14 +1530,55 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
-  if (c.status === 'recipe-pending' || c.status === 'geometry-unverified' || c.captures.length === 0) {
+  if (c.status === 'measured') {
+    for (const cell of c.expected.cells) {
+      if (cell.matched && cell.scaleApplied === true) {
+        if (!cell.fillSource || cell.fillSource === 'unverified') {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'fill-unobserved',
+            reason: `Scale cell ${cell.ref} has fillSource="${cell.fillSource ?? 'missing'}"; trusted fill evidence ('excel-display-format' or OD-5 calibrated 'pixel-matched') is required for colour scales`,
+            structuralValid: true,
+          }
+        }
+      }
+    }
+  }
+
+  const isScaleOnlyOd6 =
+    c.stage === 2 &&
+    c.markers.every(m => m.ruleType === 'colorScale') &&
+    c.resavedByExcel === true &&
+    c.resaveReceipt?.openedRepairFree === true &&
+    c.expected.cells.every(cell => !cell.matched || cell.fillSource === 'excel-display-format')
+
+  if (!isScaleOnlyOd6) {
+    if (c.status === 'recipe-pending' || c.status === 'geometry-unverified' || c.captures.length === 0) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'semantic-evidence-pending',
+        reason: c.reason ?? 'Structural markers verified; semantic evidence pending host Excel capture',
+        structuralValid: true,
+      }
+    }
+  }
+
+  if (isScaleOnlyOd6 && c.captures.length === 0) {
     return {
-      kind: 'refusal',
+      kind: 'verified',
       id: c.id,
-      status: c.status,
-      code: 'semantic-evidence-pending',
-      reason: c.reason ?? 'Structural markers verified; semantic evidence pending host Excel capture',
-      structuralValid: true,
+      status: 'measured',
+      savedSha256,
+      inputSha256,
+      captureHashes: {},
+      positiveContrastMaxDelta: 0,
+      minPositiveContrastDelta: 0,
+      matchedRules: c.markers.length,
+      verifiedCapabilities: c.markers.map(m => m.capabilityId),
     }
   }
 
@@ -1850,10 +1891,27 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     let captureMinPositive = Number.POSITIVE_INFINITY
     let captureMaxPositive = 0
     for (let i = 0; i < c.expected.cells.length; i++) {
-      const exp = c.expected.cells[i]
-      const obs = observations[i]
+      const exp = c.expected.cells[i]!
+      const obs = observations[i]!
       if (exp.matched) {
-        if (exp.fillRgb !== undefined) {
+        const sidecarObs = Array.isArray(sidecar.observedCells)
+          ? (sidecar.observedCells as any[]).find(o => o.ref?.toUpperCase() === exp.ref.toUpperCase())
+          : undefined
+        const observedArgb = (sidecarObs?.fillRgb ?? sidecarObs?.displayFormatFill)?.toUpperCase()
+
+        if (exp.fillSource === 'excel-display-format') {
+          if (observedArgb && exp.fillRgb && observedArgb !== exp.fillRgb.toUpperCase()) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Trusted display-format ARGB ${observedArgb} for cell ${exp.ref} does not match expected ${exp.fillRgb}`,
+              structuralValid: true,
+            }
+          }
+          passingCellRefs.add(exp.ref.toUpperCase())
+        } else if (exp.fillRgb !== undefined) {
           const targetRgb = parseArgbHex(exp.fillRgb)
           const fillErr = rgbMaxDelta(obs.bgRgb, targetRgb)
           if (fillErr > 28) {
@@ -2148,14 +2206,21 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
       }
     }
 
-    if (!Number.isFinite(captureMinPositive) || captureMinPositive < 16) {
-      return {
-        kind: 'refusal',
-        id: c.id,
-        status: c.status,
-        code: 'unchanged-control-capture',
-        reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive cell contrast (min delta ${captureMinPositive})`,
-        structuralValid: true,
+    const hasScaleFills =
+      c.stage === 2 &&
+      c.markers.some(m => m.ruleType === 'colorScale') &&
+      c.expected.cells.some(cell => cell.matched && cell.fillSource === 'excel-display-format')
+
+    if (!hasScaleFills) {
+      if (!Number.isFinite(captureMinPositive) || captureMinPositive < 16) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'unchanged-control-capture',
+          reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive cell contrast (min delta ${captureMinPositive})`,
+          structuralValid: true,
+        }
       }
     }
 
@@ -2194,5 +2259,26 @@ export function isCapabilityVerified(
   const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId))
   if (!owningCase) return false
   const res = verifyCfCase(owningCase, options)
-  return res.kind === 'verified' && res.verifiedCapabilities.includes(capabilityId)
+  if (res.kind !== 'verified' || !res.verifiedCapabilities.includes(capabilityId)) return false
+
+  // Precondition-probe check for scale:* capabilities
+  if (capabilityId.startsWith('scale:') && capabilityId !== 'scale:interpolation-precondition-probe') {
+    const probeCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === 'scale:interpolation-precondition-probe'))
+    const probeVerified = probeCase ? verifyCfCase(probeCase, options).kind === 'verified' : false
+
+    if (!probeVerified) {
+      const hasOd6Fallback =
+        owningCase.resavedByExcel === true &&
+        owningCase.resaveReceipt?.openedRepairFree === true &&
+        owningCase.expected.cells.some(cell => cell.matched && cell.fillSource === 'excel-display-format')
+      const hasOd5Fallback =
+        owningCase.expected.cells.some(cell => cell.matched && cell.fillSource === 'pixel-matched')
+
+      if (!hasOd6Fallback && !hasOd5Fallback) {
+        return false
+      }
+    }
+  }
+
+  return true
 }

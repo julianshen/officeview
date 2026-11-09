@@ -700,6 +700,212 @@ describe('CF oracle verifier', () => {
     expect(semanticRes.structuralValid).toBe(true)
   })
 
+  it('scale fill requires trusted fill evidence', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-scale-fill-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:fill-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFF0000', 'FF00FF00'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    const validPng = makeCapturePng(true)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    const makeCase = (fillSource?: 'excel-display-format' | 'pixel-matched' | 'unverified'): CfOracleCase => ({
+      id: 'scale-fill-case',
+      stage: 2,
+      question: 'Scale fill trust evidence',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, fillRgb: 'FFFF0000', scaleApplied: true, fillSource },
+          { ref: 'B3', controlRef: 'A3', matched: false, scaleApplied: false, fillSource },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    })
+
+    const writeSidecar = (geomSource = 'excel-measured', observedArgb = 'FFFF0000') => {
+      writeFileSync(
+        join(dir, 'scale.json'),
+        JSON.stringify({
+          excelVersion: '16.114',
+          route: 'copy-picture',
+          appearance: 'screen',
+          scale: 1,
+          pxPerPt: 1,
+          width: 168,
+          height: 54,
+          colWidthsPt: [84, 84],
+          rowHeightsPt: [18, 18, 18],
+          geometrySource: geomSource,
+          resavedByExcel: true,
+          resaveSavedSha256: xlsxHash,
+          sheet: 'Sheet1',
+          range: 'A1:B3',
+          savedSha256: xlsxHash,
+          pngSha256: validPngHash,
+          capturedAt: '2026-11-06T08:00:00Z',
+          observedCells: [
+            { ref: 'B2', fillSource: 'excel-display-format', fillRgb: observedArgb },
+            { ref: 'B3', fillSource: 'excel-display-format', fillRgb: 'FFFFFFFF' },
+          ],
+        }),
+      )
+    }
+
+    // 1. Missing fillSource or 'unverified' -> fill-unobserved
+    writeSidecar('excel-measured')
+    const unverifiedRes = verifyCfCase(makeCase('unverified'), { rootDir: dir })
+    expect(unverifiedRes).toMatchObject({
+      kind: 'refusal',
+      code: 'fill-unobserved',
+    })
+
+    const missingSourceRes = verifyCfCase(makeCase(undefined), { rootDir: dir })
+    expect(missingSourceRes).toMatchObject({
+      kind: 'refusal',
+      code: 'fill-unobserved',
+    })
+
+    // 2. Geometry must be excel-measured before pixel sample (T1-A(a))
+    writeSidecar('calc-estimated')
+    const unverifiedGeomRes = verifyCfCase(makeCase('pixel-matched'), { rootDir: dir })
+    expect(unverifiedGeomRes).toMatchObject({
+      kind: 'refusal',
+      code: 'geometry-mismatch',
+    })
+
+    // 3. OD-5 calibrated pixel-matched with excel-measured geometry verifies
+    writeSidecar('excel-measured')
+    // validPng has #ffc7ce at B2, target FFFFC7CE
+    const cPixelMatched = makeCase('pixel-matched')
+    cPixelMatched.expected.cells[0].fillRgb = 'FFFFC7CE'
+    const pixelMatchedRes = verifyCfCase(cPixelMatched, { rootDir: dir })
+    expect(pixelMatchedRes.kind).toBe('verified')
+
+    // 4. Trusted ARGB (fillSource: 'excel-display-format') verifies even when pixel advice disagrees
+    writeSidecar('excel-measured', 'FFFF0000')
+    const trustedArgbCase = makeCase('excel-display-format')
+    trustedArgbCase.expected.cells[0].fillRgb = 'FFFF0000'
+    // validPng has #ffc7ce (delta > 28 from FFFF0000), but trusted ARGB overrides pixel advice
+    const trustedRes = verifyCfCase(trustedArgbCase, { rootDir: dir })
+    expect(trustedRes.kind).toBe('verified')
+
+    // 5. Trusted ARGB that differs from expectation gets cell-expectation-mismatch
+    writeSidecar('excel-measured', 'FF00FF00') // observed green vs expected red
+    const mismatchArgbCase = makeCase('excel-display-format')
+    mismatchArgbCase.expected.cells[0].fillRgb = 'FFFF0000'
+    const mismatchRes = verifyCfCase(mismatchArgbCase, { rootDir: dir })
+    expect(mismatchRes).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 6. OD-6: trusted ARGB + resave receipt with NO PNG promotes semantic capability unconditionally
+    const od6NoPngCase = makeCase('excel-display-format')
+    od6NoPngCase.captures = []
+    const od6Res = verifyCfCase(od6NoPngCase, { rootDir: dir })
+    expect(od6Res.kind).toBe('verified')
+
+    // 7. Precondition probe failure refuses scale:* capabilities unless OD-5 or OD-6 engages
+    const manifestFixture: CfManifest = {
+      version: 1,
+      excelBuild: '16.114',
+      locale: 'zh-TW',
+      dateSystem: '1900',
+      hostTimeZone: 'Asia/Taipei',
+      generatedAt: '2026-11-06T00:00:00Z',
+      cases: [
+        {
+          id: 'probe-case',
+          stage: 2,
+          question: 'Precondition probe',
+          input: 'scale.xlsx',
+          saved: 'scale.xlsx',
+          sheet: 'Sheet1',
+          range: 'A1:B3',
+          requiredAppearances: ['screen'],
+          markers: [
+            {
+              part: 'xl/worksheets/sheet1.xml',
+              extension: 'legacy',
+              capabilityId: 'scale:interpolation-precondition-probe',
+              sqref: 'B2:B3',
+              ruleType: 'colorScale',
+              priority: 1,
+              formulas: [],
+            },
+          ],
+          expected: {
+            inputSha256: xlsxHash,
+            savedSha256: xlsxHash,
+            provenance: 'seed-hypothesis',
+            positiveRefs: ['B2'],
+            negativeRefs: ['B3'],
+            cells: [{ ref: 'B2', controlRef: 'A2', matched: true }, { ref: 'B3', controlRef: 'A3', matched: false }],
+          },
+          captures: [],
+          status: 'recipe-pending', // Refused!
+          tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+        },
+        od6NoPngCase, // Has OD-6 fallback
+      ],
+    }
+
+    // OD-6 fallback engages -> capability verified despite probe failure
+    expect(isCapabilityVerified('scale:fill-test', manifestFixture, { rootDir: dir })).toBe(true)
+
+    // Without OD-5 or OD-6 fallback, capability is refused when probe fails
+    const noFallbackCase = makeCase('unverified')
+    manifestFixture.cases[1] = noFallbackCase
+    expect(isCapabilityVerified('scale:fill-test', manifestFixture, { rootDir: dir })).toBe(false)
+  })
+
   it('rejects review-t1-r1 counterexamples: text-only capture, inverted/blue expectations, white printer capture, unbound sidecar, and threshold 100->1000', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-r1-'))
     dirs.push(dir)
