@@ -332,7 +332,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   let capturedCount = 0
   for (let i = 0; i < manifest.cases.length; i++) {
     const c = manifest.cases[i]
-    if (c.stage > stage || (only && c.id !== only) || c.status === 'unsupported') continue
+    if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
     const savedAbs = resolve(REPO_ROOT, c.saved)
     const savedBytes = new Uint8Array(readFileSync(savedAbs))
     const savedSha256 = sha256Hex(savedBytes)

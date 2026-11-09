@@ -1458,6 +1458,8 @@ export interface GenerateStage1Options {
   rootDir?: string
   /** When set, only this case's files and manifest entry are generated/updated; other cases remain untouched. */
   onlyCaseId?: string
+  /** When set, only cases belonging to this stage are generated/updated; other stages' cases remain untouched. */
+  stage?: number
   /** Anchor local date (`YYYY-MM-DD` in `Asia/Taipei`) for clock-dependent fixtures. */
   anchorLocalDate?: string
 }
@@ -1466,6 +1468,7 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
   const opts: GenerateStage1Options = typeof options === 'string' ? { rootDir: options } : options
   const rootDir = opts.rootDir ?? REPO_ROOT
   const onlyCaseId = opts.onlyCaseId
+  const targetStage = opts.stage
   const anchorDateIso = opts.anchorLocalDate ?? DEFAULT_CLOCK_ANCHOR_DATE
 
   const fixtureDir = resolve(rootDir, 'tests/fixtures/xlsx-cf')
@@ -1489,6 +1492,11 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
     const prev = existingManifest?.cases.find(x => x.id === template.id)
     if (onlyCaseId && template.id !== onlyCaseId && prev) {
       // Do not touch other cases when rebuilding a single selected case
+      cases.push(prev)
+      continue
+    }
+    if (targetStage !== undefined && template.stage !== targetStage && prev) {
+      // Do not touch other stages when targeting a specific stage
       cases.push(prev)
       continue
     }
@@ -1566,7 +1574,8 @@ export const generateAllCases = generateAllStage1
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2)
   const onlyCaseId = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
+  const stage = args.includes('--stage') ? Number(args[args.indexOf('--stage') + 1]) : undefined
   const anchorLocalDate = args.includes('--anchor-date') ? args[args.indexOf('--anchor-date') + 1] : undefined
-  const manifest = await generateAllStage1({ onlyCaseId, anchorLocalDate })
+  const manifest = await generateAllStage1({ onlyCaseId, stage, anchorLocalDate })
   console.log(`[cf-refs/generate] generated ${manifest.cases.length} oracle cases -> ${CF_MANIFEST_PATH}`)
 }

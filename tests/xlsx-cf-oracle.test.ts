@@ -7,7 +7,7 @@ import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
 import { afterEach, describe, expect, it } from 'vitest'
 import { compareCfCase } from '../scripts/cf-compare'
-import { assertCanCloseWorkbook, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
+import { assertCanCloseWorkbook, filterCasesForStage, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
   CF_CAPABILITIES,
   CF_CASES,
@@ -906,6 +906,51 @@ describe('CF oracle verifier', () => {
     const noFallbackCase = makeCase('unverified')
     manifestFixture.cases[1] = noFallbackCase
     expect(isCapabilityVerified('scale:fill-test', manifestFixture, { rootDir: dir })).toBe(false)
+  })
+
+  it('stage filtering in generate, build, and capture touches only the specified stage', async () => {
+    // 1. filterCasesForStage enforces that --stage 2 returns strictly stage 2 buildable cases
+    const stage2Cases = filterCasesForStage(CF_CASES as CfOracleCase[], 2)
+    expect(stage2Cases.length).toBe(7)
+    expect(stage2Cases.every(c => c.stage === 2)).toBe(true)
+    expect(stage2Cases.some(c => c.stage === 1)).toBe(false)
+    expect((CF_CASES as CfOracleCase[]).filter(c => c.stage === 2)).toHaveLength(8)
+
+    // 2. filterCasesForStage with --stage 1 returns strictly stage 1 buildable cases
+    const stage1Cases = filterCasesForStage(CF_CASES as CfOracleCase[], 1)
+    expect(stage1Cases.length).toBe(12)
+    expect(stage1Cases.every(c => c.stage === 1)).toBe(true)
+    expect(stage1Cases.some(c => c.stage === 2)).toBe(false)
+    expect((CF_CASES as CfOracleCase[]).filter(c => c.stage === 1)).toHaveLength(13)
+
+    // 3. generateAllStage1 with stage: 2 preserves existing Stage 1 cases in manifest
+    const dir = mkdtempSync(join(tmpdir(), 'cf-stage-filter-'))
+    const fixtureDir = join(dir, 'tests/fixtures/xlsx-cf')
+    mkdirSync(join(fixtureDir, 'inputs'), { recursive: true })
+    mkdirSync(join(fixtureDir, 'refs'), { recursive: true })
+
+    const fakeStage1Case: CfOracleCase = {
+      ...(CF_CASES.find(c => c.id === 'stage1-cellis-literals') as CfOracleCase),
+      expected: {
+        ...(CF_CASES.find(c => c.id === 'stage1-cellis-literals') as CfOracleCase).expected,
+        inputSha256: 'deadbeef11111111111111111111111111111111111111111111111111111111',
+      },
+    }
+    const initialManifest: CfManifest = {
+      version: 1,
+      excelBuild: '16.114',
+      locale: 'zh-TW',
+      dateSystem: '1900',
+      hostTimeZone: 'Asia/Taipei',
+      generatedAt: '2026-11-06T00:00:00Z',
+      cases: [fakeStage1Case],
+    }
+    writeFileSync(join(fixtureDir, 'manifest.json'), JSON.stringify(initialManifest, null, 2))
+
+    // Generating stage: 2 must NOT overwrite the fake Stage 1 case
+    const genManifest = await generateAllStage1({ rootDir: dir, stage: 2 })
+    const retainedStage1 = genManifest.cases.find(c => c.id === 'stage1-cellis-literals')
+    expect(retainedStage1?.expected.inputSha256).toBe('deadbeef11111111111111111111111111111111111111111111111111111111')
   })
 
   it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {

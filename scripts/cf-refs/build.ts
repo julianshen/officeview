@@ -29,6 +29,17 @@ export function shouldSkipCaseOnResume(c: CfOracleCase, currentInputSha256: stri
   return res.kind === 'verified'
 }
 
+/** Filters manifest or catalog cases strictly to the targeted stage, excluding unsupported negative cases. */
+export function filterCasesForStage(
+  cases: readonly CfOracleCase[],
+  stage: number,
+  onlyCaseId?: string,
+): CfOracleCase[] {
+  return cases.filter(
+    c => c.stage === stage && (!onlyCaseId || c.id === onlyCaseId) && c.status !== 'unsupported',
+  )
+}
+
 /** Enforces that `build.ts` never closes a workbook that was already open before the build started. */
 export function assertCanCloseWorkbook(targetName: string, preExistingOpenWorkbooks: ReadonlySet<string>): void {
   if (preExistingOpenWorkbooks.has(targetName)) {
@@ -204,7 +215,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       ? args[args.indexOf('--anchor-date') + 1]
       : undefined
 
-  const manifest: CfManifest = await generateAllStage1({ onlyCaseId: only, anchorLocalDate })
+  const manifest: CfManifest = await generateAllStage1({ stage, onlyCaseId: only, anchorLocalDate })
   execFileSync('open', ['-a', 'Microsoft Excel'])
   execFileSync('sleep', ['2'])
   const preExisting = new Set<string>(workbookNames() ?? [])
@@ -215,7 +226,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
   for (let i = 0; i < manifest.cases.length; i++) {
     const c = manifest.cases[i]
-    if (c.stage > stage || (only && c.id !== only) || c.status === 'unsupported') continue
+    if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
     const inputBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input)))
     const currentInputSha256 = sha256Hex(inputBytes)
     if (resume && shouldSkipCaseOnResume(c, currentInputSha256, REPO_ROOT)) {
