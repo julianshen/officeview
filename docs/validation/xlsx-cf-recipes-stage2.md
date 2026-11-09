@@ -85,13 +85,13 @@ In `scripts/cf-refs/capture.ts`, cell-level evidence is collected by querying Mi
 ```applescript
 tell application "Microsoft Excel"
   set targetSheet to worksheet "Sheet1" of active workbook
-  
+
   -- 1. CF Winning Display Format Interior Color
   set dispColor to color of interior object of display format of range "B2" of targetSheet
-  
+
   -- 2. Base Unformatted Interior Color (Precondition Probe)
   set baseColor to color of interior object of range "B2" of targetSheet
-  
+
   -- 3. Display Value & Formatting
   set dispText to string value of range "B2" of targetSheet
 end tell
@@ -153,22 +153,22 @@ For `stage2-scale-thresholds`, dynamic refresh behaviour (re-evaluating scale th
    tell application "Microsoft Excel"
      open POSIX file "/Users/julianshen/prj/officeview/.worktrees/cf-s2/tests/fixtures/xlsx-cf/stage2-scale-thresholds.xlsx"
      set ws to worksheet "Sheet1" of active workbook
-     
+
      -- Step A: Record initial display colours for B2:B6
      set preColors to {}
      repeat with r from 2 to 6
        set end of preColors to color of interior object of display format of range ("B" & r) of ws
      end repeat
-     
+
      -- Step B: Mutate the maximum cell live (e.g. cell B6 from 10 to 20)
      set value of range "B6" of ws to 20
-     
+
      -- Step C: Re-read display colours for B2:B6 without saving
      set postColors to {}
      repeat with r from 2 to 6
        set end of postColors to color of interior object of display format of range ("B" & r) of ws
      end repeat
-     
+
      -- Step D: Close strictly WITHOUT saving
      close active workbook saving no
    end tell
