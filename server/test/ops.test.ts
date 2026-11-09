@@ -81,10 +81,13 @@ describe('T2 over the wire: 13 hidden constructs never transmitted', async () =>
   for (const f of fixtures) it(`${f.id}`, async () => {
     // The hidden source really is in the input (non-vacuous).
     expect(contains(f.withHidden, enc.encode(f.marker)) || (await (await import('jszip')).default.loadAsync(f.withHidden).then(async (z) => (await Promise.all(Object.values(z.files).map((e) => e.async('string')))).join(''))).includes(f.marker)).toBe(true)
-    const pixels: Record<string, Buffer[]> = { relaxed: [], protected: [] }
+    const pixels: Record<string, Buffer[]> = { relaxed: [], protected: [], marked: [] }
     const texts: string[] = []
-    for (const projection of ['relaxed', 'protected'] as const) {
-      const h = await start({ doc: f.withHidden, policy: { projection } }), c = new Client(h.url)
+    // `protected` (forensic off) is pixel-compared with the relaxed replay; `marked`
+    // is the production default: leak-checked, and within the Layer-1 shift of it.
+    const runs = { relaxed: { projection: 'relaxed' }, protected: { projection: 'protected', forensicMark: false }, marked: { projection: 'protected' } } as const
+    for (const projection of ['relaxed', 'protected', 'marked'] as const) {
+      const h = await start({ doc: f.withHidden, policy: runs[projection] }), c = new Client(h.url)
       const m = await c.hello(); await c.ready()
       expect(contains(enc.encode(JSON.stringify(m)), enc.encode(f.marker))).toBe(false)
       for (let u = 0; u < m.units.count; u++) {
@@ -112,5 +115,7 @@ describe('T2 over the wire: 13 hidden constructs never transmitted', async () =>
     expect(all.includes(f.marker)).toBe(false)
     expect(pixels.protected!.length).toBe(pixels.relaxed!.length)
     pixels.protected!.forEach((p, i) => expect(p.equals(pixels.relaxed![i]!), `${f.id} unit ${i} protected == relaxed`).toBe(true))
+    // amplitude 2 + pedestal 2 bound the per-channel Layer-1 shift.
+    pixels.marked!.forEach((p, i) => { let d = 0; for (let k = 0; k < p.length; k++) d = Math.max(d, Math.abs(p[k]! - pixels.protected![i]![k]!)); expect(d, `${f.id} unit ${i} marked within 4 of canonical`).toBeLessThanOrEqual(4) })
   }, 60_000)
 })

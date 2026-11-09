@@ -14,6 +14,8 @@ import { ASSET_ALLOWANCE } from '../../src/stream/remote/reservation'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
 import { AuditTable, ForensicExhausted, msgHex, type Issued } from './audit'
 import { CODEC_ID } from './mark/params'
+import { deriveBasisKey } from './mark/basis'
+import { ScratchLease } from './scratch'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
 import { effectivePolicy, forensicNotices, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
@@ -59,6 +61,8 @@ export interface StreamServerOptions {
   documentCacheBytes?: number
   /** Audit table (tests preset token exhaustion). */
   audit?: AuditTable
+  /** TEST-ONLY: wedge each Layer-1 encode (forwarded only by a testHooks pool). */
+  encodeHangMs?: number
 }
 
 interface Conn {
@@ -95,6 +99,10 @@ export function createStreamServer(o: StreamServerOptions) {
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
   const renderCache = createRenderCache<RenderedUnit>()
+  /** sid → §14 scratch lease (≤ 2 Layer-1 encodes in flight). */
+  const leases = new Map<string, ScratchLease>()
+  const forensicStats = { marked: 0, unmarked: 0, carriers: [] as number[], leased: 0 }
+  const leaseFor = (sid: string) => { let l = leases.get(sid); if (!l) leases.set(sid, l = new ScratchLease(2, (d) => { forensicStats.leased += d })); return l }
   const ledger = new DocumentLedger((docRef, policy) => o.pool.dropParsed(docRef, policy === 'full' ? 'full' : 'visible-only'), o.documentCacheBytes)
   const pack = loadPack()
 
@@ -240,6 +248,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const r = reapers.get(sid); if (r) { clearTimeout(r); reapers.delete(sid) }
     table.close(sid)
     sessionRates.delete(sid)
+    leases.get(sid)?.close(); leases.delete(sid)
     const sd = sessionDoc.get(sid)
     sessionDoc.delete(sid)
     if (sd) releaseDoc(sd.doc.docRef)
@@ -306,11 +315,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const missing = p.projection === 'commands' ? [...ws.data.missingFaces].sort() : undefined
     const job = { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex: unitIndex as number, scale: scale as number, mark }
     const estimate = (() => { const size = sd.doc.units[unitIndex as number]!; return size.w * size.h * 4 * (scale as number) ** 2 * 2 })()
-    const fields = (projectionMode: 'final-raster' | 'commands'): RenderKeyFields => ({
-      docRef: sd.doc.docRef, contentPolicyId: sd.doc.contentPolicyId, layoutFingerprint: sd.doc.fingerprint, recorderVersion: 1, scaleBucket: scale as number,
-      markSettings: { visible: mark.kind, text: mark.kind === 'viewer' ? mark.text : mark.kind === 'fixed' ? 'fixed' : '', forensic: false },
-      projectionMode, policyDetails: { projection: sd.doc.contentPolicyId, ...(projectionMode === 'commands' && missing ? { missingFaces: missing } : {}) }, unitId: unitIndex as number,
-    })
+    const fields = (projectionMode: 'final-raster' | 'commands') => keyFields(sd.doc, mark, unitIndex as number, scale as number, projectionMode, missing)
     const obtain = async (projection: 'final-raster' | 'commands'): Promise<RenderedUnit | RefusalCode> => {
       const key = renderKey(fields(projection))
       const hit = renderCache.get(key)
@@ -321,20 +326,57 @@ export function createStreamServer(o: StreamServerOptions) {
         return unit
       } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
     }
-    let unit = await obtain(p.projection)
+    const first = await obtain(p.projection)
     if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
-    if (typeof unit === 'string') return refuse(ws, reqId, unit)
-    let messages = prepareUnit(reqId, unitIndex as number, unit)
+    if (typeof first === 'string') return refuse(ws, reqId, first)
+    let unit: RenderedUnit = first
+    let messages = unit.kind === 'commands' ? prepareUnit(reqId, unitIndex as number, unit) : undefined
     if (!messages && unit.kind === 'commands') {
       // Assets too large for ASSET_DEFINE's caps: ship the unit as a raster (Task 7).
-      unit = await obtain('final-raster')
+      const raster = await obtain('final-raster')
       if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
-      if (typeof unit === 'string') return refuse(ws, reqId, unit)
+      if (typeof raster === 'string') return refuse(ws, reqId, raster)
+      unit = raster
+    }
+    let unmarked: string | undefined
+    if (unit.kind === 'raster') {
+      // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
+      if (sd.forensic) {
+        const m = await markUnit(s.sid, sd, unitIndex as number, scale as number, unit)
+        if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+        if (typeof m === 'string') return refuse(ws, reqId, m)
+        unit = m.unit; unmarked = m.unmarked
+      }
       messages = prepareUnit(reqId, unitIndex as number, unit)
     }
     if (!messages) return refuse(ws, reqId, 'policy-refused')
     if (unit.kind === 'raster' && unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
+    if (unmarked) send(ws, { reqId, type: 'diag', code: 'forensic-unmarked', unitIndex, reason: unmarked })
     sendFrames(ws, messages)
+  }
+
+  /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
+  function keyFields(doc: DocState, mark: MarkSpec, unitIndex: number, scale: number, projectionMode: 'final-raster' | 'commands', missing?: string[]): RenderKeyFields {
+    return {
+      docRef: doc.docRef, contentPolicyId: doc.contentPolicyId, layoutFingerprint: doc.fingerprint, recorderVersion: 1, scaleBucket: scale,
+      markSettings: { visible: mark.kind, text: mark.kind === 'viewer' ? mark.text : mark.kind === 'fixed' ? 'fixed' : '', forensic: false },
+      projectionMode, policyDetails: { projection: doc.contentPolicyId, ...(projectionMode === 'commands' && missing ? { missingFaces: missing } : {}) }, unitId: unitIndex,
+    }
+  }
+
+  /** §9.4 steps 4–5 for one session: Layer-1 over the canonical raster under
+   * the scratch lease. Unmarkable units ship canonical bytes with a reason. */
+  async function markUnit(sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }): Promise<{ unit: RenderedUnit & { kind: 'raster' }; unmarked?: string } | RefusalCode> {
+    let release: () => void
+    try { release = await leaseFor(sid).acquire() } catch { return 'policy-refused' }
+    try {
+      const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, `${unitIndex}@${scale}`)
+      const r = await o.pool.encode(sid, { png: unit.png, w: unit.w, h: unit.h, kBasis, code: sd.forensic!.code, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, unit.w * unit.h * 4 * 3)
+      if ('unmarked' in r) { forensicStats.unmarked++; return { unit, unmarked: r.unmarked } }
+      forensicStats.marked++
+      forensicStats.carriers.push(r.carriers); if (forensicStats.carriers.length > 256) forensicStats.carriers.shift()
+      return { unit: { ...unit, png: r.png } }
+    } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' } finally { release() }
   }
 
   /** Frames a unit's messages under every per-kind cap, or undefined (nothing sent). */
@@ -454,8 +496,15 @@ export function createStreamServer(o: StreamServerOptions) {
     audit,
     /** The sid's Layer-1 issuance (tests and the validation script). */
     forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
+    /** TEST-ONLY view: the canonical cached PNG this session's raster unit is built from. */
+    canonicalOf: (sid: string, unitIndex: number, scale: number) => {
+      const sd = sessionDoc.get(sid)
+      if (!sd) return undefined
+      const hit = renderCache.get(renderKey(keyFields(sd.doc, markOf(sd.policy, sd.decision), unitIndex, scale, 'final-raster')))
+      return hit?.kind === 'raster' ? hit.png : undefined
+    },
     table,
-    stats: () => ({ sockets: sockets.size, sessions: table.size, docs: docs.size, cache: { entries: renderCache.count, bytes: renderCache.size }, pool: o.pool.stats() }),
+    stats: () => ({ sockets: sockets.size, sessions: table.size, docs: docs.size, cache: { entries: renderCache.count, bytes: renderCache.size }, pool: o.pool.stats(), forensic: { ...forensicStats, carriers: [...forensicStats.carriers] } }),
   }
   return server
 }
