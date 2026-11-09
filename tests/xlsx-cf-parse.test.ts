@@ -85,7 +85,13 @@ describe('CF rule parsing: all 18 types', () => {
     expect(scale.writes.has('fill')).toBe(true)
 
     // Stage 2 Task 13 sibling assertion: proves the rule resolves under evidence
-    withInjectedCfEvidence(['scale:interpolation-spec-palette'], () => {
+    withInjectedCfEvidence(
+      [
+        'scale:thresholds-min-max',
+        'scale:thresholds-percentile-inc-exc',
+        'scale:interpolation-spec-palette',
+      ],
+      () => {
       const withEvidence = parse(
         `<conditionalFormatting sqref="B2:B20 D2:D20">` +
           `<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>100</formula></cfRule>` +

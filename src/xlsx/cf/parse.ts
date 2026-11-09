@@ -616,6 +616,103 @@ interface BodyInputs {
   origin: CfRuleOrigin
 }
 
+export interface CfScaleBoundInput {
+  readonly type: string
+  readonly value?: number
+  readonly val?: string
+}
+
+export type CfScaleColorInput =
+  | string
+  | {
+      readonly rgb?: string
+      readonly theme?: string | number
+      readonly tint?: string | number
+      readonly indexed?: string | number
+      readonly auto?: string | boolean
+      readonly customTheme?: boolean
+    }
+
+/**
+ * Computes the set of scale:* capability IDs required to authorize a colour-scale rule.
+ * Fail-closed: the rule resolves iff every required capability has evidence.
+ */
+export function scaleRequiredCapabilities(
+  bounds: readonly CfScaleBoundInput[],
+  colours: readonly CfScaleColorInput[],
+): Set<string> {
+  const req = new Set<string>()
+
+  // 1. Scale shape / point count
+  if (bounds.length === 3 || colours.length === 3) {
+    req.add('scale:interpolation-spec-palette')
+  }
+
+  // 2. Cfvo bounds features
+  for (let i = 0; i < bounds.length; i++) {
+    const b = bounds[i]!
+    const type = b.type
+
+    if (type === 'min' || type === 'max') {
+      req.add('scale:thresholds-min-max')
+      if (b.val !== undefined) {
+        req.add('scale:thresholds-legacy-min-val-0')
+      }
+      if (type === 'min' && i !== 0) {
+        req.add('scale:thresholds-min-midlist-max-first')
+      }
+      if (type === 'max' && i !== bounds.length - 1) {
+        req.add('scale:thresholds-min-midlist-max-first')
+      }
+    } else if (type === 'num') {
+      req.add('scale:thresholds-num-bounds')
+    } else if (type === 'percent') {
+      req.add('scale:thresholds-percent')
+      const val = b.value ?? (b.val !== undefined ? Number(b.val) : undefined)
+      if (val !== undefined && (val < 0 || val > 100)) {
+        req.add('scale:thresholds-percent-percentile-out-of-bounds')
+      }
+    } else if (type === 'percentile') {
+      req.add('scale:thresholds-percentile-inc-exc')
+      const val = b.value ?? (b.val !== undefined ? Number(b.val) : undefined)
+      if (val !== undefined && (val < 0 || val > 100)) {
+        req.add('scale:thresholds-percent-percentile-out-of-bounds')
+      }
+    }
+  }
+
+  // 3. Colour features
+  for (const c of colours) {
+    if (typeof c === 'string') {
+      const clean = c.trim()
+      if (clean === 'auto') {
+        req.add('scale:colors-auto')
+      } else if (clean.startsWith('theme:') || clean.startsWith('theme')) {
+        req.add('scale:colors-theme-tint')
+      } else if (clean.startsWith('indexed:') || clean.startsWith('indexed')) {
+        req.add('scale:colors-indexed')
+      } else if (clean.length === 8 && !clean.toUpperCase().startsWith('FF')) {
+        req.add('scale:colors-alpha-00')
+      }
+    } else if (typeof c === 'object' && c !== null) {
+      if (c.auto === true || c.auto === '1' || c.auto === 'true') {
+        req.add('scale:colors-auto')
+      }
+      if (c.theme !== undefined) {
+        req.add(c.customTheme ? 'scale:colors-custom-theme' : 'scale:colors-theme-tint')
+      }
+      if (c.indexed !== undefined) {
+        req.add('scale:colors-indexed')
+      }
+      if (c.rgb !== undefined && c.rgb.length === 8 && !c.rgb.toUpperCase().startsWith('FF')) {
+        req.add('scale:colors-alpha-00')
+      }
+    }
+  }
+
+  return req
+}
+
 function parseColorScaleRule(
   fin: SheetFinalizer,
   inputs: BodyInputs,
@@ -653,12 +750,7 @@ function parseColorScaleRule(
   }
 
   const bounds: CfScaleBound[] = []
-  let hasLegacyMinVal0 = false
-  let hasMidlistMinOrMaxFirst = false
-  let hasNum = false
-  let hasPercent = false
-  let hasPercentile = false
-  let hasOutOfBoundsPercent = false
+  const boundsInput: CfScaleBoundInput[] = []
 
   for (let i = 0; i < cfvos.length; i++) {
     const cfvoNode = cfvos[i]!
@@ -684,23 +776,12 @@ function parseColorScaleRule(
       return finishUnresolved('cf-invalid-cfvo', slot)
     }
 
-    // Positional checks (S2-D)
-    if (cfvoType === 'min' && i !== 0) {
-      hasMidlistMinOrMaxFirst = true
-    }
-    if (cfvoType === 'max' && i !== cfvos.length - 1) {
-      hasMidlistMinOrMaxFirst = true
-    }
-
-    // Legacy min val="0" (S2-D)
-    if ((cfvoType === 'min' || cfvoType === 'max') && val !== undefined) {
-      hasLegacyMinVal0 = true
-    }
-
     if (cfvoType === 'min') {
       bounds.push({ type: 'min' })
+      boundsInput.push({ type: 'min', val })
     } else if (cfvoType === 'max') {
       bounds.push({ type: 'max' })
+      boundsInput.push({ type: 'max', val })
     } else {
       if (val === undefined) {
         return finishUnresolved('cf-invalid-cfvo', slot)
@@ -726,67 +807,30 @@ function parseColorScaleRule(
         return finishUnresolved('cf-invalid-cfvo', slot)
       }
 
-      if (cfvoType === 'percent' || cfvoType === 'percentile') {
-        if (numVal < 0 || numVal > 100) {
-          hasOutOfBoundsPercent = true
-        }
-      }
-
-      if (cfvoType === 'num') hasNum = true
-      if (cfvoType === 'percent') hasPercent = true
-      if (cfvoType === 'percentile') hasPercentile = true
-
       bounds.push({ type: cfvoType, value: numVal })
+      boundsInput.push({ type: cfvoType, value: numVal, val })
     }
   }
 
-  // Refusal evidence gates (S2-D, S2-E)
-  if (hasMidlistMinOrMaxFirst && !hasEvidence('scale:thresholds-min-midlist-max-first')) {
-    return finishUnresolved('cf-unsupported-rule', slot)
+  const colorInputs: CfScaleColorInput[] = []
+  for (let i = 0; i < colors.length; i++) {
+    colorInputs.push(attrs(colors[i]!))
   }
-  if (hasLegacyMinVal0 && !hasEvidence('scale:thresholds-legacy-min-val-0')) {
-    return finishUnresolved('cf-unsupported-rule', slot)
-  }
-  if (hasOutOfBoundsPercent && !hasEvidence('scale:thresholds-percent-percentile-out-of-bounds')) {
-    return finishUnresolved('cf-unsupported-rule', slot)
+
+  // Fail-closed authorization across every feature used by the rule
+  const required = scaleRequiredCapabilities(boundsInput, colorInputs)
+  for (const cap of required) {
+    if (!hasEvidence(cap)) {
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
   }
 
   // Resolve endpoint colours (S2-F, Item 12)
   const points: CfScalePoint[] = []
-  let hasTheme = false
-  let hasIndexed = false
-  let hasAlpha00 = false
-  let hasAuto = false
 
   for (let i = 0; i < colors.length; i++) {
     const colorNode = colors[i]!
     const ca = attrs(colorNode)
-    const isAuto = ca['auto'] === '1' || ca['auto'] === 'true'
-
-    if (isAuto) {
-      hasAuto = true
-      if (!hasEvidence('scale:colors-auto')) {
-        return finishUnresolved('cf-unsupported-rule', slot)
-      }
-    }
-    if (ca['theme'] !== undefined) {
-      hasTheme = true
-      if (!hasEvidence('scale:colors-theme-tint') && !hasEvidence('scale:colors-custom-theme')) {
-        return finishUnresolved('cf-unsupported-rule', slot)
-      }
-    }
-    if (ca['indexed'] !== undefined) {
-      hasIndexed = true
-      if (!hasEvidence('scale:colors-indexed')) {
-        return finishUnresolved('cf-unsupported-rule', slot)
-      }
-    }
-    if (ca['rgb'] !== undefined && ca['rgb'].length === 8 && !ca['rgb'].toUpperCase().startsWith('FF')) {
-      hasAlpha00 = true
-      if (!hasEvidence('scale:colors-alpha-00')) {
-        return finishUnresolved('cf-unsupported-rule', slot)
-      }
-    }
 
     const resolvedHex = resolveSheetColor(ca, fin.styles.colors)
     if (!resolvedHex) {
@@ -795,13 +839,6 @@ function parseColorScaleRule(
     }
 
     const cleanHex = resolvedHex.toUpperCase()
-    if (cleanHex.length === 8 && !cleanHex.startsWith('FF')) {
-      hasAlpha00 = true
-      if (!hasEvidence('scale:colors-alpha-00')) {
-        return finishUnresolved('cf-unsupported-rule', slot)
-      }
-    }
-
     const fullHex = cleanHex.length === 6 ? `FF${cleanHex}` : cleanHex
     const argb = parseInt(fullHex, 16)
     if (!Number.isFinite(argb)) {
@@ -809,51 +846,6 @@ function parseColorScaleRule(
     }
 
     points.push({ bound: bounds[i]!, argb })
-  }
-
-  // Check overall scale capability authorization
-  const isSpecPalette =
-    bounds.length === 3 &&
-    bounds[0]?.type === 'min' &&
-    bounds[1]?.type === 'percentile' &&
-    bounds[1].value === 50 &&
-    bounds[2]?.type === 'max' &&
-    points[0]?.argb === 0xfff8696b &&
-    points[1]?.argb === 0xffffeb84 &&
-    points[2]?.argb === 0xff63be7b
-
-  let authorized = false
-  if (isSpecPalette) {
-    authorized = hasEvidence('scale:interpolation-spec-palette') || hasEvidence('scale:thresholds-percentile-inc-exc')
-  } else if (hasTheme && (hasEvidence('scale:colors-theme-tint') || hasEvidence('scale:colors-custom-theme'))) {
-    authorized = true
-  } else if (hasIndexed && hasEvidence('scale:colors-indexed')) {
-    authorized = true
-  } else if (hasAlpha00 && hasEvidence('scale:colors-alpha-00')) {
-    authorized = true
-  } else if (hasAuto && hasEvidence('scale:colors-auto')) {
-    authorized = true
-  } else if (hasPercentile && hasEvidence('scale:thresholds-percentile-inc-exc')) {
-    authorized = true
-  } else if (hasPercent && hasEvidence('scale:thresholds-percent')) {
-    authorized = true
-  } else if (hasNum && (hasEvidence('scale:thresholds-num-bounds') || hasEvidence('scale:interpolation-rounding-ladder'))) {
-    authorized = true
-  } else if (
-    bounds.length === 2 &&
-    ((bounds[0]?.type === 'min' && bounds[1]?.type === 'max') ||
-      (bounds[0]?.type === 'max' && bounds[1]?.type === 'min'))
-  ) {
-    authorized =
-      hasEvidence('scale:thresholds-min-max') ||
-      hasEvidence('scale:interpolation-precondition-probe') ||
-      hasEvidence('scale:interpolation-color-space') ||
-      (hasLegacyMinVal0 && hasEvidence('scale:thresholds-legacy-min-val-0')) ||
-      (hasMidlistMinOrMaxFirst && hasEvidence('scale:thresholds-min-midlist-max-first'))
-  }
-
-  if (!authorized) {
-    return finishUnresolved('cf-unsupported-rule', slot)
   }
 
   return finishResolved(

@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { parseXml } from '../src/core/xml'
 import { tokenizeBytes } from '../src/core/xml-stream'
 import { createCfDiagnostics, createCfMemory } from '../src/xlsx/cf/limits'
-import { parseCfSheet, type CfStylesSource } from '../src/xlsx/cf/parse'
+import {
+  parseCfSheet,
+  scaleRequiredCapabilities,
+  type CfScaleBoundInput,
+  type CfScaleColorInput,
+  type CfStylesSource,
+} from '../src/xlsx/cf/parse'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
 import { resolveSheetColor } from '../src/xlsx/sheetColors'
 import { injectCfEvidence, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
@@ -141,29 +147,36 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
 
     // With evidence injected: §3 example yields min / percentile 50 / max with points
     // FFF8696B, FFFFEB84, FF63BE7B.
-    withInjectedCfEvidence(['scale:interpolation-spec-palette'], () => {
-      const withEvidence = parse(xml)
-      expect(withEvidence.value.rules).toHaveLength(3)
-      const scaleResolved = ruleByPriority(withEvidence.value.rules, 3)
-      expect(scaleResolved.definition.kind).toBe('colorScale')
-      if (scaleResolved.definition.kind === 'colorScale') {
-        expect(scaleResolved.definition.points).toHaveLength(3)
-        expect(scaleResolved.definition.points[0]).toEqual({
-          bound: { type: 'min' },
-          argb: 0xfff8696b,
-        })
-        expect(scaleResolved.definition.points[1]).toEqual({
-          bound: { type: 'percentile', value: 50 },
-          argb: 0xffffeb84,
-        })
-        expect(scaleResolved.definition.points[2]).toEqual({
-          bound: { type: 'max' },
-          argb: 0xff63be7b,
-        })
-      }
-      expect(scaleResolved.writes.has('colorScale')).toBe(true)
-      expect(scaleResolved.writes.has('fill')).toBe(true)
-    })
+    withInjectedCfEvidence(
+      [
+        'scale:thresholds-min-max',
+        'scale:thresholds-percentile-inc-exc',
+        'scale:interpolation-spec-palette',
+      ],
+      () => {
+        const withEvidence = parse(xml)
+        expect(withEvidence.value.rules).toHaveLength(3)
+        const scaleResolved = ruleByPriority(withEvidence.value.rules, 3)
+        expect(scaleResolved.definition.kind).toBe('colorScale')
+        if (scaleResolved.definition.kind === 'colorScale') {
+          expect(scaleResolved.definition.points).toHaveLength(3)
+          expect(scaleResolved.definition.points[0]).toEqual({
+            bound: { type: 'min' },
+            argb: 0xfff8696b,
+          })
+          expect(scaleResolved.definition.points[1]).toEqual({
+            bound: { type: 'percentile', value: 50 },
+            argb: 0xffffeb84,
+          })
+          expect(scaleResolved.definition.points[2]).toEqual({
+            bound: { type: 'max' },
+            argb: 0xff63be7b,
+          })
+        }
+        expect(scaleResolved.writes.has('colorScale')).toBe(true)
+        expect(scaleResolved.writes.has('fill')).toBe(true)
+      },
+    )
   })
 
   it('scale structure refusals', () => {
@@ -247,15 +260,18 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
     // Under evidence it resolves:
-    withInjectedCfEvidence(['scale:thresholds-legacy-min-val-0'], () => {
-      const resolvedLegacy = parse(
-        `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
-          `<cfvo type="min" val="0"/><cfvo type="max"/>` +
-          `<color rgb="FFFF0000"/><color rgb="FF00FF00"/>` +
-          `</colorScale></cfRule></conditionalFormatting>`,
-      )
-      expect(resolvedLegacy.value.rules[0]!.definition.kind).toBe('colorScale')
-    })
+    withInjectedCfEvidence(
+      ['scale:thresholds-min-max', 'scale:thresholds-legacy-min-val-0'],
+      () => {
+        const resolvedLegacy = parse(
+          `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
+            `<cfvo type="min" val="0"/><cfvo type="max"/>` +
+            `<color rgb="FFFF0000"/><color rgb="FF00FF00"/>` +
+            `</colorScale></cfRule></conditionalFormatting>`,
+        )
+        expect(resolvedLegacy.value.rules[0]!.definition.kind).toBe('colorScale')
+      },
+    )
 
     const maxFirst = parse(
       `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
@@ -269,15 +285,18 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
     // Under evidence it resolves:
-    withInjectedCfEvidence(['scale:thresholds-min-midlist-max-first'], () => {
-      const resolvedPos = parse(
-        `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
-          `<cfvo type="max"/><cfvo type="min"/>` +
-          `<color rgb="FFFF0000"/><color rgb="FF00FF00"/>` +
-          `</colorScale></cfRule></conditionalFormatting>`,
-      )
-      expect(resolvedPos.value.rules[0]!.definition.kind).toBe('colorScale')
-    })
+    withInjectedCfEvidence(
+      ['scale:thresholds-min-max', 'scale:thresholds-min-midlist-max-first'],
+      () => {
+        const resolvedPos = parse(
+          `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
+            `<cfvo type="max"/><cfvo type="min"/>` +
+            `<color rgb="FFFF0000"/><color rgb="FF00FF00"/>` +
+            `</colorScale></cfRule></conditionalFormatting>`,
+        )
+        expect(resolvedPos.value.rules[0]!.definition.kind).toBe('colorScale')
+      },
+    )
 
     // 5. 6 cfvo -> cf-resource-limit before construction
     const overCfvo = parse(
@@ -345,7 +364,9 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       `</cfRule>` +
       `</conditionalFormatting>`
 
-    await withInjectedCfEvidence(['scale:colors-theme-tint'], async () => {
+    await withInjectedCfEvidence(
+      ['scale:thresholds-min-max', 'scale:colors-theme-tint'],
+      async () => {
       // 1. Resident path
       const resident = parse(xmlBody, styles)
       expect(resident.value.rules).toHaveLength(1)
@@ -407,5 +428,200 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
     expect(alphaScale.value.rules[0]!.definition.kind).toBe('unresolved')
+  })
+
+  describe('fail-closed colour-scale capability authorization', () => {
+    it('(a) theme + percentile with only the theme evidence -> unresolved, cf-unsupported-rule', () => {
+      const xml =
+        `<conditionalFormatting sqref="A1:A10">` +
+        `<cfRule type="colorScale" priority="1">` +
+        `<colorScale>` +
+        `<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>` +
+        `<color theme="4" tint="-0.4"/><color rgb="FFFFFFFF"/><color rgb="FF000000"/>` +
+        `</colorScale>` +
+        `</cfRule>` +
+        `</conditionalFormatting>`
+      withInjectedCfEvidence(['scale:colors-theme-tint'], () => {
+        const res = parse(xml)
+        expect(res.value.rules[0]!.definition).toMatchObject({
+          kind: 'unresolved',
+          type: 'colorScale',
+          reason: 'cf-unsupported-rule',
+        })
+      })
+    })
+
+    it('(b) the spec palette with only scale:thresholds-percentile-inc-exc -> unresolved', () => {
+      const xml =
+        `<conditionalFormatting sqref="A1:A10">` +
+        `<cfRule type="colorScale" priority="1">` +
+        `<colorScale>` +
+        `<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>` +
+        `<color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/>` +
+        `</colorScale>` +
+        `</cfRule>` +
+        `</conditionalFormatting>`
+      withInjectedCfEvidence(['scale:thresholds-percentile-inc-exc'], () => {
+        const res = parse(xml)
+        expect(res.value.rules[0]!.definition).toMatchObject({
+          kind: 'unresolved',
+          type: 'colorScale',
+          reason: 'cf-unsupported-rule',
+        })
+      })
+    })
+
+    it('(c) the same bounds with different colours behave identically to the spec palette under identical evidence', () => {
+      const diffColoursXml =
+        `<conditionalFormatting sqref="A1:A10">` +
+        `<cfRule type="colorScale" priority="1">` +
+        `<colorScale>` +
+        `<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>` +
+        `<color rgb="FF0000FF"/><color rgb="FFFFFFFF"/><color rgb="FFFF0000"/>` +
+        `</colorScale>` +
+        `</cfRule>` +
+        `</conditionalFormatting>`
+      // With only percentile evidence: unresolved
+      withInjectedCfEvidence(['scale:thresholds-percentile-inc-exc'], () => {
+        const res = parse(diffColoursXml)
+        expect(res.value.rules[0]!.definition).toMatchObject({
+          kind: 'unresolved',
+          type: 'colorScale',
+          reason: 'cf-unsupported-rule',
+        })
+      })
+      // With full required set: resolved
+      const fullEvidence = [
+        'scale:thresholds-min-max',
+        'scale:thresholds-percentile-inc-exc',
+        'scale:interpolation-spec-palette',
+      ]
+      withInjectedCfEvidence(fullEvidence, () => {
+        const res = parse(diffColoursXml)
+        expect(res.value.rules[0]!.definition.kind).toBe('colorScale')
+      })
+    })
+
+    it('(d) the full required set -> resolved', () => {
+      const specXml =
+        `<conditionalFormatting sqref="A1:A10">` +
+        `<cfRule type="colorScale" priority="1">` +
+        `<colorScale>` +
+        `<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>` +
+        `<color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/>` +
+        `</colorScale>` +
+        `</cfRule>` +
+        `</conditionalFormatting>`
+      const fullEvidence = [
+        'scale:thresholds-min-max',
+        'scale:thresholds-percentile-inc-exc',
+        'scale:interpolation-spec-palette',
+      ]
+      withInjectedCfEvidence(fullEvidence, () => {
+        const res = parse(specXml)
+        expect(res.value.rules[0]!.definition.kind).toBe('colorScale')
+        if (res.value.rules[0]!.definition.kind === 'colorScale') {
+          expect(res.value.rules[0]!.definition.points).toHaveLength(3)
+          expect(res.value.rules[0]!.definition.points[0]!.argb).toBe(0xfff8696b)
+          expect(res.value.rules[0]!.definition.points[1]!.argb).toBe(0xffffeb84)
+          expect(res.value.rules[0]!.definition.points[2]!.argb).toBe(0xff63be7b)
+        }
+      })
+    })
+
+    it('(e) a table test of scaleRequiredCapabilities for each feature', () => {
+      const cases: Array<{
+        name: string
+        bounds: CfScaleBoundInput[]
+        colours: CfScaleColorInput[]
+        expected: string[]
+      }> = [
+        {
+          name: '2-point min/max with standard RGB',
+          bounds: [{ type: 'min' }, { type: 'max' }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: ['scale:thresholds-min-max'],
+        },
+        {
+          name: '2-point num bounds',
+          bounds: [{ type: 'num', value: 20 }, { type: 'num', value: 80 }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: ['scale:thresholds-num-bounds'],
+        },
+        {
+          name: '2-point percent bounds',
+          bounds: [{ type: 'percent', value: 10 }, { type: 'percent', value: 90 }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: ['scale:thresholds-percent'],
+        },
+        {
+          name: '2-point percentile bounds',
+          bounds: [{ type: 'percentile', value: 25 }, { type: 'percentile', value: 75 }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: ['scale:thresholds-percentile-inc-exc'],
+        },
+        {
+          name: 'out-of-bounds percent/percentile',
+          bounds: [{ type: 'percent', value: -10 }, { type: 'percentile', value: 150 }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: [
+            'scale:thresholds-percent',
+            'scale:thresholds-percentile-inc-exc',
+            'scale:thresholds-percent-percentile-out-of-bounds',
+          ],
+        },
+        {
+          name: 'legacy min val="0"',
+          bounds: [{ type: 'min', val: '0' }, { type: 'max' }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: ['scale:thresholds-min-max', 'scale:thresholds-legacy-min-val-0'],
+        },
+        {
+          name: 'positional max first / min mid-list',
+          bounds: [{ type: 'max' }, { type: 'min' }],
+          colours: ['FFFF0000', 'FF00FF00'],
+          expected: ['scale:thresholds-min-max', 'scale:thresholds-min-midlist-max-first'],
+        },
+        {
+          name: '3-point scale interpolation (spec palette)',
+          bounds: [{ type: 'min' }, { type: 'percentile', value: 50 }, { type: 'max' }],
+          colours: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+          expected: [
+            'scale:interpolation-spec-palette',
+            'scale:thresholds-min-max',
+            'scale:thresholds-percentile-inc-exc',
+          ],
+        },
+        {
+          name: 'theme+tint colour form',
+          bounds: [{ type: 'min' }, { type: 'max' }],
+          colours: [{ theme: '4', tint: '-0.4' }, { rgb: 'FFFFFFFF' }],
+          expected: ['scale:thresholds-min-max', 'scale:colors-theme-tint'],
+        },
+        {
+          name: 'indexed colour form',
+          bounds: [{ type: 'min' }, { type: 'max' }],
+          colours: [{ indexed: '10' }, { indexed: '12' }],
+          expected: ['scale:thresholds-min-max', 'scale:colors-indexed'],
+        },
+        {
+          name: 'alpha other than FF colour form',
+          bounds: [{ type: 'min' }, { type: 'max' }],
+          colours: ['00F8696B', '0063BE7B'],
+          expected: ['scale:thresholds-min-max', 'scale:colors-alpha-00'],
+        },
+        {
+          name: 'auto colour form',
+          bounds: [{ type: 'min' }, { type: 'max' }],
+          colours: ['auto', 'auto'],
+          expected: ['scale:thresholds-min-max', 'scale:colors-auto'],
+        },
+      ]
+
+      for (const c of cases) {
+        const actual = scaleRequiredCapabilities(c.bounds, c.colours)
+        expect(actual, c.name).toEqual(new Set(c.expected))
+      }
+    })
   })
 })
