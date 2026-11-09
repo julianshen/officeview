@@ -166,3 +166,7 @@ Census (`bun --preload ./scripts/stream-s0/napi-preload.ts scripts/stream-s1/occ
 | docx | 15 | 57 (+2 refused) | 12057 | 11987 (99.4 %) | 70 | covered 70 |
 
 "Refused" units exceed the 64 MiB surface cap (tiles are Stage 4). xlsx `clipped` runs are cell text cut by its cell clip, i.e. not 100 % visible.
+
+## Stage 1d — local loads byte-for-byte unchanged (§16 T2)
+
+`scripts/stream-s1/local-identity.ts` paints every unit of every `corpus/` document through the local path (`loadOfficeFile(bytes)` → `getPaintables`, @napi-rs/canvas, scale 1) and hashes the RGBA. Baseline: a throwaway worktree at **ca952c50** (merge-base of `origin/main` and this branch), same machine and session; hashes in `docs/validation/streaming-s1/local-identity.json`. **70 files, 106 units, 0 differing units** (one fuzzer ZIP fails identically on both sides). `tests/stream/local-unchanged.test.tsx` mounts `<OfficeFile data={bytes}>` for a docx, xlsx and pptx and asserts no `WebSocket` is constructed, the remote chunk is never imported and no stream notice appears; verified by mutation (forcing the import fails all three).
