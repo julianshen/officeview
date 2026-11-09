@@ -30,7 +30,7 @@
  */
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
 import type { ChartModel } from '../../../charts/model'
-import type { ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/view/contracts'
+import type { LinkedControlSelection, ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/view/contracts'
 import type { SourceRect } from '../../../xlsx/view/coordinates'
 import { cellDisplayText } from '../../../xlsx/render'
 import { pivotRuntimeFor } from '../../../xlsx/pivotLoader'
@@ -91,6 +91,7 @@ export interface PivotLabels { field(field: number): string; item(field: number,
 export interface PivotClient {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<PivotOpenResult>
   apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<PivotApplyOutcome>
+  applyLinked?(selection: LinkedControlSelection, targets: readonly { sheetId: number; pivot: number; delta: PivotDelta | 'reset' }[], signal?: AbortSignal): Promise<LinkedPivotApplyOutcome>
   release(sheetId: number, pivot: number): void
   /** A refusal known without opening (no runtime, no cache, a remote path without its port). */
   preflight?(sheetId: number, pivot: number): PivotDiagnostic | undefined
@@ -98,9 +99,62 @@ export interface PivotClient {
   /** Releases every session (viewer unmount). */
   dispose?(): void
 }
+export type LinkedPivotApplyOutcome = { kind: 'committed'; revision: number; targets: readonly { sheetId: number; pivot: number; revision: number; def: PivotTableDefinition; model: PivotMenuModel }[] }
+  | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }
 
 const refusal = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
 const nameOf = (def: PivotTableDefinition | undefined) => `Pivot table ${String(def?.name ?? '').slice(0, 128)}`
+
+/** Clear restores All everywhere a slicer filters: page fields keep a separate
+ * page selection that an items delta does not touch, so clearing them needs
+ * the page delta. Row and column fields keep the items delta. */
+export function slicerClearDelta(fieldIndex: number, isPageField: boolean): PivotDelta {
+  return isPageField
+    ? { kind: 'page', field: fieldIndex, selected: 'all' }
+    : { kind: 'items', field: fieldIndex, hidden: [] }
+}
+
+/** A timeline `filter` delta preserves the field's report-filter selection, so
+ * a page-axis date field holding a specific selection would keep restricting
+ * the pivot after the month commits (PR #60 review 4486162364). Selection must
+ * refuse; clear reconciles via `clearFilters`, which resets the page to All. */
+export function timelinePageSelectionConflicts(field: { axis: string; page?: readonly number[] | 'all' } | undefined): boolean {
+  return field?.axis === 'page' && field.page !== undefined && field.page !== 'all'
+}
+
+/** A slicer `items` selection delta preserves the field's report-filter
+ * selection in the same way, so a page-axis slicer field holding a specific
+ * item must refuse the selection (PR #60 review 4486449655). Clear already
+ * reconciles via `slicerClearDelta`, which sends a `page` delta for page
+ * fields, so only the selection branch needs this guard. */
+export function slicerPageSelectionConflicts(field: { axis: string; page?: readonly number[] | 'all' } | undefined): boolean {
+  return field?.axis === 'page' && field.page !== undefined && field.page !== 'all'
+}
+
+/** A slicer/timeline target pivot resolved across workbook sheets. */
+export interface ControlPivotTarget { sheetId: number; pivot: number; def: NonNullable<XlsxSheet['pivotTables']>[number] }
+/** Resolve a control's target pivot by saved name and cache id. Loaded display
+ * entries take precedence over bare sheets: paged shells carry no pivot
+ * definitions, so only the entries know off-sheet targets. */
+export function resolveControlPivotTargets(
+  sheets: readonly XlsxSheet[],
+  sheetIds: readonly string[],
+  entries: ReadonlyMap<string, { sheet: XlsxSheet }>,
+  name: string,
+  cacheId: number | undefined,
+): ControlPivotTarget[] {
+  const matches: ControlPivotTarget[] = []
+  for (const [sheetId, savedSheet] of sheets.entries()) {
+    const sheet = entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
+    for (const [pivot, def] of (sheet.pivotTables ?? []).entries()) {
+      if (def.name !== name || def.cacheId !== cacheId) continue
+      matches.push({ sheetId, pivot, def })
+      if (matches.length > 1) break
+    }
+    if (matches.length > 1) break
+  }
+  return matches
+}
 
 // ---- the remote seam (Task 27) ---------------------------------------------------------------------------------------
 
@@ -113,6 +167,7 @@ const nameOf = (def: PivotTableDefinition | undefined) => `Pivot table ${String(
 export interface RemotePivotPort {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<PivotOpenResult>
   apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<PivotApplyOutcome>
+  applyLinked?(selection: LinkedControlSelection, targets: readonly { sheetId: number; pivot: number; delta: PivotDelta | 'reset' }[], signal?: AbortSignal): Promise<LinkedPivotApplyOutcome>
   release(sheetId: number, pivot: number): void
   labels?(sheetId: number, pivot: number): PivotLabels | undefined
   dispose?(): void
@@ -121,6 +176,7 @@ export interface RemotePivotPort {
 export interface RemotePivotSessionsLike {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<{ kind: 'open'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel; cells?: PivotShownLayout['cells'] } | { kind: 'refused'; message: string }>
   apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<{ kind: 'committed'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel; notice?: string; cells?: PivotShownLayout['cells'] } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
+  applyLinked?(selection: LinkedControlSelection, targets: readonly { sheetId: number; pivot: number; delta: PivotDelta | 'reset' }[], signal?: AbortSignal): Promise<{ kind: 'committed'; revision: number; targets: readonly { sheetId: number; pivot: number; result: { revision: number; def: PivotTableDefinition; menu: PivotMenuModel; cells?: PivotShownLayout['cells'] } }[] } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
   release(sheetId: number, pivot: number): void
 }
 const OPEN_FIRST = 'Open the pivot before changing it.'
@@ -176,6 +232,21 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       keep(key(sheetId, pivot), after)
       return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def, ...(before && after ? { fit: { before, after } } : {}) }, ...(result.notice ? { notice: result.notice } : {}) }
     },
+    async applyLinked(selection, targets, signal) {
+      if (!sessions.applyLinked) return { kind: 'refused', message: 'Linked slicer selection is not available on this source.' }
+      const mapped = targets.map(target => ({ ...target, remoteSheetId: sheets.id(target.sheetId) }))
+      if (mapped.some(target => target.remoteSheetId === undefined)) return { kind: 'refused', message: 'A linked slicer target is not available on this source.' }
+      const result = await sessions.applyLinked(selection, mapped.map(({ remoteSheetId, ...target }) => ({ ...target, sheetId: remoteSheetId! })), signal)
+      if (result.kind !== 'committed') return result
+      const committed = result.targets.map((target, index) => {
+        const localSheetId = targets[index]!.sheetId
+        const k = key(localSheetId, target.pivot), model = formatMenu(target.result.menu, sheets.sheet(localSheetId))
+        models.set(k, model); opened.add(k)
+        keep(k, target.result.cells ? { def: target.result.def, cells: target.result.cells } : undefined)
+        return { sheetId: localSheetId, pivot: target.pivot, revision: target.result.revision, def: target.result.def, model }
+      })
+      return { kind: 'committed', revision: result.revision, targets: committed }
+    },
     release(sheetId, pivot) {
       const k = key(sheetId, pivot), id = sheets.id(sheetId)
       models.delete(k); keep(k, undefined)
@@ -202,6 +273,13 @@ export function createRemotePivotClient(port: RemotePivotPort, install: (commit:
       if (outcome.ok) install(outcome.commit)
       return outcome
     },
+    ...(port.applyLinked ? { async applyLinked(selection, targets, signal) {
+      const result = await port.applyLinked!(selection, targets, signal)
+      if (result.kind === 'committed') for (const target of result.targets) {
+        install({ sheetId: target.sheetId, pivot: target.pivot, revision: target.revision, def: target.def })
+      }
+      return result
+    } } : {}),
     release: (sheetId, pivot) => port.release(sheetId, pivot),
     ...(port.labels ? { labels: port.labels.bind(port) } : {}),
     dispose: () => port.dispose?.(),

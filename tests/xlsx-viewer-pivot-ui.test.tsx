@@ -17,7 +17,7 @@ import InteractiveSheetDoc, { pivotCellMatch } from '../src/components/xlsx/Inte
 import { PivotFieldList } from '../src/components/xlsx/pivot/PivotFieldList'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
+import { pivotEngine, pivotRuntimeFor } from '../src/xlsx/pivotLoader'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
 import type { XlsxDocument } from '../src/xlsx/types'
@@ -1023,4 +1023,59 @@ describe('a multi-item report filter: adding a hidden item (PR #57 review)', () 
     if (!listed.ok) throw new Error(JSON.stringify(listed))
     expect(listed.def.location.ref).toBe(all.sheets[pivotSheet(all)]!.pivotTables![0]!.location.ref)
   })
+})
+
+const CONTROLS_SEED = `${FIXTURES}controls/controls-seed.xlsx`
+
+describe('interactive slicer controls (Task 41)', () => {
+  async function chooseApples(ui: ReturnType<typeof render>) {
+    const group = await ui.findByRole('group', { name: /Product slicer/i }, FIRST_PAINT_WAIT)
+    const apples = within(group).getByRole('button', { name: 'Apples, selected' })
+    fireEvent.click(apples)
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Bananas, not selected' })).toBeTruthy(), FIRST_PAINT_WAIT)
+    await waitFor(() => expect(cellText(ui.container, 7, 1)).toContain('90'), FIRST_PAINT_WAIT)
+    const filtered = [...ui.container.querySelectorAll<HTMLButtonElement>('[data-officeview-ui="pivot-button"][aria-pressed="true"]')]
+    expect(filtered.length).toBeGreaterThan(0)
+    return group
+  }
+
+  it('resident: click-one selects the stable cache item, exposes filtered field state, and Clear restores the saved totals', async () => {
+    const doc = await load(CONTROLS_SEED), ui = render(<InteractiveSheetDoc doc={doc} />)
+    const group = await chooseApples(ui)
+    fireEvent.click(within(group).getByRole('button', { name: 'Clear Filter' }))
+    await waitFor(() => expect(cellText(ui.container, 7, 4)).toContain('150'), FIRST_PAINT_WAIT)
+    expect([...ui.container.querySelectorAll<HTMLButtonElement>('[data-officeview-ui="pivot-button"][aria-pressed="true"]')]).toHaveLength(0)
+    ui.unmount()
+  }, 60_000)
+
+  it('repaints the canvas control from the committed slicer selection', async () => {
+    const doc = await load(CONTROLS_SEED), engine = pivotEngine()
+    if (!engine) throw new Error('Expected the parsed slicer to register its painter')
+    const painted: Array<Extract<import('../src/xlsx/pivots/slicers/model').XlsxControlContent, { kind: 'slicer' }>['slicer']> = []
+    const paintOriginal = engine.paintControl.bind(engine)
+    const paint = vi.spyOn(engine, 'paintControl').mockImplementation((ctx, content, width, height, familyCss) => {
+      if (content.kind === 'slicer') painted.push(content.slicer)
+      paintOriginal(ctx, content, width, height, familyCss)
+    })
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    try {
+      const group = await ui.findByRole('group', { name: /Product slicer/i }, FIRST_PAINT_WAIT)
+      fireEvent.click(within(group).getByRole('button', { name: 'Apples, selected' }))
+      await waitFor(() => expect(cellText(ui.container, 7, 1)).toContain('90'), FIRST_PAINT_WAIT)
+      await waitFor(() => expect(painted.at(-1)?.selectedItemIds).toEqual([0]), FIRST_PAINT_WAIT)
+      expect(painted.at(-1)?.items.map(item => item.selected)).toEqual([true, false, false, false])
+    } finally { ui.unmount(); paint.mockRestore() }
+  }, 60_000)
+
+  it('worker/paged: click-one and clear use the linked-control transaction and update the visible pivot', async () => {
+    const h = workerHarness(), ui = await renderPaged(h, CONTROLS_SEED)
+    const group = await ui.findByRole('group', { name: /Product slicer/i }, FIRST_PAINT_WAIT)
+    fireEvent.click(within(group).getByRole('button', { name: 'Apples, selected' }))
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Bananas, not selected' })).toBeTruthy(), FIRST_PAINT_WAIT)
+    expect(h.posted.map(command => command.kind)).toContain('controlApply')
+    expect(h.posted.map(command => command.kind)).toContain('controlCommit')
+    fireEvent.click(within(group).getByRole('button', { name: 'Clear Filter' }))
+    await waitFor(() => expect(cellText(ui.container, 7, 4)).toContain('150'), FIRST_PAINT_WAIT)
+    ui.unmount()
+  }, 60_000)
 })

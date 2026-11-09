@@ -355,6 +355,7 @@ export class RemoteWorkbook implements WorkbookSource {
         release: owner => this.mainLedger.release('replies', owner),
       },
       committed: (sheetId, pivot, result, valueGen) => this.publishPivotCommit(String(sheetId), pivot, result, valueGen),
+      linkedCommitted: targets => this.publishLinkedPivotCommits(targets.map(target => ({ sheetId: String(target.sheetId), pivot: target.pivot, result: target.result, valueGen: target.valueGen }))),
       formulaFlagChanged: (sheetId, hasFormulaCellsOutsidePivots) => {
         this.hasFormulaCellsOutsidePivots = hasFormulaCellsOutsidePivots
         if (hasFormulaCellsOutsidePivots) this.pivotFormulaNoticeSheets.add(String(sheetId))
@@ -664,33 +665,53 @@ export class RemoteWorkbook implements WorkbookSource {
   /** The worker is authoritative for committed pivot values; publish the same
    * generation, merges and used extent to the main geometry before notifying. */
   private publishPivotCommit(sheetId: string, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void {
-    if (this.closed || !this.sheets.some(sheet => sheet.sheetId === sheetId)) return
-    if (result.hasFormulaCellsOutsidePivots !== undefined) this.hasFormulaCellsOutsidePivots = result.hasFormulaCellsOutsidePivots
-    let pivots = this.pivotMerges.get(sheetId)
-    if (!pivots) this.pivotMerges.set(sheetId, pivots = new Map())
-    pivots.set(pivot, result.merges.map(rect => ({ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 })))
-    const current = this.layout(sheetId)
-    if (!this.pivotBaseUsed.has(sheetId)) this.pivotBaseUsed.set(sheetId, current.used)
-    let extents = this.pivotUsedExtents.get(sheetId)
-    if (!extents) this.pivotUsedExtents.set(sheetId, extents = new Map())
-    extents.set(pivot, result.overlayExtent)
-    let protectedByPivot = this.pivotProtectedRects.get(sheetId)
-    if (!protectedByPivot) this.pivotProtectedRects.set(sheetId, protectedByPivot = new Map())
-    protectedByPivot.set(pivot, result.protectedRects)
-    const used = unionUsedRect(this.pivotBaseUsed.get(sheetId), [...extents.values()].filter((rect): rect is SourceRect => rect !== null))
-    const { used: _oldUsed, ...withoutUsed } = current
-    this.setLayout(sheetId, { ...withoutUsed, ...(used ? { used } : {}) })
-    const entry = this.merges(sheetId)
-    this.refreshPivotMerges(sheetId, entry)
-    const old = this.identity(sheetId)
-    if (valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
-    this.owner = { ...this.owner, workbookValueGen: Math.max(this.owner.workbookValueGen + 1, valueGen), sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
-    this.stores.get(sheetId)?.clear()
-    // The replacement chart models live as long as the drawing cache shows them: charged to its pool (R2-4).
-    for (const { chart } of result.charts) if (!this.mainLedger.hasLifetime(chart)) this.mainLedger.chargeWhileReachable('drawings', [chart], estimatePayloadBytes(chart))
-    this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), result.charts)
-    entry.gen++
-    this.invalidateRegionStyles(sheetId)
+    this.publishLinkedPivotCommits([{ sheetId, pivot, result, valueGen }])
+  }
+  /** All changed pivot displays on a sheet publish together, so a linked control advances that sheet's main-thread
+   * geometry/value identity once and observers never see a partial fan-out. */
+  private publishLinkedPivotCommits(targets: readonly { sheetId: string; pivot: number; result: RemotePivotApplyPayload; valueGen: number }[]): void {
+    if (this.closed || !targets.length) return
+    const bySheet = new Map<string, typeof targets[number][]>()
+    const chartChanges: Array<{ ownerKey: string; charts: RemotePivotApplyPayload['charts'] }> = []
+    for (const target of targets) {
+      if (!this.sheets.some(sheet => sheet.sheetId === target.sheetId)) continue
+      const list = bySheet.get(target.sheetId) ?? []; list.push(target); bySheet.set(target.sheetId, list)
+      if (target.result.hasFormulaCellsOutsidePivots !== undefined) this.hasFormulaCellsOutsidePivots = target.result.hasFormulaCellsOutsidePivots
+      let pivots = this.pivotMerges.get(target.sheetId)
+      if (!pivots) this.pivotMerges.set(target.sheetId, pivots = new Map())
+      pivots.set(target.pivot, target.result.merges.map(rect => ({ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 })))
+      let extents = this.pivotUsedExtents.get(target.sheetId)
+      if (!extents) this.pivotUsedExtents.set(target.sheetId, extents = new Map())
+      extents.set(target.pivot, target.result.overlayExtent)
+      let protectedByPivot = this.pivotProtectedRects.get(target.sheetId)
+      if (!protectedByPivot) this.pivotProtectedRects.set(target.sheetId, protectedByPivot = new Map())
+      protectedByPivot.set(target.pivot, target.result.protectedRects)
+      for (const { chart } of target.result.charts) if (!this.mainLedger.hasLifetime(chart)) this.mainLedger.chargeWhileReachable('drawings', [chart], estimatePayloadBytes(chart))
+      chartChanges.push({ ownerKey: JSON.stringify([target.sheetId, target.pivot]), charts: target.result.charts })
+    }
+    for (const [sheetId, sheetTargets] of bySheet) {
+      const current = this.layout(sheetId)
+      if (!this.pivotBaseUsed.has(sheetId)) this.pivotBaseUsed.set(sheetId, current.used)
+      const extents = this.pivotUsedExtents.get(sheetId)!
+      const used = unionUsedRect(this.pivotBaseUsed.get(sheetId), [...extents.values()].filter((rect): rect is SourceRect => rect !== null))
+      const { used: _oldUsed, ...withoutUsed } = current
+      this.setLayout(sheetId, { ...withoutUsed, ...(used ? { used } : {}) })
+      const mergeEntry = this.merges(sheetId)
+      this.refreshPivotMerges(sheetId, mergeEntry)
+      const valueGen = Math.max(...sheetTargets.map(target => target.valueGen))
+      const old = this.identity(sheetId)
+      if (valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
+      this.stores.get(sheetId)?.clear()
+      mergeEntry.gen++
+      this.invalidateRegionStyles(sheetId)
+    }
+    const drawingChangedSheets = chartChanges.length ? this.drawingCache.setPivotChartsBatch(chartChanges) : []
+    // A linked pivot can update a chart on a different sheet. Advance each sheet's
+    // geometry generation once across both the pivot and chart fan-out.
+    for (const sheetId of drawingChangedSheets) if (!bySheet.has(sheetId)) (this.merges(sheetId) as { gen: number }).gen++
+    const sheetValues = new Map([...bySheet].map(([sheetId, sheetTargets]) => [sheetId, Math.max(this.identity(sheetId).valueGen, ...sheetTargets.map(target => target.valueGen))]))
+    this.owner = { ...this.owner, workbookValueGen: Math.max(this.owner.workbookValueGen + 1, ...sheetValues.values()),
+      sheetVector: this.owner.sheetVector.map(item => sheetValues.has(item.sheetId) ? { ...item, valueGen: sheetValues.get(item.sheetId)! } : item) }
     this.notify()
   }
   private withdrawPivotCommit(sheetId: string, pivot: number): void {
@@ -716,7 +737,8 @@ export class RemoteWorkbook implements WorkbookSource {
     this.refreshPivotMerges(sheetId, entry)
     entry.gen++
     this.stores.get(sheetId)?.clear()
-    this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), [])
+    const drawingChangedSheets = this.drawingCache.setPivotChartsBatch([{ ownerKey: JSON.stringify([sheetId, pivot]), charts: [] }])
+    for (const changedSheetId of drawingChangedSheets) if (changedSheetId !== sheetId) (this.merges(changedSheetId) as { gen: number }).gen++
     this.invalidateRegionStyles(sheetId)
     this.notify()
   }

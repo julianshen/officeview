@@ -22,7 +22,8 @@ import { paneRegions } from '../../../xlsx/view/frozenPanes'
 import type { ScrollWindow } from '../../../xlsx/view/contracts'
 import type { PivotDiagnostic, PivotTableDefinition } from '../../../xlsx/pivots/model'
 import { drillBox, dropdownBox, pivotButtons, PX_PER_PT, savedPivotLayout, type ButtonPlacement } from '../../../xlsx/pivots/index'
-import type { PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './pivotClient'
+import type { LinkedPivotApplyOutcome, PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './pivotClient'
+import type { LinkedControlSelection } from '../../../xlsx/view/contracts'
 import { PivotFieldMenu } from './PivotFieldMenu'
 import { PivotPageMenu } from './PivotPageMenu'
 import { PivotValueSettingsDialog } from './PivotValueSettingsDialog'
@@ -30,8 +31,17 @@ export { PivotFieldList } from './PivotFieldList'
 export { PivotValueSettingsDialog, PIVOT_VALUE_NUMFMT_PRESETS } from './PivotValueSettingsDialog'
 export type { PivotValueSettingsDialogProps } from './PivotValueSettingsDialog'
 
-export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort } from './pivotClient'
+export { createResidentPivotClient, createRemotePivotClient, pendingPivotFits, pivotAutofitColumns, remotePivotPort, resolveControlPivotTargets, slicerClearDelta, slicerPageSelectionConflicts, timelinePageSelectionConflicts } from './pivotClient'
+export { dateFilter } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind, PivotShownLayout, PendingPivotFits, PivotFitMemory } from './pivotClient'
+export { SlicerLayer } from './SlicerLayer'
+export type { SlicerLayerProps } from './SlicerLayer'
+export { TimelineLayer } from './TimelineLayer'
+export type { TimelineLayerProps } from './TimelineLayer'
+export { SlicerController, SlicerRetainedCharges, TimelineController, sameSlicerHiddenItems, slicerRetainedGroupKey } from '../../../xlsx/pivots/slicers/controller'
+export type { SlicerAction, SlicerApplyResult, SlicerControllerHost, TimelineAction, TimelineApplyResult, TimelineControllerHost } from '../../../xlsx/pivots/slicers/controller'
+export type { Box as SlicerBox, SlicerModel } from '../../../xlsx/pivots/slicers/model'
+export type { TimelineModel } from '../../../xlsx/pivots/slicers/model'
 
 export type PivotUiState =
   | { status: 'idle' }
@@ -131,7 +141,7 @@ export class PivotController {
     this.host.openMenu({ sheet, pivot, field: button.field, kind: button.kind === 'page' ? 'page' : 'field', invoker, ...(anchor ? { anchor } : {}) })
   }
   /** Applies (and, through the client, commits and installs) one change; refusals are announced (S2-AJ and the rest). */
-  apply(sheet: number, pivot: number, delta: PivotDelta | 'reset'): Promise<boolean> {
+  apply(sheet: number, pivot: number, delta: PivotDelta | 'reset', announce = true): Promise<boolean> {
     const run = this.queue.then(async () => {
       if (this.disposed) return false
       const outcome = await this.host.client.apply(sheet, pivot, delta)
@@ -140,9 +150,31 @@ export class PivotController {
       if (state.status === 'open') this.set(sheet, pivot, { ...state, revision: outcome.revision, model: outcome.model })
       const done = delta === 'reset' ? PIVOT_RESET : PIVOT_APPLIED
       // A refreshOnLoad pivot's first change says it was refreshed from the workbook's data (§7.7), once.
-      this.host.announce(outcome.notice ? `${outcome.notice} ${done}` : done)
+      if (announce) this.host.announce(outcome.notice ? `${outcome.notice} ${done}` : done)
       return true
     }).catch(error => { this.host.announce(error instanceof Error ? error.message.slice(0, 256) : 'Pivot change failed.'); return false })
+    this.queue = run
+    return run
+  }
+  /** Slicer adapter: the worker gets its atomic linked-control operation; a resident UI action may target only one pivot. */
+  applyLinked(selection: LinkedControlSelection, targets: readonly { sheetId: number; pivot: number; delta: PivotDelta | 'reset' }[]): Promise<LinkedPivotApplyOutcome> {
+    const run = this.queue.then(async (): Promise<LinkedPivotApplyOutcome> => {
+      if (this.disposed) return { kind: 'cancelled' }
+      if (this.host.client.applyLinked) {
+        const result = await this.host.client.applyLinked(selection, targets, this.abort.signal)
+        if (result.kind === 'committed') for (const target of result.targets) {
+          const state = this.state(target.sheetId, target.pivot)
+          if (state.status === 'open') this.set(target.sheetId, target.pivot, { ...state, revision: target.revision, model: target.model })
+        }
+        return result
+      }
+      if (targets.length !== 1) return { kind: 'refused', message: 'Resident linked slicers with multiple pivot targets are not available yet.' }
+      const target = targets[0]!, outcome = await this.host.client.apply(target.sheetId, target.pivot, target.delta)
+      if (!outcome.ok) return { kind: 'refused', message: outcome.diagnostic.message }
+      const state = this.state(target.sheetId, target.pivot)
+      if (state.status === 'open') this.set(target.sheetId, target.pivot, { ...state, revision: outcome.revision, model: outcome.model })
+      return { kind: 'committed', revision: outcome.revision, targets: [{ sheetId: target.sheetId, pivot: target.pivot, revision: outcome.revision, def: outcome.def, model: outcome.model }] }
+    }).catch(error => ({ kind: 'refused' as const, message: error instanceof Error ? error.message.slice(0, 256) : 'Slicer change failed.' }))
     this.queue = run
     return run
   }
@@ -219,8 +251,10 @@ export interface PivotButtonLayerProps {
   touch: boolean
   /** The cell's shown text: names a button when the client has no labels. */
   cellText?(row: number, col: number): string
+  /** Saved cache-field slicer state; exposed on the corresponding filter hit target. */
+  isFiltered?(cacheId: number, field: number): boolean
 }
-interface Target { key: string; pivot: number; button: ButtonPlacement; box: { x: number; y: number; width: number; height: number }; action: string; refused?: string }
+interface Target { key: string; pivot: number; button: ButtonPlacement; box: { x: number; y: number; width: number; height: number }; action: string; filtered?: boolean; refused?: string }
 
 const TOUCH = 44
 function actionName(controller: PivotController, sheet: number, pivot: number, button: ButtonPlacement, cellText: PivotButtonLayerProps['cellText']): string {
@@ -274,7 +308,8 @@ export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | n
       const x1 = Math.min(box.x + box.width, clip.x1), y1 = Math.min(box.y + box.height, clip.y1)
       if (x1 <= x0 || y1 <= y0) continue
       box = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }
-      targets.push({ key: `${pivot}:${button.row}:${button.col}`, pivot, button, box, action: actionName(controller, sheet, pivot, button, props.cellText),
+      const filtered = button.kind === 'filter' && props.isFiltered?.(def.cacheId, button.field) === true
+      targets.push({ key: `${pivot}:${button.row}:${button.col}`, pivot, button, box, action: `${actionName(controller, sheet, pivot, button, props.cellText)}${filtered ? ', filtered' : ''}`, ...(filtered ? { filtered: true } : {}),
         ...(state.status === 'refused' ? { refused: state.diagnostic.message } : {}) })
     }
   })
@@ -288,7 +323,7 @@ export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | n
       // Pointer only (Ruling S3-J): never a Tab stop; the keyboard uses the gridcell's Alt+arrow route.
       return <button key={target.key} type="button" data-officeview-ui="pivot-button" data-pivot-key={target.key} data-pivot={target.pivot} data-row={button.row} data-col={button.col}
         tabIndex={-1} aria-label={name} title={name} {...(target.refused ? { 'aria-disabled': 'true', 'aria-description': target.action } : {})}
-        {...(drill ? { 'aria-expanded': button.kind === 'collapse' } : { 'aria-haspopup': 'dialog' as const })}
+        {...(drill ? { 'aria-expanded': button.kind === 'collapse' } : { 'aria-haspopup': 'dialog' as const })} {...(button.kind === 'filter' ? { 'aria-pressed': Boolean(target.filtered) } : {})}
         onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
         onClick={event => { event.stopPropagation(); void controller.activate(sheet, target.pivot, button, event.currentTarget) }}
         style={{ position: 'absolute', left: target.box.x, top: target.box.y, width: target.box.width, height: target.box.height, padding: 0, margin: 0, border: 0, background: 'transparent', cursor: target.refused ? 'default' : 'pointer', pointerEvents: 'auto' }} />

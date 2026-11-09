@@ -79,8 +79,10 @@ import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import type { FormatAllocation } from '../xlsx/formula/format'
 import type { EffectiveFormatScope, FormatBudget } from '../xlsx/view/formatWorkspace'
 import type { PivotCacheDefinition, PivotTableDefinition } from '../xlsx/pivots/model'
+import { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS } from '../xlsx/view/contracts'
 import type { RecordLimits, RecordResult } from '../xlsx/pivots/engine/records'
 import type { CellReader } from '../xlsx/pivots/engine/faithful'
+import { estimatePayloadBytes } from '../xlsx/view/payloadBytes'
 
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 const PREPARE_PAGE_LIMIT = 4096
@@ -280,6 +282,12 @@ export interface WorkbookSource {
 }
 
 /** Source-specific inputs consumed by the worker pivot session manager. */
+export interface WorkerControlLink {
+  readonly name: string
+  readonly kind: 'slicer' | 'timeline'
+  readonly cacheId?: number
+  readonly pivotTables: readonly string[]
+}
 export interface WorkerPivotAssets {
   readonly tables: readonly PivotTableDefinition[]
   readonly date1904: boolean
@@ -287,6 +295,8 @@ export interface WorkerPivotAssets {
   readonly metadataBytes: number
   readonly runtimeKey: object
   readonly linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]
+  /** Bounded resolved control-to-pivot linkage copied from workbook drawing metadata. */
+  readonly controlLinks?: readonly WorkerControlLink[]
   /** Every pivot of the workbook by sheet and name (an unnamed one possibly any name): resolves a chart source without a sheet (S3-Q). */
   readonly pivots?: readonly { readonly sheet: string; readonly name?: string }[]
   /** Pins source-owned per-generation metadata while a worker pivot handle references it. */
@@ -349,6 +359,18 @@ interface WorkerPivotHandle {
   requestRevision: number
   serial: number
 }
+interface WorkerLinkedControlStage {
+  revision: number
+  selection: import('../xlsx/view/contracts').LinkedControlSelection
+  targets: Array<{ id: string; key: string; sheetId: string; pivot: number; revision: number; handle: WorkerPivotHandle; staged: WorkerPivotStage; result: Extract<import('../xlsx/view/contracts').WorkerResult, { kind: 'pivotApply' }> }>
+  replyCharge: Charge
+  composites: Map<string, import('../xlsx/view/contracts').ValueOverlay | undefined>
+  compositeCharges: Map<string, Charge>
+  /** Non-target same-sheet pivots the composite depends on: every handle,
+   * including an absent committed overlay, so a first commit or a release
+   * in between still goes stale instead of restoring old displayed values. */
+  deps: Array<{ handle: WorkerPivotHandle; committed: unknown }>
+}
 export type WorkerPivotOutcome =
   | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; /** The value cells a fit reads (absent past the payload cap: no autofit). */ cells?: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[]; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
   | { kind: 'apply'; revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; /** The candidate shows the saved view (a reset): it installs no overlay (Ruling S3-AK). */ atSaved?: true; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells?: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell }[] }
@@ -357,6 +379,14 @@ export type WorkerPivotOutcome =
   | { kind: 'release'; released: boolean; valueGen?: number }
   | { kind: 'refused'; feature: string; message: string }
   | { kind: 'quota'; requiredBytes?: number; limitBytes: number }
+  | { kind: 'cancelled' }
+export type WorkerLinkedControlOutcome =
+  | { kind: 'controlApply'; revision: number; selection: import('../xlsx/view/contracts').LinkedControlSelection; targets: readonly { id: string; sheetId: string; pivot: number; revision: number; result: Extract<import('../xlsx/view/contracts').WorkerResult, { kind: 'pivotApply' }> }[] }
+  | { kind: 'controlCommit'; revision: number; selection: import('../xlsx/view/contracts').LinkedControlSelection; valueGens: readonly { sheetId: string; valueGen: number }[] }
+  | { kind: 'controlCancel'; cancelled: boolean }
+  | { kind: 'stale' }
+  | { kind: 'refused'; feature: string; message: string }
+  | { kind: 'quota'; requiredBytes: number; limitBytes: number }
   | { kind: 'cancelled' }
 
 /** S8 extension point: typed filter rule evaluation over the resident store.
@@ -866,8 +896,14 @@ class PivotIndexQuota extends Error {
 }
 /** A sheet's committed pivot overlays as one: a cell is answered by the last overlay whose rectangles hold it,
  * found with one point query over all of them (Task 33 perf: not a walk over every overlay). */
-export function combinePivotOverlays(overlays: readonly import('../xlsx/view/contracts').ValueOverlay[]): import('../xlsx/view/contracts').ValueOverlay | undefined {
+export function combinePivotOverlays(overlays: readonly import('../xlsx/view/contracts').ValueOverlay[], grantBytes = Infinity): import('../xlsx/view/contracts').ValueOverlay | undefined {
   if (!overlays.length) return undefined
+  // Read lengths only: copying vectors and building the index must fit the
+  // already-held grant, not be checked after construction.
+  let rectCount = 0, protectedCount = 0, mergeCount = 0
+  for (const overlay of overlays) { rectCount += overlay.rects.length; protectedCount += overlay.protectedRects.length; mergeCount += overlay.merges.length }
+  const requiredBytes = 512 + OwnedRects.upperBytesFor(rectCount) + rectCount * 64 + protectedCount * 48 + mergeCount * 48
+  if (!Number.isSafeInteger(requiredBytes) || requiredBytes > grantBytes) throw new PivotIndexQuota(requiredBytes, grantBytes)
   const rects = overlays.flatMap(overlay => overlay.rects)
   const protectedRects = overlays.flatMap(overlay => overlay.protectedRects)
   const merges = overlays.flatMap(overlay => overlay.merges)
@@ -1008,6 +1044,9 @@ export class DocumentSession {
   private structureBytes = 0
   private readonly structureEntries = new Map<string, PoolEntry>()
   private readonly pivotHandles = new Map<string, WorkerPivotHandle>()
+  private readonly linkedCompositeCharges = new Map<string, Charge>()
+  private linkedControlStage?: WorkerLinkedControlStage
+  private linkedControlRevision = 0
   private readonly pivotStores = new Map<string, PivotStoreShare>()
   private readonly pivotRuntimeEntries = new Map<object, PivotRuntimeShare>()
   private formulaOutsidePivots?: boolean
@@ -1578,6 +1617,7 @@ export class DocumentSession {
   pivotApply(sheetId: string, pivot: number, baseRevision: number, requestRevision: number, delta: import('../xlsx/pivots/session/delta').PivotDelta | 'reset', grantBytes: number, fitGrantBytes?: number): WorkerPivotOutcome {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot))
     if (!handle || this.closed) return { kind: 'refused', feature: 'pivot-session-released', message: 'The pivot session is not open.' }
+    if (this.linkedControlStage?.targets.some(target => target.key === pivotHandleKey(sheetId, pivot))) this.cancelControlApply()
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0 || baseRevision > handle.committedWireRevision
       || !Number.isSafeInteger(requestRevision) || requestRevision <= handle.requestRevision
       || !Number.isSafeInteger(grantBytes) || grantBytes <= 0) return { kind: 'stale' }
@@ -1666,9 +1706,211 @@ export class DocumentSession {
       ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), ...withCells(cells),
       protectedRects: overlay.protectedRects }
   }
+  /** Stage the complete, bounded target fan-out before making any pivot or control selection visible. */
+  async controlApply(revision: number, grantBytes: number, selection: import('../xlsx/view/contracts').LinkedControlSelection,
+    targets: readonly import('../xlsx/view/contracts').LinkedControlPivotTarget[], signal: AbortSignal): Promise<WorkerLinkedControlOutcome> {
+    const { validateLinkedControlOperation, resolveWorkerControlLink } = await import('../xlsx/pivots/slicers/transaction')
+    if (this.closed || signal.aborted) return { kind: 'cancelled' }
+    if (!validateLinkedControlOperation(selection) || !Number.isSafeInteger(revision)
+      || !Number.isSafeInteger(grantBytes) || grantBytes < 1 || !Array.isArray(targets)
+      || targets.length < 1 || targets.length > MAX_LINKED_CONTROL_TARGETS
+      || ('selectedItemIds' in selection && selection.selectedItemIds.length > MAX_LINKED_CONTROL_ITEMS)) {
+      return { kind: 'refused', feature: 'pivot-control-protocol-invalid', message: 'The linked-control request is invalid or exceeds its target, item or memory bound.' }
+    }
+    if (revision <= this.linkedControlRevision) return { kind: 'stale' }
+    // Task 40 implements pivot-cache controls only. A table cache uses a distinct
+    // source-row FilterSpec transaction and must never be mistaken for a pivot apply.
+    if (selection.kind === 'tableSlicerSelection') return { kind: 'refused', feature: 'pivot-control-table-unverified', message: 'Table slicer filtering is not verified yet.' }
+    this.cancelControlApply()
+    const seen = new Set<string>()
+    const resolved: Array<{ target: import('../xlsx/view/contracts').LinkedControlPivotTarget; handle: WorkerPivotHandle; key: string }> = []
+    for (const target of targets) {
+      const key = pivotHandleKey(target.sheetId, target.pivot), id = JSON.stringify([target.sheetId, target.pivot])
+      const handle = this.pivotHandles.get(key)
+      if (seen.has(id) || !handle || !Number.isSafeInteger(target.baseRevision) || target.baseRevision !== handle.committedWireRevision
+        || target.name !== handle.def.name || target.cacheId !== handle.cache.cacheId || handle.staged) {
+        return { kind: 'refused', feature: 'pivot-control-target-stale', message: 'A linked pivot target is missing, duplicated, staged elsewhere, or no longer matches its saved cache linkage.' }
+      }
+      seen.add(id); resolved.push({ target, handle, key })
+    }
+    const targetLinks = resolved.map(({ target }) => ({ name: target.name, cacheId: target.cacheId }))
+    const controlLinks = resolved.map(({ handle }) => resolveWorkerControlLink(selection, handle.assets.controlLinks ?? [], targetLinks))
+    const badLink = controlLinks.find(result => !result.ok)
+    if (badLink && !badLink.ok) return { kind: 'refused', feature: badLink.feature, message: badLink.message }
+    const canonicalLink = controlLinks[0]?.ok ? JSON.stringify(controlLinks[0].link) : undefined
+    if (!canonicalLink || controlLinks.some(result => !result.ok || JSON.stringify(result.link) !== canonicalLink)) {
+      return { kind: 'refused', feature: 'pivot-control-linkage-unknown', message: 'Linked pivot targets do not agree on the saved workbook control linkage.' }
+    }
+    if (resolved.length > 1) {
+      // Ruling S5-C: the linked-pivots-with-different-layouts route is still an owner recipe.
+      // Compare the bounded view structure before allocating any target candidates.
+      const layoutKeys = resolved.map(({ handle }) => JSON.stringify([
+        handle.session.view.rows, handle.session.view.cols, handle.session.view.data,
+        handle.session.view.fields.map(field => [field.subtotals, field.subtotalTop, field.compact, field.outline, field.insertBlankRow, field.fillDownLabels]),
+        handle.def.dataOnRows,
+      ]))
+      if (new Set(layoutKeys).size !== 1) return { kind: 'refused', feature: 'pivot-control-linked-layout-unverified', message: 'Linked pivots with different layouts are not verified yet.' }
+    }
+    const replyGrant = Math.floor(grantBytes / 3)
+    const compositeGrant = Math.floor(grantBytes / 6)
+    const candidateGrant = grantBytes - replyGrant - compositeGrant
+    const perTarget = Math.floor(candidateGrant / resolved.length)
+    if (replyGrant < 1 || compositeGrant < 1 || perTarget < 1) return { kind: 'quota', requiredBytes: grantBytes + 1, limitBytes: grantBytes }
+    // Reserve the worst-case wire reply before any pivot candidate or reply graph is built.
+    const replyCharge = this.charge()
+    if (!replyCharge.set(replyGrant)) { replyCharge.release(); return { kind: 'quota', requiredBytes: replyGrant, limitBytes: this.memory.limitBytes } }
+    const sheetIds = [...new Set(resolved.map(item => item.target.sheetId))]
+    const compositeCharges = new Map<string, Charge>()
+    const perSheetCompositeGrant = Math.floor(compositeGrant / sheetIds.length)
+    for (const sheetId of sheetIds) {
+      const charge = this.charge()
+      if (perSheetCompositeGrant < 1 || !charge.set(perSheetCompositeGrant)) {
+        charge.release(); replyCharge.release()
+        for (const other of compositeCharges.values()) other.release()
+        return { kind: 'quota', requiredBytes: compositeGrant, limitBytes: this.memory.limitBytes }
+      }
+      compositeCharges.set(sheetId, charge)
+    }
+    const stagedTargets: NonNullable<WorkerLinkedControlStage['targets']> = []
+    const releaseAll = () => {
+      for (const entry of stagedTargets) this.cancelPivotApply(entry.sheetId, entry.pivot, entry.staged.requestRevision)
+      replyCharge.release()
+      for (const charge of compositeCharges.values()) charge.release()
+    }
+    this.linkedControlRevision = revision
+    for (const { target, handle, key } of resolved) {
+      if (signal.aborted || this.closed) { releaseAll(); return { kind: 'cancelled' } }
+      const applied = this.pivotApply(target.sheetId, target.pivot, target.baseRevision, target.requestRevision, target.delta, perTarget, 0)
+      if (applied.kind !== 'apply') {
+        releaseAll()
+        return applied.kind === 'quota' ? { kind: 'quota', requiredBytes: applied.requiredBytes ?? perTarget, limitBytes: applied.limitBytes }
+          : applied.kind === 'cancelled' ? applied
+            : { kind: 'refused', feature: applied.kind === 'refused' ? applied.feature : 'pivot-control-target-stale', message: applied.kind === 'refused' ? applied.message : 'A linked pivot candidate became stale.' }
+      }
+      const staged = handle.staged
+      if (!staged || staged.requestRevision !== target.requestRevision || staged.wireRevision !== applied.revision) {
+        this.cancelPivotApply(target.sheetId, target.pivot, target.requestRevision)
+        releaseAll()
+        return { kind: 'stale' }
+      }
+      const result: Extract<import('../xlsx/view/contracts').WorkerResult, { kind: 'pivotApply' }> = {
+        kind: 'pivotApply', revision: applied.revision, ...(applied.notice ? { notice: applied.notice } : {}), ...(applied.atSaved ? { atSaved: true } : {}),
+        def: applied.def, menu: applied.menu, rects: applied.rects, protectedRects: applied.protectedRects, overlayExtent: applied.overlayExtent,
+        merges: applied.merges, usedRows: applied.usedRows, usedCols: applied.usedCols, charts: applied.charts,
+        ...(applied.cells ? { cells: applied.cells } : {}),
+      }
+      stagedTargets.push({ id: JSON.stringify([target.sheetId, target.pivot]), key, sheetId: target.sheetId, pivot: target.pivot, revision: applied.revision, handle, staged, result })
+    }
+    const response = { kind: 'controlApply' as const, revision, selection, targets: stagedTargets.map(({ id, sheetId, pivot, revision: targetRevision, result }) => ({ id, sheetId, pivot, revision: targetRevision, result })) }
+    const replyBytes = estimatePayloadBytes(response)
+    if (!Number.isSafeInteger(replyBytes) || replyBytes > replyGrant || !replyCharge.set(replyBytes)) {
+      releaseAll()
+      return { kind: 'quota', requiredBytes: replyBytes, limitBytes: replyGrant }
+    }
+    const composites = new Map<string, import('../xlsx/view/contracts').ValueOverlay | undefined>()
+    const deps: WorkerLinkedControlStage['deps'] = []
+    for (const sheetId of sheetIds) {
+      const candidateHandles = new Map(stagedTargets.filter(target => target.sheetId === sheetId).map(target => [target.handle, target.staged]))
+      const overlays = [...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId).flatMap(handle => {
+        const candidate = candidateHandles.get(handle)
+        if (candidate) return candidate.overlay?.rects.length ? [candidate.overlay] : []
+        const committed = handle.committed
+        // Snapshot every same-sheet non-target handle, including the absent-committed
+        // state: a first commit between apply and commit must go stale (PR #60 R7).
+        deps.push({ handle, committed })
+        if (!committed?.overlay?.rects.length) return []
+        return [committed.overlay]
+      })
+      let composite: import('../xlsx/view/contracts').ValueOverlay | undefined
+      try { composite = combinePivotOverlays(overlays, perSheetCompositeGrant) }
+      catch (error) {
+        releaseAll()
+        if (error instanceof PivotIndexQuota) return { kind: 'quota', requiredBytes: error.requiredBytes, limitBytes: error.limitBytes }
+        throw error
+      }
+      const rects = composite?.rects.length ?? 0, protectedRects = composite?.protectedRects.length ?? 0, merges = composite?.merges.length ?? 0
+      // The candidate index and copied rectangle vectors are charged before combinePivotOverlays allocates them.
+      const compositeBytes = 512 + OwnedRects.upperBytesFor(rects) + rects * 64 + protectedRects * 48 + merges * 48
+      const charge = compositeCharges.get(sheetId)!
+      if (!Number.isSafeInteger(compositeBytes) || compositeBytes > perSheetCompositeGrant || !charge.set(compositeBytes)) {
+        releaseAll()
+        return { kind: 'quota', requiredBytes: compositeBytes, limitBytes: perSheetCompositeGrant }
+      }
+      composites.set(sheetId, composite)
+    }
+    this.linkedControlStage = { revision, selection, targets: stagedTargets, replyCharge, composites, compositeCharges, deps }
+    return response
+  }
+  /** Synchronous all-target commit: validation, pivot state, overlays and per-sheet generations publish in one worker turn. */
+  controlCommit(revision: number, signal: AbortSignal): WorkerLinkedControlOutcome {
+    const stage = this.linkedControlStage
+    if (!stage || stage.revision !== revision || this.closed || signal.aborted) return signal.aborted ? { kind: 'cancelled' } : { kind: 'stale' }
+    if (!stage.targets.every(({ handle, staged, revision: targetRevision }) => handle.staged === staged && staged.wireRevision === targetRevision && handle.session.canCommit(staged.result))) {
+      this.cancelControlApply(revision)
+      return { kind: 'stale' }
+    }
+    // Every other same-sheet pivot must be untouched since staging: an
+    // independent commit, release, or a first commit from no overlay would
+    // otherwise have its displayed values silently restored by this publication.
+    const live = new Set(this.pivotHandles.values())
+    if (!stage.deps.every(dep => live.has(dep.handle) && dep.handle.committed === dep.committed)) {
+      this.cancelControlApply(revision)
+      return { kind: 'stale' }
+    }
+    // A handle opened after staging (absent from deps) is also a change:
+    // its later commit would be wiped by the staged composite.
+    const sheetIds = new Set(stage.targets.map(target => target.sheetId))
+    const stagedHandles = new Set([...stage.targets.map(target => target.handle), ...stage.deps.map(dep => dep.handle)])
+    for (const handle of this.pivotHandles.values()) {
+      if (sheetIds.has(handle.sheetId) && !stagedHandles.has(handle)) {
+        this.cancelControlApply(revision)
+        return { kind: 'stale' }
+      }
+    }
+    for (const sheetId of sheetIds) if (!this.store(sheetId).setValueOverlay) {
+      this.cancelControlApply(revision)
+      return { kind: 'refused', feature: 'pivot-overlay-unavailable', message: 'A linked-control source cannot publish pivot values.' }
+    }
+    // All candidates were produced by these exact sessions and no await occurs here; commit() cannot become stale between checks.
+    for (const { handle, staged } of stage.targets) {
+      if (!handle.session.commit(staged.result)) throw new Error('Preflighted linked pivot commit became stale inside a synchronous worker turn')
+    }
+    const sheets = new Map<string, WorkerPivotHandle[]>()
+    for (const entry of stage.targets) {
+      const previous = entry.handle.committed
+      entry.handle.committed = entry.staged; entry.handle.staged = undefined
+      entry.handle.def = entry.staged.result.def; entry.handle.cache = entry.staged.result.cache
+      entry.handle.committedWireRevision = entry.revision
+      if (previous && previous !== entry.staged && previous.entry !== entry.staged.entry) previous.entry.release()
+      const list = sheets.get(entry.sheetId) ?? []; list.push(entry.handle); sheets.set(entry.sheetId, list)
+    }
+    const valueGens = [...sheets.keys()].sort().map(sheetId => {
+      const store = this.store(sheetId)
+      if (!store.setValueOverlay) throw new Error('Prevalidated linked-control target lost value-overlay capability')
+      store.setValueOverlay(stage.composites.get(sheetId)); this.publishValues(sheetId)
+      this.linkedCompositeCharges.get(sheetId)?.release()
+      this.linkedCompositeCharges.set(sheetId, stage.compositeCharges.get(sheetId)!)
+      return { sheetId, valueGen: store.stamp.valueGen }
+    })
+    this.linkedControlStage = undefined
+    stage.compositeCharges.clear()
+    stage.replyCharge.release()
+    this.startFormulaOutsidePivotsScan()
+    return { kind: 'controlCommit', revision, selection: stage.selection, valueGens }
+  }
+  cancelControlApply(revision?: number): boolean {
+    const stage = this.linkedControlStage
+    if (!stage || revision !== undefined && stage.revision !== revision) return false
+    this.linkedControlStage = undefined
+      for (const target of stage.targets) this.cancelPivotApply(target.sheetId, target.pivot, target.staged.requestRevision)
+    stage.replyCharge.release()
+    for (const charge of stage.compositeCharges.values()) charge.release()
+    return true
+  }
   async pivotCommit(sheetId: string, pivot: number, revision: number, signal: AbortSignal): Promise<WorkerPivotOutcome> {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot)), staged = handle?.staged
     if (!handle || !staged || staged.wireRevision !== revision) return { kind: 'stale' }
+    if (this.linkedControlStage?.targets.some(target => target.key === pivotHandleKey(sheetId, pivot))) return { kind: 'stale' }
     const store = this.store(sheetId)
     if (!store.setValueOverlay) { staged.result.hold?.release(); staged.entry.release(); handle.staged = undefined; return { kind: 'refused', feature: 'pivot-overlay-unavailable', message: 'This source cannot publish pivot values.' } }
     if (signal.aborted || !handle.session.commit(staged.result)) { staged.result.hold?.release(); staged.entry.release(); handle.staged = undefined; return signal.aborted ? { kind: 'cancelled' } : { kind: 'stale' } }
@@ -1676,6 +1918,7 @@ export class DocumentSession {
     handle.committed = staged; handle.staged = undefined; handle.def = staged.result.def; handle.cache = staged.result.cache
     handle.committedWireRevision = revision
     store.setValueOverlay(this.combinedPivotOverlay(sheetId))
+    this.linkedCompositeCharges.get(sheetId)?.release(); this.linkedCompositeCharges.delete(sheetId)
     this.publishValues(sheetId)
     if (previous && previous !== staged && previous.entry !== staged.entry) previous.entry.release()
     this.startFormulaOutsidePivotsScan()
@@ -1727,6 +1970,7 @@ export class DocumentSession {
   pivotRelease(sheetId: string, pivot: number): WorkerPivotOutcome {
     const key = pivotHandleKey(sheetId, pivot), handle = this.pivotHandles.get(key)
     if (!handle) return { kind: 'release', released: false }
+    if (this.linkedControlStage?.targets.some(target => target.key === key)) this.cancelControlApply()
     this.pivotHandles.delete(key)
     this.dropPivotBlockers(sheetId)
     if (handle.staged) { handle.staged.result.hold?.release(); handle.staged.entry.release() }
@@ -1734,6 +1978,7 @@ export class DocumentSession {
     if (handle.committed) {
       const store = this.store(sheetId)
       store.setValueOverlay?.(this.combinedPivotOverlay(sheetId))
+      this.linkedCompositeCharges.get(sheetId)?.release(); this.linkedCompositeCharges.delete(sheetId)
       if (!this.closed && store.stamp.valueGen > this.state(sheetId).valueGen) this.publishValues(sheetId)
       valueGen = store.stamp.valueGen
       handle.committed.entry.release()
@@ -1758,6 +2003,7 @@ export class DocumentSession {
    * S3-AK) a pivot showing a committed change keeps its session and overlay, charged, until it is reset or the document
    * closes, as on the resident path; only its staged candidate goes. */
   releasePivotsExcept(sheetId?: string, keepChanged = false): void {
+    this.cancelControlApply()
     for (const handle of [...this.pivotHandles.values()]) {
       if (sheetId !== undefined && handle.sheetId === sheetId) continue
       if (keepChanged && handle.committed && handle.committed.result.def !== handle.savedDef) {

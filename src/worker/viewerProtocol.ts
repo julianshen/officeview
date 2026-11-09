@@ -18,7 +18,7 @@ import type {
   WorkerReply,
   WorkerReplyBase,
 } from '../xlsx/view/contracts'
-import { OPERATION_REFUSED_CODE } from '../xlsx/view/contracts'
+import { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS, OPERATION_REFUSED_CODE } from '../xlsx/view/contracts'
 import { MAX_ROWS, validateCoordinate } from '../xlsx/view/coordinates'
 import { CompactRowVisibility } from '../xlsx/view/visibility'
 
@@ -30,6 +30,7 @@ export type {
 export const VIEWER_COMMAND_KINDS: readonly WorkerCommandKind[] = Object.freeze([
   'open', 'activateSheet', 'prepareColumns', 'sort', 'filter', 'viewport', 'valueQuery', 'search', 'read', 'cancel', 'close',
   'pivotOpen', 'pivotApply', 'pivotCommit', 'pivotFormulaStatus', 'pivotRelease',
+  'controlApply', 'controlCommit', 'controlCancel',
 ])
 const COMMAND_KINDS: ReadonlySet<string> = new Set(VIEWER_COMMAND_KINDS)
 const REPLY_KINDS: ReadonlySet<string> = new Set(['progress', 'complete', 'cancelled', 'incomplete', 'quota', 'error'])
@@ -40,7 +41,43 @@ const TERMINAL_KINDS: ReadonlySet<string> = new Set(['complete', 'cancelled', 'i
 export function isViewerCommand(data: unknown): data is WorkerCommand {
   if (typeof data !== 'object' || data === null) return false
   const { kind, requestId } = data as { kind?: unknown; requestId?: unknown }
-  return typeof requestId === 'string' && typeof kind === 'string' && COMMAND_KINDS.has(kind)
+  if (typeof requestId !== 'string' || typeof kind !== 'string' || !COMMAND_KINDS.has(kind)) return false
+  if (kind === 'controlApply') {
+    const command = data as Record<string, unknown>, selection = command.selection
+    if (typeof command.docId !== 'string' || !Number.isSafeInteger(command.revision) || Number(command.revision) < 1
+      || !Number.isSafeInteger(command.grantBytes) || Number(command.grantBytes) < 1 || !Array.isArray(command.targets)
+      || command.targets.length < 1 || command.targets.length > MAX_LINKED_CONTROL_TARGETS || typeof selection !== 'object' || selection === null) return false
+    const value = selection as Record<string, unknown>
+    if (typeof value.name !== 'string' || value.name.length < 1 || value.name.length > 256) return false
+    const selectionKeys = Object.keys(value)
+    if ((value.kind === 'slicerClear' || value.kind === 'timelineClear') && selectionKeys.length !== 2) return false
+    if (value.kind === 'timelineSelection') {
+      if (selectionKeys.length !== 4 || !Object.prototype.hasOwnProperty.call(value, 'start') || !Object.prototype.hasOwnProperty.call(value, 'end')) return false
+      if (!Number.isSafeInteger(value.start) || !Number.isSafeInteger(value.end) || Number(value.start) > Number(value.end)) return false
+    } else if (value.kind === 'slicerSelection' || value.kind === 'tableSlicerSelection') {
+      if (selectionKeys.length !== 3 || !Object.prototype.hasOwnProperty.call(value, 'selectedItemIds')) return false
+      if (!Array.isArray(value.selectedItemIds) || value.selectedItemIds.length > MAX_LINKED_CONTROL_ITEMS) return false
+      const ids = new Set<number>()
+      for (const id of value.selectedItemIds) { if (!Number.isSafeInteger(id) || Number(id) < 0 || ids.has(Number(id))) return false; ids.add(Number(id)) }
+    } else if (value.kind !== 'slicerClear' && value.kind !== 'timelineClear') return false
+    const targets = new Set<string>()
+    for (const item of command.targets) {
+      if (typeof item !== 'object' || item === null) return false
+      const target = item as Record<string, unknown>
+      if (typeof target.sheetId !== 'string' || target.sheetId.length > 256 || !Number.isSafeInteger(target.pivot) || Number(target.pivot) < 0
+        || typeof target.name !== 'string' || target.name.length > 256 || !Number.isSafeInteger(target.cacheId) || Number(target.cacheId) < 0
+        || !Number.isSafeInteger(target.baseRevision) || Number(target.baseRevision) < 0
+        || !Number.isSafeInteger(target.requestRevision) || Number(target.requestRevision) < 1
+        || (target.delta !== 'reset' && (typeof target.delta !== 'object' || target.delta === null))) return false
+      const id = JSON.stringify([target.sheetId, target.pivot])
+      if (targets.has(id)) return false
+      targets.add(id)
+    }
+  } else if (kind === 'controlCommit' || kind === 'controlCancel') {
+    const command = data as Record<string, unknown>
+    if (typeof command.docId !== 'string' || !Number.isSafeInteger(command.revision) || Number(command.revision) < 1) return false
+  }
+  return true
 }
 export function isViewerReply(data: unknown): data is WorkerReply {
   if (typeof data !== 'object' || data === null) return false

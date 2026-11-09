@@ -119,6 +119,30 @@ import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
 import type * as PivotUi from './pivot/PivotButtonLayer'
 import type { PivotDeltaKind } from '../../xlsx/pivots/session/delta'
 
+interface ActiveSlicerDrawing { drawing: XlsxDrawing; model: PivotUi.SlicerModel }
+interface ActiveTimelineDrawing { drawing: XlsxDrawing; model: PivotUi.TimelineModel }
+function slicerDrawingsOf(drawings: readonly XlsxDrawing[] | undefined): ActiveSlicerDrawing[] {
+  const out: ActiveSlicerDrawing[] = []
+  for (const drawing of drawings ?? []) {
+    if (drawing.group) continue
+    if (drawing.content?.kind === 'slicer') out.push({ drawing, model: drawing.content.slicer })
+  }
+  return out
+}
+function timelineDrawingsOf(drawings: readonly XlsxDrawing[] | undefined): ActiveTimelineDrawing[] {
+  const out: ActiveTimelineDrawing[] = []
+  for (const drawing of drawings ?? []) {
+    if (drawing.group) continue
+    if (drawing.content?.kind === 'timeline') out.push({ drawing, model: drawing.content.timeline })
+  }
+  return out
+}
+function slicerDrawingBox(drawing: XlsxDrawing): PivotUi.SlicerBox | undefined {
+  if (drawing.group || drawing.transformValid === false || drawing.rotationDeg) return undefined
+  const box = { x: drawing.xEmu / 9525, y: drawing.yEmu / 9525, width: drawing.widthEmu / 9525, height: drawing.heightEmu / 9525 }
+  return Object.values(box).every(Number.isFinite) && box.width > 0 && box.height > 0 ? box : undefined
+}
+
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
 export interface SheetViewInput {
@@ -355,6 +379,64 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const session = useRef(new SheetNavigationSession(docId)).current
   const windows = useRef(new Map<string, ScrollWindow>()).current
   const entries = useRef(new Map<string, SheetEntry>()).current
+  const slicerModels = useRef(new Map<string, PivotUi.SlicerModel>()).current
+  const slicerSheetIds = useRef(new Map<string, string>()).current
+  const slicerDrawingCache = useRef(new Map<string, { generation: number; base: readonly XlsxDrawing[]; drawings: XlsxDrawing[] }>()).current
+  // Option A (PR #60 review 4486449664): the sheet-scoped controller transfers
+  // its admitted hold here on commit; disposing the controller releases
+  // nothing. The single retained-charges instance (the shared pivots-chunk
+  // class, created lazily once `pivotUi` is loaded) ends a cache's charge when
+  // the model is replaced, the cache evicts it, or the viewer unmounts.
+  const slicerRetainedRef = useRef<PivotUi.SlicerRetainedCharges | null>(null)
+  // Ledger owners for transferred holds must stay unique across controller
+  // instances: the retained charge survives controller disposal, so a
+  // per-controller serial restarting at zero reuses the previous owner's key
+  // and `mainLedger.set()` overwrites its charge (PR #61 review). These
+  // viewer-scoped serials only reset on unmount, which also clears retained.
+  const slicerHoldSerial = useRef(0)
+  const timelineHoldSerial = useRef(0)
+  useEffect(() => () => {
+    slicerRetainedRef.current?.clear()
+    slicerRetainedRef.current = null
+  }, [])
+  // A removed sheet no longer needs its retained copies or drawing overrides:
+  // evicting here keeps the slicer-model pool bounded across document edits.
+  useEffect(() => {
+    const live = new Set(sheetIds)
+    for (const [name, sheetId] of [...slicerSheetIds]) {
+      if (!live.has(sheetId)) {
+        slicerSheetIds.delete(name)
+        slicerModels.delete(name)
+      }
+    }
+    for (const sheetId of [...slicerDrawingCache.keys()]) if (!live.has(sheetId)) slicerDrawingCache.delete(sheetId)
+    for (const [name, sheetId] of [...timelineSheetIds]) {
+      if (!live.has(sheetId)) {
+        timelineSheetIds.delete(name)
+        timelineModels.delete(name)
+      }
+    }
+    for (const sheetId of [...timelineDrawingCache.keys()]) if (!live.has(sheetId)) timelineDrawingCache.delete(sheetId)
+    if (slicerModels.size) {
+      const retained = slicerRetainedRef.current
+      if (retained && pivotUi) {
+        const liveGroups = new Set<string>()
+        for (const [name, model] of slicerModels) {
+          const sheetId = slicerSheetIds.get(name)
+          if (sheetId === undefined) continue
+          liveGroups.add(pivotUi.slicerRetainedGroupKey(model.cacheName ?? model.name, sheetId))
+        }
+        for (const groupKey of [...retained.keys()]) if (!liveGroups.has(groupKey)) retained.evict(groupKey)
+      }
+    } else {
+      slicerRetainedRef.current?.clear()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheetIds])
+  const timelineModels = useRef(new Map<string, PivotUi.TimelineModel>()).current
+  const timelineSheetIds = useRef(new Map<string, string>()).current
+  const localDrawingGens = useRef(new Map<string, number>()).current
+  const timelineDrawingCache = useRef(new Map<string, { generation: number; base: readonly XlsxDrawing[]; drawings: XlsxDrawing[] }>()).current
   const source = useMemo(() => props.source ?? createObjectWorkbookSource(doc, docId), [doc, docId, props.source])
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
@@ -551,7 +633,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     setResidentDependentNotices({ unsupported, outdated, cells })
   }
-  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length) || Boolean(remote && sheetIds.some(id => remote.layout(id).hasPivotDisplay)), [doc, remote, sheetIds])
+  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length || sheet.drawings?.some(drawing => drawing.content?.kind === 'slicer' || drawing.content?.kind === 'timeline')) || Boolean(remote && sheetIds.some(id => remote.layout(id).hasPivotDisplay)), [doc, remote, sheetIds])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
   // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
@@ -777,12 +859,47 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const sparklineContent = remote && remote.layout(sheetId).hasSparklines ? remote.sparklines(sheetId) : null
     const sparklineGen = sparklineContent?.gen ?? 0
     if (sparklineContent) sheet = sheetWithSparklines(sheet, sparklineContent)
+    const timelineGeneration = localDrawingGens.get(sheetId) ?? 0
+    const cachedTimelineDrawings = timelineDrawingCache.get(sheetId)
+    if (cachedTimelineDrawings && cachedTimelineDrawings.generation === timelineGeneration && cachedTimelineDrawings.base === sheet.drawings) {
+      if (cachedTimelineDrawings.drawings !== sheet.drawings) sheet = { ...sheet, drawings: cachedTimelineDrawings.drawings }
+    } else if (timelineModels.size && sheet.drawings?.some(drawing => drawing.content?.kind === 'timeline' && timelineModels.has(drawing.content.timeline.name))) {
+      let changed = false
+      const drawings = sheet.drawings.map(drawing => {
+        if (drawing.content?.kind !== 'timeline') return drawing
+        const model = timelineModels.get(drawing.content.timeline.name)
+        if (!model || model === drawing.content.timeline) return drawing
+        changed = true
+        return { ...drawing, content: { ...drawing.content, timeline: model } }
+      })
+      if (changed) {
+        timelineDrawingCache.set(sheetId, { generation: timelineGeneration, base: sheet.drawings, drawings })
+        sheet = { ...sheet, drawings }
+      }
+    }
+    const cachedSlicerDrawings = slicerDrawingCache.get(sheetId)
+    if (cachedSlicerDrawings && cachedSlicerDrawings.generation === timelineGeneration && cachedSlicerDrawings.base === sheet.drawings) {
+      if (cachedSlicerDrawings.drawings !== sheet.drawings) sheet = { ...sheet, drawings: cachedSlicerDrawings.drawings }
+    } else if (slicerModels.size && sheet.drawings?.some(drawing => drawing.content?.kind === 'slicer' && slicerModels.has(drawing.content.slicer.name))) {
+      let changed = false
+      const drawings = sheet.drawings.map(drawing => {
+        if (drawing.content?.kind !== 'slicer') return drawing
+        const model = slicerModels.get(drawing.content.slicer.name)
+        if (!model || model === drawing.content.slicer) return drawing
+        changed = true
+        return { ...drawing, content: { ...drawing.content, slicer: model } }
+      })
+      if (changed) {
+        slicerDrawingCache.set(sheetId, { generation: timelineGeneration, base: sheet.drawings, drawings })
+        sheet = { ...sheet, drawings }
+      }
+    }
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     // A resident pivot overlay (Task 28) moves the store's value and merge generations: the geometry is rebuilt over it.
     const structureGen = remote ? remote.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
     const valueGen = remote ? 0 : source.store(sheetId).stamp.valueGen
-    const drawingGen = remote ? remote.drawings(sheetId).gen : 0
+    const drawingGen = (remote ? remote.drawings(sheetId).gen : 0) + timelineGeneration
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
     const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.drawingGen === drawingGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
     if (!override && previous && previous.revision === input.revision && same(previous)) return { entry: previous }
@@ -871,6 +988,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const sparklineViewKeyRef = useRef(sparklineViewKey)
 
   const entry = activeSheetId ? entryFor(activeSheetId) : null
+  const activeSlicerDrawings = useMemo(() => slicerDrawingsOf(entry?.sheet.drawings), [entry?.sheet.drawings])
+  const activeTimelineDrawings = useMemo(() => timelineDrawingsOf(entry?.sheet.drawings), [entry?.sheet.drawings])
   const identity = identityOf(activeSheetId)
   const identityKey = JSON.stringify([identity.docId, identity.sheetId, identity.valueGen, identity.fontGen, identity.viewGen])
 
@@ -1837,7 +1956,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // ---- pivot controls (Task 28): a lazy chunk with the client, the button layer and the menus ----
   const [pivotUi, setPivotUi] = useState<typeof PivotUi | null>(null)
   // A paged shell's pivots arrive with the worker's display parts: the active sheet's entry says so.
-  const wantsPivotUi = hasPivots || Boolean(entry?.sheet.pivotTables?.length)
+  const wantsPivotUi = hasPivots || Boolean(entry?.sheet.pivotTables?.length || activeSlicerDrawings.length || activeTimelineDrawings.length)
   useEffect(() => {
     if (!wantsPivotUi) return
     let live = true
@@ -2068,6 +2187,218 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       setPivotController(current => current === controller ? null : current)
     }
   }, [pivotUi, doc, remote, mainLedger, budgetProfile, pivotKinds])
+  const [slicerController, setSlicerController] = useState<PivotUi.SlicerController | null>(null)
+  const slicerControllerOwner = useRef<{ sheetId: string; doc: XlsxDocument; pivotController: unknown; pivotUi: unknown; controller: PivotUi.SlicerController } | null>(null)
+  useEffect(() => {
+    const previous = slicerControllerOwner.current
+    if (!pivotUi || !pivotController || !activeSlicerDrawings.length) {
+      if (previous && (previous.sheetId !== activeSheetId || previous.doc !== doc || previous.pivotController !== pivotController || previous.pivotUi !== pivotUi || !activeSlicerDrawings.length)) {
+        previous.controller.dispose()
+        slicerControllerOwner.current = null
+        setSlicerController(current => current === previous.controller ? null : current)
+      }
+      return
+    }
+    if (previous && previous.sheetId === activeSheetId && previous.doc === doc && previous.pivotController === pivotController && previous.pivotUi === pivotUi) {
+      previous.controller.register(activeSlicerDrawings.map(item => item.model))
+      for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
+      setSlicerController(previous.controller)
+      return
+    }
+    previous?.controller.dispose()
+    for (const { model } of activeSlicerDrawings) slicerSheetIds.set(model.name, activeSheetId)
+    // The sheet this controller's admissions cover. Retained charges are
+    // keyed per cache per sheet (PR #61 review): same-cache drawings on
+    // another sheet commit from another controller with its own admission,
+    // so replacing this sheet's group must never release that sheet's hold.
+    const controllerSheetId = activeSheetId
+    const controller = new pivotUi.SlicerController(activeSlicerDrawings.map(item => item.model), {
+      announce: message => pivotHost.current.announce(message),
+      onChange: (model, hold) => {
+        slicerModels.set(model.name, model)
+        // Option A: take over the transferred admission. Replacing a model
+        // releases the previous group hold exactly once; a failure never
+        // throws out of render (the notice path already announced).
+        if (hold) {
+          try {
+            const retained = slicerRetainedRef.current ??= new pivotUi.SlicerRetainedCharges()
+            const cacheKey = model.cacheName ?? model.name
+            const sheetId = slicerSheetIds.get(model.name) ?? controllerSheetId
+            retained.retain(pivotUi.slicerRetainedGroupKey(cacheKey, sheetId), hold)
+          } catch { try { hold.release() } catch { /* fail closed */ } }
+        }
+        const sheetId = slicerSheetIds.get(model.name)
+        if (sheetId !== undefined) localDrawingGens.set(sheetId, (localDrawingGens.get(sheetId) ?? 0) + 1)
+      },
+      admit: bytes => {
+        const owner = `slicer-selection:${identityKey}:${++slicerHoldSerial.current}`
+        if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return undefined
+        mainLedger.set('controls', owner, bytes)
+        let held = true
+        return { release: () => { if (!held) return; held = false; mainLedger.release('controls', owner) } }
+      },
+      apply: async (model, action, signal) => {
+        if (signal.aborted) return { kind: 'cancelled' }
+        const drives = model.drives ?? []
+        if (drives.length !== 1 || !drives[0]?.pivotTable || drives[0].table) return { kind: 'refused', message: 'This slicer has multiple or unsupported targets; its selection is not available.' }
+        const name = drives[0].pivotTable
+        const activeSheetIndex = sheetIds.indexOf(activeSheetId)
+        const matches = doc.sheets.flatMap((savedSheet, sheetId) => {
+          // The active sheet prefers its live entry (a post-commit map entry
+          // can lag it); other sheets prefer their loaded entries, because
+          // paged shells carry no pivot definitions, over bare shells.
+          const sheet = sheetId === activeSheetIndex
+            ? entry?.sheet ?? entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
+            : entries.get(sheetIds[sheetId] ?? '')?.sheet ?? savedSheet
+          return (sheet.pivotTables ?? []).flatMap((def, pivot) => def.name === name && def.cacheId === model.cacheId ? [{ sheetId, pivot, def }] : [])
+        })
+        if (matches.length !== 1) return { kind: 'refused', message: 'This slicer target is missing or ambiguous; its selection is not available.' }
+        const target = matches[0]!, fieldIndex = model.sourceFieldIndex
+        if (!Number.isSafeInteger(fieldIndex) || fieldIndex! < 0 || target.def.cacheId !== model.cacheId) return { kind: 'refused', message: 'This slicer field does not match its pivot cache.' }
+        const opened = await pivotController.open(target.sheetId, target.pivot)
+        if (opened.status !== 'open') return { kind: 'refused', message: opened.status === 'refused' ? opened.diagnostic.message : 'This pivot cannot be opened for a slicer change.' }
+        const field = opened.model.fields.find(candidate => candidate.index === fieldIndex)
+        const pivotItems = target.def.fields[fieldIndex!]!.items
+        if (!field || !Array.isArray(pivotItems) || pivotItems.length > 10_000 || pivotItems.some(item => item.type === 'data' && item.x === undefined)) return { kind: 'refused', message: 'This slicer field has an unsupported item mapping.' }
+        // An items delta preserves the field's pivot filters while the engine
+        // keeps applying them: accepting would report success yet leave the
+        // pivot restricted (PR #60 review 4485866932). Refuse like the timeline
+        // adapter does for its overlapping date filters.
+        if (field.filters.length) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        // A report-filter slicer field holding a specific page selection would
+        // keep restricting the pivot after an items selection commits: the
+        // items delta preserves view.pages[].selected (PR #60 review 4486449655).
+        // Clear reconciles via slicerClearDelta, so only selection refuses here.
+        if (action.kind !== 'clear' && pivotUi.slicerPageSelectionConflicts(field)) return { kind: 'refused', message: 'This slicer field has a report-filter selection that the slicer cannot safely replace.' }
+        const current = new Set(model.selectedItemIds ?? model.items.filter(item => item.selected).map(item => item.id))
+        const expectedHidden = pivotItems.flatMap((item, index) => item.type === 'data' && !current.has(item.x!) ? [index] : [])
+        const actualHidden = field.items.filter(item => item.hidden).map(item => item.index)
+        if (!pivotUi.sameSlicerHiddenItems(expectedHidden, actualHidden)) {
+          // A pivot reset clears the field: reconcile when nothing is hidden;
+          // any other mismatch is an overlapping filter and stays refused.
+          if (actualHidden.length !== 0) return { kind: 'refused', message: 'This pivot field has an overlapping filter that the slicer cannot safely replace.' }
+        }
+        const selected = action.kind === 'clear' ? new Set(model.allItemIds ?? []) : new Set(action.selectedItemIds)
+        const hidden = pivotItems.flatMap((item, index) => item.type === 'data' && !selected.has(item.x!) ? [index] : [])
+        const cacheName = model.cacheName ?? model.name
+        const selection: import('../../xlsx/view/contracts').LinkedControlSelection = action.kind === 'clear'
+          ? { kind: 'slicerClear', name: cacheName }
+          : { kind: 'slicerSelection', name: cacheName, selectedItemIds: action.selectedItemIds }
+        const delta = action.kind === 'clear'
+          ? pivotUi.slicerClearDelta(fieldIndex!, opened.model.pages.includes(fieldIndex!))
+          : { kind: 'items', field: fieldIndex!, hidden } as const
+        const outcome = await pivotController.applyLinked(selection, [{ sheetId: target.sheetId, pivot: target.pivot, delta }])
+        if (outcome.kind === 'committed') return { kind: 'committed', revision: outcome.targets[0]?.revision ?? outcome.revision }
+        return outcome.kind === 'refused' ? outcome : { kind: outcome.kind }
+      },
+    })
+    slicerControllerOwner.current = { sheetId: activeSheetId, doc, pivotController, pivotUi, controller }
+    setSlicerController(controller)
+  }, [pivotUi, pivotController, activeSlicerDrawings, activeSheetId, doc, entries, sheetIds])
+  useEffect(() => () => {
+    slicerControllerOwner.current?.controller.dispose()
+    slicerControllerOwner.current = null
+  }, [])
+  const [timelineController, setTimelineController] = useState<PivotUi.TimelineController | null>(null)
+  useEffect(() => {
+    if (!pivotUi || !pivotController) { setTimelineController(null); return }
+    const savedTimelines = doc.sheets.flatMap(sheet => timelineDrawingsOf(sheet.drawings).map(item => item.model))
+    const controller = new pivotUi.TimelineController(savedTimelines, {
+      announce: message => pivotHost.current.announce(message),
+      onChange: model => {
+        timelineModels.set(model.name, model)
+        const sheetId = timelineSheetIds.get(model.name)
+        if (sheetId !== undefined) localDrawingGens.set(sheetId, (localDrawingGens.get(sheetId) ?? 0) + 1)
+      },
+      admit: bytes => {
+        const owner = `timeline-selection:${identityKey}:${++timelineHoldSerial.current}`
+        if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return undefined
+        mainLedger.set('controls', owner, bytes)
+        let held = true
+        return { release: () => { if (!held) return; held = false; mainLedger.release('controls', owner) } }
+      },
+      apply: async (model, action, signal) => {
+        if (signal.aborted) return { kind: 'cancelled' }
+        const drives = model.drives ?? []
+        if (drives.length !== 1 || !drives[0]?.pivotTable) return { kind: 'refused', message: 'This timeline has multiple or unsupported targets; its selection is not available.' }
+        const name = drives[0].pivotTable
+        const matches = pivotUi.resolveControlPivotTargets(doc.sheets, sheetIds, entries, name, model.cacheId)
+        if (matches.length !== 1) return { kind: 'refused', message: 'This timeline target is missing or ambiguous; its selection is not available.' }
+        const target = matches[0]!
+        if (!Number.isSafeInteger(model.cacheId) || target.def.cacheId !== model.cacheId) return { kind: 'refused', message: 'This timeline does not match its pivot cache.' }
+        const opened = await pivotController.open(target.sheetId, target.pivot)
+        if (opened.status !== 'open') return { kind: 'refused', message: opened.status === 'refused' ? opened.diagnostic.message : 'This pivot cannot be opened for a timeline change.' }
+        let field: typeof opened.model.fields[number] | undefined
+        for (const candidate of opened.model.fields) if (candidate.values === 'date') {
+          if (field) return { kind: 'refused', message: 'This timeline has an ambiguous date-field mapping and is not available.' }
+          field = candidate
+        }
+        if (!field) return { kind: 'refused', message: 'This timeline has an ambiguous date-field mapping and is not available.' }
+        const savedItems = target.def.fields[field.index]?.items
+        if (!savedItems || savedItems.length > 10_000) return { kind: 'refused', message: 'This timeline date field has an incomplete or unsupported item mapping.' }
+        if (opened.model.date1904) return { kind: 'refused', message: 'Date timelines in a 1904-date-system workbook are not available yet.' }
+        for (const item of savedItems) if (item.type === 'data' && item.hidden) return { kind: 'refused', message: 'This date field has hidden items that the timeline cannot safely replace.' }
+        if (field.filters.some(filter => filter.type !== 'dateBetween') || field.filters.length > 1) {
+          return { kind: 'refused', message: 'This date field has an overlapping filter that the timeline cannot safely replace.' }
+        }
+        const dateSerial = (utcMs: number) => {
+          const date = new Date(utcMs), day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+          const epoch = opened.model.date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30)
+          return (day - epoch) / 86_400_000
+        }
+        const ownedFilter = model.filterId === undefined ? undefined : field.filters.find(filter => filter.id === model.filterId && filter.type === 'dateBetween')
+        let filterId = model.filterId
+        if (filterId !== undefined && (!ownedFilter || field.filters.length !== 1)) {
+          // A pivot reset removes the owned filter: reconcile only when the
+          // field carries no filters at all, then install fresh (selection) or
+          // drop the dangling ownership (clear). Anything else stays refused.
+          if (field.filters.length !== 0) return { kind: 'refused', message: 'The timeline filter changed meanwhile; its selection is not available.' }
+          if (action.kind === 'clear') return { kind: 'committed', revision: 0 }
+          filterId = undefined
+        }
+        const matchesSavedSelection = (filter: typeof field.filters[number]): boolean => {
+          if (!model.selection || filter.type !== 'dateBetween' || filter.autoFilter.columns.length !== 1) return false
+          let lower: string | undefined, upper: string | undefined, count = 0
+          for (const rule of filter.autoFilter.columns[0]?.customFilters?.filters ?? []) {
+            count++
+            if (rule.operator === 'greaterThanOrEqual') lower = rule.val
+            else if (rule.operator === 'lessThanOrEqual') upper = rule.val
+            else return false
+          }
+          return count === 2 && lower === String(dateSerial(model.selection.start)) && upper === String(dateSerial(model.selection.end))
+        }
+        const savedFilter = model.filterId === undefined && field.filters.length === 1 ? field.filters.find(matchesSavedSelection) : undefined
+        const timelineFilter = ownedFilter ?? savedFilter
+        if (field.filters.length && !timelineFilter) return { kind: 'refused', message: 'This date field already has a filter that the timeline cannot safely replace.' }
+        if (action.kind === 'clear' && !timelineFilter) return { kind: 'refused', message: 'The saved timeline selection does not match a safely identifiable date filter.' }
+        // A report-filter date field holding a specific page selection would
+        // keep restricting the pivot after the month commits: the filter delta
+        // preserves view.pages[].selected (PR #60 review 4486162364). Clear
+        // reconciles via clearFilters, so only selection refuses here.
+        if (action.kind !== 'clear' && pivotUi.timelinePageSelectionConflicts(field)) return { kind: 'refused', message: 'This date field has a report-filter selection that the timeline cannot safely replace.' }
+        const id = timelineFilter?.id ?? opened.model.nextFilterId
+        const delta = action.kind === 'clear' ? { kind: 'clearFilters' as const, field: field.index }
+          : { kind: 'filter' as const, field: field.index, filter: pivotUi.dateFilter(field.index, id, 'between', dateSerial(action.start), dateSerial(action.end)) }
+        const selection: import('../../xlsx/view/contracts').LinkedControlSelection = action.kind === 'clear'
+          ? { kind: 'timelineClear', name: model.name }
+          : { kind: 'timelineSelection', name: model.name, start: action.start, end: action.end }
+        const outcome = await pivotController.applyLinked(selection, [{ sheetId: target.sheetId, pivot: target.pivot, delta }])
+        if (outcome.kind === 'committed') return { kind: 'committed', revision: outcome.targets[0]?.revision ?? outcome.revision, ...(action.kind === 'clear' ? {} : { filterId: id }) }
+        return outcome.kind === 'refused' ? outcome : { kind: outcome.kind }
+      },
+    })
+    setTimelineController(controller)
+    return () => { controller.dispose(); setTimelineController(current => current === controller ? null : current) }
+  }, [pivotUi, pivotController, doc, docId, budgetProfile, mainLedger, entries, sheetIds, rerender])
+  useEffect(() => {
+    if (!timelineController) return
+    for (const { model } of activeTimelineDrawings) {
+      timelineSheetIds.set(model.name, activeSheetId)
+      timelineController.register([model])
+    }
+  }, [timelineController, activeTimelineDrawings, activeSheetId])
+  useEffect(() => slicerController?.subscribe(rerender), [slicerController, rerender])
+  useEffect(() => timelineController?.subscribe(rerender), [timelineController, rerender])
   useEffect(() => pivotController?.subscribe(rerender), [pivotController, rerender])
   const controlJob = useRef<AbortController | null>(null)
   // The header sort in flight (spec §12.2 acknowledgment): shown with the click,
@@ -2834,9 +3165,46 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
               popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: popup.request.kind === 'valueSettings' ? 'Value field settings' : pivotMenuLabel(pivotController, popup.request), ...(popup.request.anchor ? { anchorElement: popup.request.anchor } : {}), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
                 : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
-              cellControls={pivotUi && pivotController && activePivots?.length && scroll ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
-                cellText={pivotCellText} /> : undefined}
-              onCellControl={pivotUi && pivotController && activePivots?.length ? (at, action, grid) => {
+              cellControls={scroll && ((pivotUi && pivotController && activePivots?.length) || (pivotUi && slicerController && activeSlicerDrawings.length) || (pivotUi && timelineController && activeTimelineDrawings.length)) ? <>
+                {pivotUi && pivotController && activePivots?.length ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
+                  cellText={pivotCellText} isFiltered={(cacheId, field) => slicerController?.isFieldFiltered(cacheId, field) ?? false} /> : null}
+                {pivotUi && slicerController && activeSlicerDrawings.map(({ drawing, model }) => {
+                  const box = slicerDrawingBox(drawing)
+                  return box ? <pivotUi.SlicerLayer key={model.name} model={model} box={box} window={scroll} viewport={viewport} controller={slicerController}
+                    invoker={rootRef.current?.querySelector<HTMLElement>('[role="grid"]') ?? undefined} /> : null
+                })}
+                {pivotUi && timelineController && activeTimelineDrawings.map(({ drawing, model }) => {
+                  const box = slicerDrawingBox(drawing)
+                  return box ? <pivotUi.TimelineLayer key={model.name} model={model} box={box} window={scroll} viewport={viewport} controller={timelineController}
+                    invoker={rootRef.current?.querySelector<HTMLElement>('[role="grid"]') ?? undefined} /> : null
+                })}
+              </> : undefined}
+              onCellControl={pivotUi && ((pivotController && activePivots?.length) || (slicerController && activeSlicerDrawings.length) || (timelineController && activeTimelineDrawings.length)) ? (at, action, grid) => {
+                if (action === 'open' && timelineController && entry) {
+                  const cell = entry.metrics.sourceCellToLogical(at)
+                  const over = cell && activeTimelineDrawings.find(({ drawing }) => {
+                    const box = slicerDrawingBox(drawing)
+                    return box && cell.x < box.x + box.width && cell.x + cell.width > box.x && cell.y < box.y + box.height && cell.y + cell.height > box.y
+                  })
+                  if (over) {
+                    const layer = [...(rootRef.current?.querySelectorAll<HTMLElement>('[data-officeview-ui="timeline-layer"]') ?? [])].find(node => node.dataset.timelineName === over.model.name)
+                    const first = layer?.querySelector<HTMLButtonElement>('[data-timeline-index]')
+                    if (first) { first.focus(); return true }
+                  }
+                }
+                if (action === 'open' && slicerController && entry) {
+                  const cell = entry.metrics.sourceCellToLogical(at)
+                  const over = cell && activeSlicerDrawings.find(({ drawing }) => {
+                    const box = slicerDrawingBox(drawing)
+                    return box && cell.x < box.x + box.width && cell.x + cell.width > box.x && cell.y < box.y + box.height && cell.y + cell.height > box.y
+                  })
+                  if (over) {
+                    const layer = [...(rootRef.current?.querySelectorAll<HTMLElement>('[data-officeview-ui="slicer-layer"]') ?? [])].find(node => node.dataset.slicerName === over.model.name)
+                    const first = layer?.querySelector<HTMLButtonElement>('[data-slicer-item]:not(:disabled)')
+                    if (first) { first.focus(); return true }
+                  }
+                }
+                if (!pivotController || !activePivots?.length) return false
                 // Ruling S3-J: the keyboard route to a cell's pivot control (focus returns to the grid).
                 const found = pivotUi.controlsAt(activePivots, at.row, at.col)
                 const drill = found.find(entry => entry.button.kind === 'expand' || entry.button.kind === 'collapse')
@@ -2878,6 +3246,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
                 // Ruling S3-AM: a formula a pivot change left stale carries its mark and tooltip (resident only).
                 const why = activeStaleCells?.get(at.row * MAX_COLS + at.col)
                 const stale = why ? { ...shown, stale: why === 'unsupported' ? STALE_UNSUPPORTED : STALE_OUTDATED } : shown
+                if (activeSlicerDrawings.length) {
+                  const cellBox = entry.metrics.sourceCellToLogical(at)
+                  const over = cellBox && activeSlicerDrawings.find(({ drawing }) => {
+                    const box = slicerDrawingBox(drawing)
+                    return box && cellBox.x < box.x + box.width && cellBox.x + cellBox.width > box.x && cellBox.y < box.y + box.height && cellBox.y + cellBox.height > box.y
+                  })
+                  if (over) return { ...stale, control: `${over.model.caption ?? over.model.name} slicer, Alt+Down to open` }
+                }
+                if (activeTimelineDrawings.length) {
+                  const cellBox = entry.metrics.sourceCellToLogical(at)
+                  const over = cellBox && activeTimelineDrawings.find(({ drawing }) => {
+                    const box = slicerDrawingBox(drawing)
+                    return box && cellBox.x < box.x + box.width && cellBox.x + cellBox.width > box.x && cellBox.y < box.y + box.height && cellBox.y + cellBox.height > box.y
+                  })
+                  if (over) return { ...stale, control: `${over.model.caption ?? over.model.name} timeline, Alt+Down to open` }
+                }
                 if (!pivotUi || !pivotController || !activePivots?.length) return stale
                 const expanded = pivotUi.expandedAt(activePivots, at.row, at.col)
                 const control = pivotUi.cellControlDescription(pivotController, activeIndex, activePivots, at.row, at.col, pivotCellText)
