@@ -1366,6 +1366,33 @@ describe('CF oracle verifier', () => {
     }
   })
 
+  it('expects whole-column scale cells F13..F17 in stage2-scale-scope as matched against unformatted column E', () => {
+    const scopeCase = CF_CASES.find(c => c.id === 'stage2-scale-scope')!
+    expect(scopeCase).toBeDefined()
+
+    const wholeColRefs = ['F13', 'F14', 'F15', 'F16', 'F17']
+    for (const ref of wholeColRefs) {
+      expect(scopeCase.expected.positiveRefs).toContain(ref)
+      expect(scopeCase.expected.negativeRefs).not.toContain(ref)
+    }
+
+    for (let r = 2; r <= 6; r++) {
+      const fCell = scopeCase.expected.cells.find(cell => cell.ref === `F${r}`)
+      expect(fCell).toBeDefined()
+      expect(fCell!.matched).toBe(true)
+      expect(fCell!.scaleApplied).toBe(true)
+      expect(fCell!.controlRef).toBe(`E${r}`)
+    }
+
+    for (let r = 13; r <= 17; r++) {
+      const fCell = scopeCase.expected.cells.find(cell => cell.ref === `F${r}`)
+      expect(fCell).toBeDefined()
+      expect(fCell!.matched).toBe(true)
+      expect(fCell!.scaleApplied).toBe(true)
+      expect(fCell!.controlRef).toBe(`E${r}`)
+    }
+  })
+
   it('rejects review-t1-r1 counterexamples: text-only capture, inverted/blue expectations, white printer capture, unbound sidecar, and threshold 100->1000', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-r1-'))
     dirs.push(dir)

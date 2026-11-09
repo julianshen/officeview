@@ -3178,16 +3178,16 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
         'D2', 'D3', 'D4', 'D5', 'D6',
         'B8', 'C8', 'B9', 'C9',
         'F2', 'F3', 'F4', 'F5', 'F6',
+        'F13', 'F14', 'F15', 'F16', 'F17',
       ],
       negativeRefs: [
         'B13', 'B14', 'B15', 'B16', 'B17',
         'C13', 'C14', 'C15', 'C16', 'C17',
         'D13', 'D14', 'D15', 'D16', 'D17',
         'B18', 'C18', 'B19', 'C19',
-        'F13', 'F14', 'F15', 'F16', 'F17',
       ],
       cells: [
-        ...['B', 'C', 'D', 'F'].flatMap(col => [
+        ...['B', 'C', 'D'].flatMap(col => [
           ...[2, 3, 4, 5, 6].map(r => ({
             ref: `${col}${r}`,
             controlRef: `${col}${r + 11}`,
@@ -3203,6 +3203,20 @@ export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
             fillSource: 'unverified' as const,
           })),
         ]),
+        ...[2, 3, 4, 5, 6].map(r => ({
+          ref: `F${r}`,
+          controlRef: `E${r}`,
+          matched: true,
+          scaleApplied: true,
+          fillSource: 'unverified' as const,
+        })),
+        ...[13, 14, 15, 16, 17].map(r => ({
+          ref: `F${r}`,
+          controlRef: `E${r}`,
+          matched: true,
+          scaleApplied: true,
+          fillSource: 'unverified' as const,
+        })),
         { ref: 'B8', controlRef: 'B18', matched: true, scaleApplied: true, fillSource: 'unverified' },
         { ref: 'C8', controlRef: 'C18', matched: true, scaleApplied: true, fillSource: 'unverified' },
         { ref: 'B9', controlRef: 'B19', matched: true, scaleApplied: true, fillSource: 'unverified' },

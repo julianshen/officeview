@@ -7484,7 +7484,12 @@
           "F3",
           "F4",
           "F5",
-          "F6"
+          "F6",
+          "F13",
+          "F14",
+          "F15",
+          "F16",
+          "F17"
         ],
         "negativeRefs": [
           "B13",
@@ -7505,12 +7510,7 @@
           "B18",
           "C18",
           "B19",
-          "C19",
-          "F13",
-          "F14",
-          "F15",
-          "F16",
-          "F17"
+          "C19"
         ],
         "cells": [
           {
@@ -7725,72 +7725,72 @@
           },
           {
             "ref": "F2",
-            "controlRef": "F13",
+            "controlRef": "E2",
             "matched": true,
             "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F3",
-            "controlRef": "F14",
+            "controlRef": "E3",
             "matched": true,
             "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F4",
-            "controlRef": "F15",
+            "controlRef": "E4",
             "matched": true,
             "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F5",
-            "controlRef": "F16",
+            "controlRef": "E5",
             "matched": true,
             "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F6",
-            "controlRef": "F17",
+            "controlRef": "E6",
             "matched": true,
             "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F13",
-            "controlRef": "F2",
-            "matched": false,
-            "scaleApplied": false,
+            "controlRef": "E13",
+            "matched": true,
+            "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F14",
-            "controlRef": "F3",
-            "matched": false,
-            "scaleApplied": false,
+            "controlRef": "E14",
+            "matched": true,
+            "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F15",
-            "controlRef": "F4",
-            "matched": false,
-            "scaleApplied": false,
+            "controlRef": "E15",
+            "matched": true,
+            "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F16",
-            "controlRef": "F5",
-            "matched": false,
-            "scaleApplied": false,
+            "controlRef": "E16",
+            "matched": true,
+            "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
             "ref": "F17",
-            "controlRef": "F6",
-            "matched": false,
-            "scaleApplied": false,
+            "controlRef": "E17",
+            "matched": true,
+            "scaleApplied": true,
             "fillSource": "unverified"
           },
           {
