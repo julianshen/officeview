@@ -7,11 +7,11 @@ import { canvasBackend, type CanvasBackend, type CanvasLike } from '../../core/c
 import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
-import type { StreamNotice, UnitPayload } from './session'
+import type { StreamNotice, UnitLease, UnitPayload } from './session'
 
 export interface SessionLike {
   readonly manifest: Manifest
-  unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitPayload>
+  unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitLease>
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
 }
@@ -64,7 +64,8 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       // §7.6/§10: a unit that fails to replay is re-requested once, then reported.
       for (let attempt = 0; attempt < 2 && !out; attempt++) {
         const payload = await session.unit(unit, bucket, signal)
-        try { out = await render(unit, bucket, payload) } catch { /* retry once */ }
+        // The admission lease covers decode/replay; release it once that work is done.
+        try { out = await render(unit, bucket, payload) } catch { /* retry once */ } finally { payload.release() }
       }
       if (!out) { o.onNotice?.({ code: 'unit-failed', unit }); throw new StreamSessionError('unit-failed') }
       if (closed || signal?.aborted) return
@@ -80,6 +81,7 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     close() { if (closed) return; closed = true; session.close() },
     ended: session.ended ?? new Promise(() => {}),
   }
-  void doc.ended.then((e) => { if (e) o.onNotice?.({ code: e.code }) })
+  // A terminal end invalidates every pending paint: nothing commits pixels after it.
+  void doc.ended.then((e) => { closed = true; if (e) o.onNotice?.({ code: e.code }) })
   return doc
 }

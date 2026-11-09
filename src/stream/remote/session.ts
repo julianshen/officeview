@@ -16,13 +16,17 @@ import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError } from './errors'
-import { Admission, unitCost } from './reservation'
+import { Admission, ASSET_ALLOWANCE, unitCost } from './reservation'
 
 export type StreamClient = Pick<WebSocket, 'send' | 'close' | 'readyState' | 'addEventListener' | 'removeEventListener'> & { binaryType: BinaryType }
 export type StreamClientFactory = (source: StreamSource) => StreamClient
 export type UnitPayload =
   | { kind: 'raster'; w: number; h: number; png: Uint8Array }
   | { kind: 'commands'; ops: Uint8Array; assets: ReadonlyMap<number, Asset> }
+/** A unit payload plus its admission lease: the consumer calls `release()`
+ * once it has decoded/replayed the payload (idempotent). Until then the
+ * request's §14 reservation stays charged. */
+export type UnitLease = UnitPayload & { release(): void }
 /** Manifest notices, plus 'face-missing', 'text-unavailable', 'resumed', 'unit-failed'. */
 export type StreamNotice = { code: string; unit?: number }
 export type SessionState = 'open' | 'resuming' | 'closed'
@@ -47,9 +51,11 @@ const defaultClient: StreamClientFactory = (s) => new WebSocket(s.url)
 
 interface UnitReq {
   index: number; bucket: number; reqId: number
+  /** Bytes this request was admitted for: the decoded cap of every response. */
+  grant: number
   assets: Map<number, Asset>
+  assetBytes: number
   resolve: (u: UnitPayload) => void; reject: (e: unknown) => void
-  release: () => void
   retried: boolean; rotatedRetry: boolean
 }
 
@@ -82,6 +88,9 @@ export class StreamSession {
   private sweeper?: ReturnType<typeof setInterval>
   private handshake?: { resolve: (m: Manifest) => void; reject: (e: unknown) => void }
   private resumeAttempt = 0
+  /** Received messages are processed strictly in order (an ASSET_DEFINE's
+   * hashing must finish before the UNIT_COMMANDS that references it). */
+  private inbox: Promise<void> = Promise.resolve()
 
   private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {
     this.ended = new Promise((r) => { this.settleEnded = r })
@@ -105,17 +114,20 @@ export class StreamSession {
   stats() { return { inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size } }
 
   /** Request one unit at a scale bucket. Settles once: payload, typed error, or abort. */
-  async unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitPayload> {
+  async unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitLease> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
     const dims = this.manifest.units.list[index]
     if (!dims || !this.manifest.recorder.scalesBuckets.includes(bucket)) throw new StreamSessionError('policy-refused', `no unit ${index} at bucket ${bucket}`)
-    const release = await this.admission.acquire(unitCost(dims.w, dims.h, bucket, this.manifest.recorder.projection !== 'final-raster'), signal)
+    const grant = unitCost(dims.w, dims.h, bucket, this.manifest.recorder.projection !== 'final-raster')
+    const release = await this.admission.acquire(grant, signal)
     if (this.isClosed()) { release(); throw this.failure ?? new StreamSessionError('closed') }
-    return new Promise<UnitPayload>((resolve, reject) => {
-      const req: UnitReq = { index, bucket, reqId: 0, assets: new Map(), resolve, reject, release, retried: false, rotatedRetry: false }
-      const settle = () => { this.units.delete(req.reqId); release() }
-      req.resolve = (u) => { settle(); resolve(u) }
-      req.reject = (e) => { settle(); reject(e) }
+    return new Promise<UnitLease>((resolve, reject) => {
+      const req: UnitReq = { index, bucket, reqId: 0, grant, assets: new Map(), assetBytes: 0, resolve: () => {}, reject, retried: false, rotatedRetry: false }
+      // A delivered payload keeps the lease (its consumer releases it after
+      // decode/replay); a failed or aborted request releases it here, after
+      // any message for it that is still being processed (the inbox is serial).
+      req.resolve = (u) => { this.units.delete(req.reqId); resolve(Object.assign(u, { release })) }
+      req.reject = (e) => { this.units.delete(req.reqId); void this.inbox.then(release); reject(e) }
       signal?.addEventListener('abort', () => { if (this.units.get(req.reqId) === req) req.reject(signal.reason ?? abortError()) }, { once: true })
       if (signal?.aborted) return req.reject(signal.reason ?? abortError())
       this.issue(req)
@@ -148,12 +160,19 @@ export class StreamSession {
       acceptedVersions: new Set([1]),
       expects: (reqId, kind) => (kind === Kind.MANIFEST ? reqId === this.helloReqId && !!this.handshake : this.units.has(reqId) && UNIT_KINDS.has(kind)),
       encodedCap: (k) => CAPS[k]?.[0] ?? 0,
-      decodedCap: (k) => CAPS[k]?.[1] ?? 0,
+      // A unit response may never decode past the bytes its request was admitted for.
+      decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity : this.units.get(reqId)?.grant ?? 0),
     })
     return new Promise<Manifest>((resolve, reject) => {
       this.handshake = { resolve, reject }
       let sock: StreamClient
-      try { sock = (this.o.client ?? defaultClient)(this.source) } catch { this.handshake = undefined; return reject(new StreamSessionError('connect-failed')) }
+      try { sock = (this.o.client ?? defaultClient)(this.source) } catch {
+        this.handshake = undefined
+        reject(new StreamSessionError('connect-failed'))
+        // A resume whose transport cannot even be built retries like a drop.
+        if (this.state === 'resuming') this.scheduleResume()
+        return
+      }
       this.sock = sock
       sock.binaryType = 'arraybuffer'
       const live = () => gen === this.gen
@@ -184,15 +203,19 @@ export class StreamSession {
     if (this.missingFaces.length) this.o.onNotice?.({ code: 'face-missing' })
   }
 
-  private async onMessage(data: unknown) {
+  private onMessage(data: unknown) {
+    // The receipt guard runs on arrival, before anything is queued or buffered.
     const size = typeof data === 'string' ? data.length : data instanceof ArrayBuffer ? data.byteLength : (data as Blob).size
     if (size > FRAGMENT_CAP) return this.end(new StreamSessionError('oversized-frame'), 4007, 'oversized-frame')
-    if (typeof data === 'string') return this.onText(data)
-    if (!(data instanceof ArrayBuffer)) return
     const gen = this.gen
-    const res = await this.reasm.push(new Uint8Array(data))
-    if (gen !== this.gen || !res) return
-    await this.onFrame(res)
+    this.inbox = this.inbox.then(async () => {
+      if (gen !== this.gen) return
+      if (typeof data === 'string') return this.onText(data)
+      if (!(data instanceof ArrayBuffer)) return
+      const res = await this.reasm.push(new Uint8Array(data))
+      if (gen !== this.gen || !res) return
+      await this.onFrame(res)
+    }).catch(() => {})
   }
 
   private onText(data: string) {
@@ -224,13 +247,21 @@ export class StreamSession {
     if (!req) return
     try {
       if (res.kind === Kind.ASSET_DEFINE) {
-        for (const a of await decodeAssets(res.payload, req.assets)) req.assets.set(a.id, a)
+        // §14: one request's assets stay inside the allowance it was admitted for.
+        req.assetBytes += res.payload.length
+        if (req.assetBytes > ASSET_ALLOWANCE) throw new Error('asset allowance exceeded')
+        const defined = await decodeAssets(res.payload, req.assets)
+        if (this.units.get(res.reqId) !== req) return
+        for (const a of defined) req.assets.set(a.id, a)
         return
       }
       const u = decodeUnit(res.payload)
       if (u.unitId !== req.index) throw new Error('unit id mismatch')
       if (res.kind === Kind.UNIT_RASTER && u.discriminator === 2) {
-        const r = decodeRasterBody(u.body, { maxRgbaBytes: UNIT_RASTER_DECODED_CAP })
+        const dims = this.manifest.units.list[req.index]!
+        const r = decodeRasterBody(u.body, { maxRgbaBytes: Math.min(UNIT_RASTER_DECODED_CAP, req.grant) })
+        // The raster must be the unit at the requested bucket (server surfaces are ceil(w·bucket) ≤ w·bucket).
+        if (r.w > dims.w * req.bucket || r.h > dims.h * req.bucket) throw new Error('raster larger than the requested unit')
         return req.resolve({ kind: 'raster', w: r.w, h: r.h, png: r.png })
       }
       if (res.kind === Kind.UNIT_COMMANDS && u.discriminator === 1) return req.resolve({ kind: 'commands', ops: u.body, assets: req.assets })
@@ -265,9 +296,16 @@ export class StreamSession {
     const abnormal = code === 1001 || code === 1006 || code === 1000 || code === 1005
     // Before the first MANIFEST there is nothing to resume.
     if (!this.manifest) { hs?.reject(new StreamSessionError('connect-failed')); this.handshake = undefined; return this.end(new StreamSessionError('connect-failed')) }
-    if (!abnormal || this.resumeAttempt >= RESUME_BACKOFF_MS.length) return this.end(new StreamSessionError('connect-failed'))
+    if (!abnormal) return this.end(new StreamSessionError('connect-failed'))
     if (hs) { this.handshake = undefined; hs.reject(new StreamSessionError('connect-failed')) }
+    this.sock = undefined
     this.setState('resuming')
+    this.scheduleResume()
+  }
+
+  /** Next bounded resume attempt, or the terminal failure once they are spent. */
+  private scheduleResume() {
+    if (this.resumeAttempt >= RESUME_BACKOFF_MS.length) return this.end(new StreamSessionError('connect-failed'))
     const delay = RESUME_BACKOFF_MS[this.resumeAttempt++]!
     setTimeout(() => { if (this.state === 'resuming') void this.resume() }, delay)
   }

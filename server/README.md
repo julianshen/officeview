@@ -28,3 +28,20 @@ base64) and an allowed origin (`--origin` / `OV_STREAM_ORIGINS`).
 - **Fonts.** `fontpack/` (20 OFL faces, `pack.json` pins their hashes);
   Calibri/Cambria/Arial/Helvetica/Times New Roman/Courier New are painted
   with their metric-compatible pack faces. Verify: `bun scripts/stream-s1/fontpack-lock.ts`.
+
+## The browser side (Stage 1d)
+
+```tsx
+<OfficeFile
+  data={{ kind: 'stream', url: 'wss://viewer.example.com/stream?doc=…', token }}
+  streamFonts={{ baseUrl: '/officeview-fontpack' }}   // optional: serve fontpack/ here
+  onStreamNotice={(n) => console.log(n.code)}         // manifest notices, face-missing, resumed, unit-failed, session end codes
+  streamClient={(s) => new WebSocket(s.url)}          // optional factory (the default)
+/>
+```
+
+- **The mode is the branch.** A `StreamSource` (or a promise of one) never reaches `fetch` or a byte reader; the client code is a lazy chunk, so pages that only load files never download it, and local loads paint byte-for-byte as before (`docs/validation/streaming-s1.md`).
+- **What a reader gets in Stage 1.** Rasters (protected) or replayed commands (audited relaxed sessions), painted at the scale bucket for the device pixel ratio. No text layer, search, copy, zoom or presentation; the view says "text unavailable in this viewing mode" once. The host `watermark` prop is ignored (the server bakes the mark); print follows the server's `can.print`.
+- **Fonts.** The font pack is **not** in the npm package. Protected sessions need no fonts (every unit is a raster). For relaxed sessions, serve `fontpack/` (`pack.json` + TTFs) and pass `streamFonts.baseUrl`; each face is hash-checked against the manifest before it is registered, and any face that is missing, unverifiable or not hashed within 1.5 s is reported missing, so its units arrive as rasters.
+- **Drops.** An abnormal drop (1001/1006) resumes the same session for up to 30 s (`detachGraceMs`, capped by the token's `exp`); the scroll position is untouched and pending units are re-requested. A terminal close (revoked, expired, oversized frame, …) shows "Viewing session ended (<code>)" and calls `onStreamNotice` with that code; recovery is a host re-open.
+- **Test harness.** `bun run test:browser:stream` runs `tests/browser/stream-viewer.spec.ts` against `server/test/app.ts`, which adds test-only controls (drop / revoke / oversize) on a separate port.

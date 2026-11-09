@@ -170,3 +170,30 @@ Census (`bun --preload ./scripts/stream-s0/napi-preload.ts scripts/stream-s1/occ
 ## Stage 1d — local loads byte-for-byte unchanged (§16 T2)
 
 `scripts/stream-s1/local-identity.ts` paints every unit of every `corpus/` document through the local path (`loadOfficeFile(bytes)` → `getPaintables`, @napi-rs/canvas, scale 1) and hashes the RGBA. Baseline: a throwaway worktree at **ca952c50** (merge-base of `origin/main` and this branch), same machine and session; hashes in `docs/validation/streaming-s1/local-identity.json`. **70 files, 106 units, 0 differing units** (one fuzzer ZIP fails identically on both sides). `tests/stream/local-unchanged.test.tsx` mounts `<OfficeFile data={bytes}>` for a docx, xlsx and pptx and asserts no `WebSocket` is constructed, the remote chunk is never imported and no stream notice appears; verified by mutation (forcing the import fails all three).
+
+## Stage 1d — client integration
+
+Plan `docs/superpowers/plans/2026-11-09-streaming-s1d-client.md`. `<OfficeFile data={{ kind: 'stream', url }}>` opens a session through the lazy `src/stream/remote/` chunk (StreamSession → RemoteOfficeDoc → lazy RemoteDocView); the server keeps an abnormally dropped session resumable for 30 s (capped by the token's `exp`).
+
+- `bun run test:server`: **251 passed** (23 files) — including `client-session` / `client-remote-doc` (the client against the real server), `resume-detached`, `occlusion`.
+- `bun run test tests/stream tests/office-file-stream.test.tsx`: all passed (scripted-socket session guards, faces, routing, local-unchanged).
+- `bun run test:browser:stream`: **7/7** twice (happy, relaxed + font pack, error, expiry with renews over 20 s, reconnect keeps sid + scroll and paints further units, oversized frame → 4007 + typed alert, revoke → 4005 + typed alert). The chromium/webkit/slideshow projects keep their pre-existing spec sets.
+- `bun run gates:core`: core closure 299 B; index closure Δ 475 ≤ recorded 476 (second recorded change: §6.3 routing, +332 B, module set unchanged).
+- Codex review (single checkpoint): 8 findings; the 7 Important ones fixed with regression tests (admission lease held until decode/replay; per-request decoded grant + raster-size + asset-allowance checks; serial receipt so a command unit never overtakes its assets; unbounded composites withhold everything they can clear; a terminal end invalidates pending paints; print guard attribute on the themed root; a resume whose transport factory throws keeps retrying, then fails). Deferred Minor: the text-frame receipt cap counts UTF-16 units, not UTF-8 bytes.
+
+**Stage-1 limits added by 1d:** no zoom, search, copy, a11y text or presentation on a remote document; the Chromium-vs-napi replay tolerance (§7.4 rule 5) is not yet published; a session end after the view is shown is reported in the view and through `onStreamNotice`, not through `<OfficeFile error>`.
+
+## Stage 1 exit check (§17 row 1)
+
+| Row | Evidence | Status |
+|---|---|---|
+| core entry + eager gates (§8.1) | T11 section above; `gates:core` | green |
+| server hidden-content strip incl. fail-closed row (§6.4) | "Content projection" | green |
+| pinned font pack (§7.4 rule 6) | `fontpack/`, T4 with pack 22.8 % raster | green |
+| recorder + replay, corpus zero local-backend diff | "Corpus zero local-backend diff (Stage 1b)" | green |
+| WS handshake + typed closes; close-code matrix | Stage 1c close-code matrix; 1d browser 4005/4007 | green |
+| RemoteOfficeDoc branch | Stage 1d; `office-file-stream.test.tsx`; browser specs | green |
+| Stage-1-mandatory semantic occlusion evidence (§7.7/§11) | "Stage 1d — occlusion evidence" | green (evidence; culling store is Stage 2) |
+| demo WS-only server (pool, protected default, marks, print wiring) | Stage 1c | green (forensic mark: Stage 2 notice) |
+| T2 zero ink for the 13 hidden constructs on the stream path | Stage 1c T2 13/13 | green |
+| local-vs-others byte-for-byte | "local loads byte-for-byte unchanged": 0/106 differ | green |

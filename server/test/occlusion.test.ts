@@ -145,3 +145,13 @@ describe('stroke bounds', () => {
     expect(e.reasons.covered).toBe(1)
   })
 })
+
+describe('destructive composites (review 4)', () => {
+  for (const op of ['copy', 'destination-in', 'source-in', 'source-out', 'destination-atop'] as const) it(`${op} far from the ink still withholds it (it clears outside its source)`, () => {
+    const e = run((c) => { text(c); c.globalCompositeOperation = op; c.fillRect(170, 70, 20, 20) })
+    expect(e.reasons.composite).toBe(1)
+  })
+  it('the same modes under a rect clip that excludes the ink leave it servable', () => {
+    expect(run((c) => { text(c); c.save(); c.beginPath(); c.rect(150, 60, 50, 40); c.clip(); c.globalCompositeOperation = 'copy'; c.fillRect(170, 70, 20, 20); c.restore() })).toMatchObject({ servable: 1 })
+  })
+})

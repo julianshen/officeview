@@ -54,7 +54,7 @@ type Pending = {
 }
 type Options = {
   acceptedVersions: ReadonlySet<number>; expects: (reqId: number, kind: Kind) => boolean;
-  decodedCap: (kind: Kind) => number; encodedCap: (kind: Kind) => number; now?: () => number;
+  decodedCap: (kind: Kind, reqId: number) => number; encodedCap: (kind: Kind) => number; now?: () => number;
 }
 
 /** Owns only admitted fragments. No caller-visible payload exists until all checks pass. */
@@ -126,7 +126,7 @@ export class Reassembler {
   }
   private async inflate(id: number, p: Pending): Promise<FrameResult> {
     const last = p.chunks[p.chunks.length - 1], expectedCrc = data(last).getUint32(last.length - 4, true)
-    const cap = this.opts.decodedCap(p.kind)
+    const cap = this.opts.decodedCap(p.kind, id)
     if (!Number.isSafeInteger(cap) || cap < 0) return this.reject(id, 'decoded-cap')
     // Small compressed pulls bound the native inflater's output ahead of our admission.
     // In particular, never enqueue a complete compressed space bomb in one write.

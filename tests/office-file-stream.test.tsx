@@ -91,4 +91,12 @@ describe('<OfficeFile data={StreamSource}>', () => {
     await waitFor(() => expect(view.container.querySelector('[data-stream-error="revoked"]')).toBeTruthy())
     expect(view.getAllByRole('alert').length).toBe(1)
   })
+  it('review 6: denied print marks the themed instance root the print guard matches', async () => {
+    const doc = fakeDoc()
+    ;(doc.manifest.can as { print: boolean }).print = false
+    h.open.mockReset(); h.open.mockResolvedValueOnce(doc)
+    const view = render(<OfficeFile data={stream()} />)
+    await waitFor(() => expect(view.container.querySelectorAll('canvas').length).toBe(2))
+    expect(view.container.querySelector('[data-ov-theme-root][data-ov-instance][data-ov-print="false"]')).toBeTruthy()
+  })
 })

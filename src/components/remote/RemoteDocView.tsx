@@ -59,8 +59,10 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
     return () => { io.disconnect(); ac.abort() }
   }, [doc, units])
   return (
-    <div {...themeRootProps(theme, useId())} className={className} style={style}>
-      <div data-officeview-root="" data-ov-print={allowPrint} role="document" aria-label={title ?? doc.manifest.name}
+    // data-ov-print sits on the themed instance root: the print guard
+    // (officeview.css) matches [data-ov-theme-root][data-ov-instance][data-ov-print="false"].
+    <div {...themeRootProps(theme, useId())} data-ov-print={allowPrint} className={className} style={style}>
+      <div data-officeview-root="" role="document" aria-label={title ?? doc.manifest.name}
         style={{ overflow: 'auto', height: '100%', background: background ?? 'var(--ov-color-backdrop)' }}>
         <div role="status" data-officeview-notice="">{TEXT_UNAVAILABLE}</div>
         {ended ? <div role="alert" data-stream-error={ended}>Viewing session ended ({ended}).</div> : null}

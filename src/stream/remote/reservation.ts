@@ -5,6 +5,8 @@ export const SESSION_TRANSIENT_BYTES = 96 * 1024 * 1024
 export const MAX_OUTSTANDING = 8
 const MiB = 1024 * 1024
 const RASTER_DECODED_CAP = 64 * MiB, ENCODED_CAP = 8 * MiB, COMMANDS_DECODED = 8 * MiB, ASSETS = 9 * MiB
+/** Decoded ASSET_DEFINE bytes one unit request may receive in total. */
+export const ASSET_ALLOWANCE = ASSETS
 
 /** The bytes one unit request may need (§14): the raster's RGBA at the bucket
  * (capped at the 64 MiB decoded cap) plus its encoded bytes (≤ the 8 MiB

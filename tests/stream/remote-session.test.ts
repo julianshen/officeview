@@ -7,6 +7,9 @@ import { encodeRasterBody } from '../../src/stream/raster'
 import { encodeUnit } from '../../src/stream/unit'
 import { StreamSession } from '../../src/stream/remote/session'
 import { StreamSessionError } from '../../src/stream/remote/errors'
+import { AssetTable } from '../../src/stream/record/recorder'
+import { encodeAssets } from '../../src/stream/asset-wire'
+import { Opcode, OpWriter } from '../../src/stream/ops'
 
 const exampleManifest = (): Manifest => ({
   v: 1, docRef: 'a'.repeat(24), kind: 'pptx', name: 'deck.pptx',
@@ -131,7 +134,11 @@ describe('StreamSession (scripted socket)', () => {
     await settle()
     expect(sock.units().length).toBe(8)
     sock.frame(3, sock.units()[0]!.reqId, raster(0))
-    await ps[0]
+    const first = await ps[0]!
+    await settle()
+    // The slot belongs to the payload until its consumer releases it (review r1).
+    expect(sock.units().length).toBe(8)
+    first.release()
     await settle()
     expect(sock.units().length).toBe(9)
   })
@@ -168,5 +175,71 @@ describe('StreamSession (scripted socket)', () => {
     const b = await opened()
     b.s.close()
     expect(await b.s.ended).toBeUndefined()
+  })
+  it('review 1: the admission slot is held until the payload is released', async () => {
+    const { s, sock } = await opened()
+    const p = s.unit(0, 1)
+    await settle()
+    sock.frame(3, sock.units()[0]!.reqId, raster(0))
+    const u = await p
+    expect(s.stats().inFlight).toBe(1)
+    u.release(); u.release()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+  it('review 2: a raster larger than the requested unit at its bucket is refused', async () => {
+    const { s, sock } = await opened({ units: { count: 1, list: [{ w: 2, h: 2 }] } })
+    const p = s.unit(0, 1)
+    await settle()
+    sock.frame(3, sock.units()[0]!.reqId, raster(0, 40, 40))
+    await settle()
+    sock.frame(3, sock.units()[1]!.reqId, raster(0, 40, 40))
+    expect(((await p.then(() => undefined, (x) => x)) as StreamSessionError).code).toBe('unit-failed')
+  })
+  it('review 2: assets beyond the per-request allowance fail the unit', async () => {
+    const { s, sock } = await opened({ recorder: { ...exampleManifest().recorder, requiredFaces: [], projection: 'commands' } })
+    const t = new AssetTable()
+    const big = () => new Uint8Array(1200 * 1100 * 4).map((_, i) => (i * 37) & 255)
+    t.add({ type: 'bitmap', source: 'image', w: 1200, h: 1100, rgba: big() })
+    t.add({ type: 'bitmap', source: 'canvas', w: 1200, h: 1100, rgba: big() })
+    const payloads = encodeAssets(t.all())
+    expect(payloads.length).toBe(2)
+    const p = s.unit(0, 1)
+    await settle()
+    for (const id of [0, 1]) {
+      const reqId = sock.units()[id]!.reqId
+      for (const pl of payloads) sock.frame(2, reqId, pl)
+      await settle(400)
+    }
+    expect(((await p.then(() => undefined, (x) => x)) as StreamSessionError).code).toBe('unit-failed')
+  })
+  it('review 3: a command unit never overtakes its ASSET_DEFINE', async () => {
+    const { s, sock } = await opened({ recorder: { ...exampleManifest().recorder, requiredFaces: [], projection: 'commands' } })
+    const t = new AssetTable()
+    t.add({ type: 'bitmap', source: 'image', w: 300, h: 300, rgba: new Uint8Array(300 * 300 * 4).fill(7) })
+    const [assetPayload] = encodeAssets(t.all())
+    const w = new OpWriter().op(Opcode.STATE_PUSH)
+    const p = s.unit(0, 1)
+    await settle()
+    const reqId = sock.units()[0]!.reqId
+    sock.frame(2, reqId, assetPayload!)
+    sock.frame(4, reqId, encodeUnit({ unitId: 0, discriminator: 1, body: w.bytes() }))
+    const u = await p
+    if (u.kind !== 'commands') throw new Error('commands')
+    expect(u.assets.size).toBe(1)
+  })
+  it('review 7: a resume whose transport factory throws keeps retrying, then fails', async () => {
+    const sock = new FakeSocket()
+    let calls = 0
+    const manifest = { ...exampleManifest(), recorder: { ...exampleManifest().recorder, requiredFaces: [] }, session: { ...exampleManifest().session, token: tokenFor('j1') } }
+    let closedWith: StreamSessionError | undefined
+    const p = StreamSession.open({ kind: 'stream', url: 'wss://x' }, { client: () => { if (calls++ === 0) return sock as never; throw new Error('no network') }, onState: (st, e) => { if (st === 'closed') closedWith = e } })
+    sock.open(); await settle()
+    sock.frame(1, sock.sent[0]!.reqId, encodeManifest(manifest))
+    const s = await p
+    sock.dispatchEvent(Object.assign(new Event('close'), { code: 1006, reason: '' }))
+    await settle(2200)
+    expect(calls).toBe(4)
+    expect(closedWith?.code).toBe('connect-failed')
+    expect(await s.ended).toMatchObject({ code: 'connect-failed' })
   })
 })

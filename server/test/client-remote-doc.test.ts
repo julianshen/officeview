@@ -45,12 +45,13 @@ describe('RemoteOfficeDoc', () => {
   }, 30_000)
 })
 
-function fakeSession(payloads: UnitPayload[]): SessionLike & { requests: number; closes: number } {
+function fakeSession(payloads: UnitPayload[], ended?: Promise<StreamSessionError | undefined>): SessionLike & { requests: number; closes: number; released: number } {
   const manifest = { units: { count: 1, list: [{ w: 4, h: 4 }] }, recorder: { scalesBuckets: [1, 2] }, can: { search: false, copy: false } } as unknown as Manifest
   const s = {
-    manifest, requests: 0, closes: 0,
-    async unit() { const p = payloads[Math.min(s.requests, payloads.length - 1)]!; s.requests++; return p },
+    manifest, requests: 0, closes: 0, released: 0,
+    async unit() { const p = payloads[Math.min(s.requests, payloads.length - 1)]!; s.requests++; return { ...p, release: () => { s.released++ } } },
     close() { s.closes++ },
+    ...(ended ? { ended } : {}),
   }
   return s
 }
@@ -66,6 +67,7 @@ describe('RemoteOfficeDoc failure paths', () => {
     const e = await doc.paint(0, 1, 1, canvas).then(() => undefined, (x) => x)
     expect((e as StreamSessionError).code).toBe('unit-failed')
     expect(s.requests).toBe(2)
+    expect(s.released).toBe(2)   // review 1: every lease is returned
     expect(notices).toEqual([{ code: 'unit-failed', unit: 0 }])
     expect(pixels(canvas).equals(before)).toBe(true)    // never half-painted
   })
@@ -82,5 +84,21 @@ describe('RemoteOfficeDoc failure paths', () => {
     doc.close(); doc.close()
     expect(s.closes).toBe(1)
     await expect(doc.paint(0, 1, 1, backend.createCanvas(4, 4))).rejects.toBeInstanceOf(StreamSessionError)
+  })
+  it('review 5: a terminal end while a paint is decoding commits no pixels', async () => {
+    let end!: (e: StreamSessionError) => void
+    const ended = new Promise<StreamSessionError | undefined>((r) => { end = r })
+    const png = (() => { const c = backend.createCanvas(4, 4); c.getContext('2d')!.fillStyle = '#f00'; c.getContext('2d')!.fillRect(0, 0, 4, 4); return new Uint8Array((c as unknown as { toBuffer(m: string): Buffer }).toBuffer('image/png')) })()
+    const slow = { ...backend, decodeImage: async (b: Uint8Array, m?: string) => { await Bun.sleep(100); return backend.decodeImage(b, m) } }
+    const s = fakeSession([{ kind: 'raster', w: 4, h: 4, png }], ended)
+    const doc = createRemoteDoc(s, { backend: slow })
+    const canvas = backend.createCanvas(4, 4)
+    const before = pixels(canvas)
+    const p = doc.paint(0, 1, 1, canvas)
+    await Bun.sleep(20)
+    end(new StreamSessionError('revoked'))
+    await p.catch(() => {})
+    expect(pixels(canvas).equals(before)).toBe(true)
+    expect(s.released).toBe(1)
   })
 })

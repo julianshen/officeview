@@ -34,6 +34,8 @@ type Rect = [x0: number, y0: number, x1: number, y1: number]
 type Clip = Rect | 'nonrect' | undefined
 interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason }
 
+/** Canvas composite modes whose effect is not bounded by the source shape. */
+const UNBOUNDED_COMPOSITES = new Set(['copy', 'source-in', 'source-out', 'destination-in', 'destination-atop'])
 const EMPTY: Rect = [Infinity, Infinity, -Infinity, -Infinity]
 const grow = (r: Rect, x: number, y: number): Rect => [Math.min(r[0], x), Math.min(r[1], y), Math.max(r[2], x), Math.max(r[3], y)]
 const pad = (r: Rect, d: number): Rect => [r[0] - d, r[1] - d, r[2] + d, r[3] + d]
@@ -112,7 +114,9 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
       const d = ctx.shadowBlur * 2 + Math.max(Math.abs(ctx.shadowOffsetX), Math.abs(ctx.shadowOffsetY))
       b = pad(b, d)
     }
-    if (clip && clip !== 'nonrect') b = intersect(b, clip)
+    // These modes clear the destination OUTSIDE the source too, within the clip.
+    if (UNBOUNDED_COMPOSITES.has(ctx.globalCompositeOperation)) b = clip && clip !== 'nonrect' ? clip : surface
+    else if (clip && clip !== 'nonrect') b = intersect(b, clip)
     if (ctx.filter && ctx.filter !== 'none') { mark('filter', b); return }
     if (opts.erase || ctx.globalCompositeOperation !== 'source-over') { mark('erase', b); return }
     const alpha = ctx.globalAlpha * (colorAlpha(paint) ?? 1)
