@@ -881,6 +881,13 @@ function parseArgbHex(argb: string): [number, number, number] {
 const rgbMaxDelta = (a: readonly [number, number, number], b: readonly [number, number, number]): number =>
   Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
 
+/** Returns true if cellRef coordinates fall within the range geometry's row and column boundaries. */
+export function isCellWithinRange(cellRef: string, geom: WorksheetRangeGeometry): boolean {
+  const pos = parseA1(cellRef)
+  if (!pos) return false
+  return pos.col >= geom.minCol && pos.col <= geom.maxCol && pos.row >= geom.minRow && pos.row <= geom.maxRow
+}
+
 function cellPixelBox(
   png: DecodedPng,
   geom: WorksheetRangeGeometry,
@@ -1036,7 +1043,35 @@ export function observeCellsFromCapture(
   for (const cell of c.expected.cells) {
     const box = cellPixelBox(png, geom, cell.ref)
     const ctrlBox = cellPixelBox(png, geom, cell.controlRef)
-    if (!box || !ctrlBox) return null
+    if (!box || !ctrlBox) {
+      // Cell or control is hidden (0-width column or 0-height row)
+      out.push({
+        ref: cell.ref,
+        controlRef: cell.controlRef,
+        bgRgb: [255, 255, 255],
+        controlBgRgb: [255, 255, 255],
+        bgContrastDelta: 0,
+        interiorMaxDelta: 0,
+        inkPixelCount: 0,
+        inkWeight: 0,
+        inkRgb: [0, 0, 0],
+        controlInkPixelCount: 0,
+        controlInkWeight: 0,
+        glyphRowCount: 0,
+        glyphColumnTransitions: 0,
+        borderTopDelta: 0,
+        borderTopVsControlDelta: 0,
+        borderBottomDelta: 0,
+        borderBottomVsControlDelta: 0,
+        hasUnderlineInk: false,
+        hasStrikethroughInk: false,
+        formattedText: options?.observedCellTexts?.[cell.ref],
+        decorationSource: options?.observedCellDecorations?.[cell.ref] ? 'excel-display-format' : 'unverified',
+        underline: options?.observedCellDecorations?.[cell.ref]?.underline ?? 'none',
+        strikethrough: options?.observedCellDecorations?.[cell.ref]?.strikethrough ?? false,
+      })
+      continue
+    }
     const bgRgb = sampleCellBackgroundRgb(png, box)
     const controlBgRgb = sampleCellBackgroundRgb(png, ctrlBox)
     const bgContrastDelta = rgbMaxDelta(bgRgb, controlBgRgb)
@@ -1437,8 +1472,8 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
   for (const cell of c.expected.cells) {
     if (
-      !cellPixelBox({ width: 1000, height: 1000, data: new Uint8ClampedArray(0) }, rangeGeom, cell.ref) ||
-      !cellPixelBox({ width: 1000, height: 1000, data: new Uint8ClampedArray(0) }, rangeGeom, cell.controlRef) ||
+      !isCellWithinRange(cell.ref, rangeGeom) ||
+      !isCellWithinRange(cell.controlRef, rangeGeom) ||
       cell.ref.toUpperCase() === cell.controlRef.toUpperCase()
     ) {
       return {

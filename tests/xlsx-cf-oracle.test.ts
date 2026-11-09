@@ -35,6 +35,7 @@ import {
   computeWorksheetRangeGeometry,
   decodePngSync,
   isCapabilityVerified,
+  isCellWithinRange,
   isSupportedExcelVersion,
   observeCellsFromCapture,
   parseA1,
@@ -976,6 +977,28 @@ describe('CF oracle verifier', () => {
       }
     }
   }, 30_000)
+
+  it('correctly validates cell coordinates within range even with hidden rows (stage2-scale-scope)', () => {
+    const scopeCase = CF_CASES.find(c => c.id === 'stage2-scale-scope')!
+    const file = readFileSync(resolve(REPO_ROOT, scopeCase.input))
+    const parts = readZipPartsSync(new Uint8Array(file))!
+    const geom = computeWorksheetRangeGeometry(parts, scopeCase.range)!
+
+    // B4 (row 4 hidden) and control B15 are both inside capture range A1:F20
+    expect(isCellWithinRange('B4', geom)).toBe(true)
+    expect(isCellWithinRange('B15', geom)).toBe(true)
+    expect(isCellWithinRange('A1', geom)).toBe(true)
+    expect(isCellWithinRange('F20', geom)).toBe(true)
+    expect(isCellWithinRange('G20', geom)).toBe(false)
+    expect(isCellWithinRange('F21', geom)).toBe(false)
+
+    // verifyCfCase structural validation must NOT refuse stage2-scale-scope on B4/B15
+    const res = verifyCfCase(scopeCase, { rootDir: REPO_ROOT })
+    expect(res.structuralValid).toBe(true)
+    if (res.kind === 'refusal') {
+      expect(res.code).not.toBe('cell-expectation-mismatch')
+    }
+  })
 
   it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {
     const DXF_RED = 'FFFFC7CE'
