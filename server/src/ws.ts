@@ -186,7 +186,7 @@ export function createStreamServer(o: StreamServerOptions) {
       const s = table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt: nowSec() })
       sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp })
       sessionRates.set(sid, ws.data.rates)
-      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: 1, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: false, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, untraceable: policy.visibleMark === 'off' })
+      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: 1, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: false, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: null, forensicLayers: [] })
       ws.data.sid = sid
       committed = true
       sendManifest(ws, reqId, sid, token.token)
