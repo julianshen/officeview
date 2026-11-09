@@ -84,10 +84,10 @@ Per Spec §§5.7 and 6.5 and the Stage 1 staging rule:
 
 Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZIP entries directly (`xl/worksheets/*.xml` and `xl/styles.xml`), skipping `~$` lockfiles (`corpus/~$docx-having-images.docx`, `corpus/~$i-Bug66263-table.docx`):
 
-- **Total `.xlsx` files scanned**: `659` (`33` in `corpus/`, `613` pre-existing in `tests/fixtures/`, plus `13` Stage 1 oracle fixtures in `tests/fixtures/xlsx-cf/`).
+- **Total `.xlsx` files scanned**: `667` (`33` in `corpus/`, `613` pre-existing in `tests/fixtures/`, `13` Stage 1 oracle fixtures, plus `8` Stage 2 colour-scale oracle fixtures in `tests/fixtures/xlsx-cf/`).
 - **LibreOffice CLI (`soffice` / `libreoffice`)**: Not installed on this host (`which soffice libreoffice` returned not found); per spec §7, no new LibreOffice fixtures were synthesized, and the 2 existing LibreOffice/Collabora files in `corpus/` are inventoried below.
 - **Pre-existing `corpus/*.xlsx` inventory (33 files)**:
-  - **Conditional formatting rules (`<conditionalFormatting>` / `<x14:conditionalFormattings>`)**: `0` of the 33 pre-existing `corpus/*.xlsx` files contain worksheet conditional formatting rules.
+  - **Conditional formatting rules (`<conditionalFormatting>` / `<x14:conditionalFormattings>`)**: `0` of the 33 pre-existing `corpus/*.xlsx` files contain worksheet conditional formatting rules. Specifically, `0` contain `<colorScale>` or `<x14:colorScale>`.
   - **`xl/styles.xml` `<dxfs>` entries**: `7` of the 33 `corpus/*.xlsx` files contain `<dxfs>` entries authored for table and pivot formatting:
     - `corpus/lo-calc-PivotTableFormatsSubTotals.xlsx` (`Microsoft Excel Online`, `dxfs count="17"`)
     - `corpus/poi-tableStyle.xlsx` (`Microsoft Excel`, `dxfs count="13"`)
@@ -103,6 +103,23 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
     - `LibreOffice/7.3.7.2$Linux_X86_64 LibreOffice_project/30$Build-2` (1 file: `poi-62272.xlsx`)
     - `Apache POI` (1 file: `poi-link-external-workbook-a.xlsx`)
     - Absent `docProps/app.xml` (5 POI files: `poi-47889.xlsx`, `poi-59021.xlsx`, `poi-59746_NoRowNums.xlsx`, `poi-66365.xlsx`, `poi-xlsx-jdbc.xlsx`)
+
+- **Colour-scale rules inventory across all repository `.xlsx` files**:
+  - The only `.xlsx` files in the repository containing `<colorScale>` or `<x14:colorScale>` are the conditional formatting oracle cases in `tests/fixtures/xlsx-cf/`:
+    1. `stage1-priority-composition.xlsx` (Stage 1 cross-visual composition marker)
+    2. `stage2-scale-interpolation.xlsx` (4 rules: 2-colour `min`/`max`, `num 0`/`num 510` ladder, `min`/`max` colour space, 3-colour `min`/`percentile 50`/`max` spec palette)
+    3. `stage2-scale-thresholds.xlsx` (8 rules: `min`/`max`, `num` bounds, `percent 25`, `percentile 30` INC vs EXC, out-of-bounds `percent`/`percentile`, legacy `min val="0"`, positional `max`/`min`, `num val="$A$1"`)
+    4. `stage2-scale-degenerate.xlsx` (5 rules: all values equal, single cell, inverted `num 100`→`10`, midpoint `num 200` > `max 100`, values beyond `num` bounds)
+    5. `stage2-scale-participation.xlsx` (2 rules: numeric participation types, error presence impact)
+    6. `stage2-scale-colors.xlsx` (5 rules: `theme`+`tint` ±0.4, `indexed`, alpha `00`, `auto="1"`, custom non-Office theme palette)
+    7. `stage2-scale-scope.xlsx` (6 rules: disjoint `sqref`, duplicate blocks, hidden row, autofilter-hidden row, merged cells, canonical whole-column `F1:F1048576`)
+    8. `stage2-scale-composition.xlsx` (11 rules: DXF p1 + scale p2, scale p1 + DXF p2, equal-priority tie-break, font DXF merge, matching/non-matching `stopIfTrue` ahead, scale `stopIfTrue="1"`, overlapping scales, text cell lower DXF, own fill + table base, unresolved expression stub)
+    9. `stage2-scale-unresolved-shapes.xlsx` (5 rules: 2 cfvo with 3 colours, cfvo without `type`, formula cfvo, `activePresent="1"`, standalone `<x14:colorScale>` with literal/reference `<xm:f>`)
+  - **Writer shapes & OpenXML structure**:
+    - Generator templates author OpenXML canonical form (`Microsoft Macintosh Excel` compatible).
+    - `<cfvo>` types represented: `min`, `max`, `num`, `percent`, `percentile`, `formula`, legacy `min val="0"`, and missing `@type`.
+    - Colour forms represented: 8-digit ARGB hex (`rgb="FFFF0000"`, `rgb="00F8696B"`), `theme` + `tint` (`theme="4" tint="0.4"`), `indexed="10"`, `auto="1"`, and custom `theme1.xml` palette colors.
+    - x14 usage: standalone `<x14:colorScale>` inside `<extLst>` with `<x14:cfvo>` carrying `<xm:f>0</xm:f>` and `<xm:f>$A$1</xm:f>` (OD-3: recorded for writer-shape inventory, out of scope for Stage 2, lifts no capability).
 
 ---
 
@@ -176,3 +193,83 @@ Resolves Critical findings C1–C3, Important findings I1–I7, and Minor findin
 - **I7: Top10 ECMA Citations**: Added citations to ECMA-376 Part 1 §18.3.1.10 for default rank 10 and percent ceil rounding.
 - **M4: Parse Diagnostics Capped**: Capped `sheet.diagnostics` at 64 entries per sheet in `src/xlsx/parse.ts`.
 - **Multi-range duplicates & Merged anchor**: Multi-range frequencies counted across all sqref rectangles before cell deduplication; merged sub-cells inherit anchor values.
+
+---
+
+## 9. Stage 2 Colour Scale Oracle Cases & Live Excel 16.114 Probe Summary (Task 12)
+
+All 8 Stage 2 colour scale oracle workbooks were authored in OpenXML canonical form by `bun scripts/cf-refs/generate.ts --stage 2` and catalogued in `tests/fixtures/xlsx-cf/manifest.json`.
+
+Following the project's TDD rulings:
+1. **Host Execution Model (Ruling S2-A)**: Implementers do not execute Excel directly. Input workbooks are generated and remain on disk ready for host execution via `scripts/cf-refs/build.ts` and `scripts/cf-refs/capture.ts`. 7 cases are in `recipe-pending` status and 1 case (`stage2-scale-unresolved-shapes`) is in `unsupported` status.
+2. **Fill-Colour Authority (Ruling S2-A)**: No expected ARGB is written by manual guesswork. Ground truth is derived exclusively from trusted AppleScript observations of Excel's `display format` interior color (`color of interior object of display format of range`) on the saved workbook.
+3. **Semantic Verification (Lesson 2)**: Verifiers compare semantic properties (exact ordered cfvo bounds and colour sequence) rather than raw XML strings.
+4. **Conformance Invariant (Lesson 1)**: Conformance coverage in `tests/xlsx-cf-oracle-conformance.test.ts` asserts that Stage 2 cells remain withheld until evidence is verified, preserving existing Stage 1 conformance.
+
+### Stage 2 Oracle Cases Matrix
+
+| Case ID | Sheet & Range | Pinned Markers & cfvo/colors | Grounding Rulings & Questions Settled | Controls Layout | Status |
+|---|---|---|---|---|---|
+| `stage2-scale-interpolation` | `Sheet1!A1:E22` | 4 markers: 2-colour min/max; `num 0`/`510` ladder; min/max colour space; 3-colour min/percentile 50/max spec palette | **Precondition probe (S2-A)**: display format differs from base interior color. **Rounding ladder (S2-B)**: half-up vs. half-even vs. truncate. **Colour space (S2-B)**: sRGB vs. linear-light vs. HSL. **Spec palette**: 3-colour palette from spec §3. | Rows `2..11` (CF) vs. Rows `13..22` (Controls) | `recipe-pending` |
+| `stage2-scale-thresholds` | `Sheet1!A1:I12` | 8 markers: `min`/`max`; `num` bounds; `percent 25`; `percentile 30` (INC vs EXC); out-of-bounds `percent`/`percentile`; legacy `min val="0"`; positional `max` first / `min` mid-list; `num val="$A$1"` structure | **Threshold variants (S2-C, S2-D, S2-E, S2-L)**: exact percentile method (spec §5.8 PERCENTILE.INC), out-of-bounds bound domain, legacy shapes, positional shapes, formula references. **Dynamic refresh**: live edit of max cell without saving pins live recompute for Task 15. | Rows `2..6` (CF) vs. Rows `8..12` (Controls) | `recipe-pending` |
+| `stage2-scale-degenerate` | `Sheet1!A1:F12` | 5 markers: equal values; single numeric cell; inverted `num 100`→`10`; midpoint `num 200` above `max 100`; values beyond `num` bounds | **Degenerate handling (S2-E)**: flat/equal values, single cell, inverted thresholds, midpoint out of order, bounds overflow/underflow. Clamping is never assumed. | Rows `2..6` (CF) vs. Rows `8..12` (Controls) | `recipe-pending` |
+| `stage2-scale-participation` | `Sheet1!A1:C22` | 2 markers: numeric participation types; error presence impact | **Participation semantics (S2-G)**: numeric serials, dates, booleans, strings, blanks, errors. Verifies whether presence of one error suppresses coloring on other cells in scope. | Rows `2..11` (CF) vs. Rows `13..22` (Controls) | `recipe-pending` |
+| `stage2-scale-colors` | `Sheet1!A1:F12` | 5 markers: `theme`+`tint` ±0.4; `indexed`; alpha `00`; `auto="1"`; custom non-Office `theme1.xml` palette | **Colour form resolution (S2-F, OD-4)**: theme+tint resolution order against `applyTint`, indexed palette, translucent alpha, automatic color, custom palette. Per OD-4, unsettled theme+tint stays unresolved. | Rows `2..6` (CF) vs. Rows `8..12` (Controls) | `recipe-pending` |
+| `stage2-scale-scope` | `Sheet1!A1:F20` | 6 markers: disjoint `sqref`; duplicate blocks; hidden row; autofilter-hidden row; merged cells; canonical whole-column `F1:F1048576` | **Scope & geometry (S2-H)**: union disjoint ranges, duplicate rules, hidden row filtering, autofilter row filtering, merged cell range inheritance, whole-column clipping. | Rows `2..9` (CF) vs. Rows `13..20` (Controls) | `recipe-pending` |
+| `stage2-scale-composition` | `Sheet1!A1:L10` | 11 markers: DXF p1 + scale p2; scale p1 + DXF p2; equal priority; font DXF merge; matching/non-matching `stopIfTrue` ahead; scale `stopIfTrue="1"`; overlapping scales; text cell lower DXF; own fill + table base; unresolved expression stub | **Composition & priority (S2-I, S2-J, OD-1)**: fill slot arbitration, orthogonal font merge, `stopIfTrue` interaction, scale `stopIfTrue="1"` ignored per OD-1 once measured, two scales withhold fill, unresolved expression stub stop-taints lower rules. | Rows `2..5` (CF) vs. Rows `7..10` (Controls) | `recipe-pending` |
+| `stage2-scale-unresolved-shapes` | `Sheet1!A1:F12` | 5 markers: 2 cfvo with 3 colors; cfvo without `type`; formula cfvo; `activePresent="1"`; standalone `x14:colorScale` | **Malformed & unsupported shapes (S2-C, S2-K, OD-3)**: Excel open/repair/strip outcome. Standalone x14 deferred to Stage 5. Status is `unsupported`; viewer fails closed. | Rows `2..6` vs. Rows `8..12` | `unsupported` |
+
+---
+
+### Stage 2 Evidence-to-Capability Matrix
+
+Every Stage 2 capability corresponds to a single variant in the oracle matrix and defines a strict atomic fail-closed disposition citing the S2 ruling it lifts:
+
+| Capability ID | Oracle Case ID | Question Settled by Oracle | Ruling & Bounds Policy | Current Evidence Status | Viewer Atomic Fail-Closed Disposition |
+|---|---|---|---|---|---|
+| `scale:interpolation-precondition-probe` | `stage2-scale-interpolation` | Precondition probe: display format interior color differs from base interior color | Ruling S2-A | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-A (precondition probe requires display format interior color to differ from base interior color) |
+| `scale:interpolation-rounding-ladder` | `stage2-scale-interpolation` | Rounding ladder across half-up, half-even, and truncate on 0, 1, 3, 5, 255, 509, 510 | Ruling S2-B | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-B (interpolation rounding has no default; requires verified rounding ladder evidence) |
+| `scale:interpolation-color-space` | `stage2-scale-interpolation` | Colour space interpolation across sRGB, linear-light, and HSL at 50% | Ruling S2-B | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-B (color space has no default; requires verified color space evidence) |
+| `scale:interpolation-spec-palette` | `stage2-scale-interpolation` | Spec §3 3-colour palette `FFF8696B`/`FFFFEB84`/`FF63BE7B` over 1..9 | Rulings S2-A, S2-B | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-A and S2-B |
+| `scale:thresholds-min-max` | `stage2-scale-thresholds` | Basic 2-colour `min`/`max` threshold evaluation | Ruling S2-C | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-C |
+| `scale:thresholds-num-bounds` | `stage2-scale-thresholds` | Numeric literal bounds `num 20` / `num 80` | Ruling S2-C | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-C |
+| `scale:thresholds-percent` | `stage2-scale-thresholds` | 3-colour `percent 25` midpoint threshold over data | Ruling S2-C | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-C |
+| `scale:thresholds-percentile-inc-exc` | `stage2-scale-thresholds` | `percentile 30` over {1,2,3,4,10} settling INC (2.2) vs. EXC (1.8) | Ruling S2-L | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-L (exact percentile only, PERCENTILE.INC per spec §5.8) |
+| `scale:thresholds-percent-percentile-out-of-bounds` | `stage2-scale-thresholds` | `percent -10` and `percentile 150` out-of-domain thresholds | Ruling S2-E | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-E (bound domain outside 0..100) |
+| `scale:thresholds-legacy-min-val-0` | `stage2-scale-thresholds` | Excel 2007 legacy cfvo shape `type="min" val="0"` | Ruling S2-D | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-D (legacy cfvo shape type="min" val="0") |
+| `scale:thresholds-min-midlist-max-first` | `stage2-scale-thresholds` | Non-canonical positional cfvo shapes (`max` first, `min` mid-list) | Ruling S2-D | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-D (positional cfvo shapes) |
+| `scale:thresholds-num-val-reference` | `stage2-scale-thresholds` | Bound referencing cell `num val="$A$1"` | Ruling S2-C | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-C (reference or formula val="$A$1" stays cf-unsupported-rule until Stage 5) |
+| `scale:degenerate-equal-values` | `stage2-scale-degenerate` | All cell values in range are equal ($v_{min} = v_{max}$) | Ruling S2-E | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-E (v_min = v_max) |
+| `scale:degenerate-single-cell` | `stage2-scale-degenerate` | Single numeric cell scope | Ruling S2-E | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-E (single numeric cell) |
+| `scale:degenerate-inverted-thresholds` | `stage2-scale-degenerate` | Inverted bounds `num 100` → `num 10` ($t_{low} \ge t_{high}$) | Ruling S2-E | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-E (inverted thresholds t_low >= t_high) |
+| `scale:degenerate-midpoint-above-max` | `stage2-scale-degenerate` | 3-colour midpoint `num 200` positioned above endpoint `num 100` | Ruling S2-E | `recipe-pending` | While unmeasured or refused, rule is unresolved per Ruling S2-E (3-colour midpoint outside endpoints) |
+| `scale:degenerate-values-beyond-bounds` | `stage2-scale-degenerate` | Values strictly below `num 20` and above `num 80` (no clamping assumed) | Ruling S2-E | `recipe-pending` | While unmeasured or refused, cell is unresolved per Ruling S2-E (values beyond num bounds; clamping never assumed) |
+| `scale:participation-types` | `stage2-scale-participation` | Participation across numbers, dates, booleans, text, blanks, errors | Ruling S2-G | `recipe-pending` | While unmeasured or refused, non-numeric cells are unresolved per Ruling S2-G |
+| `scale:participation-error-presence` | `stage2-scale-participation` | Presence of single `#DIV/0!` in range: impact on non-error cells | Ruling S2-G | `recipe-pending` | While unmeasured or refused, scope containing error makes rule unresolved per Ruling S2-G |
+| `scale:colors-theme-tint` | `stage2-scale-colors` | Endpoints with `theme="4" tint="0.4"` and `theme="5" tint="-0.4"` | Rulings S2-F, OD-4 | `recipe-pending` | While unmeasured or refused, theme+tint scale is unresolved per Ruling S2-F and OD-4 |
+| `scale:colors-indexed` | `stage2-scale-colors` | Endpoints with `indexed="10"` and `indexed="12"` | Ruling S2-F | `recipe-pending` | While unmeasured or refused, indexed color scale is unresolved per Ruling S2-F |
+| `scale:colors-alpha-00` | `stage2-scale-colors` | Endpoints with translucent alpha channel `rgb="00F8696B"` | Ruling S2-F | `recipe-pending` | While unmeasured or refused, alpha other than FF is unresolved per Ruling S2-F |
+| `scale:colors-auto` | `stage2-scale-colors` | Endpoints with `auto="1"` | Ruling S2-F | `recipe-pending` | While unmeasured or refused, auto color scale is unresolved per Ruling S2-F |
+| `scale:colors-custom-theme` | `stage2-scale-colors` | Endpoints with custom non-Office `theme1.xml` palette | Ruling S2-F | `recipe-pending` | While unmeasured or refused, custom theme scale is unresolved per Ruling S2-F |
+| `scale:scope-disjoint` | `stage2-scale-scope` | Disjoint range `sqref="B2:B4 D2:D4"` | Ruling S2-H | `recipe-pending` | While unmeasured or refused, disjoint scope is unresolved per Ruling S2-H |
+| `scale:scope-duplicate-blocks` | `stage2-scale-scope` | Identical scale rule duplicated across two `<conditionalFormatting>` blocks | Ruling S2-H | `recipe-pending` | While unmeasured or refused, duplicated conditionalFormatting blocks are unresolved per Ruling S2-H |
+| `scale:scope-hidden-row` | `stage2-scale-scope` | Scale scope with hidden row (row 4 hidden) | Ruling S2-H | `recipe-pending` | While unmeasured or refused, scope with hidden rows is unresolved per Ruling S2-H |
+| `scale:scope-autofilter-hidden-row` | `stage2-scale-scope` | Scale scope with autofilter-hidden row | Ruling S2-H | `recipe-pending` | While unmeasured or refused, scope with autofilter-hidden rows is unresolved per Ruling S2-H |
+| `scale:scope-merged-cell` | `stage2-scale-scope` | Merged range `B8:C9` inside colour scale scope | Ruling S2-H | `recipe-pending` | While unmeasured or refused, merged cells in scale scope are unresolved per Ruling S2-H |
+| `scale:scope-whole-column` | `stage2-scale-scope` | Canonical whole-column scope `F1:F1048576` with 5 populated rows | Ruling S2-H | `recipe-pending` | While unmeasured or refused, whole-column scale scope is unresolved per Ruling S2-H |
+| `scale:composition-dxf-p1-scale-p2` | `stage2-scale-composition` | DXF fill at priority 1 with colour scale at priority 2 | Ruling S2-I | `recipe-pending` | While unmeasured or refused, fill composition is unresolved per Ruling S2-I |
+| `scale:composition-scale-p1-dxf-p2` | `stage2-scale-composition` | Colour scale at priority 1 with DXF fill at priority 2 | Ruling S2-I | `recipe-pending` | While unmeasured or refused, fill composition is unresolved per Ruling S2-I |
+| `scale:composition-equal-priority` | `stage2-scale-composition` | Equal priority `priority="7"` DXF fill and colour scale document order | Ruling S2-I | `recipe-pending` | While unmeasured or refused, equal-priority composition is unresolved per Ruling S2-I |
+| `scale:composition-font-only-dxf` | `stage2-scale-composition` | Font-only DXF merge with colour scale fill | Ruling S2-I | `recipe-pending` | While unmeasured or refused, font DXF merge is unresolved per Ruling S2-I |
+| `scale:composition-matching-stopIfTrue-ahead` | `stage2-scale-composition` | Matching DXF rule with `stopIfTrue="1"` ahead of colour scale | Ruling S2-I | `recipe-pending` | While unmeasured or refused, matching stopIfTrue ahead is unresolved per Ruling S2-I |
+| `scale:composition-non-matching-stopIfTrue-ahead` | `stage2-scale-composition` | Non-matching DXF rule with `stopIfTrue="1"` ahead of colour scale | Ruling S2-I | `recipe-pending` | While unmeasured or refused, non-matching stopIfTrue ahead is unresolved per Ruling S2-I |
+| `scale:composition-scale-stopIfTrue` | `stage2-scale-composition` | Colour scale carrying `stopIfTrue="1"` ahead of lower DXF fill | Rulings S2-J, OD-1 | `recipe-pending` | While unmeasured or refused, scale with stopIfTrue="1" is unresolved per Ruling S2-J and OD-1 |
+| `scale:composition-overlapping-scales` | `stage2-scale-composition` | Two overlapping colour scales on the same cells (withhold fill) | Ruling S2-I | `recipe-pending` | While unmeasured or refused, overlapping scales withhold fill per Ruling S2-I |
+| `scale:composition-text-cell-lower-dxf` | `stage2-scale-composition` | Text cell in scale range with lower-priority DXF fill | Ruling S2-I | `recipe-pending` | While unmeasured or refused, text cell in scale range is unresolved per Ruling S2-I |
+| `scale:composition-own-fill-and-table` | `stage2-scale-composition` | Cell's own base fill and table-styled base under colour scale | Ruling S2-I | `recipe-pending` | While unmeasured or refused, own fill and table base under scale are unresolved per Ruling S2-I |
+| `scale:composition-unresolved-expression-stub` | `stage2-scale-composition` | Unresolved expression stub at priority 1 with scale below | Ruling S2-I | `recipe-pending` | While unmeasured or refused, expression stub stop-taints lower rules per Ruling S2-I |
+| `scale:unresolved-2cfvo-3colors` | `stage2-scale-unresolved-shapes` | Malformed scale: 2 cfvo children with 3 color children | Ruling S2-C | `unsupported` | Always unsupported per Ruling S2-C (count mismatch cfvo vs colors) |
+| `scale:unresolved-cfvo-without-type` | `stage2-scale-unresolved-shapes` | Malformed cfvo: `<cfvo val="0"/>` missing `@type` attribute | Ruling S2-C | `unsupported` | Always unsupported per Ruling S2-C (cfvo without type gives cf-invalid-cfvo) |
+| `scale:unresolved-cfvo-formula` | `stage2-scale-unresolved-shapes` | Formula bound: `<cfvo type="formula" val="SUM(A1:A5)"/>` | Ruling S2-C | `unsupported` | Always unsupported per Ruling S2-C (formula cfvo deferred to Stage 5) |
+| `scale:unresolved-active-present` | `stage2-scale-unresolved-shapes` | Unsupported attribute `activePresent="1"` | Ruling S2-C | `unsupported` | Always unsupported per Ruling S2-C |
+| `scale:unresolved-x14-standalone` | `stage2-scale-unresolved-shapes` | Standalone `<x14:colorScale>` in `<extLst>` with `<xm:f>` | Rulings S2-K, OD-3 | `unsupported` | Always cf-unsupported-rule per Ruling S2-K and OD-3 (standalone x14 colorScale out of scope for Stage 2, lifts no capability) |

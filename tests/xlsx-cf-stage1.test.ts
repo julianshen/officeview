@@ -158,10 +158,11 @@ describe('stage gate status distinguishes verified completion from blocked evide
 describe('every unresolved capability refuses atomically on both paths', () => {
   it('all product-marked unresolved rules withhold on resident and wire scopes', async () => {
     const manifest = loadManifest()
+    const stage1Cases = manifest.cases.filter(c => c.stage === 1 || !c.stage)
     const seen = new Map<string, { ruleType: string; reason: string }>()
     let unresolvedCount = 0
     let probedCells = 0
-    for (const c of manifest.cases) {
+    for (const c of stage1Cases) {
       const sheet = await sheetFromSaved(c.input, c.saved)
       const rules = sheet.conditionalFormatting?.rules ?? []
       const unresolved = rules.filter(rule => {
@@ -293,11 +294,12 @@ describe('unresolved rules withhold through the real paged worker route', () => 
     const { createPagedWorkbookSource } = await import('../src/xlsx/view/pagedSource')
     const { createCfMemory } = await import('../src/xlsx/cf/limits')
     const manifest = loadManifest()
+    const stage1Cases = manifest.cases.filter(c => c.stage === 1 || !c.stage)
     let rules = 0
     let cells = 0
     let readyReads = 0
     let pendingReads = 0
-    for (const c of manifest.cases) {
+    for (const c of stage1Cases) {
       const sheet = await sheetFromSaved(c.input, c.saved)
       const unresolved = (sheet.conditionalFormatting?.rules ?? []).filter(rule => {
         const definition = (rule as { definition?: { kind?: string } }).definition

@@ -17,6 +17,7 @@ import {
   CF_STAGE2_CASES,
   type CfManifest,
   type CfOracleCase,
+  type CfPartMarker,
   type CfResaveReceipt,
 } from '../scripts/cf-refs/cases'
 import { parseExcelColorToArgb } from '../scripts/cf-refs/capture'
@@ -639,7 +640,7 @@ describe('CF oracle verifier', () => {
     const validHash = sha256(validBytes)
     writeFileSync(join(dir, 'valid.xlsx'), validBytes)
     const validRes = verifyCfCase(makeScaleCase('valid.xlsx', validHash), { rootDir: dir })
-    expect(validRes.structuralValid).toBe(true)
+    expect(validRes).toMatchObject({ structuralValid: true })
 
     // 1. Reordered colours: FF63BE7B -> FFFFEB84 -> FFF8696B
     const reorderedColorsXml =
@@ -698,7 +699,7 @@ describe('CF oracle verifier', () => {
     const semanticHash = sha256(semanticBytes)
     writeFileSync(join(dir, 'semantic.xlsx'), semanticBytes)
     const semanticRes = verifyCfCase(makeScaleCase('semantic.xlsx', semanticHash), { rootDir: dir })
-    expect(semanticRes.structuralValid).toBe(true)
+    expect(semanticRes).toMatchObject({ structuralValid: true })
   })
 
   it('scale fill requires trusted fill evidence', async () => {

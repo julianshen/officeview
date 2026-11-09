@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
 import { openWorkbook, osa, q, runScript, workbookNames } from '../xlsx-refs/excel'
 import { closeOwnedWorkbook, isDisplayLocked } from './build'
-import { CF_CASES, CF_STAGE1_CASES, type CfManifest, type CfOracleCase } from './cases'
+import { CF_CASES, type CfManifest, type CfOracleCase } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
   computeWorksheetRangeGeometry,
@@ -398,16 +398,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     } else {
       clockState = c.clockRequirement ? probeLiveExcelClockState(c, savedAbs, preExisting) : null
       const liveObs = probeLiveExcelCellObservations(c, savedAbs, preExisting)
+      const liveGeom = liveObs?.geometry
       hasLiveGeom =
-        liveObs?.geometry !== null &&
-        liveObs?.geometry !== undefined &&
-        liveObs.geometry.colWidthsPt.length > 0 &&
-        liveObs.geometry.rowHeightsPt.length > 0
+        liveGeom !== null &&
+        liveGeom !== undefined &&
+        liveGeom.colWidthsPt.length > 0 &&
+        liveGeom.rowHeightsPt.length > 0
       activeGeom =
-        hasLiveGeom && parts
+        hasLiveGeom && parts && liveGeom
           ? computeWorksheetRangeGeometry(parts, c.range, {
-              colWidthsPt: liveObs.geometry.colWidthsPt,
-              rowHeightsPt: liveObs.geometry.rowHeightsPt,
+              colWidthsPt: liveGeom.colWidthsPt,
+              rowHeightsPt: liveGeom.rowHeightsPt,
             }) ?? geom
           : geom
       cellTexts = liveObs?.cellTexts
