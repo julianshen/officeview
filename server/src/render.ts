@@ -5,6 +5,7 @@
  * or record commands (relaxed sessions). Deterministic: no clock, no
  * randomness; the mark text is a parameter (§14).
  */
+import { occlusionObserver, type OcclusionEvidence } from './occlusion'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -38,11 +39,22 @@ export const sizeCeil = (v: number) => Math.ceil(v - 1e-9)
  * is allocated. Larger units need tiles (Stage 4) and are refused today. */
 export const unitSurfaceAllowed = (w: number, h: number) => Math.max(w, h) <= MAX_UNIT_PX && w * h * 4 <= UNIT_RASTER_DECODED_CAP
 export interface UnitSize { w: number; h: number }
-export type RenderedUnit =
+/** `evidence`: the §7.7 occlusion evidence of the paint pass (server-side only). */
+export type RenderedUnit = (
   | { kind: 'raster'; w: number; h: number; png: Uint8Array; fallback?: string }
   | { kind: 'commands'; w: number; h: number; ops: Uint8Array; opCount: number; assets: Asset[]; faces: string[] }
-export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; afterUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void }
+) & { evidence?: OcclusionEvidence }
+/** `wrap` may interpose on the context the painter receives (the visible mark is painted outside it). */
+export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; afterUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; wrap?(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D }
 export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
+
+/** §7.7: every paint pass that serves a unit records occlusion evidence. */
+function observe(ctx: CanvasRenderingContext2D, w: number, h: number, observers: readonly PaintObserver[]) {
+  const occ = occlusionObserver(w, h)
+  let painted = occ.wrap(ctx)
+  for (const o of observers) if (o.wrap) painted = o.wrap(painted)
+  return { painted, evidence: () => occ.evidence() }
+}
 
 const root = resolve(import.meta.dir, '../..')
 const versionOf = (p: string) => (JSON.parse(readFileSync(p, 'utf8')) as { version: string }).version
@@ -133,7 +145,7 @@ export class DocumentHost {
       const cmd = this.recordCommands(paintable, job.unitIndex, w, h, job.scale, page, mark, observers)
       if (cmd.ok) {
         const use = facesUsed(cmd.ops)
-        if (use.unpinned.length === 0 && !use.faces.some((f) => job.missingFaces?.includes(f))) return { kind: 'commands', w, h, ops: cmd.ops, opCount: cmd.opCount, assets: cmd.assets, faces: use.faces }
+        if (use.unpinned.length === 0 && !use.faces.some((f) => job.missingFaces?.includes(f))) return { kind: 'commands', w, h, ops: cmd.ops, opCount: cmd.opCount, assets: cmd.assets, faces: use.faces, evidence: cmd.evidence }
         return { ...this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers), fallback: 'face-missing' }
       }
       return { ...this.raster(paintable, job.unitIndex, w, h, job.scale, page, mark, observers), fallback: `recorder:${cmd.reason}` }
@@ -145,12 +157,13 @@ export class DocumentHost {
     const canvas = this.backend.createCanvas(w, h)
     const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
     ctx.scale(scale, scale)
-    for (const o of observers) o.beforeUnit(ctx, index)
-    paintable.paint(ctx)
-    for (const o of observers) o.afterUnit(ctx, index)
+    const { painted, evidence } = observe(ctx, w, h, observers)
+    for (const o of observers) o.beforeUnit(painted, index)
+    paintable.paint(painted)
+    for (const o of observers) o.afterUnit(painted, index)
     if (mark) paintWatermark(ctx, page, mark)
     const png = criticalChunksOnly(new Uint8Array((canvas as unknown as { toBuffer(m: 'image/png'): Buffer }).toBuffer('image/png')))
-    return { kind: 'raster', w, h, png }
+    return { kind: 'raster', w, h, png, evidence: evidence() }
   }
 
   private recordCommands(paintable: PaintableArray[number], index: number, w: number, h: number, scale: number, page: { widthPx: number; heightPx: number }, mark: WatermarkOptions | undefined, observers: readonly PaintObserver[]) {
@@ -159,12 +172,13 @@ export class DocumentHost {
     // Font pinning sits OUTSIDE the recorder so recorded fonts carry pack names.
     const ctx = pinFonts(rec.ctx, loadPack())
     ctx.scale(scale, scale)
-    for (const o of observers) o.beforeUnit(ctx, index)
-    paintable.paint(ctx)
-    for (const o of observers) o.afterUnit(ctx, index)
+    const { painted, evidence } = observe(ctx, w, h, observers)
+    for (const o of observers) o.beforeUnit(painted, index)
+    paintable.paint(painted)
+    for (const o of observers) o.afterUnit(painted, index)
     if (mark) paintWatermark(ctx, page, mark)
     const out = rec.finish()
     if (out.discriminator === 3) return { ok: false as const, reason: out.reason }
-    return { ok: true as const, ops: out.ops, opCount: out.opCount, assets: out.assets }
+    return { ok: true as const, ops: out.ops, opCount: out.opCount, assets: out.assets, evidence: evidence() }
   }
 }

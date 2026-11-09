@@ -150,3 +150,19 @@ Branch `feature/streaming-s1`; plan `docs/superpowers/plans/2026-11-09-streaming
 - Embedded fonts are not registered; their text paints with fallbacks and command units fall back to rasters.
 - `can.*` semantic services are off until Stage 3.
 - ASSET_DEFINE is sent per unit (no cross-unit asset dedupe yet).
+
+## Stage 1d — occlusion evidence (§7.7)
+
+Every paint pass that serves a unit (raster and commands) records per-text-run ink bounds and the opaque-coverage record (`server/src/occlusion.ts`, attached in `DocumentHost` so every caller gets it). A run is servable iff its ink is on the surface, inside the current clip (tracked exactly only for axis-aligned rect clips), not transparent, and touched by no later opaque (alpha ≥ 0.95, `source-over`) paint, non-`source-over` op or filter. Bounds are conservative supersets; a paint of unknown opacity counts as opaque. **Evidence only: nothing is culled or shipped in Stage 1** — Stage 3's semantic services consume it.
+
+The coverage record is kept at device precision (op boxes + sequence numbers) instead of a cell grid: a 4 px grid withheld every spreadsheet cell next to a gridline (xlsx 0 % servable), and a 1 px grid costs ~40 MB per scale-2 page.
+
+Census (`bun --preload ./scripts/stream-s0/napi-preload.ts scripts/stream-s1/occlusion-census.ts`; Stage-0 corpus, visible-only, final-raster, scale 1, mark off):
+
+| kind | files | units | text runs | servable | withheld | reasons |
+|---|---|---|---|---|---|---|
+| pptx | 30 | 157 (+1 refused) | 1383 | 1357 (98.1 %) | 26 | covered 24, transparent 1, off-surface 1 |
+| xlsx | 7 | 9 (+2 refused) | 66 | 44 (66.7 %) | 22 | clipped 18, covered 2, off-surface 2 |
+| docx | 15 | 57 (+2 refused) | 12057 | 11987 (99.4 %) | 70 | covered 70 |
+
+"Refused" units exceed the 64 MiB surface cap (tiles are Stage 4). xlsx `clipped` runs are cell text cut by its cell clip, i.e. not 100 % visible.
