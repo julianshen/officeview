@@ -1,9 +1,10 @@
 import { linkPivotCharts } from '../xlsx/pivotChartLink'
+import { PackageError } from '../core/package-error'
 import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import type { XlsxFrozenPane } from '../xlsx/frozenPane'
 import type { XlsxCellStyle } from '../xlsx/types'
 import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
-import type { AllocationContext } from '../xlsx/view/allocationAccount'
+import type { AllocationContext, AllocationReservation } from '../xlsx/view/allocationAccount'
 /**
  * Resident document session (spec §§4.1, 6.3, 10.1–10.2; plan S4.1).
  *
@@ -69,13 +70,14 @@ import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } 
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
 import { filterValueDomain, scanValueDomain, type ValueDomainScan, type ValueStatus } from '../xlsx/view/values'
 import { awaitQueryDeadline, interruptibleStore, retainUntilDrained } from './viewerAbort'
+import type { CfMemory } from '../xlsx/cf/limits'
 import { WorkbookFind, FindError, FIND_HIT_BUFFER_BUDGET, type FindPage, type FindSheetInput } from '../xlsx/view/find'
 import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
 import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
 import { accountQueryBytes, boundedQueryStore, queryWorkspaceRefusal, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import type { FormatAllocation } from '../xlsx/formula/format'
-import type { FormatBudget } from '../xlsx/view/formatWorkspace'
+import type { EffectiveFormatScope, FormatBudget } from '../xlsx/view/formatWorkspace'
 import type { PivotCacheDefinition, PivotTableDefinition } from '../xlsx/pivots/model'
 import { MAX_LINKED_CONTROL_ITEMS, MAX_LINKED_CONTROL_TARGETS } from '../xlsx/view/contracts'
 import type { RecordLimits, RecordResult } from '../xlsx/pivots/engine/records'
@@ -118,6 +120,53 @@ function sameWorkbookOwner(a: WorkbookOwner, b: WorkbookOwner): boolean {
 }
 export const failure = (code: SourceFailure['code'], message: string, retryable = false): SourceFailure =>
   Object.freeze({ code, retryable, message })
+/** Adapts the session MemoryPool as the CF document account. CfMemory only
+ * exercises reserve/trySet/release (plus headroom and closed probes), which
+ * map onto one pool charge each: absolute set semantics on both sides, so a
+ * failed trySet leaves the charge untouched and the shared pool — not an
+ * isolated ledger — admits or refuses. adopt/owns never run against this
+ * context (CfMemory retains through its own leases); the stubs document that
+ * boundary rather than pretending to support it. */
+function poolCfContext(pool: MemoryPool): AllocationContext {
+  return {
+    limitBytes: pool.limitBytes,
+    get closed() { return pool.stats().closed },
+    reserve(): AllocationReservation {
+      const share = pool.charge()
+      let bytes = 0, ended = false
+      return {
+        owner: 'cf-session-pool',
+        get bytes() { return bytes },
+        trySet: (next: number): boolean => {
+          if (ended) return false
+          if (!share.set(next)) return false
+          bytes = next
+          return true
+        },
+        charge: (extra: number): void => {
+          if (!ended && extra > 0) {
+            const next = bytes + extra
+            if (share.set(next)) bytes = next
+          }
+        },
+        release: (count?: number): void => {
+          if (ended) return
+          if (count === undefined || count >= bytes) {
+            ended = true
+            share.release()
+          } else if (count > 0) {
+            const next = bytes - count
+            if (share.set(next)) bytes = next
+          }
+        },
+        adopt: (): void => { /* CfMemory never adopts into the context account. */ },
+      }
+    },
+    canReserve: (bytes: number): boolean =>
+      Number.isSafeInteger(bytes) && bytes >= 0 && pool.stats().totalBytes + bytes <= pool.limitBytes,
+    owns: (): boolean => false,
+  }
+}
 /** §4.1 column page ordering violation; the session never stages such lanes. */
 const UNORDERED_PAGE = failure('page-error', 'Column pages must cover requested rows in ascending, contiguous order')
 /** S13.2: a store that cannot serve drawing content says so (a visible
@@ -197,6 +246,8 @@ export interface WorkbookSource {
   /** Workbook-level formula scan for the paged dependent fallback, excluding saved pivot rectangles. */
   scanFormulaCellsOutsidePivots?(signal?: AbortSignal): boolean | undefined | Promise<boolean | undefined>
   hasSparklines?(sheetId: string): boolean
+  /** Task 9: CF metadata fast path; absent/false means no per-batch CF work. */
+  hasConditionalFormatting?(sheetId: string): boolean
   hasRegionStyles?(sheetId: string): boolean
   regionStyleTableCount?(sheetId: string): number
   hasPivotDisplay?(sheetId: string): boolean
@@ -224,8 +275,9 @@ export interface WorkbookSource {
   /** S5.4: style table and date system of a source whose cells carry style ids only. */
   formatting?(): WorkbookFormatting
   /** The canonical logical display text, without materializing cell layouts. `region` resolves a styled
-   * table/pivot region over the cell's own style, as the viewer paints it (worker Find). */
-  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation, region?: RegionStyleResolver): string
+   * table/pivot region over the cell's own style, as the viewer paints it (worker Find). `scope`
+   * applies a prepared current-generation CF effective format last (Task 9). */
+  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation, region?: RegionStyleResolver, scope?: EffectiveFormatScope): string
   release(): Promise<void>
 }
 
@@ -1016,6 +1068,11 @@ export class DocumentSession {
   /** Insertion order is recency order; bounded by MAX_OPEN_SCANS. */
   private readonly scans = new Map<string, OpenScan>()
   private scanSerial = 0
+  /** Session-scoped CF construction account shared by every preparation of
+   * this document: concurrent preparations hold against the same cap (wired
+   * to the document allocation when main-control provides one), so a full
+   * worker pool refuses CF construction instead of isolating it per request. */
+  private cfMemory: CfMemory | undefined
   activeSheetId: string
 
   constructor(readonly docId: string, readonly source: WorkbookSource, private readonly options: SessionOptions = {}) {
@@ -2050,6 +2107,21 @@ export class DocumentSession {
       release: () => { released = true; share.release() },
     }
   }
+  /** Shared CF construction account for this document's preparations. Loaded
+   * lazily so the CF service graph stays out of the paged worker chunk. */
+  private async cfAccount(): Promise<CfMemory> {
+    if (!this.cfMemory) {
+      const { createCfMemory } = await import('../xlsx/cf/limits')
+      // Ordinary worker sessions own this.memory and supply no main-control
+      // allocation: adapt CF reservations to the real session pool, so a
+      // full worker pool refuses CF construction instead of isolating it on
+      // an independent ledger. Only CfMemory's reserve/trySet/release (plus
+      // headroom/closed probes) run against this context.
+      const context = this.options.allocation ?? poolCfContext(this.memory)
+      this.cfMemory ??= createCfMemory({ context })
+    }
+    return this.cfMemory
+  }
   private async afterYield(work: Promise<void>, signal: AbortSignal): Promise<void> {
     try {
       await awaitQueryDeadline(work, signal)
@@ -2641,6 +2713,8 @@ export class DocumentSession {
       ensureComplete: (rect, options) => store.ensureComplete(rect, options),
       release: () => store.release(),
       queryColumn: (request, options) => session.pagedColumn(store, request, options),
+      // Task 9 worker find prepares CF text scopes through the same wrapper.
+      ...(store.readConditionalFormatting ? { readConditionalFormatting: (request, memory, options) => store.readConditionalFormatting!(request, memory, options) } : {}),
     }
     return prepared
   }
@@ -3168,6 +3242,12 @@ export class DocumentSession {
         if (!current.charge.set(current.bytes)) { this.stopSearch(current); return this.refusal(current.bytes) }
         const sheets: FindSheetInput[] = []
         const regions = new Map<string, RegionStyleResolver>()
+        // Stores behind the bounded search wrapper, for per-batch CF preparation.
+        const textStores = new Map<string, { store: SourceStore; valueGen: number }>()
+        // One bounded CF probe per sheet per search: no-CF sheets never pay per-page.
+        const cfPresence = new Map<string, boolean>()
+        // The session format budget, shared by text formatting and CF scopes.
+        let searchFormatBudget!: FormatBudget
         for (const { sheetId } of this.source.sheets) {
           if (query.sheetIds && !query.sheetIds.includes(sheetId)) continue
           // Importing sheets remain searchable. A nonblocking structural probe
@@ -3189,19 +3269,21 @@ export class DocumentSession {
           const region = await this.findRegionStyles(sheetId, current, signal)
           if (current.stopped || signal.aborted) return { kind: 'cancelled' }
           if (region) regions.set(sheetId, region)
+          const bounded = boundedQueryStore(store, budget / 2, bytes => {
+            current.emittedBytes += bytes
+            if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
+          }, 20_000, true, true, this.memory, this.queryYield)
+          textStores.set(sheetId, { store: bounded, valueGen: view.identity.valueGen })
           sheets.push({ sheetId, identity: view.identity, order: view.order, visibility,
             isColumnVisible: col => geometry.cols.size(col) > 0,
-            store: boundedQueryStore(store, budget / 2, bytes => {
-              current.emittedBytes += bytes
-              if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
-            }, 20_000, true, true, this.memory, this.queryYield),
+            store: bounded,
           })
         }
         current.engine = new WorkbookFind({ owner, sheets }, query, {
           signal: current.controller.signal, currentOwner: () => this.workbookOwner(),
           awaitYield: work => this.afterYield(work, current.controller.signal),
           ...(this.options.yield ? { yield: phase => awaitQueryDeadline(this.options.yield!(phase), current.controller.signal) } : {}), ...(this.options.now ? { now: this.options.now } : {}),
-          formatBudget: {
+          formatBudget: (searchFormatBudget = {
             reserve: bytes => {
               if (!current.charge.set(current.bytes + bytes)) throw new FindError('resource-limit', 'Search formatting exceeds the worker memory budget')
               current.bytes += bytes
@@ -3224,8 +3306,45 @@ export class DocumentSession {
               current.bytes -= bytes
               current.charge.set(current.bytes)
             },
-          },
-          ...(this.source.displayText ? { textOf: (cell, id, allocation) => this.source.displayText!(cell, id, allocation, regions.get(id)) } : {}),
+          }),
+          ...(this.source.displayText ? {
+            textOf: (cell, id, allocation, scope) => this.source.displayText!(cell, id, allocation, regions.get(id), scope),
+            // Bounded current-generation CF formats for one scan batch (Task 9).
+            // Presence is probed once per sheet per search; any other failure
+            // keeps base text, never another cell's result.
+            prepareScope: async (sheetId, rects, batchSignal) => {
+              if (cfPresence.get(sheetId) === false) return undefined
+              const entry = textStores.get(sheetId)
+              if (!entry?.store.readConditionalFormatting) { cfPresence.set(sheetId, false); return undefined }
+              try {
+                const text = await import('../xlsx/cf/text')
+                const scope = await text.prepareCfWireScope(
+                  async chunk => {
+                    const result = await entry.store.readConditionalFormatting!({
+                      rects: chunk,
+                      stamp: { owner: this.docId, sheetId, workbookValueGen: entry.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                      grantBytes: text.CF_TEXT_SCOPE_GRANT_BYTES,
+                    }, await this.cfAccount(), { signal: batchSignal })
+                    return { result, release: () => {} }
+                  },
+                  rects,
+                  {
+                    budget: searchFormatBudget,
+                    onEmpty: () => cfPresence.set(sheetId, false),
+                  },
+                )
+                if (!scope) return undefined
+                cfPresence.set(sheetId, true)
+                return scope
+              } catch (error) {
+                // Typed resource refusals propagate so the engine records the
+                // batch and keeps scan/materialization consistent; aborts and
+                // anything else stay base (the engine detects cancellation).
+                if (error instanceof PackageError && error.code === 'resource-limit') throw error
+                return undefined
+              }
+            },
+          } : {}),
         })
       }
       if (signal.aborted) { this.stopSearch(current); return { kind: 'cancelled' } }
@@ -3358,6 +3477,7 @@ export class DocumentSession {
       ...(geometry.hiddenCols?.length ? { hiddenCols: geometry.hiddenCols.map(interval => ({ ...interval })) } : {}),
       ...(used ? { used: { ...used } } : {}),
       ...(this.source.hasSparklines ? { hasSparklines: this.source.hasSparklines(sheetId) } : {}),
+      ...(this.source.hasConditionalFormatting ? { hasConditionalFormatting: this.source.hasConditionalFormatting(sheetId) } : {}),
       ...(this.source.hasRegionStyles ? { hasRegionStyles: this.source.hasRegionStyles(sheetId) } : {}),
       ...(this.source.regionStyleTableCount ? { regionStyleTableCount: this.source.regionStyleTableCount(sheetId) } : {}),
       ...(this.source.hasPivotDisplay ? { hasPivotDisplay: this.source.hasPivotDisplay(sheetId) } : {}),
@@ -3432,6 +3552,79 @@ export class DocumentSession {
           void work.then(() => { drained = true }, () => { drained = true })
           const payload = await work
           result = { op: 'pivotDisplay', result: this.livePivotDisplay(owner.sheetId, payload) }
+        } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
+        break
+      }
+      case 'conditionalFormatting': {
+        // The provider builds under the session-scoped CF account: the
+        // ordinary worker pool when no main-control allocation is present
+        // (shared by every preparation of this document), the document
+        // allocation otherwise. A ready provider transfers a live outgoing
+        // lease on that account; the session holds it through posting and
+        // releases after drain, so the live result is never uncharged
+        // between return and post. Without a lease (fallback or refusal
+        // payloads) the session charge admits the measured payload instead.
+        const charge = this.charge()
+        let raw: Promise<unknown> | undefined, drained = false
+        const outgoings: Array<() => void> = []
+        let outgoingsReleased = false
+        const releaseOutgoings = () => {
+          if (outgoingsReleased) return
+          outgoingsReleased = true
+          for (const release of outgoings.splice(0)) {
+            try { release() } catch { /* release-only path */ }
+          }
+        }
+        const handOff = () => { if (retain) retain(() => { charge.release(); releaseOutgoings() }); else { charge.release(); releaseOutgoings() } }
+        try {
+          if (!Number.isSafeInteger(query.grantBytes) || query.grantBytes <= 0) {
+            result = {
+              op: 'conditionalFormatting',
+              result: {
+                sheetId: owner.sheetId, stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                kind: 'unresolved', reason: 'cf-resource-limit', states: [], definitions: [], definitionsVersion: 0,
+                diagnostics: [{ kind: 'resource-limit' as const, feature: 'cf-grant-required', message: 'Conditional formatting transfer requires a receiver grant' }],
+              },
+            }
+          } else {
+            // The kernel passes its measured reply envelope; the provider uses
+            // the larger of that floor and its own framed wrapper bound.
+            const work = store.readConditionalFormatting?.(
+              { rects: query.rects, stamp: query.stamp, grantBytes: query.grantBytes },
+              await this.cfAccount(),
+              { signal, envelopeBytes: replyEnvelopeBytes, retainOutgoing: release => { outgoings.push(release) } },
+            ) ?? Promise.resolve({
+              sheetId: owner.sheetId,
+              stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+              kind: 'unresolved' as const, reason: 'cf-unavailable',
+              states: [], definitions: [], definitionsVersion: 0,
+              diagnostics: [{ kind: 'unsupported' as const, feature: 'cf-unavailable', message: 'This source cannot resolve conditional formatting.' }],
+            })
+            raw = work
+            void work.then(() => { drained = true }, () => { drained = true })
+            const payload = await work
+            // The outgoing walk is admitted on the shared account (grown
+            // incrementally as the traversal needs workspace), not merely
+            // capped: a pool at its hard limit refuses the walk itself
+            // instead of allocating visited-set/stack storage first. The pool
+            // charge below is skipped when a provider lease already owns the
+            // bytes, so the same payload is never admitted twice.
+            const cfLimits = await import('../xlsx/cf/limits')
+            const account = await this.cfAccount()
+            const outgoing = cfLimits.measureCfWalkedBytes(payload, account)
+            if (outgoing === undefined || (outgoings.length === 0 && !charge.set(outgoing))) {
+              releaseOutgoings()
+              result = {
+                op: 'conditionalFormatting',
+                result: {
+                  sheetId: owner.sheetId,
+                  stamp: { owner: owner.docId, sheetId: owner.sheetId, workbookValueGen: owner.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 },
+                  kind: 'unresolved', reason: 'cf-resource-limit', states: [], definitions: [], definitionsVersion: 0,
+                  diagnostics: [{ kind: 'resource-limit' as const, feature: 'cf-grant-required', message: 'Conditional formatting transfer exceeds the worker memory budget' }],
+                },
+              }
+            } else result = { op: 'conditionalFormatting', result: payload }
+          }
         } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }

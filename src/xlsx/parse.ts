@@ -16,6 +16,7 @@ import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages, settleChartFallbacks } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
+import { ensureCfParser, hasConditionalFormatting } from './cfLoader'
 import { frozenPaneFrom } from './frozenPane'
 import { cellDisplayText, computeMetrics } from './render'
 import { drawingPartContext, resolvePartTarget } from '../drawing/parts'
@@ -539,7 +540,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   for (const sheet of sheets) {
-    if ((sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
+    if ((sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length || sheet.conditionalFormatting !== undefined) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
   }
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
@@ -614,6 +615,34 @@ async function parseSheet(
   if (sparklineDiagnostics.length) {
     for (const diagnostic of sparklineDiagnostics) {
       if (!sheet.diagnostics?.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) (sheet.diagnostics ??= []).push(diagnostic)
+    }
+  }
+  // Conditional formatting: the lexical presence check costs no import, account
+  // or cache on CF-free sheets. The lazy chunk parses, admits and attaches.
+  if (hasConditionalFormatting(data)) {
+    try {
+      const cf = await ensureCfParser(true)
+      if (cf) {
+        const dxfsNode = styles.styleSheet ? getChildren(styles.styleSheet.root, 'dxfs')[0] : undefined
+        const lease = cf.parseCfSheet(
+          data,
+          { colors: styles.colorContext, dxfNodes: dxfsNode ? getChildren(dxfsNode, 'dxf') : [] },
+          cf.cfMemoryFor(styles),
+          { sheetId, partPath: path },
+        )
+        cf.attachCfSheetRules(sheet, lease)
+        for (const diagnostic of lease.value.diagnostics) {
+          if ((sheet.diagnostics?.length ?? 0) >= 64) break
+          if (!sheet.diagnostics?.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) {
+            (sheet.diagnostics ??= []).push(diagnostic)
+          }
+        }
+      }
+    } catch {
+      // No partial attachment above: cells paint with their stored formatting.
+      if ((sheet.diagnostics?.length ?? 0) < 64) {
+        (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'cf-parser-unavailable', message: 'Conditional formatting could not be parsed; cells paint with their stored formatting' })
+      }
     }
   }
   // Excel's column pixel model; set before drawings are placed against the grid.

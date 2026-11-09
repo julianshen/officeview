@@ -126,7 +126,10 @@ export function parseDxf(node: XmlNode, colors: SheetColorContext): DxfStyle {
   return dxf
 }
 
-function parseDxfList(node: XmlNode | undefined, colors: SheetColorContext): DxfStyle[] {
+/** All `<dxf>` children of a `<dxfs>` element, capped at MAX_DXFS. Shared with
+ * the lazy CF parser, which reads the original nodes for strict unsupported-
+ * property detection before relying on these parsed values. */
+export function parseDxfList(node: XmlNode | undefined, colors: SheetColorContext): DxfStyle[] {
   return getChildren(node, 'dxf').slice(0, MAX_DXFS).map(dxf => parseDxf(dxf, colors))
 }
 

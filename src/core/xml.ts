@@ -258,7 +258,10 @@ function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new M
       continue
     }
     const nk = k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
-    const childAware: NamespaceTracking = namespaceAware === 'subtree' || namespaceAware === 'choices' ? namespaceAware : namespaceAware === 'root' && nk === 'extLst' ? 'subtree' : false
+    // Worksheet subtrees needing namespace-URI checks keep retention: the
+    // sparkline/slicer extLst (existing) and conditionalFormatting, whose
+    // x14:id extension children pair base data bars by URI, not prefix.
+    const childAware: NamespaceTracking = namespaceAware === 'subtree' || namespaceAware === 'choices' ? namespaceAware : namespaceAware === 'root' && (nk === 'extLst' || nk === 'conditionalFormatting') ? 'subtree' : false
     const child = normalize(v, local, k, childAware)
     const colon = k.indexOf(':')
     const childNs = local.get(colon >= 0 ? k.slice(0, colon) : '')
@@ -334,6 +337,18 @@ function asNode(v: unknown, namespace?: string): XmlNode {
   const node = { [ATTRS]: {}, [TEXT]: v === null || v === undefined ? '' : String(v) } as XmlNode
   elementNamespaceMap.set(node, namespace)
   return node
+}
+
+/** Iterate without copying a potentially hostile repeated-child list. */
+export function* iterateChildren(node: XmlNode | undefined, name: string): IterableIterator<XmlNode> {
+  if (!node) return
+  const registered = namespaceChildrenMap.get(node)?.get(name)
+  if (registered) { yield* registered; return }
+  const value = node[name]
+  const namespaces = childNamespaceMap.get(node)?.get(name) ?? []
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) yield asNode(value[i], namespaces[i])
+  } else if (value !== undefined && value !== null) yield asNode(value, namespaces[0])
 }
 
 export function getChildren(node: XmlNode | undefined, name: string): XmlNode[] {

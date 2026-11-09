@@ -12,11 +12,13 @@
  */
 import { defaultColumnWidthPx } from '../columnWidth'
 import type {
-  AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
-  RangeCompletion, ReadOptions, RemotePivotDisplay, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
+  AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery, RangeCompletion,
+  ReadOptions, RemotePivotDisplay, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, SpillExtent, StructuralResult, ValueOverlay, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
 import { resolveDrawingAnchors } from './drawingBounds'
+import type { CfMemory, CfWorkBudget } from '../cf/limits'
+import type { CfSheetRules, CfStamp, CfLiteral, CfValueSource, CfValuePage, CfLease, CfPrepared } from '../cf/model'
 import { PackageError } from '../../core/package-error'
 import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1Range, type SourceCell, type SourceRect } from './coordinates'
 import { uniqueRectList } from './rectIndex'
@@ -32,6 +34,7 @@ import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type Aggrega
 import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
 import type { SheetMetadata } from '../storage/sheetRecords'
+import { hostTask } from './scheduler'
 import type { ChartWorkspace } from '../../charts/workspace'
 import type { ChartModel } from '../../charts/model'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
@@ -44,7 +47,7 @@ import type { XlsxSparklineGroup } from '../sparklines/model'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
-import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
+import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles, CF_REPLY_ENVELOPE_BYTES, estimateCfPreparationBytes, measureCfPropertiesBytes, versionCfRules, type CfReadRequest, type CfReadResult, type CfSharedDefinition, type CfReadStamp, type CfReadOptions } from './contracts'
 import { estimatePayloadBytes } from './payloadBytes'
 import { savedPivotRects } from '../pivots/stub'
 import { SOURCE_ALLOCATION, adoptAllocation, type SourceAllocationOptions } from './allocationAccount'
@@ -110,6 +113,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   /** S13.2: the parsed drawing payload, retained (evictable) in the document pool so
    * repeated reads (stale retries, re-shown sheets) clone instead of re-parsing. */
   private drawingsCache?: { entry: PoolEntry; result: SheetDrawings; releaseCharts: () => void }
+  /** Identity of the rule set whose shared-definition entry this adapter last
+   * observed; replaced or released rules drop their share entry (live result
+   * leases keep governing the bytes until their own release). */
+  private sharedDefRules: CfSheetRules | undefined
   constructor(stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }, private readonly pacing: StorePacing = {}, registerForWorkbookReads = true) {
     this.currentStamp = stamp
     if (registerForWorkbookReads) {
@@ -119,6 +126,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
   }
 
+  get completeness() { return this.sheet.state === 'complete' ? 'complete' as const : 'loading' as const }
   get stamp(): SourceStamp { return this.currentStamp }
   private get valueOverlay(): ValueOverlay | undefined { return overlayStates.get(this)?.overlay }
   get structureGen(): number { return overlayStates.get(this)?.structureGen ?? 0 }
@@ -877,6 +885,133 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     return result
   }
 
+  /**
+   * Task 7: bounded CF preparation for the receiving CF layer. Validates the
+   * receiver grant and the requested stamp, withholds while importing, admits
+   * the bounded estimate before touching any page, then prepares through the
+   * shared CF service and returns clone-safe winning states plus versioned
+   * shared definitions.
+   */
+  async readConditionalFormatting(request: CfReadRequest, memory?: CfMemory, options?: CfReadOptions): Promise<CfReadResult> {
+    // The CF service graph stays in a lazy chunk: it is only loaded when a
+    // validated request actually builds. Account creation reserves nothing.
+    // The workspace account is deliberately roomy: the receiver grant gates
+    // the wire reply (so an exact-fit grant always admits an exact build),
+    // while the transient workspace is bounded by the session caps.
+    let account = memory
+    if (!account) {
+      const limits = await import('../cf/limits')
+      account = limits.createCfMemory({})
+    }
+    const self = this
+    // Single read of the sheet's rules: the same object feeds the live cfGen
+    // below and the provider call, so they cannot disagree mid-call. The hash
+    // is the worker's authority for definitions identity.
+    const liveRules = this.sheet.conditionalFormatting
+    // Release the previous rules' shared-definition identity when the sheet
+    // replaced them (or dropped them); live result leases keep governing the
+    // bytes until their own release.
+    if (this.sharedDefRules !== undefined && this.sharedDefRules !== liveRules) {
+      releaseSharedCfDefinitions(this.sharedDefRules)
+    }
+    this.sharedDefRules = liveRules
+    // Admit the hash walk before normalizing rule content: even the adapter's
+    // generation hash is construction, so a starved account refuses before
+    // any rule value is read. Sizing is exact (lengths plus escape counts),
+    // like the provider's: a flat per-key allowance cannot bound strings or
+    // JSON escaping. The hold stays live across the provider call below, and
+    // the admitted normalization travels with it so the version is computed
+    // once per preparation instead of twice. One finally unwinds the hold on
+    // every path out (idempotent on release).
+    const hashBound = cfMetadataBound(liveRules, 0)
+    if (hashBound === undefined) {
+      return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting scope exceeds the bounded preparation area.'), requiredBytes: undefined }
+    }
+    const hashHold = account.reserve(hashBound)
+    if (hashHold.kind !== 'reserved') {
+      return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+    }
+    try {
+      let liveCfGen: number
+      let admitted: CfRemotePrepareOptions['admittedRules']
+      if (liveRules && liveRules.rules.length > 0) {
+        let exact: number | undefined
+        try {
+          exact = cfNormalizedBytes(liveRules.rules)
+        } catch {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
+        }
+        if (exact === undefined) {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting definitions exceed the bounded preparation area.'), requiredBytes: undefined }
+        }
+        const grownTarget = hashBound + exact
+        if (!Number.isSafeInteger(grownTarget) || !hashHold.grow(grownTarget)) {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+        }
+        let normalized: string
+        try {
+          normalized = normalizeCfRules(liveRules.rules)
+        } catch {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
+        }
+        if (normalized.length * 2 > exact) {
+          return { ...cfReadError(this.sheet.sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+        }
+        liveCfGen = versionCfRules(normalized)
+        admitted = { rules: liveRules, normalized, version: liveCfGen }
+      } else {
+        liveCfGen = versionCfRules('[]')
+      }
+    const source: CfValueSource = {
+      bounds: async (_id: string) => {
+        // A complete sheet with no used extent is still readable: the service
+        // clamps requested rects and synthesizes blanks for unstored cells, so
+        // blank-targeting rules evaluate instead of pending forever. Only an
+        // incomplete import withholds as pending.
+        if (self.sheet.state !== 'complete') return undefined
+        const used = self.extent.used
+        if (!used) return { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 16383 }
+        return { firstRow: used.r0, lastRow: used.r1, firstCol: used.c0, lastCol: used.c1 }
+      },
+      // Read the live generation on every call: the service re-reads this
+      // stamp to withhold a preparation whose source committed mid-build.
+      // cfGen is the live content hash (authoritative); view/clock/owner are
+      // client-managed labels echoed for cache keying, not worker authority.
+      stamp: (_id: string) => ({
+        owner: request.stamp.owner,
+        sheetId: self.sheet.sheetId,
+        workbookValueGen: self.stamp.valueGen,
+        cfGen: liveCfGen,
+        viewGen: request.stamp.viewGen,
+        structureGen: request.stamp.structureGen,
+        clockGen: request.stamp.clockGen,
+      }),
+      pages: this.cfPages(request, account, options?.signal),
+      }
+      const dateContext = options?.dateContext ?? {
+        dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
+        epochNowMs: Date.now(),
+      }
+      const remoteOptions: CfRemotePrepareOptions = {
+        ...options,
+        dateContext,
+        ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
+      }
+      return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
+    } finally {
+      try { hashHold.release() } catch { /* release-only path */ }
+    }
+  }
+
+  /** CfValueSource over this sheet's paged rows: 64-cell pages admitted
+   * before construction, released by the consumer after each page. */
+  private cfPages(request: CfReadRequest, memory: CfMemory, signal?: AbortSignal): CfValueSource['pages'] {
+    const self = this
+    void request
+    return pagedStoreCfPages({ readRows: (range, cursor, options) => self.readRows(range, cursor, options), get stamp() { return self.stamp } }, memory, signal)
+  }
+
   /** S3: asynchronously snapshot only the source cells referenced by this
    * sheet's groups, then run the same synchronous resolver as resident XLSX.
    * The worker owns both the metadata and every page read (including cross-sheet
@@ -1337,6 +1472,848 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     this.drawingsCache?.entry.release()
     this.drawingsCache?.releaseCharts()
     this.drawingsCache = undefined
+    if (this.sharedDefRules !== undefined) {
+      releaseSharedCfDefinitions(this.sharedDefRules)
+      this.sharedDefRules = undefined
+    }
+  }
+}
+/** Deterministic serialization of a rule set for shared-definition versioning:
+ * identical rules share one charged copy; any change yields a new version. */
+function normalizeCfRules(rules: readonly CfSheetRules['rules'][number][]): string {
+  const normalized = [...rules].map(rule => ({
+    id: rule.id,
+    priority: rule.priority,
+    documentOrder: rule.documentOrder,
+    stopIfTrue: rule.stopIfTrue,
+    ranges: [...rule.ranges].map(r => [r.firstRow, r.lastRow, r.firstCol, r.lastCol]),
+    writes: [...rule.writes].sort(),
+    dxf: Object.fromEntries(Object.keys(rule.dxf ?? {}).sort().map(k => [k, (rule.dxf as Record<string, unknown>)[k]])),
+    definition: rule.definition,
+  }))
+  normalized.sort((a, b) => a.id - b.id || a.documentOrder - b.documentOrder)
+  return JSON.stringify(normalized)
+}
+
+/** Content hash identifying a rule set for shared-definition versioning.
+ * Test seam and provider helper: identical rule sets share one version. */
+export function cfRulesVersion(rules: CfSheetRules | undefined): number {
+  if (!rules || rules.rules.length === 0) return versionCfRules('[]')
+  return versionCfRules(normalizeCfRules(rules.rules))
+}
+
+/** Exact UTF-16 units of one JSON string literal (quotes plus `"`/`\` escapes
+ * and `\uXXXX` control escapes), matching JSON.stringify output. Reads only. */
+function jsonQuotedUnits(value: string): number {
+  let extra = 0
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code === 0x22 || code === 0x5c) extra += 1
+    else if (code < 0x20) extra += 5
+  }
+  return 2 + value.length + extra
+}
+function jsonNumberUnits(value: number): number {
+  if (!Number.isFinite(value)) return 4 // JSON.stringify emits null
+  return String(value).length
+}
+/** Exact UTF-16 units of a JSON value, mirroring stringify semantics
+ * (undefined/function/symbol properties dropped, array holes to null).
+ * Returns undefined for unrepresentable shapes (depth/cycle/bigint), so the
+ * caller refuses before serializing. Reads only; the `seen` set is the only
+ * allocation and lives inside the caller's hold. */
+function jsonValueUnits(value: unknown, depth: number, seen: Set<object>): number | undefined {
+  if (value === null) return 4
+  if (value === undefined) return undefined
+  switch (typeof value) {
+    case 'string': return jsonQuotedUnits(value)
+    case 'number': return jsonNumberUnits(value)
+    case 'boolean': return value ? 4 : 5
+    case 'object': {
+      if (depth > 64 || seen.has(value)) return undefined
+      seen.add(value)
+      try {
+        if (Array.isArray(value)) {
+          let units = 2
+          for (let i = 0; i < value.length; i++) {
+            if (i > 0) units += 1
+            units += jsonValueUnits(value[i], depth + 1, seen) ?? 4
+            if (!Number.isSafeInteger(units)) return undefined
+          }
+          return units
+        }
+        let units = 2, first = true
+        for (const key of Object.keys(value as Record<string, unknown>)) {
+          const item = jsonValueUnits((value as Record<string, unknown>)[key], depth + 1, seen)
+          if (item === undefined) continue // dropped exactly like stringify
+          if (!first) units += 1
+          first = false
+          units += jsonQuotedUnits(key) + 1 + item
+          if (!Number.isSafeInteger(units)) return undefined
+        }
+        return units
+      } finally {
+        seen.delete(value)
+      }
+    }
+    default: return undefined // function/symbol dropped; bigint refused above
+  }
+}
+/** Skeleton punctuation of one normalized rule object, in normalizeCfRules
+ * field order: the literal source of truth for the fixed per-rule units. */
+const RULE_SKELETON = ['{"id":', ',"priority":', ',"documentOrder":', ',"stopIfTrue":', ',"ranges":', ',"writes":', ',"dxf":', ',"definition":', '}']
+const RULE_SKELETON_UNITS = RULE_SKELETON.reduce((sum, part) => sum + part.length, 0)
+/** Exact UTF-16 bytes of the normalized rule JSON (matching JSON.stringify
+ * output byte-for-byte in size), computed by reading values but building
+ * nothing: string lengths plus escape counts, numbers by literal length, the
+ * definition by the bounded generic walk. Returns undefined for
+ * unrepresentable shapes so the caller refuses before serializing. */
+function cfNormalizedBytes(rules: readonly CfSheetRules['rules'][number][]): number | undefined {
+  const seen = new Set<object>()
+  let units = 2 // [...]
+  for (let index = 0; index < rules.length; index++) {
+    const rule = rules[index]!
+    if (index > 0) units += 1
+    units += RULE_SKELETON_UNITS
+    units += jsonNumberUnits(rule.id) + jsonNumberUnits(rule.priority) + jsonNumberUnits(rule.documentOrder)
+    units += rule.stopIfTrue ? 4 : 5
+    units += 2 // ranges: [...]
+    for (let ri = 0; ri < rule.ranges.length; ri++) {
+      const range = rule.ranges[ri]!
+      if (ri > 0) units += 1
+      units += 5 + jsonNumberUnits(range.firstRow) + jsonNumberUnits(range.lastRow) + jsonNumberUnits(range.firstCol) + jsonNumberUnits(range.lastCol)
+      if (!Number.isSafeInteger(units)) return undefined
+    }
+    units += 2 // writes: [...] (sorted order is the same multiset, same size)
+    let wrote = false
+    for (const name of rule.writes) {
+      if (wrote) units += 1
+      wrote = true
+      units += jsonQuotedUnits(name)
+      if (!Number.isSafeInteger(units)) return undefined
+    }
+    units += 2 // dxf: {...}
+    const dxf = rule.dxf ?? {}
+    let defined = false
+    for (const key in dxf) {
+      const item = jsonValueUnits((dxf as Record<string, unknown>)[key], 0, seen)
+      if (item === undefined) {
+        // stringify drops function/symbol/undefined values; bigint values
+        // (nested or direct) refuse before serializing. A nested shape the
+        // sizer misjudges still cannot slip through: normalization runs
+        // inside try/catch with a byte-exact assertion below.
+        const raw = (dxf as Record<string, unknown>)[key]
+        if (raw !== undefined && typeof raw !== 'function' && typeof raw !== 'symbol' && typeof raw !== 'bigint') continue
+        return undefined
+      }
+      if (defined) units += 1
+      defined = true
+      units += jsonQuotedUnits(key) + 1 + item
+      if (!Number.isSafeInteger(units)) return undefined
+    }
+    const definition = jsonValueUnits(rule.definition, 0, seen)
+    if (definition === undefined) return undefined
+    units += definition
+    units += 1 // closing }
+    if (!Number.isSafeInteger(units)) return undefined
+  }
+  return units * 2
+}
+
+/** Read-only construction allowance for rule metadata: counts rules, ranges,
+ * dxf keys and writes without reading values, copying or serializing, so no
+ * rule content (including getter-backed test probes) is touched before the
+ * returned bound is admitted. Exact per-value bytes join the working bound
+ * later through the walked wire measures, inside the hold. */
+function cfMetadataBound(rules: CfSheetRules | undefined, rectCount: number): number | undefined {
+  let bound = 2048 + rectCount * 160
+  if (!Number.isSafeInteger(bound)) return undefined
+  if (rules) {
+    bound += Math.min(rules.diagnostics.length, 64) * 2048
+    for (const rule of rules.rules) {
+      bound += 2048 + rule.ranges.length * 160 + rule.writes.size * 512
+      const dxf = rule.dxf
+      // Keys only: reading a value could evaluate arbitrary content, so each
+      // entry carries a flat allowance instead of a measured size.
+      if (dxf) for (const key in dxf) bound += 64 + key.length * 4 + 2048
+      if (!Number.isSafeInteger(bound)) return undefined
+    }
+  }
+  return bound
+}
+
+/** Cross-scope shared definitions: one frozen, charged array per live rule set
+ * and version, so distinct viewport scopes with unchanged rules reuse the
+ * same definitions instead of rebuilding (and recharging) them per scope.
+ * The table entry owns its bytes through an explicit retained lease on the
+ * shared account (admitted at commit); result leases charge the full reply
+ * through post/drain, so the array is transiently double-counted while both
+ * are live — conservative, never under-counted. Entries are committed only
+ * on a fully admitted successful preparation — refusals and withholds never
+ * populate the table — and the adapter releases an entry when its rules are
+ * replaced or the store is released. WeakMap keys bound lifetime to the live
+ * rules objects; explicit release ends the charge deterministically. */
+const sharedCfDefinitions = new WeakMap<object, { version: number; definitions: readonly CfSharedDefinition[]; hits: number; lease: CfLease<readonly CfSharedDefinition[]> }>()
+function lookupSharedCfDefinitions(rules: CfSheetRules, version: number): readonly CfSharedDefinition[] | undefined {
+  const cached = sharedCfDefinitions.get(rules)
+  if (!cached || cached.version !== version) return undefined
+  cached.hits++
+  return cached.definitions
+}
+/** Authoritative recheck without counting a use: publication decides on this
+ * value, and lookup/commit run synchronously back-to-back (no await
+ * between), so concurrent preparations cannot interleave a lost overwrite. */
+function peekSharedCfDefinitions(rules: CfSheetRules, version: number): readonly CfSharedDefinition[] | undefined {
+  const cached = sharedCfDefinitions.get(rules)
+  return cached && cached.version === version ? cached.definitions : undefined
+}
+function commitSharedCfDefinitions(rules: CfSheetRules, version: number, definitions: readonly CfSharedDefinition[], lease: CfLease<readonly CfSharedDefinition[]>): void {
+  sharedCfDefinitions.set(rules, { version, definitions, hits: 1, lease })
+}
+/** Drops the shared-definition entry for replaced or released rules, ending
+ * its charge; live result leases keep governing the result bytes until
+ * their own release. */
+export function releaseSharedCfDefinitions(rules: object): void {
+  const cached = sharedCfDefinitions.get(rules)
+  if (cached) {
+    sharedCfDefinitions.delete(rules)
+    if (cached.lease) {
+      try { cached.lease.release() } catch { /* release-only path */ }
+    }
+  }
+}
+/** Test seam: identity-sharing lifecycle of one live rule set. */
+export function sharedCfDefinitionStats(rules: object): { version: number; hits: number; charged: boolean } | undefined {
+  const cached = sharedCfDefinitions.get(rules)
+  return cached ? { version: cached.version, hits: cached.hits, charged: cached.lease !== undefined } : undefined
+}
+/** Deep-freezes a definition array: the outer array, each definition, its
+ * properties and its writes. Shared arrays must be immutable at every
+ * level, not just at the top. */
+function freezeCfDefinitions(definitions: CfSharedDefinition[]): readonly CfSharedDefinition[] {
+  for (const definition of definitions) {
+    Object.freeze(definition.properties)
+    Object.freeze(definition.writes)
+    Object.freeze(definition)
+  }
+  return Object.freeze(definitions)
+}
+
+function cfReadError(sheetId: string, stamp: CfReadStamp, reason: string, feature: string, message: string, requiredBytes?: number, pendingSheetIds?: readonly string[]): CfReadResult {
+  return {
+    sheetId, stamp, kind: reason === 'cf-pending-data' ? 'pending' : 'unresolved', reason,
+    states: [], definitions: [], definitionsVersion: versionCfRules('[]'),
+    diagnostics: [{ kind: reason === 'cf-pending-data' ? 'pending' : 'resource-limit', feature, message }],
+    ...(pendingSheetIds === undefined ? {} : { pendingSheetIds }),
+    ...(requiredBytes === undefined ? {} : { requiredBytes }),
+  }
+}
+
+/** Task 7: receiver-granted CF preparation over any CfValueSource. Validates the
+ * grant and the requested stamp, withholds unimported scopes as pending, admits
+ * the bounded estimate before touching any page, composes through the shared
+ * CF service, and returns clone-safe winning states with versioned shared
+ * definitions. Every early return releases what it admitted; the happy path
+ * releases the service lease before returning plain data. */
+export interface CfRemotePrepareOptions {
+  readonly signal?: AbortSignal
+  readonly budget?: () => CfWorkBudget
+  readonly envelopeBytes?: number
+  /** Receives the release of the live outgoing lease adopted on the shared
+   * account: the caller holds it through post and releases after drain. */
+  readonly retainOutgoing?: (release: () => void) => void
+  /** Caller-admitted normalization: the adapter computed the version once
+   * under its own hold (kept live across this call). The provider verifies
+   * rules identity plus the content hash — both without reading rule values
+   * — and skips its own sizing and serialization when they verify. */
+  readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
+  readonly dateContext?: import('../cf/predicates').CfDateContext
+}
+export async function prepareCfRemote(
+  request: CfReadRequest,
+  sheetId: string,
+  source: CfValueSource,
+  rules: CfSheetRules | undefined,
+  memory: CfMemory,
+  options?: CfRemotePrepareOptions,
+): Promise<CfReadResult> {
+  const first = await prepareCfRemoteOnce(request, sheetId, source, rules, memory, options, false)
+  if (first.kind !== 'unresolved' || first.reason !== 'cf-resource-limit' || rules === undefined) return first
+  // A retained share is an optimization, never a requirement: if this
+  // preparation failed for account headroom while a share for these rules
+  // is retained, release it and retry once without committing a new one.
+  // Live outgoing leases belong to other calls and are untouched, and the
+  // retry runs at most once, so this always terminates.
+  const withheld = first.diagnostics[0]?.feature
+  if (withheld === 'cf-grant-required' || withheld === 'cf-scope-too-large' || withheld === 'cf-invalid-rect' || withheld === 'cf-sheet-scope-unresolved') {
+    return first
+  }
+  if (sharedCfDefinitionStats(rules) === undefined) return first
+  releaseSharedCfDefinitions(rules)
+  return prepareCfRemoteOnce(request, sheetId, source, rules, memory, options, true)
+}
+
+/** Single preparation attempt. `skipShare` (retry path only) reuses a
+ * rechecked winner but never commits a new table entry, so a reclaimed
+ * share stays reclaimed for the rest of the pressured window. */
+async function prepareCfRemoteOnce(
+  request: CfReadRequest,
+  sheetId: string,
+  source: CfValueSource,
+  rules: CfSheetRules | undefined,
+  memory: CfMemory,
+  options?: CfRemotePrepareOptions,
+  skipShare = false,
+): Promise<CfReadResult> {
+  const signal = options?.signal
+  // The session forwards the kernel's measured envelope floor; the provider
+  // uses the larger of that and its own framed wrapper bound.
+  const envelopeBytes = Math.max(CF_REPLY_ENVELOPE_BYTES, options?.envelopeBytes ?? 0)
+  const budget = options?.budget?.()
+  const cancelled = () => { throw new PackageError('cancelled', 'CF remote preparation cancelled') }
+  if (signal?.aborted) throw cancelled()
+  const grantBytes = request.grantBytes
+  if (!Number.isSafeInteger(grantBytes) || grantBytes <= 0) {
+    return {
+      ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting read requires a positive byte grant.'),
+      requiredBytes: CF_REPLY_ENVELOPE_BYTES,
+    }
+  }
+  for (const rect of request.rects) {
+    if (!Number.isSafeInteger(rect.r0) || !Number.isSafeInteger(rect.r1) || !Number.isSafeInteger(rect.c0) || !Number.isSafeInteger(rect.c1)
+      || rect.r0 < 0 || rect.r1 > 1048575 || rect.c0 < 0 || rect.c1 > 16383 || rect.r0 > rect.r1 || rect.c0 > rect.c1) {
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-invalid-rect', 'Conditional formatting read range is invalid.'), requiredBytes: undefined }
+    }
+  }
+  if (request.stamp.sheetId !== sheetId) {
+    return { ...cfReadError(sheetId, request.stamp, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting request targets a different sheet.'), requiredBytes: undefined }
+  }
+  // Bound validation-tier work upfront: the rule count caps every
+  // normalization, definition build and per-cell bound below, so no
+  // unbounded structure is ever built before admission. Both lazy CF modules
+  // load before any reservation, so an import failure admits nothing.
+  const limitsModule = await import('../cf/limits')
+  const serviceModule = await import('../cf/service')
+  if (rules && rules.rules.length > limitsModule.CF_LIMITS.rules) {
+    return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting exceeds the bounded rule count.'), requiredBytes: undefined }
+  }
+  // The service refuses more than rangesPerRule source rects; refuse the same
+  // bound here so an unbounded rect list can never reach the mapping below.
+  if (request.rects.length > limitsModule.CF_LIMITS.rangesPerRule) {
+    return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting scope exceeds the bounded preparation area.'), requiredBytes: undefined }
+  }
+  // Live stamp before any construction: a stale workbook generation withholds
+  // without allocating.
+  let live: CfStamp
+  try {
+    live = source.stamp(sheetId)
+  } catch {
+    return { ...cfReadError(sheetId, request.stamp, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting source stamp is unavailable.'), requiredBytes: undefined }
+  }
+  if (live.workbookValueGen !== request.stamp.workbookValueGen) {
+    return {
+      ...cfReadError(sheetId, { ...request.stamp, workbookValueGen: live.workbookValueGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting source changed generation; re-request with the live stamp.'),
+      requiredBytes: undefined,
+    }
+  }
+  // Admit the metadata tier before touching rule content: the bound is a
+  // pure read-only walk (counts only — no copies, no serialization, no value
+  // reads), and the single reservation below covers every build until it
+  // grows into the working hold. Concurrent preparations on a shared account
+  // see each other's holds, so the cap is genuinely shared.
+  const metaBound = cfMetadataBound(rules, request.rects.length)
+  if (metaBound === undefined) {
+    return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting scope exceeds the bounded preparation area.'), requiredBytes: undefined }
+  }
+  const working = memory.reserve(metaBound)
+  if (working.kind !== 'reserved') {
+    return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+  }
+  // A caller-admitted normalization arrives verified, not trusted: the rules
+  // object must be identical and the content hash must match the admitted
+  // string — both checks read no rule values. A mismatch falls back to the
+  // provider's own admitted sizing and serialization below.
+  const admittedInput = options?.admittedRules
+  const admitted = admittedInput !== undefined && admittedInput.rules === rules
+    && versionCfRules(admittedInput.normalized) === admittedInput.version
+    ? admittedInput : undefined
+  // Phase 2: exact serialization size by reading values (lengths and escape
+  // counts only — no copies) inside the phase-1 hold, then grow the hold to
+  // cover the build before serializing anything. A flat per-key allowance
+  // cannot bound strings or JSON escaping; measuring first does. Skipped
+  // when the caller admitted and verified the normalization above.
+  let exactRules = 0
+  if (!admitted && rules && rules.rules.length > 0) {
+    try {
+      const sized = cfNormalizedBytes(rules.rules)
+      if (sized === undefined) {
+        working.release()
+        return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting definitions exceed the bounded preparation area.'), requiredBytes: undefined }
+      }
+      exactRules = sized
+    } catch {
+      working.release()
+      return { ...cfReadError(sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
+    }
+    const grownTarget = metaBound + exactRules
+    if (!Number.isSafeInteger(grownTarget) || !working.grow(grownTarget)) {
+      working.release()
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+    }
+  }
+  // Rules content hash is the worker's authority for definitions identity
+  // (cfGen 0 means "unknown, adopt live" for cold starts). A known-but-wrong
+  // version is withheld with the live stamp so the caller re-requests current
+  // definitions instead of painting stale ones. Normalization runs at most
+  // once per preparation — here, or once in the admitting caller — inside an
+  // admitted hold, with a byte-exact backstop: a sizer/stringify mismatch
+  // refuses here rather than building on a lie.
+  let version: number
+  if (admitted) {
+    version = admitted.version
+  } else if (rules && rules.rules.length > 0) {
+    let normalized: string
+    try {
+      normalized = normalizeCfRules(rules.rules)
+    } catch {
+      working.release()
+      return { ...cfReadError(sheetId, request.stamp, 'cf-preparation-failed', 'cf-preparation-withheld', 'Conditional formatting definitions could not be prepared.'), requiredBytes: undefined }
+    }
+    if (normalized.length * 2 > exactRules) {
+      working.release()
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'), requiredBytes: undefined }
+    }
+    version = versionCfRules(normalized)
+  } else {
+    version = versionCfRules('[]')
+  }
+  if (rules && rules.rules.length > 0 && request.stamp.cfGen !== 0 && request.stamp.cfGen !== version) {
+    working.release()
+    return {
+      ...cfReadError(sheetId, { ...request.stamp, workbookValueGen: live.workbookValueGen, cfGen: version }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting definitions changed generation; re-request with the live stamp.'),
+      requiredBytes: undefined,
+    }
+  }
+  const liveStamp: CfReadStamp = { ...request.stamp, workbookValueGen: live.workbookValueGen, cfGen: version }
+  // CF service ranges use firstRow/lastRow naming; the wire uses r0/r1/c0/c1.
+  // Built inside the admitted hold: the rect list is request-bounded above.
+  const cfRects = request.rects.map(r => ({ firstRow: r.r0, lastRow: r.r1, firstCol: r.c0, lastCol: r.c1 }))
+  // Bounds before pages: unimported scopes stay pending without scanning anything.
+  // Every early return and every throw below releases the admitted hold:
+  // cancellation rethrows for the protocol, anything else fails closed.
+  let bounds: { firstRow: number; lastRow: number; firstCol: number; lastCol: number } | undefined
+  try {
+    const b = await source.bounds(sheetId, budget, signal ?? new AbortController().signal)
+    bounds = b === undefined ? undefined : { firstRow: b.firstRow, lastRow: b.lastRow, firstCol: b.firstCol, lastCol: b.lastCol }
+  } catch (error) {
+    try { working.release() } catch { /* release-only path */ }
+    if (error instanceof PackageError && error.code === 'cancelled') throw error
+    return cfReadError(sheetId, request.stamp, 'cf-pending-data', 'cf-source-unavailable', 'Conditional formatting bounds are not available.', undefined, [sheetId])
+  }
+  if (bounds === undefined) {
+    working.release()
+    return { ...cfReadError(sheetId, request.stamp, 'cf-pending-data', 'cf-source-pending', 'Conditional formatting source is still importing the requested range.'), pendingSheetIds: [sheetId] }
+  }
+  if (!rules || rules.rules.length === 0) {
+    working.release()
+    // Empty retained rules are not proof that CF is absent: capture/parse
+    // overflow marks the sheet unknown via unresolvedSheet, and the common
+    // service would withhold on it. Route the sentinel before the shortcut
+    // so a fail-closed typed result — not a vacuous ready — comes back.
+    const sentinel = rules?.unresolvedSheet
+    if (sentinel) {
+      const reason = sentinel.reason.startsWith('cf-') ? sentinel.reason : 'cf-preparation-failed'
+      return {
+        ...cfReadError(sheetId, liveStamp, reason, 'cf-sheet-scope-unresolved', `Conditional formatting sheet scope is unresolved (${sentinel.reason}); rules covering ${sentinel.writes} writes were withheld.`),
+        requiredBytes: undefined,
+      }
+    }
+    return {
+      sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions: [],
+      definitionsVersion: version, diagnostics: [],
+    }
+  }
+  // Upper bound before touching any page, measured with the same wire
+  // arithmetic the reply is checked with: a fitting grant always admits an
+  // exact build. The transient service workspace is bounded separately by
+  // the session caps, so the grant only ever gates the wire reply.
+  let cells = 0
+  for (const r of cfRects) {
+    cells += (r.lastRow - r.firstRow + 1) * (r.lastCol - r.firstCol + 1)
+    if (!Number.isSafeInteger(cells) || cells > 1_000_000) {
+      working.release()
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-scope-too-large', 'Conditional formatting scope exceeds the bounded preparation area.'), requiredBytes: undefined }
+    }
+  }
+  // Shared definitions: one frozen array per live rule set and version, so
+  // distinct viewport scopes with unchanged rules reuse the same definitions
+  // instead of rebuilding (and recharging) them per scope. Previously
+  // returned arrays stay intact for pinned readers after replacement. The
+  // fast path below may go stale under concurrency; publication rechecks the
+  // table and only the winner commits (see the success path).
+  let definitions: readonly CfSharedDefinition[] | undefined = lookupSharedCfDefinitions(rules, version)
+  if (!definitions) {
+    const built: CfSharedDefinition[] = rules.rules.map((rule, index) => {
+      const writes = [...rule.writes]
+      const properties: Record<string, string | number | boolean | null> = {}
+      for (const [key, value] of Object.entries(rule.dxf ?? {})) properties[key] = value as string | number | boolean | null
+      return { id: `rule-${typeof rule.id === 'number' ? rule.id : index}`, version, properties, writes }
+    })
+    definitions = freezeCfDefinitions(built)
+  }
+  const diagnostics: CfReadResult['diagnostics'][number][] = rules.diagnostics.slice(0, 64).map(d => ({ kind: 'unsupported' as const, feature: d.feature, message: d.message.slice(0, 256) }))
+  // Fixed framing is measured, not estimated: walk a template result with the
+  // same walker the kernel publishes with, so preflight and post-build share
+  // one framing model. Per-cell content stays bounded by the wire measure.
+  // The template omits diagnostics on purpose: a grant that fits only the
+  // base still completes ready with diagnostics omitted (never silently
+  // partial data). Diagnostics ride the working hold through their own
+  // walked size below instead of the grant gate. Every walk admits its
+  // traversal workspace on the shared account instead of running unbounded.
+  const templateBytes = limitsModule.measureCfWalkedBytes({
+    sheetId, stamp: liveStamp, kind: 'ready', states: [], definitions,
+    definitionsVersion: version, diagnostics: [],
+  }, memory)
+  const diagBytes = limitsModule.measureCfWalkedBytes(diagnostics, memory)
+  // Per-cell bound matching the walked wire size exactly for full wins:
+  // 24 object + 3x16 property slots + 2x8 numbers + 16 props slot + properties,
+  // plus 8 for the states-array element slot the walker charges per item.
+  // Partial wins undershoot; taint-heavy outliers are caught post-build.
+  let perCell = 96
+  for (const rule of rules.rules) perCell += measureCfPropertiesBytes((rule.dxf ?? {}) as Record<string, string | number | boolean | null>)
+  if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
+    working.release()
+    return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
+  }
+  const estimate = estimateCfPreparationBytes(cells, perCell, 0, 0, 0)
+  if (estimate === undefined) {
+    working.release()
+    return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
+  }
+  const boundedEstimate = templateBytes + estimate + envelopeBytes
+  if (!Number.isSafeInteger(boundedEstimate) || boundedEstimate > grantBytes) {
+    working.release()
+    return {
+      ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'),
+      requiredBytes: boundedEstimate,
+    }
+  }
+  // Grow the metadata hold into the working hold: one reservation covers the
+  // metadata build above plus the per-cell states, known diagnostics and
+  // framing below, so the peak is admitted exactly once on the (possibly
+  // shared) account. The grant gate stays diagnostics-free above.
+  const workingTarget = boundedEstimate + diagBytes
+  if (!Number.isSafeInteger(workingTarget) || !working.grow(workingTarget)) {
+    working.release()
+    return {
+      ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'),
+      requiredBytes: boundedEstimate,
+    }
+  }
+  // Service and its lease live inside the working hold: everything built
+  // below is covered by the pre-admitted bound, and a single finally unwinds
+  // in reverse order (lease, service, working hold) exactly once.
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext })
+  let prepared: CfLease<CfPrepared> | undefined
+  try {
+    if (signal?.aborted) throw cancelled()
+    try {
+      prepared = await service.prepareCf(
+          // The service grant bounds the transient workspace (its own session
+          // cap); the receiver grant above bounds the wire reply.
+          { stamp: { ...liveStamp }, sourceRects: cfRects, signal: signal ?? new AbortController().signal, grantBytes: limitsModule.CF_LIMITS.scratchBytes },
+          source,
+          memory,
+        )
+    } catch (error) {
+      if (error instanceof PackageError && error.code === 'cancelled') throw error
+      if (signal?.aborted) throw cancelled()
+        if (error instanceof CfPageFault) {
+          if (error.fault === 'incomplete') {
+            return { ...cfReadError(sheetId, liveStamp, 'cf-pending-data', 'cf-source-pending', 'Conditional formatting source is still importing the requested range.'), pendingSheetIds: [sheetId] }
+          }
+          if (error.fault === 'stale') {
+            const live = source.stamp(sheetId)
+            return {
+              ...cfReadError(sheetId, { ...liveStamp, workbookValueGen: live.workbookValueGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting source changed generation during preparation.'),
+              requiredBytes: undefined,
+            }
+          }
+          return {
+            sheetId, stamp: liveStamp, kind: 'unresolved' as const, reason: 'cf-unavailable-values',
+            states: [], definitions: [], definitionsVersion: version,
+            diagnostics: [{ kind: 'unsupported' as const, feature: 'cf-unavailable-values', message: 'Conditional formatting withheld: the scope contains values unavailable to the cached reader.' }],
+          }
+        }
+        const reason = error instanceof PackageError && error.code === 'resource-limit' ? 'cf-resource-limit' : 'cf-preparation-failed'
+        return {
+          sheetId, stamp: liveStamp, kind: 'unresolved' as const, reason,
+          states: [], definitions: [], definitionsVersion: version,
+          diagnostics: [{ kind: 'unsupported' as const, feature: 'cf-preparation-withheld', message: `Conditional formatting preparation withheld (${reason}).` }],
+        }
+    }
+    // Revalidate liveness before publishing: a generation change during the
+    // scan must withhold instead of publishing stale states.
+    const liveAfter = source.stamp(sheetId)
+    if (liveAfter.workbookValueGen !== request.stamp.workbookValueGen) {
+      try { prepared.release() } catch { /* release-only path */ }
+      prepared = undefined
+      return {
+        ...cfReadError(sheetId, { ...request.stamp, workbookValueGen: liveAfter.workbookValueGen }, 'cf-stale-generation', 'cf-stale-source', 'Conditional formatting source changed generation during preparation.'),
+        requiredBytes: undefined,
+      }
+    }
+    const states: CfReadResult['states'][number][] = []
+    let unresolvedCells = 0
+    let n = 0
+    for (const rect of cfRects) {
+      for (let row = rect.firstRow; row <= rect.lastRow; row++) {
+        for (let col = rect.firstCol; col <= rect.lastCol; col++) {
+          if (signal?.aborted) throw cancelled()
+          if ((n++ & 63) === 0) await Promise.resolve()
+          const at = prepared.value.at(row, col)
+          if (at.kind === 'no-match') continue
+          if (at.kind === 'unresolved') {
+            unresolvedCells++
+            states.push({ row, col, properties: {}, unresolvedWrites: [], unresolvedReason: at.reason })
+            continue
+          }
+          const won = at.value.unresolvedWrites !== undefined ? [...at.value.unresolvedWrites] as string[] : undefined
+          states.push({ row, col, properties: { ...at.value.properties }, ...(won === undefined ? {} : { unresolvedWrites: won }) })
+        }
+      }
+    }
+    if (unresolvedCells > 0) {
+      // The post-build diagnostic was not in the preflight template: grow the
+      // working hold to cover it before constructing, withholding on pressure.
+      if (!working.grow(working.bytes + 1024)) {
+        return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory.'), requiredBytes: undefined }
+      }
+      diagnostics.push({ kind: 'unsupported', feature: 'cf-unresolved-cells', message: `${unresolvedCells} cells did not resolve and kept base formatting.` })
+    }
+    // Post-build measurement uses the same payload walker the kernel publishes
+    // with, so preflight, publication and adoption share one framing model.
+    // Every walk admits its traversal workspace on the shared account.
+    const measureBuilt = (withDiagnostics: boolean): number | undefined => {
+      const candidate: CfReadResult = {
+        sheetId, stamp: liveStamp, kind: 'ready', states, definitions,
+        definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [],
+      }
+      return limitsModule.measureCfWalkedBytes(candidate, memory)
+    }
+    const fullBytes = measureBuilt(true)
+    if (fullBytes === undefined) {
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: estimate }
+    }
+    const baseBytes = measureBuilt(false)
+    if (baseBytes === undefined) {
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: estimate }
+    }
+    const fullWithEnvelope = fullBytes + envelopeBytes
+    const baseWithEnvelope = baseBytes + envelopeBytes
+    if (baseWithEnvelope > grantBytes) {
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
+    }
+    const omitted = fullWithEnvelope > grantBytes ? [] : diagnostics
+    // Publish the share only after all admission succeeds — never on a
+    // refusal or withhold path, and only with its own charged lease (no
+    // unowned table entries). The recheck runs before any commit and the
+    // commit runs only after the outgoing adopt: a concurrent preparation
+    // may have committed while this one built, and recheck plus adopt plus
+    // commit are synchronous with no await between, so the second publisher
+    // reuses the winner instead of overwriting (and leaking) its lease.
+    // Skipping the commit on pressure — or on a pressure retry, which must
+    // not re-retain what it just reclaimed — is fail-soft: sharing is an
+    // optimization; the adopted result stays fully owned. Winner and local
+    // build have identical content, so the walked sizes checked above hold
+    // for either array.
+    const live = peekSharedCfDefinitions(rules, version)
+    const published = live ?? definitions
+    const result: CfReadResult = {
+      sheetId, stamp: liveStamp, kind: 'ready', states, definitions: published,
+      definitionsVersion: version, diagnostics: omitted,
+    }
+    // Transfer live outgoing ownership: adopt the wire result on the shared
+    // account instead of refunding before return, so no window exists where
+    // the live states sit uncharged. The caller holds the lease through post
+    // and releases after drain; without an outbox the lease ends here.
+    const wireBytes = limitsModule.measureCfWalkedBytes(result, memory)
+    if (wireBytes === undefined || !Number.isSafeInteger(wireBytes + envelopeBytes)) {
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory.'), requiredBytes: undefined }
+    }
+    let adopted: CfLease<CfReadResult>
+    try {
+      adopted = working.adopt(result, wireBytes + envelopeBytes)
+    } catch {
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory.'), requiredBytes: undefined }
+    }
+    // Adopting moves construction to retained; the finally below becomes a
+    // no-op for the working hold while the outgoing lease stays live.
+    // The table commit lands only now that the outgoing admission succeeded;
+    // a failed commit simply skips sharing and returns the adopted result.
+    let committedHere = false
+    if (live === undefined && !skipShare) {
+      const owned = limitsModule.admitSharedCopy(memory, published)
+      if (owned !== undefined) {
+        commitSharedCfDefinitions(rules, version, owned.value, owned)
+        committedHere = true
+      }
+    }
+    if (options?.retainOutgoing) {
+      const release = () => { try { adopted.release() } catch { /* release-only path */ } }
+      try {
+        options.retainOutgoing(release)
+      } catch (error) {
+        try { adopted.release() } catch { /* release-only path */ }
+        // A failed handoff must not leave a newly retained cache owner
+        // behind: roll back exactly the entry this call committed (a
+        // rechecked winner belongs to someone else and stays).
+        if (committedHere) {
+          try { releaseSharedCfDefinitions(rules) } catch { /* release-only path */ }
+        }
+        throw error
+      }
+    } else {
+      adopted.release()
+    }
+    return result
+  } finally {
+    if (prepared !== undefined) {
+      try { prepared.release() } catch { /* release-only path */ }
+    }
+    service.dispose()
+    try { working.release() } catch { /* release-only path */ }
+  }
+}
+
+/** Minimal read surface the CF page bridge needs; the paged adapter supplies
+ * it from its own read path, tests supply fakes. */
+export interface CfPagedReadHost {
+  readonly stamp: SourceStamp
+  readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
+}
+
+/** Typed bridge failures: incomplete pages withhold as pending (data may
+ * arrive), unavailable cells withhold as unresolvable (unknown is not blank),
+ * and stale pages withhold rather than publish a mixed-generation result. */
+export class CfPageFault extends Error {
+  constructor(
+    public readonly fault: 'incomplete' | 'unavailable' | 'stale',
+    public readonly sheetId: string,
+    message: string,
+  ) { super(message); this.name = 'CfPageFault' }
+}
+
+/** Admitted bytes of one bridge rect's chunk workspace: at most 64 chunk
+ * entries in flight (object slots plus string references — the strings stay
+ * owned by the store's page), admitted before the store is touched. */
+const CF_PAGE_WORKSPACE_BYTES = 16384
+
+/** CfValueSource pages over a readRows store: 64-cell pages admitted before
+ * construction, released by the consumer after each page. Out-of-rect cells
+ * never enter a page; incomplete scopes withhold, unavailable values withhold
+ * (never silently blank), and stale pages withhold instead of publishing
+ * mixed-generation results. */
+export function pagedStoreCfPages(
+  store: CfPagedReadHost,
+  memory: CfMemory,
+  signal?: AbortSignal,
+): CfValueSource['pages'] {
+  return async function* (id: string, rects: readonly import('../cf/model').SourceRect[], budget: CfWorkBudget, pageSignal: AbortSignal) {
+    void id
+    const combined = AbortSignal.any ? AbortSignal.any([signal, pageSignal].filter((s): s is AbortSignal => !!s)) : pageSignal
+    // Generation pinned at open: every page must belong to it, or the whole
+    // scan withholds rather than mixing generations.
+    const openGen = store.stamp.valueGen
+    const readRect = async function* (rect: (typeof rects)[number]): AsyncGenerator<CfLease<CfValuePage>> {
+      let chunk: { row: number; col: number; value: CfLiteral }[] = []
+      const flush = async function* (): AsyncGenerator<CfLease<CfValuePage>> {
+        if (chunk.length === 0) return
+        const spent = budget.spend(chunk.length)
+        if (spent === 'refused') {
+          if (combined?.aborted) throw new PackageError('cancelled', 'CF paged read cancelled')
+          throw new PackageError('resource-limit', 'CF paged read exceeded the shared work budget', undefined, 'memory-budget')
+        }
+        if (spent === 'yield') {
+          await hostTask()
+          if (combined?.aborted) throw new PackageError('cancelled', 'CF paged read cancelled')
+          budget.resume()
+        }
+        let bytes = 544 + chunk.length * 14
+        for (const cell of chunk) {
+          const v = cell.value
+          if (v.kind === 'string') bytes += 16 + v.value.length * 2
+          else if (v.kind === 'error') bytes += 16 + String(v.value).length * 2
+          else if (v.kind === 'number') bytes += 92
+          else if (v.kind === 'boolean') bytes += 94
+          else bytes += 66
+        }
+        const hold = memory.reserve(bytes)
+        if (hold.kind !== 'reserved') {
+          throw new PackageError('resource-limit', 'CF paged read exceeded its admitted page', undefined, 'memory-budget')
+        }
+        try {
+          const rows = new Uint32Array(chunk.length)
+          const cols = new Uint16Array(chunk.length)
+          const values = new Array<CfLiteral>(chunk.length)
+          for (let i = 0; i < chunk.length; i++) {
+            const cell = chunk[i]!
+            rows[i] = cell.row
+            cols[i] = cell.col
+            values[i] = cell.value
+          }
+          yield hold.adopt({ rows, cols, values }, bytes)
+        } catch (cause) {
+          try { hold.release() } catch { /* release-only path */ }
+          throw cause
+        }
+        chunk = []
+      }
+      let cursor: string | undefined
+      for (;;) {
+        if (combined?.aborted) throw new PackageError('cancelled', 'CF paged read cancelled')
+        const page = await store.readRows(
+          { r0: rect.firstRow, r1: rect.lastRow, c0: rect.firstCol, c1: rect.lastCol },
+          cursor,
+          { stamp: store.stamp, signal: combined ?? new AbortController().signal },
+        )
+        if (page.error) throw new PackageError('resource-limit', page.error.message || 'CF paged read failed on an incomplete page', undefined, 'memory-budget')
+        if (page.completeness !== 'complete') throw new CfPageFault('incomplete', store.stamp.sheetId, 'Conditional formatting page is still importing; retry when complete')
+        if (page.stamp.valueGen !== openGen) throw new CfPageFault('stale', store.stamp.sheetId, 'Conditional formatting source committed mid-scan; re-request at the live generation')
+        for (const row of page.items) {
+          for (const cell of row.cells) {
+            if (cell.col < rect.firstCol || cell.col > rect.lastCol) continue
+            // Unavailable is unknown, not blank: yielding it as blank would let
+            // blank predicates match falsely and corrupt statistics. Withhold
+            // the whole preparation instead.
+            if (cell.unavailable) throw new CfPageFault('unavailable', store.stamp.sheetId, 'Conditional formatting scope contains values unavailable to the cached reader')
+            const value: CfLiteral = cell.value === null ? { kind: 'blank' }
+              : cell.valueIsError ? { kind: 'error', value: String(cell.value) }
+              : typeof cell.value === 'number' ? { kind: 'number', value: cell.value }
+              : typeof cell.value === 'boolean' ? { kind: 'boolean', value: cell.value }
+              : { kind: 'string', value: cell.value }
+            chunk.push({ row: row.row, col: cell.col, value })
+            if (chunk.length >= 64) yield* flush()
+          }
+        }
+        if (!page.nextCursor) break
+        cursor = page.nextCursor
+      }
+      yield* flush()
+    }
+    for (const rect of rects) {
+      // Admit the chunk workspace before the store is touched: chunk entries
+      // and materialized values live inside this hold, released per rect.
+      const workspace = memory.reserve(CF_PAGE_WORKSPACE_BYTES)
+      if (workspace.kind !== 'reserved') {
+        throw new PackageError('resource-limit', 'CF paged read exceeds its admitted page workspace', undefined, 'memory-budget')
+      }
+      try {
+        yield* readRect(rect)
+      } finally {
+        try { workspace.release() } catch { /* release-only path */ }
+      }
+    }
   }
 }
 
@@ -1585,6 +2562,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     },
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
     hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
+    hasConditionalFormatting(sheetId) { return find(sheetId).metadata.hasConditionalFormatting === true },
     hasRegionStyles(sheetId) { return Boolean(find(sheetId).tables?.some(table => table.styleInfo?.name)) },
     regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
     hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
@@ -1638,11 +2616,12 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     formatting: () => workbook.formatting,
     // A styled table/pivot region resolves over the cell's own style, as the viewer paints it (worker Find).
-    displayText: (cell, _sheetId, allocation, region) => {
+    displayText: (cell, _sheetId, allocation, region, scope) => {
       const own = workbook.formatting.styles[cell.styleIndex]
       const overlayStyle = storeFor(_sheetId).overlayStyle({ row: cell.row, col: cell.col })
       const style = overlayStyle === null ? undefined : overlayStyle ?? own
-      return cellDisplayText(displaySheet, { value: cell.value, style: region?.styleAt(cell.row, cell.col, style, 'screen') ?? style }, allocation)
+      const regional = region?.styleAt(cell.row, cell.col, style, 'screen') ?? style
+      return cellDisplayText(displaySheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, regional) ?? regional }, allocation)
     },
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },

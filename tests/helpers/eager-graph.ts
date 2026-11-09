@@ -36,6 +36,7 @@ export function forbiddenEager(map: ModuleMap, rules: readonly RegExp[]): string
 // metrics.ts may be eager. Rules are tested against /-normalised ids; the
 // end anchor allows a ?query suffix.
 export const EAGER_FORBIDDEN: readonly RegExp[] = [
+  /src\/xlsx\/cf\//,
   /node_modules\/lucide-react\//,
   /node_modules\/motion\//,
   /node_modules\/framer-motion\//,
@@ -64,6 +65,7 @@ export const PAGED_WORKER_ROOTS: readonly RegExp[] = [
   /src\/xlsx\/storage\/pagedImport\.ts(?:$|\?)/,
 ]
 export const PAGED_WORKER_FORBIDDEN: readonly RegExp[] = [
+  /src\/xlsx\/cf\//,
   /src\/xlsx\/tableStyles\/builtins(?:\/|\.ts(?:$|\?))/,
   /src\/xlsx\/tableStyles\/parseStylesExtras\.ts(?:$|\?)/,
 ]

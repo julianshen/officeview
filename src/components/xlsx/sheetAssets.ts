@@ -1,3 +1,5 @@
+import { ensureConditionalFormatting } from '../../xlsx/cfLoader'
+import type { CfPaintBatch } from '../../xlsx/cf/render'
 /**
  * Font/image lease for the interactive sheet viewport (plan S5.2; spec §12.4).
  *
@@ -86,8 +88,13 @@ export class SheetImageCache {
 }
 
 export interface SheetAssetsOptions extends PaintOptions {
+  /** Live committed values, including overlays; static exports use their document. */
+  cfStore?: import('../../xlsx/view/contracts').SourceStore
   /** Sheet whose pictures are leased (default 0). */
   sheetIndex?: number
+  /** Visible source rectangles for CF, including blank cells. Absent: static grid. */
+  cfPaintRects?: readonly import('../../xlsx/cf/model').SourceRect[]
+  cfViewport?: { metrics: import('../../xlsx/view/contracts').SheetMetrics; boxes: readonly import('../../xlsx/view/contracts').LogicalCellBox[] }
   profile?: ProfileId
   /** Shared by every lease of one viewer; a private cache is created otherwise. */
   imageCache?: SheetImageCache
@@ -232,7 +239,8 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
     const held: ImageCandidates[] = []
     // This lease's receiving chart context (per document, parent and profile), carried by its assets, released with it.
     let charts: ChartReceiverLease | undefined
-    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset); charts?.release() }
+    let conditionalFormatting: CfPaintBatch | undefined
+    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset); charts?.release(); conditionalFormatting?.dispose() }
     try {
       const sheet = doc.sheets[options.sheetIndex ?? 0]
       const indexed = doc.images ?? []
@@ -246,6 +254,10 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       // admitted; sheets without groups stay on the undefined-check path.
       if (sheet?.resolvedSparklines?.size) await ensureSparklinePainter([sheet])
       if (sheet && sheetHasRegionStyles(sheet)) await ensureTableStyleEngine([sheet])
+      if (sheet?.conditionalFormatting) {
+        const cf = await ensureConditionalFormatting([sheet])
+        conditionalFormatting = await cf?.prepareCfPaint(sheet, { store: options.cfStore, memory: cf.paintMemoryFor(options.chartOwner ?? doc, options.chartParent), valuePolicy: doc.valuePolicy ?? 'engine', paintRects: options.cfPaintRects, viewport: options.cfViewport })
+      }
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {
@@ -262,7 +274,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       await Promise.all(cached.map(async image => { byObject.set(image, await take(image)) }))
       let released = false
       return {
-        assets: { images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) },
+        assets: { conditionalFormatting, images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) },
         fontDiagnostics: lease.diagnostics,
         decodedBytes,
         imageBudgetBytes: cache.limitBytes,
@@ -331,7 +343,7 @@ export async function preparePrintUnits(doc: XlsxDocument, options: PrintUnitsOp
     const units: Paintable[] = []
     for (let sheetIndex = 0; sheetIndex < doc.sheets.length; sheetIndex++) {
       if (!permitted()) throw denied()
-      const held = await assetLoader(doc, { ...lease, sheetIndex })
+      const held = await assetLoader(doc, { ...lease, sheetIndex, cfPaintRects: undefined, cfViewport: undefined })
       leases.push(held)
       if (!permitted()) throw denied()
       units.push(sheetPaintable(doc.sheets[sheetIndex], held.assets, watermark))

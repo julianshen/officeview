@@ -1,0 +1,508 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 2017,
+  "height": 235,
+  "colWidthsPt": [
+    84,
+    84,
+    0,
+    84,
+    0,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84,
+    84
+  ],
+  "rowHeightsPt": [
+    18,
+    18,
+    18,
+    18,
+    18,
+    0,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18,
+    18
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "39d85ae6d860015f1380c58b9786c3b73fb9460012ab96aa5b7c5b307b777b2e",
+  "sheet": "Sheet1",
+  "range": "A1:Z14",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "39d85ae6d860015f1380c58b9786c3b73fb9460012ab96aa5b7c5b307b777b2e",
+  "pngSha256": "756ec166e348a907267585f2b807942e2716a82734b499af545232b36d27a82d",
+  "capturedAt": "2026-11-08T18:20:05.176Z",
+  "observedCells": [
+    {
+      "ref": "B2",
+      "controlRef": "B10",
+      "bgRgb": [
+        255,
+        199,
+        206
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 56,
+      "interiorMaxDelta": 56,
+      "inkPixelCount": 0,
+      "inkWeight": 0,
+      "inkRgb": [
+        0,
+        0,
+        0
+      ],
+      "controlInkPixelCount": 0,
+      "controlInkWeight": 0,
+      "glyphRowCount": 0,
+      "glyphColumnTransitions": 0,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 56,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 56,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "Z5",
+      "controlRef": "Z12",
+      "bgRgb": [
+        255,
+        235,
+        156
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 99,
+      "interiorMaxDelta": 99,
+      "inkPixelCount": 0,
+      "inkWeight": 0,
+      "inkRgb": [
+        0,
+        0,
+        0
+      ],
+      "controlInkPixelCount": 0,
+      "controlInkWeight": 0,
+      "glyphRowCount": 0,
+      "glyphColumnTransitions": 0,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 99,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 99,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "A4",
+      "controlRef": "A11",
+      "bgRgb": [
+        198,
+        239,
+        206
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 57,
+      "interiorMaxDelta": 229,
+      "inkPixelCount": 74,
+      "inkWeight": 0.032229965156794424,
+      "inkRgb": [
+        16,
+        108,
+        16
+      ],
+      "controlInkPixelCount": 74,
+      "controlInkWeight": 0.06607142857142857,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 53,
+      "borderTopDelta": 206,
+      "borderTopVsControlDelta": 212,
+      "borderBottomDelta": 206,
+      "borderBottomVsControlDelta": 212,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "100",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "F4",
+      "controlRef": "F11",
+      "bgRgb": [
+        255,
+        199,
+        206
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 56,
+      "interiorMaxDelta": 245,
+      "inkPixelCount": 88,
+      "inkWeight": 0.03832752613240418,
+      "inkRgb": [
+        156,
+        0,
+        6
+      ],
+      "controlInkPixelCount": 74,
+      "controlInkWeight": 0.06607142857142857,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 45,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 56,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 56,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "A5",
+      "controlRef": "A12",
+      "bgRgb": [
+        255,
+        255,
+        255
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 0,
+      "interiorMaxDelta": 0,
+      "inkPixelCount": 46,
+      "inkWeight": 0.04107142857142857,
+      "inkRgb": [
+        25,
+        25,
+        25
+      ],
+      "controlInkPixelCount": 46,
+      "controlInkWeight": 0.04107142857142857,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 35,
+      "borderTopDelta": 255,
+      "borderTopVsControlDelta": 212,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "10",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "A8",
+      "controlRef": "A13",
+      "bgRgb": [
+        255,
+        255,
+        255
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 0,
+      "interiorMaxDelta": 0,
+      "inkPixelCount": 53,
+      "inkWeight": 0.04732142857142857,
+      "inkRgb": [
+        23,
+        23,
+        23
+      ],
+      "controlInkPixelCount": 53,
+      "controlInkWeight": 0.04732142857142857,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 37,
+      "borderTopDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "30",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "J2",
+      "controlRef": "J10",
+      "bgRgb": [
+        255,
+        235,
+        156
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 99,
+      "interiorMaxDelta": 156,
+      "inkPixelCount": 53,
+      "inkWeight": 0.04732142857142857,
+      "inkRgb": [
+        162,
+        109,
+        9
+      ],
+      "controlInkPixelCount": 55,
+      "controlInkWeight": 0.049107142857142856,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 39,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 99,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 99,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "90",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "J5",
+      "controlRef": "J13",
+      "bgRgb": [
+        255,
+        255,
+        255
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 0,
+      "interiorMaxDelta": 0,
+      "inkPixelCount": 46,
+      "inkWeight": 0.04107142857142857,
+      "inkRgb": [
+        25,
+        25,
+        25
+      ],
+      "controlInkPixelCount": 46,
+      "controlInkWeight": 0.04107142857142857,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 35,
+      "borderTopDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "10",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "M2",
+      "controlRef": "B10",
+      "bgRgb": [
+        255,
+        199,
+        206
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 56,
+      "interiorMaxDelta": 56,
+      "inkPixelCount": 0,
+      "inkWeight": 0,
+      "inkRgb": [
+        0,
+        0,
+        0
+      ],
+      "controlInkPixelCount": 0,
+      "controlInkWeight": 0,
+      "glyphRowCount": 0,
+      "glyphColumnTransitions": 0,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 56,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 56,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "M1",
+      "controlRef": "H1",
+      "bgRgb": [
+        255,
+        255,
+        255
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 0,
+      "interiorMaxDelta": 0,
+      "inkPixelCount": 58,
+      "inkWeight": 0.05178571428571429,
+      "inkRgb": [
+        1,
+        1,
+        1
+      ],
+      "controlInkPixelCount": 58,
+      "controlInkWeight": 0.05178571428571429,
+      "glyphRowCount": 7,
+      "glyphColumnTransitions": 44,
+      "borderTopDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 56,
+      "borderBottomVsControlDelta": 43,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "H8",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "B10",
+      "controlRef": "B11",
+      "bgRgb": [
+        255,
+        255,
+        255
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 0,
+      "interiorMaxDelta": 0,
+      "inkPixelCount": 0,
+      "inkWeight": 0,
+      "inkRgb": [
+        0,
+        0,
+        0
+      ],
+      "controlInkPixelCount": 0,
+      "controlInkWeight": 0,
+      "glyphRowCount": 0,
+      "glyphColumnTransitions": 0,
+      "borderTopDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    },
+    {
+      "ref": "Z12",
+      "controlRef": "Z13",
+      "bgRgb": [
+        255,
+        255,
+        255
+      ],
+      "controlBgRgb": [
+        255,
+        255,
+        255
+      ],
+      "bgContrastDelta": 0,
+      "interiorMaxDelta": 0,
+      "inkPixelCount": 0,
+      "inkWeight": 0,
+      "inkRgb": [
+        0,
+        0,
+        0
+      ],
+      "controlInkPixelCount": 0,
+      "controlInkWeight": 0,
+      "glyphRowCount": 0,
+      "glyphColumnTransitions": 0,
+      "borderTopDelta": 43,
+      "borderTopVsControlDelta": 0,
+      "borderBottomDelta": 43,
+      "borderBottomVsControlDelta": 0,
+      "hasUnderlineInk": false,
+      "hasStrikethroughInk": false,
+      "formattedText": "",
+      "decorationSource": "excel-display-format",
+      "underline": "none",
+      "strikethrough": false
+    }
+  ]
+}

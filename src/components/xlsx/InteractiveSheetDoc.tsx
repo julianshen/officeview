@@ -1,3 +1,4 @@
+import { collectCfCoverage } from './cfCoverage'
 import { useCanvasColors } from '../canvasColors'
 /**
  * Interactive sheet viewport (plan S5.2; spec §§5.5, 9, 10.1, 11, 12.4), mounted
@@ -34,8 +35,8 @@ import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
 import { SHEET_MIN_ZOOM } from '../../xlsx/view/contracts'
-import type { NavigatorRequest, SourceCell } from '../../xlsx/view/coordinates'
-import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate } from '../../xlsx/view/coordinates'
+import type { NavigatorRequest, SourceCell, SourceRect } from '../../xlsx/view/coordinates'
+import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate, coverCellsToRects } from '../../xlsx/view/coordinates'
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
@@ -52,11 +53,15 @@ import { FIND_PAGE_HITS, FindController, hitGeometry, navigateToHit, type FindHi
 import { LayoutCache, type CellLayoutHost, type LayoutAdmission } from '../../xlsx/view/textLayout'
 import { SharedMeasureContext } from './measureContext'
 import { cellDisplayText } from '../../xlsx/render'
-import { SemanticPresentationCache } from './formatPresentation'
+import { SemanticPresentationCache, cfTextKeyFor, liveScopeFor, withCfDescription } from './formatPresentation'
 import { mainFormatBudget } from './mainFormatBudget'
-import type { FormatBudget } from '../../xlsx/view/formatWorkspace'
+import type { EffectiveFormatScope, FormatBudget } from '../../xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { detectProfile } from '../../xlsx/storage/importSession'
+
+function localDaySerial(now = new Date()): number {
+  return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000)
+}
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
 import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay, type HighlightRect } from '../../core/overlay'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
@@ -99,13 +104,15 @@ import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
 import { SheetChartDescriptions, chartNotices, sheetCharts } from './sheetCharts'
 import type { XlsxFrozenPane } from '../../xlsx/frozenPane'
-import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/frozenPanes'
+import { initialOrigin, paneLogicalBoxes, paneRegions, visibleSpans } from '../../xlsx/view/frozenPanes'
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
-import { tileLogicalBox } from '../../xlsx/view/tileCache'
+import { ensureConditionalFormatting, cfNeedsViewport, CF_PAINT_BATCH_CELLS } from '../../xlsx/cfLoader'
+import { tileLogicalBox, tileRangeFor, TILE_PREFETCH_RING } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 import type { ValueOverlay } from '../../xlsx/view/contracts'
+import { cfRulesVersion } from '../../xlsx/view/pagedSource'
 import { invalidateRegionStyles, regionStylesFor } from '../../xlsx/tableStyleLoader'
 import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
 // Type-only: the pivot controls (client, layer, menus) are a lazy chunk loaded on a sheet with pivots (Task 28).
@@ -226,8 +233,13 @@ function sameFreeze(window: ScrollWindow['frozen'], authored: XlsxFrozenPane | u
  * No closure here captures a cache directly: a stale callback (or a retained
  * closure context) reaches at most the committed one through the owner.
  */
-export function useSemanticPresentations(sheet: XlsxSheet | undefined, valueGen: number, budget: FormatBudget): (cell: XlsxCell) => { text: string; state?: 'error' } {
+export function useSemanticPresentations(sheet: XlsxSheet | undefined, valueGen: number, budget: FormatBudget, scope?: EffectiveFormatScope | undefined): (cell: XlsxCell, base?: XlsxCell['style']) => { text: string; state?: 'error'; description?: string } {
   const cache = useMemo(() => sheet ? new SemanticPresentationCache(sheet, budget) : null, [sheet, valueGen, budget])
+  // The scope is read through a ref: a new preparation must not reset the cache.
+  // Correctness across generations comes from the cache key (cfGen + effective
+  // format + descriptor key), not from the scope identity.
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
   const owner = useRef<{ committed: SemanticPresentationCache | null; rendered: Set<SemanticPresentationCache> } | null>(null)
   const own = owner.current ??= { committed: null, rendered: new Set() }
   if (cache) own.rendered.add(cache)
@@ -250,7 +262,15 @@ export function useSemanticPresentations(sheet: XlsxSheet | undefined, valueGen:
     for (const rendered of own.rendered) rendered.dispose()
     own.rendered.clear()
   }, [])
-  return cell => (slot.pending ? slot.cache : own.committed)!.get(cell)
+  return (cell, base) => {
+    const cache = (slot.pending ? slot.cache : own.committed)!
+    const current = scopeRef.current
+    if (!current) return cache.get(cell)
+    const resolved = base ?? cell.style
+    const style = current.effectiveStyle(cell.row, cell.col, resolved)
+    const described = current.describe?.(cell.row, cell.col)
+    return cache.get(cell, { gen: current.gen, style, descriptorKey: described?.key, description: described?.text })
+  }
 }
 function documentIdOf(doc: object): string {
   let id = documentIds.get(doc)
@@ -510,7 +530,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const onMainLedger = props.onMainLedger
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
-  useEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
+  // Unsubscribe in the removing commit, before passive source release emits close.
+  useLayoutEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
   useEffect(() => {
     if (!remote) return
     return remote.subscribeRegionStyleEvictions(sheetId => {
@@ -538,9 +559,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // atomically: the current one stays alive, and keeps painting, until its
   // admitted replacement has committed; only then is it disposed (§10.1).
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
-  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number } | null>(null)
+  const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number; cfLiveKey?: string; cfViewportKey?: string; cfBoxes?: readonly LogicalCellBox[] } | null>(null)
   const [residentDrawingGen, setResidentDrawingGen] = useState(0)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
+  // Ruling M2: Advance clockGen and invalidate cfLiveKey across local midnight
+  const [clockGen, setClockGen] = useState(() => localDaySerial())
+  useEffect(() => {
+    const now = new Date()
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 50)
+    const delay = Math.max(1000, nextMidnight.getTime() - now.getTime())
+    const timer = setTimeout(() => {
+      setClockGen(localDaySerial())
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [clockGen])
   const loadAssets = props.assetLoader ?? prepareSheetAssets
   // Transferred chart models are charged to this viewer's live main-thread budget (spec 6.4), like its drawings.
   const chartParent = useMemo(() => mainChartParent(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]), [mainLedger, budgetProfile])
@@ -557,20 +589,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // its pictures are leased like resident ones once it does.
   const activeDrawings = remote && activeSheetId ? remote.drawings(activeSheetId) : null
   const activeSparklines = remote && activeSheetId && remote.layout(activeSheetId).hasSparklines ? remote.sparklines(activeSheetId) : null
-  useEffect(() => {
-    if (!activeSheetId) return
-    let cancelled = false
-    const sheetIndex = sheetIds.indexOf(activeSheetId)
-    let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
-    if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
-    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent }).then(next => {
-      if (cancelled) { next.dispose(); return }
-      if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
-      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0 })
-    })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -1050,7 +1068,353 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const selection: GridSelection = entry ? session.get(activeSheetId).selection : emptyGridSelection()
 
+  // No CF sheet: only the optional-field check. CF blank coverage follows the
+  // actual projected panes; the existing asset-swap path invalidates their tiles.
+  const cfRules = entry?.sheet.conditionalFormatting
+  const cfTextGen = useMemo(() => (!remote && cfRules ? cfRulesVersion(cfRules) : 0), [remote, cfRules])
+  const hasRemoteCf = !!remote && !!activeSheetId && remote.layout(activeSheetId).hasConditionalFormatting === true
+  const scopedCf = cfRules ? cfNeedsViewport(entry!.sheet) : false
+  const cfViewport = (scopedCf || hasRemoteCf) && entry && scroll ? { metrics: entry.metrics, boxes: paneLogicalBoxes(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport).map(box => {
+    const range = tileRangeFor({origin:box,viewport:{width:box.width*scroll.zoom,height:box.height*scroll.zoom},zoom:scroll.zoom,dpr,extent:{width:entry.metrics.cols.totalCss(),height:entry.metrics.rows.totalCss()}},TILE_PREFETCH_RING)
+    const first=tileLogicalBox(range.c0,range.r0,scroll.zoom,dpr),last=tileLogicalBox(range.c1,range.r1,scroll.zoom,dpr)
+    return {x:first.x,y:first.y,width:last.x+last.width-first.x,height:last.y+last.height-first.y}
+  }) } : undefined
+  const cfLiveKey = cfRules ? JSON.stringify([source.store(activeSheetId).stamp.docId, activeSheetId, source.store(activeSheetId).stamp.valueGen, entry?.structureGen, cfTextGen, scopedCf ? entry?.revision : 0, clockGen]) : hasRemoteCf ? JSON.stringify([identity.docId, activeSheetId, identity.valueGen, identity.viewGen, entry?.structureGen, remote!.merges(activeSheetId).gen, remote!.isClosed, clockGen]) : undefined
+  const cfViewportKey = cfViewport ? JSON.stringify([cfLiveKey, cfViewport.boxes]) : cfLiveKey
+  const [viewportCf,setViewportCf]=useState<{key:string;generation:string|undefined;boxes?:readonly LogicalCellBox[];batch:import('../../xlsx/cf/render').CfPaintBatch|undefined}|null>(null)
+  const heldViewportCf=useRef<import('../../xlsx/cf/render').CfPaintBatch|undefined>(undefined)
+  useEffect(()=>{const old=heldViewportCf.current;heldViewportCf.current=viewportCf?.batch;if(old!==heldViewportCf.current)old?.dispose()},[viewportCf])
+  useEffect(() => () => {
+    heldViewportCf.current?.dispose()
+    for (const s of doc.sheets) {
+      void ensureConditionalFormatting([s]).then(cf => cf?.disposeSheetCfStatistics(s))
+    }
+  }, [doc])
+  useEffect(()=>{
+    if(!cfViewportKey || assets?.cfViewportKey===cfViewportKey && assets?.cfLiveKey===cfLiveKey) { setViewportCf(null); return }
+    if(!cfRules || !entry || !assets || assets.sheetId!==activeSheetId) { setViewportCf(null); return }
+    let cancelled=false
+    const sheet=entry.sheet
+    void ensureConditionalFormatting([sheet]).then(async cf=>{
+      const batch=await cf?.prepareCfPaint(sheet,{store:source.store(activeSheetId!),memory:cf.paintMemoryFor(doc,chartParent),valuePolicy:doc.valuePolicy??'engine',viewport:cfViewport})
+      if(cancelled){batch?.dispose();return}
+      setViewportCf({key:cfViewportKey,generation:cfLiveKey,boxes:batch ? cfViewport?.boxes : undefined,batch})
+    })
+    return()=>{cancelled=true}
+    // CF-only work: font/image/chart leases do not depend on scroll position.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[assets,cfViewportKey,doc,chartParent])
+  const currentViewportCf=viewportCf?.generation===cfLiveKey ? viewportCf : undefined
+
+  // ---- Task 9 derived text: one prepared current-generation effective format
+  // for the visible source cells (plus the active cell). Find/copy prepare their
+  // own batch scopes through the same helpers; display holds one scope here.
+  // Resident sheets gate on their parsed rules; remote sheets gate on the
+  // worker-published CF presence flag, so plain sheets never take a receiver
+  // grant. A missing or refused scope always means base formatting, never a guess.
+  const prepareResidentScope = async (sheet: XlsxSheet, rects: readonly SourceRect[], batchSignal: AbortSignal, budget: FormatBudget): Promise<EffectiveFormatScope | undefined> => {
+    if (!sheet.conditionalFormatting?.rules.length || !rects.length || batchSignal.aborted) return undefined
+    const text = await import('../../xlsx/cf/text')
+    if (batchSignal.aborted) return undefined
+    return text.prepareCfTextScope(sheet, {
+      rects,
+      store: source.store(sheet.sheetId ?? sheetIds[doc.sheets.findIndex(candidate => candidate.name === sheet.name)]!),
+      signal: batchSignal,
+      locale: sheet.semantics?.locale ?? 'en-US',
+      budget,
+    })
+  }
+  const prepareRemoteScope = async (sheetId: string, rects: readonly SourceRect[], batchSignal: AbortSignal, locale: string, budget: FormatBudget, base?: import('../../xlsx/tableStyles/regionLayer').RegionStyleLayer, onEmpty?: () => void): Promise<EffectiveFormatScope | undefined> => {
+    if (!remote || !rects.length || batchSignal.aborted) return undefined
+    // A paged worker read that never settles (no failure, no notification)
+    // must not hang the preparation forever. 15s covers slow healthy loads
+    // (large viewports) and only fires on genuinely stuck requests.
+    const CF_PREPARE_SETTLE_TIMEOUT_MS = 15000
+    const identity = remote.identity(sheetId)
+    const structureGen = remote.merges(sheetId).gen
+    // Scope liveness is generations-only: the per-run abort signal cancels
+    // in-flight waits (checked explicitly), but must not kill a built scope
+    // when a bail-out re-run (same key, scope already claimed) cleans up.
+    // Otherwise the claimed scope goes stale with no recovery (same key, no
+    // new prepare). Explicit disposal (key change, unmount) ends scopes.
+    const live = () => !remote.isClosed && remote.identity(sheetId).docId === identity.docId && remote.identity(sheetId).valueGen === identity.valueGen && remote.identity(sheetId).viewGen === identity.viewGen && remote.merges(sheetId).gen === structureGen
+    const current = () => live() && !batchSignal.aborted
+    const text = await import('../../xlsx/cf/text')
+    if (!current()) return undefined
+    return text.prepareCfWireScope(
+      async chunk => {
+        if (!current()) return { result: undefined, release: () => {} }
+        const stamp = {
+          owner: identity.docId, sheetId, workbookValueGen: identity.valueGen, cfGen: 0, viewGen: identity.viewGen, structureGen, clockGen,
+        }
+        let held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
+        // A failed entry never reloads on its own, so a churn-time refusal
+        // (stale stamp while the worker races ahead) would stick past
+        // quiescence: drop the suspect generation once and re-read fresh.
+        // Bounded to one retry — a persistent failure fails closed below.
+        if (held.state.state === 'failed') {
+          held.release()
+          remote.invalidateCf(sheetId, chunk)
+          if (!current()) return { result: undefined, release: () => {} }
+          held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
+        }
+        // The entry mutates under the loader: always re-read, never narrow.
+        // A read that never settles (no failure, no notification — e.g. a
+        // paged text read racing page loads) times out once, drops the stuck
+        // entry and re-reads fresh. Bounded: a second timeout fails closed.
+        const settled = (): boolean => held.state.state === 'ready' || held.state.state === 'failed' || !current()
+        const waitSettled = async (): Promise<boolean> => {
+          if (settled() || batchSignal.aborted) return true
+          const outcome = await text.awaitSettled(settled, notify => remote.subscribe(notify), batchSignal, CF_PREPARE_SETTLE_TIMEOUT_MS)
+          return outcome === 'settled' || settled()
+        }
+        try {
+          if (!(await waitSettled()) && current() && !batchSignal.aborted) {
+            held.release()
+            remote.invalidateCf(sheetId, chunk)
+            if (!current()) return { result: undefined, release: () => {} }
+            held = remote.acquireCfPreparation(sheetId, chunk, stamp, batchSignal)
+            await waitSettled()
+          }
+          // States are copied synchronously by the scope builder; the entry is
+          // always released here, so the scope never holds provider leases.
+          const release = (): void => held.release()
+          if (!current() || !settled() || held.state.result?.kind !== 'ready') return { result: undefined, release }
+          return { result: held.state.result, release }
+        } catch {
+          held.release()
+          return { result: undefined, release: () => {} }
+        }
+      },
+      rects,
+      { locale, budget, current: live, base, onEmpty, colors: remote.formatting().colors ?? { theme: doc.sheets[sheetIds.indexOf(sheetId)]?.drawingTheme?.palette }},
+    )
+  }
+  const residentBatch = currentViewportCf?.batch ?? (assets?.cfLiveKey === cfLiveKey ? assets?.lease.assets.conditionalFormatting : undefined)
+  const residentCoverage = currentViewportCf?.batch ? currentViewportCf.boxes : residentBatch ? assets?.cfBoxes : undefined
+  const residentFrameAssets = !cfRules ? assets?.lease.assets : assets ? {...assets.lease.assets, conditionalFormatting: residentBatch} : undefined
+  useEffect(()=>{
+    if(assets?.cfLiveKey && assets.cfLiveKey!==cfLiveKey) assets.lease.assets.conditionalFormatting?.dispose()
+  },[assets,cfLiveKey])
+  const paintedCf=useRef<string|undefined>(undefined)
+  useLayoutEffect(() => {
+    if (!remote || !activeSheetId || !remote.layout(activeSheetId).hasConditionalFormatting) return
+    remote.takeCfDirtyRects(activeSheetId) // completed scopes repaint uncached tiles; generation changes invalidate below
+  }, [remote, activeSheetId, loadTick])
+
+  useEffect(() => {
+    if (!activeSheetId) return
+    let cancelled = false
+    const sheetIndex = sheetIds.indexOf(activeSheetId)
+    let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
+    if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
+    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, ...(cfRules ? {cfStore:source.store(activeSheetId)} : {}), ...(cfViewport ? { cfViewport } : {}) }).then(next => {
+      if (cancelled) { next.dispose(); return }
+      if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
+      setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId, sparklineGen: activeSparklines?.gen ?? 0, cfLiveKey, cfViewportKey, cfBoxes:cfViewport?.boxes })
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
+
   // ---- layers ----
+  // Visible source cells for the display text scope: what the grid actually
+  // presents (plus the active cell), in source coordinates. Exact cover, never
+  // a dense hull; over-count inputs skip preparation here (the batch engines
+  // still cover their own scopes).
+  const cfTextRects = ((): SourceRect[] | undefined => {
+    if (!entry || !scroll || !activeSheetId) return undefined
+    // Presence gate before any admission: resident sheets carry their parsed
+    // rules; remote sheets use the worker-published CF presence flag (worker
+    // tiles already paint remote CF; this only gates derived text).
+    const hasCf = remote
+      ? remote.layout(activeSheetId).hasConditionalFormatting === true
+      : !!entry.sheet.conditionalFormatting?.rules.length
+    if (!hasCf) return undefined
+    const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
+    let count = 0
+    for (const [a, b] of spans.y) {
+      for (const run of entry.metrics.rows.visibleBetween(a, b).runs) count += run.end - run.start + 1
+    }
+    let cols = 0
+    for (const [a, b] of spans.x) {
+      for (const run of entry.metrics.cols.visibleBetween(a, b).runs) cols += run.end - run.start + 1
+    }
+    if (count === 0 || cols === 0 || count * cols > CF_PAINT_BATCH_CELLS) return selection.active ? [{r0:selection.active.row,r1:selection.active.row,c0:selection.active.col,c1:selection.active.col}] : undefined
+    const cells: { row: number; col: number }[] = []
+    for (const [a, b] of spans.y) {
+      for (const run of entry.metrics.rows.visibleBetween(a, b).runs) {
+        for (let slot = run.start; slot <= run.end; slot++) {
+          const row = entry.view.order.displayToSource(slot)
+          for (const [c, d] of spans.x) {
+            for (const colRun of entry.metrics.cols.visibleBetween(c, d).runs) {
+              for (let col = colRun.start; col <= colRun.end; col++) cells.push({ row, col })
+            }
+          }
+        }
+      }
+    }
+    if (selection.active) cells.push({ row: selection.active.row, col: selection.active.col })
+    if (!cells.length) return undefined
+    return coverCellsToRects(cells)
+  })()
+  // Live CF generation for the display key: a changed rule set must invalidate
+  // the held scope even when value generations and rects are unchanged.
+  // Memoized on the parsed rules object so the JSON normalization runs only
+  // when rules actually change (per render it would dominate scrolling).
+
+  const cfTextKey = cfTextRects && entry && activeSheetId
+    ? JSON.stringify([ownerKey, identityKey, nextWindowKey, cfTextKeyFor({ sheetId: activeSheetId, valueGen: identityOf(activeSheetId).valueGen, cfGen: cfTextGen, locale: entry.sheet.semantics?.locale ?? 'en-US', rects: cfTextRects }), remote?.merges(activeSheetId).gen ?? -1, clockGen])
+    : undefined
+  const [cfText, setCfText] = useState<{ key: string; scope: EffectiveFormatScope | undefined; empty?: boolean } | null>(null)
+  const heldCfText = useRef<EffectiveFormatScope | undefined>(undefined)
+  // Bounded recovery budget per key: a scopeless preparation retries on worker
+  // notifications and settle timeouts, but a persistently refused key gives
+  // up instead of re-reading forever. A new key resets the budget.
+  const cfTextRetries = useRef<{ key: string; count: number }>({ key: '', count: 0 })
+  // In-flight ownership: one explicitly owned operation per key, independent
+  // of the published cfText state (which is null while a preparation is
+  // pending). The op id is minted when the preparation starts and is the
+  // single authority for cancellation and publication; a superseded or
+  // stale operation can never publish or clear a newer one.
+  interface CfTextOp { id: number; key: string; abort: AbortController }
+  const cfTextOp = useRef<CfTextOp | null>(null)
+  const cfTextOpSeq = useRef(0)
+  const cfTextMounted = useRef(true)
+  useEffect(() => {
+    cfTextMounted.current = true
+    return () => {
+      cfTextMounted.current = false
+      const op = cfTextOp.current
+      if (op) { op.abort.abort(); cfTextOp.current = null }
+    }
+  }, [])
+  const latestCfTextKey = useRef<string | undefined>(undefined)
+  latestCfTextKey.current = cfTextKey
+  useEffect(() => { const old = heldCfText.current; heldCfText.current = cfText?.scope; if (old !== heldCfText.current) old?.dispose() }, [cfText])
+  useEffect(() => () => heldCfText.current?.dispose(), [])
+  useEffect(() => {
+    if (!entry || !scroll || !cfTextRects || !cfTextKey || !activeSheetId) {
+      if (cfText !== null) setCfText(null)
+      return
+    }
+    // Already holding matching CF text — or a deterministically empty sheet —
+    // for this key: nothing to do. Otherwise a new preparation starts; the key
+    // is claimed only by a published scope, so a canceled or superseded run
+    // always retries instead of sticking. A worker notification (loadTick)
+    // re-runs a scopeless, non-empty preparation, which is how a refused first
+    // attempt recovers once the worker can serve it (the loader drops a failed
+    // entry and re-reads fresh). Recovery is bounded per key so a persistent
+    // refusal fails closed instead of re-reading forever. The bound covers
+    // load churn plus viewport changes (zoom/scroll keep the same key but
+    // need fresh attempts as pages load for the new viewport). Concurrent
+    // duplicates are suppressed by operation ownership, independent of the
+    // published cfText state (which is null while a preparation is pending).
+    if (cfText?.key === cfTextKey && (cfText.scope || (cfText as { empty?: boolean } | null)?.empty)) return
+    const cleanup = () => {
+      if (cfTextKey !== latestCfTextKey.current) {
+        const op = cfTextOp.current
+        if (op?.key === cfTextKey) {
+          op.abort.abort()
+          cfTextOp.current = null
+        }
+      }
+    }
+    const op = cfTextOp.current
+    if (op && op.key === cfTextKey && cfTextOpSeq.current === op.id) return cleanup
+    if (cfTextOp.current && cfTextOp.current.key !== cfTextKey) {
+      cfTextOp.current.abort.abort()
+      cfTextOp.current = null
+    }
+    if (cfText?.key === cfTextKey) {
+      if (cfTextRetries.current.key !== cfTextKey) cfTextRetries.current = { key: cfTextKey, count: 0 }
+      if (++cfTextRetries.current.count > 10) return
+    } else {
+      cfTextRetries.current = { key: cfTextKey, count: 0 }
+    }
+    const runId = ++cfTextOpSeq.current
+    const abort = new AbortController()
+    const ownedOp: CfTextOp = { id: runId, key: cfTextKey, abort }
+    cfTextOp.current = ownedOp
+    const sheet = entry.sheet, sheetId = activeSheetId
+    void (async () => {
+      // A refused preparation (budget pressure) leaves base text rather than
+      // failing the render; a canceled one is simply dropped.
+      let scope: EffectiveFormatScope | undefined
+      let empty = false
+      try {
+        const locale = entry.sheet.semantics?.locale ?? 'en-US'
+        scope = remote
+          ? await prepareRemoteScope(sheetId, cfTextRects, abort.signal, locale, semanticFormatBudget, undefined, () => { empty = true })
+          : await prepareResidentScope(sheet, cfTextRects, abort.signal, semanticFormatBudget)
+      } catch {
+        scope = undefined
+      }
+      // Only the owning operation may clear itself or publish; a superseded
+      // (key-changed/unmounted) or stale operation discards its result.
+      if (cfTextOp.current?.id !== runId) { scope?.dispose(); return }
+      cfTextOp.current = null
+      if (abort.signal.aborted || !cfTextMounted.current || cfTextKey !== latestCfTextKey.current) {
+        scope?.dispose()
+        return
+      }
+      // Equivalent states commit nothing: without this guard every failed
+      // preparation would re-render and immediately re-prepare in a hot loop.
+      // Deterministically empty sheets are marked so notifications stop
+      // re-preparing them; anything else retries on the next notification.
+      const next = empty ? { key: cfTextKey, scope, empty: true as const } : { key: cfTextKey, scope }
+      setCfText(previous => (previous?.key === next.key && previous?.scope === next.scope && (previous as typeof next).empty === next.empty) ? previous : next)
+    })()
+    return cleanup
+    // CF-only work: helpers are render-scoped closures over the same inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry, scroll, viewport, cfTextKey, cfText, activeSheetId, loadTick])
+  // Gate scope consumption by identity: while a replacement preparation is
+  // pending, the previous sheet/generation scope must not format new cells.
+  const liveCfScope = liveScopeFor(cfText, cfTextKey)
+  type RemotePaintState = { key: string; generation: string; scope?: EffectiveFormatScope; empty?: boolean; coverage?: ReturnType<typeof collectCfCoverage> }
+  const [remotePaintState, setRemotePaintState] = useState<RemotePaintState | null>(null)
+  const heldRemotePaint = useRef<RemotePaintState | null>(null)
+  useEffect(() => {
+    const old=heldRemotePaint.current; heldRemotePaint.current=remotePaintState
+    if(old!==remotePaintState){old?.scope?.dispose();old?.coverage?.dispose()}
+  },[remotePaintState])
+  useEffect(()=>()=>{heldRemotePaint.current?.scope?.dispose();heldRemotePaint.current?.coverage?.dispose()},[])
+  useEffect(()=>{
+    if(!remote || !hasRemoteCf || !cfViewport || !cfViewportKey || !cfLiveKey || !entry || remote.isClosed){setRemotePaintState(null);return}
+    let cancelled=false
+    const abort=new AbortController(),key=cfViewportKey,generation=cfLiveKey,sheetId=activeSheetId
+    const identity=remote.identity(sheetId),structureGen=remote.merges(sheetId).gen
+    const current=()=>!cancelled && !abort.signal.aborted && !remote.isClosed && remote.identity(sheetId).docId===identity.docId && remote.identity(sheetId).valueGen===identity.valueGen && remote.identity(sheetId).viewGen===identity.viewGen && remote.merges(sheetId).gen===structureGen
+    let coverage:ReturnType<typeof collectCfCoverage>|undefined
+    void(async()=>{
+      let empty=false
+      let scope:EffectiveFormatScope|undefined
+      try {
+        coverage=collectCfCoverage(entry.metrics,cfViewport.boxes,semanticFormatBudget)
+        scope=await prepareRemoteScope(sheetId,coverage.rects,abort.signal,entry.sheet.semantics?.locale??'en-US',semanticFormatBudget,regionStylesFor(entry.sheet),()=>{empty=true})
+        if(!scope && !empty) throw new Error('Conditional formatting is unavailable for these tiles; base formatting is shown.')
+      } catch {
+        coverage?.dispose();coverage=undefined
+        if(current())setAnnouncement('Conditional formatting unavailable; base formatting is shown.')
+      }
+      if(!current()){scope?.dispose();coverage?.dispose();return}
+      setRemotePaintState({key,generation,scope,empty,coverage})
+    })()
+    return()=>{cancelled=true;abort.abort()}
+    // Coverage changes only on tile-ring, committed view, source or geometry changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[remote,cfViewportKey,cfLiveKey,entry?.regionStyleGen])
+  const currentRemotePaint = remotePaintState?.generation===cfLiveKey && !remote?.isClosed ? remotePaintState : undefined
+  const remotePaint = useMemo(() => {
+    const scope=currentRemotePaint?.scope
+    if(!remote || !scope || !activeSheetId || !cfLiveKey || remote.isClosed)return undefined
+    const id=remote.identity(activeSheetId)
+    return {key:cfLiveKey,stamp:{owner:id.docId,sheetId:activeSheetId,workbookValueGen:id.valueGen,cfGen:scope.gen,viewGen:id.viewGen,structureGen:remote.merges(activeSheetId).gen,clockGen},
+      layer:scope.paintLayer ?? {rects:scope.regions??[],retainedBytes:0,styleAt:scope.effectiveStyle},dispose(){}}
+  },[remote,currentRemotePaint,liveCfScope,activeSheetId,cfLiveKey])
+  const frameAssets=remote && hasRemoteCf && residentFrameAssets ? {...residentFrameAssets,conditionalFormatting:remotePaint} : residentFrameAssets
+
   const baseRef = useRef<HTMLCanvasElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const palette = useCanvasColors(wrapperRef, props.theme ?? 'system')
@@ -1097,7 +1461,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
   measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
-  const presentCell = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget)
+  const presentCell = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget, liveCfScope)
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)
     if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
@@ -1143,7 +1507,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return {
       sheet: entry.sheet, geometry: entry.geometry, ...(sparklineViews ? { sparklineViews } : {}), identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
-      assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
+      assets: frameAssets, ...((cfRules && !residentBatch) || (hasRemoteCf && !currentRemotePaint?.scope && !currentRemotePaint?.empty) ? {cfPending:true} : {}), ...(hasRemoteCf ? {cfCoverage:currentRemotePaint?.coverage?.contains ?? (()=>false)} : scopedCf ? {cfCoverage:(box:LogicalCellBox)=>(residentCoverage??[]).some(b=>box.x>=b.x-1e-7&&box.y>=b.y-1e-7&&box.x+box.width<=b.x+b.width+1e-7&&box.y+box.height<=b.y+b.height+1e-7)} : {}), layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
       ...(scroll.frozen ? { frozen: scroll.frozen } : {}),
       // Row-cache proof gates worker requests: tiles the cache already proves
@@ -1267,6 +1631,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    if(paintedCf.current!==cfLiveKey)renderer.cache.invalidate(key=>key.identity.sheetId===activeSheetId)
+    paintedCf.current=cfLiveKey
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
@@ -1291,7 +1657,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, ownerKey, sparklineViewKey, activeSparklines?.gen, scroll, viewport, dpr, assets, viewportCf, cfViewportKey, cfTextKey, liveCfScope, remotePaintState, cfLiveKey, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
@@ -1343,14 +1709,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const byId = new Map(remote ? [] : sheetIds.map(id => [id, entryFor(id)]))
     const options: FindOptions = {
       formatBudget: mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]),
-      // The same canonical display text the cell paints (authored formats, semantics).
-      textOf: (cell, sheetId, allocation) => {
+      // The same canonical display text the cell paints (authored formats, semantics,
+      // and the prepared current-generation CF effective format when in scope).
+      textOf: (cell, sheetId, allocation, scope) => {
         const sheetEntry = byId.get(sheetId)
         if (!sheetEntry) return String(cell.value ?? '')
         const styled = cellAt(sheetEntry, cell)
         // The style paint and copy use: a styled table or pivot region resolved over the cell's own.
-        const style = styleForCell(sheetEntry, { row: cell.row, col: cell.col, styleIndex: cell.styleIndex, style: styled?.style })
+        const base = styleForCell(sheetEntry, { row: cell.row, col: cell.col, styleIndex: cell.styleIndex, style: styled?.style })
+        const style = scope?.effectiveStyle(cell.row, cell.col, base) ?? base
         return cellDisplayText(sheetEntry.sheet, { value: (styled ?? cell).value, style }, allocation)
+      },
+      // Resident batches prepare their own scope; the worker prepares its own.
+      prepareScope: remote ? undefined : (sheetId, rects, batchSignal) => {
+        const sheetEntry = byId.get(sheetId)
+        if (!sheetEntry) return Promise.resolve(undefined)
+        return prepareResidentScope(sheetEntry.sheet, rects, batchSignal, mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]))
       },
     }
     runArgs.current = { input, query, options }
@@ -2098,6 +2472,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (!admit(next)) throw new Error('Copy is too large. Select a smaller range.')
       columnBytes = next
     }
+    // Aggregate formatting budget for CF text scopes: every scope reserves its
+    // admitted envelope here and releases it on disposal.
+    const copyFormatBudget = mainFormatBudget(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile])
     setCopyPending(true)
     try {
       // Column visibility is compact authored geometry, not the selected cell product.
@@ -2134,7 +2511,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         selection, order: entry.view.order, visibility: entry.view.visibility, columns,
         allowed: () => current.current.allowCopy, signal: abort.signal, admitBytes: bytes => admit(columnBytes + bytes),
         retainBytes: (targets, bytes, commit) => { mainLedger.adoptWhileReachable('copy', copyOwner, 'document', targets, bytes, commit); held -= bytes }, onPending: () => { if (live.current && token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
-        format: (cell, allocation) => { const style = styleForCell(entry, { ...cell, style: cellAt(entry, cell)?.style }); return cellDisplayText(entry.sheet, { value: cell.value, style }, allocation) },
+        format: (cell, allocation, scope) => {
+          const base = styleForCell(entry, { ...cell, style: cellAt(entry, cell)?.style })
+          return cellDisplayText(entry.sheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, base) ?? base }, allocation)
+        },
+        prepareScope: (rects, batchSignal) => {
+          // Same presence gate as display: no rules/flag, no receiver grant.
+          const hasCf = remote
+            ? remote.layout(activeSheetId).hasConditionalFormatting === true
+            : !!entry.sheet.conditionalFormatting?.rules.length
+          if (!hasCf) return Promise.resolve(undefined)
+          return remote
+            ? prepareRemoteScope(activeSheetId, rects, batchSignal, entry.sheet.semantics?.locale ?? 'en-US', copyFormatBudget)
+            : prepareResidentScope(entry.sheet, rects, batchSignal, copyFormatBudget)
+        },
       })
       if (!live.current || token !== copyToken.current) return
       setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')
@@ -2395,6 +2785,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Static print needs every cell on the main thread; a worker-backed workbook never has them.
     if (remote) { setAnnouncement(PAGED_PRINT_MESSAGE); return }
     const token = ++printToken.current
+    const cfPrintOwner = doc.sheets.some(sheet => sheet.conditionalFormatting) ? JSON.stringify(ownerRef.current()) : undefined
     const loader = props.printLoader ?? preparePrintUnits
     let pages: Awaited<ReturnType<typeof loader>>
     // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
@@ -2417,12 +2808,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(rows !== sheet.rows ? { rows } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
     }) } : doc
     try { pages = await loader(printed, {
-      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
-    }) } catch (error) {
+      ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent, assetLoader: loadAssets, allowed: () => allowPrintRef.current,
+    })     } catch (error) {
       if (token === printToken.current && allowPrintRef.current) setAnnouncement(error instanceof Error ? error.message : 'Print unavailable; try again.')
       return
     }
     if (token !== printToken.current || !allowPrintRef.current) { pages.dispose(); return }
+    if (cfPrintOwner !== undefined && cfPrintOwner !== JSON.stringify(ownerRef.current())) {
+      pages.dispose()
+      setAnnouncement('The workbook changed while print was preparing; please print again.')
+      return
+    }
     // Admission against the CURRENT pane geometry (a resize may have landed during
     // the await): print stores + pane surfaces + the pool's minimum tiles <= budget.
     rendererRef.current?.cache.invalidate(() => true)
@@ -2834,7 +3230,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
-                const shown = cell ? presentCell(cell) : { text: '' }
+                // The grid-facing text carries the reviewed CF descriptor so the
+                // accessible name includes it; presentCell itself stays plain for
+                // pivot text. No new tab stops: focus behavior is unchanged.
+                // Unstored blank cells resolve their descriptor from the scope.
+                let shown: { text: string; state?: 'error' }
+                if (!cell) {
+                  const blankDesc = liveCfScope?.describe(at.row, at.col)
+                  shown = { text: blankDesc ? blankDesc.text : '' }
+                } else {
+                  const presented = presentCell(cell, styleForCell(entry, cell))
+                  const { description, ...rest } = presented
+                  shown = description === undefined ? rest : { ...rest, text: withCfDescription(rest.text, description) }
+                }
                 // Ruling S3-AM: a formula a pivot change left stale carries its mark and tooltip (resident only).
                 const why = activeStaleCells?.get(at.row * MAX_COLS + at.col)
                 const stale = why ? { ...shown, stale: why === 'unsupported' ? STALE_UNSUPPORTED : STALE_OUTDATED } : shown

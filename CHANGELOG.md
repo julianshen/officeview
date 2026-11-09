@@ -148,6 +148,15 @@ in git history.
     Mac 16.114, plus 36 reclassified Stage 2 cases: all match Excel's saved layout cell for cell. Details are in
     `docs/validation/xlsx-pivots.md`.
 
+### Fixed
+
+- **Conditional-formatting cell text recovers instead of sticking on base formatting.**
+  When a CF text preparation failed or was refused while the worker was still
+  loading, the cell kept its base text even after the worker could serve the
+  CF format. A scopeless preparation now retries on worker updates (dropping
+  the failed cache entry and re-reading fresh), bounded per key so a
+  persistently refused preparation fails closed to base text.
+
 ## [0.10.0] - 2026-10-28
 
 Excel sparklines: line, column and win/loss sparklines drawn in their cells,

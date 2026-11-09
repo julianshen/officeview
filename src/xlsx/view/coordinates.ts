@@ -9,6 +9,32 @@ export type CellId = number
 export interface SourceCell { row: SourceRow; col: SourceCol }
 /** Inclusive source-space bounds, never a flattened multi-row ID interval. */
 export interface SourceRect { r0: SourceRow; r1: SourceRow; c0: SourceCol; c1: SourceCol }
+
+/** Exact cover of populated cells as disjoint source rects (Task 9): row runs
+ * merged into identical-span slabs, so dense batches keep one hull rect while
+ * sparse batches never pay a dense hull. Total area always equals the cell
+ * count; callers, not this helper, enforce service caps per chunk. */
+export function coverCellsToRects(cells: readonly { row: number; col: number }[]): SourceRect[] {
+  const sorted = [...cells].sort((a, b) => a.row - b.row || a.col - b.col)
+  type Run = { row: number; c0: number; c1: number }
+  const runs: Run[] = []
+  for (const cell of sorted) {
+    if (!Number.isSafeInteger(cell.row) || !Number.isSafeInteger(cell.col)) continue
+    const last = runs[runs.length - 1]
+    if (last && last.row === cell.row && cell.col <= last.c1 + 1) {
+      if (cell.col > last.c1) last.c1 = cell.col
+    } else runs.push({ row: cell.row, c0: cell.col, c1: cell.col })
+  }
+  const rects: SourceRect[] = []
+  let open: { r0: number; r1: number; c0: number; c1: number } | undefined
+  const flush = () => { if (open) { rects.push({ r0: open.r0, r1: open.r1, c0: open.c0, c1: open.c1 }); open = undefined } }
+  for (const run of runs) {
+    if (open && open.r1 + 1 === run.row && open.c0 === run.c0 && open.c1 === run.c1) open.r1 = run.row
+    else { flush(); open = { r0: run.row, r1: run.row, c0: run.c0, c1: run.c1 } }
+  }
+  flush()
+  return rects
+}
 export type DisplaySlot = number
 export type NavigatorRequest =
   | { addressSpace: 'display'; at: { rowSlot: DisplaySlot; col: SourceCol } }

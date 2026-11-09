@@ -49,6 +49,7 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
   }
   const facade: SourceStore = {
     get stamp() { return store.stamp },
+    get completeness() { return store.completeness },
     get extent() { return store.extent },
     get valuePolicy() { return store.valuePolicy },
     ...(store.structureGen !== undefined ? { get structureGen() { return store.structureGen } } : {}),
@@ -71,6 +72,14 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
       () => store.readPivotDisplay!(options, grantBytes, memory, profile), options.signal,
       () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, pivotTables: [], pivotStyles: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: error.message }] }),
     ) } satisfies Pick<SourceStore, 'readPivotDisplay'> : {}),
+    ...(store.readConditionalFormatting ? { readConditionalFormatting: (request, memory, options) => {
+      if (!options?.signal) return store.readConditionalFormatting!(request, memory, options)
+      return read(
+        () => store.readConditionalFormatting!(request, memory, options),
+        options.signal,
+        () => ({ sheetId: request.stamp.sheetId, stamp: { ...request.stamp }, kind: 'unresolved' as const, reason: 'cf-cancelled', states: [], definitions: [], definitionsVersion: 0, diagnostics: [{ kind: 'cancelled' as const, feature: 'cf-cancelled', message: error.message }] }),
+      )
+    } } satisfies Pick<SourceStore, 'readConditionalFormatting'> : {}),
     queryColumn: (request, options) => read(() => store.queryColumn(request, options), options.signal, page),
     queryOverview: (request, options) => read(() => store.queryOverview(request, options), options.signal, page),
     queryStructural: (rect, options) => read(() => store.queryStructural(rect, options), options.signal, () => ({ stamp: store.stamp, completeness: 'incomplete', merges: [], tables: [], spills: [], drawings: [], missing: [rect], error })),

@@ -43,13 +43,13 @@ import type {
   AuthoritativeCell, CacheIdentity, Page, RowOrder, RowPermutationBand, RowVisibility, ScrollWindow, SearchHit, SearchQuery,
   SheetMetrics, SourceErrorCode, SourceStamp, SourceStore, WorkbookOwner,
 } from './contracts'
-import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, type SourceCell, type SourceRect, coverCellsToRects } from './coordinates'
 import { CooperativeSlice, createHostYield, type CooperativeOptions, type HostYield } from './scheduler'
 import { buildCellRecords, LayoutAdmissionError, rawTextOf, type CellLayout, type CellLayoutHost, type LayoutAdmission, type LayoutCache, type Rect } from './textLayout'
 import { navigateSelection, type SheetNavigationSession } from './selection'
 import { createScrollWindow, navigateTo, type HiddenTargetReason, type ViewportSize } from './scrollWindow'
 import type { FormatAllocation } from '../formula/format'
-import { withFormatWorkspace, type FormatBudget } from './formatWorkspace'
+import { withFormatWorkspace, type EffectiveFormatScope, type FormatBudget } from './formatWorkspace'
 
 /** Initial bounded hit page (spec §11.4). */
 export const FIND_PAGE_HITS = 200
@@ -57,6 +57,10 @@ export const FIND_PAGE_HITS = 200
 export const FIND_SCAN_LIMIT = 4096
 /** Hits waiting for emission (held band + ready queue), 12 bytes each: 3 MiB. */
 export const FIND_HIT_BUFFER_BUDGET = 262_144
+/** Admitted bytes per refused source rect (the sheet id is retained by reference). */
+export const REFUSED_RECT_BYTES = 64
+/** Refused rects retained per search before the search itself is refused. */
+export const MAX_REFUSED_RECTS = 4096
 const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 })
 
 /** resource-limit: the bounded hit buffer would be exceeded (§11.4 bounded storage). */
@@ -90,9 +94,14 @@ export interface FindOptions extends CooperativeOptions<FindPhase> {
   hitBufferBudget?: number
   signal?: AbortSignal
   /** Host display formatter; defaults to the raw logical text. */
-  textOf?: (cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation) => string
+  textOf?: (cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation, scope?: EffectiveFormatScope) => string
   /** Session/main owner of formatting builders and matching scratch. */
   formatBudget?: FormatBudget
+  /** Bounded preparation of one scan batch's current-generation effective formats
+   * (Task 9). The engine prepares per scanned page over exact-cover rects and
+   * disposes in a finally; returning undefined (or omitting the hook) keeps
+   * base formatting. */
+  prepareScope?: (sheetId: string, rects: readonly SourceRect[], signal: AbortSignal) => Promise<EffectiveFormatScope | undefined>
   /** The host's current aggregate owner, checked after every await. */
   currentOwner?: () => WorkbookOwner
 }
@@ -384,6 +393,11 @@ export class WorkbookFind {
     this.ready.clear()
     this.held = new Float64Array(0)
     this.heldCount = 0
+    this.refusedRects.length = 0
+    if (this.refusedBytes > 0 && this.options.formatBudget) {
+      try { this.options.formatBudget.release(this.refusedBytes) } catch { /* release-only path */ }
+      this.refusedBytes = 0
+    }
     this.account()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.wake?.()
@@ -452,22 +466,97 @@ export class WorkbookFind {
     if (page.error?.code === 'cancelled') throw new FindError('cancelled', 'Find cancelled')
     if (page.completeness !== 'complete' || page.error) this.incompleteSheets.add(scan.sheet.sheetId)
     if (page.error) this.fail({ sheetId: scan.sheet.sheetId, code: page.error.code, retryable: page.error.retryable, message: page.error.message, range: scan.range })
-    for (const cell of page.items) {
-      const key = this.visit(scan, cell)
-      if (key !== undefined) {
-        const group = bandOf(scan.sheet.order.bands, cell.row) ?? cell.row
-        if (group !== scan.group) {
-          await this.release()
-          scan.group = group
+    const prep = await this.prepareBatchScope(scan.sheet.sheetId, page.items)
+    // A refused batch keeps base text, and its rects are remembered so hit
+    // materialization agrees instead of reporting a false stale cell.
+    if (prep.kind === 'refused') this.rememberRefused(scan.sheet.sheetId, coverCellsToRects(page.items))
+    const scope = prep.kind === 'ready' ? prep.scope : undefined
+    try {
+      for (const cell of page.items) {
+        const key = this.visit(scan, cell, scope)
+        if (key !== undefined) {
+          const group = bandOf(scan.sheet.order.bands, cell.row) ?? cell.row
+          if (group !== scan.group) {
+            await this.release()
+            scan.group = group
+          }
+          this.hold(key)
         }
-        this.hold(key)
+        if (this.slice.due(1)) await this.slice.pause('find-scan')
       }
-      if (this.slice.due(1)) await this.slice.pause('find-scan')
+    } finally {
+      scope?.dispose()
     }
   }
 
+  /** Bounded current-generation formats for one scanned page. Resolves ready
+   * (possibly without a scope when hooks are absent), refused when preparation
+   * fails, and throws FindError cancelled on abort. Refusals keep base text;
+   * callers record them so hit materialization agrees (never a false stale). */
+  private async prepareBatchScope(sheetId: string, items: readonly AuthoritativeCell[]): Promise<{ kind: 'ready'; scope: EffectiveFormatScope | undefined } | { kind: 'refused' }> {
+    if (!this.options.prepareScope || !items.length) return { kind: 'ready', scope: undefined }
+    // Exact cover, never a dense hull: a sparse page prepares only its cells,
+    // so scan and single-cell materialization always agree.
+    const rects = coverCellsToRects(items)
+    if (!rects.length) return { kind: 'ready', scope: undefined }
+    // A scope that settles after cancellation, or an acquired scope rejected by
+    // the ownership guard below, still belongs to this batch: dispose it instead
+    // of leaking its charge. The tap is attached synchronously so no late
+    // settlement can slip through.
+    let done = false
+    const pending = this.options.prepareScope(sheetId, rects, this.lifetime.signal)
+    void pending.then(
+      scope => { if (done) scope?.dispose() },
+      () => {},
+    )
+    try {
+      const scope = await this.interruptible(pending)
+      try {
+        this.guard()
+      } catch (guardError) {
+        scope?.dispose()
+        throw guardError
+      }
+      return { kind: 'ready', scope }
+    } catch {
+      if (this.lifetime.signal.aborted) throw new FindError('cancelled', 'Find cancelled')
+      return { kind: 'refused' }
+    } finally {
+      done = true
+    }
+  }
+
+  /** Source rects whose preparation was refused: hit materialization must use
+   * base text there too, or a withheld scan format becomes a false stale hit.
+   * Each rect is admitted in the caller's format budget when one is supplied
+   * (refusal fails the search rather than growing uncharged); the count is
+   * always capped. Released on close. */
+  private readonly refusedRects: { sheetId: string; rect: SourceRect }[] = []
+  private refusedBytes = 0
+  private rememberRefused(sheetId: string, rects: readonly SourceRect[]): void {
+    for (const rect of rects) {
+      if (this.refusedRects.length >= MAX_REFUSED_RECTS) throw new FindError('resource-limit', 'Find refused too many source batches; narrow the search or retry when memory pressure drops', true)
+      if (this.options.formatBudget) {
+        try {
+          this.options.formatBudget.reserve(REFUSED_RECT_BYTES)
+        } catch {
+          throw new FindError('resource-limit', 'Find cannot retain refused source batches; narrow the search or retry when memory pressure drops', true)
+        }
+        this.refusedBytes += REFUSED_RECT_BYTES
+      }
+      this.refusedRects.push({ sheetId, rect })
+    }
+    this.account()
+  }
+  private isRefused(sheetId: string, row: number, col: number): boolean {
+    for (const entry of this.refusedRects) {
+      if (entry.sheetId === sheetId && row >= entry.rect.r0 && row <= entry.rect.r1 && col >= entry.rect.c0 && col <= entry.rect.c1) return true
+    }
+    return false
+  }
+
   /** Matches one scanned cell; returns its display key when it is a hit. */
-  private visit(scan: ScanState, cell: AuthoritativeCell): number | undefined {
+  private visit(scan: ScanState, cell: AuthoritativeCell, scope?: EffectiveFormatScope): number | undefined {
     this.stats.cellsVisited++
     const { sheet } = scan
     const slot = sheet.order.sourceToDisplay(cell.row)
@@ -478,7 +567,7 @@ export class WorkbookFind {
       return undefined
     }
     if (this.options.textOf) this.stats.textsFormatted++
-    if (!this.withText(cell, sheet.sheetId, text => firstMatch(text, this.needle, this.query.caseSensitive))) return undefined
+    if (!this.withText(cell, sheet.sheetId, text => firstMatch(text, this.needle, this.query.caseSensitive), scope)) return undefined
     this.stats.hitsRecorded++
     return slot * MAX_COLS + cell.col
   }
@@ -499,7 +588,7 @@ export class WorkbookFind {
 
   private account(): void {
     this.stats.bufferedHits = this.heldCount + this.ready.size
-    this.stats.bufferedBytes = 8 * this.heldCount + 12 * this.ready.size
+    this.stats.bufferedBytes = 8 * this.heldCount + 12 * this.ready.size + REFUSED_RECT_BYTES * this.refusedRects.length
   }
 
   /** A band/row group is complete: order its keys cooperatively (sorted 4,096-key
@@ -556,20 +645,32 @@ export class WorkbookFind {
       return undefined
     }
     if (read.kind !== 'cell') throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
-    return this.withText(read.cell, sheet.sheetId, (text, allocation) => {
-      const match = firstMatch(text, this.needle, this.query.caseSensitive)
-      if (!match) throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
-      allocation?.allocate(text.length * 2 + 128)
-      const hit = { sheetId: sheet.sheetId, cellId: cellId(row, col), source: { row, col }, text, start: match.start, end: match.end, displaySlot: slot }
-      allocation?.retain?.([hit], text.length * 2 + 128, () => {})
-      this.stats.hitsMaterialized++
-      return hit
-    })
+    // The hit text is re-read under its own bounded preparation so it cannot go
+    // stale between scan and emission. A cell whose scan batch was refused uses
+    // base text here too (never a false stale); a fresh refusal fails the
+    // search loudly instead of dropping the hit silently.
+    const refused = this.isRefused(sheet.sheetId, row, col)
+    const prep = refused ? { kind: 'ready' as const, scope: undefined } : await this.prepareBatchScope(sheet.sheetId, [read.cell])
+    if (prep.kind === 'refused') throw new FindError('resource-limit', `Find could not prepare the hit text for cell ${row},${col}; retry when memory pressure drops`, true)
+    const scope = prep.scope
+    try {
+      return this.withText(read.cell, sheet.sheetId, (text, allocation) => {
+        const match = firstMatch(text, this.needle, this.query.caseSensitive)
+        if (!match) throw new FindError('stale', `Source cell ${row},${col} of sheet ${sheet.sheetId} changed`)
+        allocation?.allocate(text.length * 2 + 128)
+        const hit = { sheetId: sheet.sheetId, cellId: cellId(row, col), source: { row, col }, text, start: match.start, end: match.end, displaySlot: slot }
+        allocation?.retain?.([hit], text.length * 2 + 128, () => {})
+        this.stats.hitsMaterialized++
+        return hit
+      }, scope)
+    } finally {
+      scope?.dispose()
+    }
   }
 
-  private withText<T>(cell: AuthoritativeCell, sheetId: string, consume: (text: string, allocation?: FormatAllocation) => T): T {
+  private withText<T>(cell: AuthoritativeCell, sheetId: string, consume: (text: string, allocation?: FormatAllocation) => T, scope?: EffectiveFormatScope): T {
     const run = (allocation?: FormatAllocation) => {
-      const text = this.options.textOf ? this.options.textOf(cell, sheetId, allocation) : rawTextOf(cell.value)
+      const text = this.options.textOf ? this.options.textOf(cell, sheetId, allocation, scope) : rawTextOf(cell.value)
       // Case folding and the raw-offset mapping coexist with the source text.
       allocation?.allocate(text.length * 24 + 128)
       return consume(text, allocation)

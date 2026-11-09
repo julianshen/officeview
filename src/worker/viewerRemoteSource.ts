@@ -20,7 +20,7 @@
  * imports the protocol/client and pure view modules, never the session.
  */
 import type {
-  AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
+  AuthoritativeCell, CacheIdentity, CellRead, CfReadStamp, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
   SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
   ProfileId, GridSelection, OverviewGroup, OverviewQuery, LogicalViewport, SearchQuery,
@@ -45,6 +45,7 @@ import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
 import { RemoteSparklineCache, type PagedSheetSparklines, type SparklineChangeReason } from './viewerRemoteSparklines'
 import { RemoteRegionStyleCache, type PagedRegionStyleState, type RegionStyleHost } from './viewerRemoteRegionStyles'
+import { RemoteCfCache, type PagedCfState, type CfReadHost } from './viewerRemoteCf'
 import { MAX_REGION_STYLE_TABLES, REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE, REGION_STYLE_REPLY_OVERHEAD_BYTES } from '../xlsx/view/contracts'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
@@ -96,6 +97,25 @@ export function viewReplyBytes(rows: number): number {
 /** Accounted bytes of one cached cell: record overhead plus UTF-16 text. */
 export function cachedCellBytes(cell: { value: unknown; formula?: string }): number {
   return 96 + (typeof cell.value === 'string' ? cell.value.length * 2 : 0) + (cell.formula ? cell.formula.length * 2 : 0)
+}
+/** Dirty rectangles kept per sheet before Task 8 drains them; beyond the cap
+ * the list coalesces to a single covering rectangle, so the handoff stays
+ * bounded no matter how many CF notifications arrive between drains. */
+export const MAX_CF_DIRTY_RECTS = 64
+export function accumulateCfDirtyRects(into: Map<string, SourceRect[]>, sheetId: string, rects: readonly SourceRect[]): void {
+  if (rects.length === 0) return
+  const kept = into.get(sheetId) ?? []
+  for (const rect of rects) kept.push({ ...rect })
+  if (kept.length > MAX_CF_DIRTY_RECTS) {
+    let r0 = Infinity, r1 = -Infinity, c0 = Infinity, c1 = -Infinity
+    for (const rect of kept) {
+      if (rect.r0 < r0) r0 = rect.r0
+      if (rect.r1 > r1) r1 = rect.r1
+      if (rect.c0 < c0) c0 = rect.c0
+      if (rect.c1 > c1) c1 = rect.c1
+    }
+    into.set(sheetId, [{ r0, r1, c0, c1 }])
+  } else into.set(sheetId, kept)
 }
 /** Detail rows one tile may request; beyond it the frame is coarse and reads no cells. */
 export const MAX_PENDING_ROWS = 2048
@@ -215,10 +235,15 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly sparklineCache: RemoteSparklineCache
   private readonly regionStyleCache: RemoteRegionStyleCache
   private readonly pivotDisplayCache: RemoteRegionStyleCache
+  private cfCache?: RemoteCfCache
   readonly pivots: RemotePivotSessions
   private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
   private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
+  /** Task 7 handoff for Task 8: bounded CF dirty rectangles per sheet.
+   * Merge-topology generations stay independent of CF paint readiness: CF
+   * notifications never bump the merges gen, they only queue rects here. */
+  private readonly cfDirtyRects = new Map<string, SourceRect[]>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -341,13 +366,55 @@ export class RemoteWorkbook implements WorkbookSource {
       releaseAcknowledged: (sheetId, valueGen) => this.adoptPivotReleaseValueGen(String(sheetId), valueGen),
     })
   }
+  private conditionalFormats(): RemoteCfCache {
+    if (this.cfCache) return this.cfCache
+    const cfHost: CfReadHost = {
+      identity: sheetId => this.identity(sheetId), loadState: sheetId => this.loadState(sheetId),
+      hasConditionalFormatting: sheetId => this.layout(sheetId).hasConditionalFormatting === true,
+      grant: requestId => {
+        const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
+        const limit = Math.min(headroom, MAIN_THREAD_BUDGETS[this.profile] / 4)
+        const owner = `cf-grant:${requestId}`
+        if (!Number.isSafeInteger(limit) || limit < 4096 || this.mainLedger.ownerBytes('replies', owner) > 0) return null
+        this.mainLedger.set('replies', owner, limit)
+        return limit
+      },
+      releaseGrant: requestId => this.mainLedger.release('replies', `cf-grant:${requestId}`),
+      request: (command, signal) => this.request(command, signal),
+      nextRequestId: () => this.nextRequestId(),
+      release: reply => this.mainLedger.settle(reply),
+      admitEntry: (key, bytes) => {
+        const owner = `cf-entry:${key}`
+        if (!Number.isSafeInteger(bytes) || bytes <= 0 || this.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.profile]) return null
+        this.mainLedger.set('layout', owner, bytes)
+        let held = true
+        return () => { if (held) { held = false; this.mainLedger.release('layout', owner) } }
+      },
+      changed: (sheetId, rects, reason = 'updated') => {
+        if (reason === 'evicted') { this.notify(); return }
+        // Merge topology stays independent of CF paint readiness: queue the
+        // bounded dirty rectangles for Task 8 instead of bumping merges gen.
+        if (reason === 'updated') accumulateCfDirtyRects(this.cfDirtyRects, sheetId, rects)
+        this.notify()
+      },
+    }
+    return this.cfCache = new RemoteCfCache(cfHost, MAIN_THREAD_BUDGETS[this.profile] / 4)
+  }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
   regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
+  /** Task 7: the sheet's composed CF cell states for the requested scope and
+   * generation. Painters hold the returned lease across frames and release it
+   * when the stamp changes; static callers await the same interface directly. */
+  cfPreparation(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp): PagedCfState { return this.conditionalFormats().get(sheetId, rects, stamp) }
+  acquireCfPreparation(sheetId: string, rects: readonly SourceRect[], stamp: CfReadStamp, signal?: AbortSignal): { state: PagedCfState; release(): void } { return this.conditionalFormats().acquire(sheetId, rects, stamp, signal) }
+  /** Drops the sheet's cached CF preparations (scoped to rects when given);
+   * held versions survive until their last release. */
+  invalidateCf(sheetId: string, rects?: readonly SourceRect[]): void { this.cfCache?.invalidate(sheetId, rects) }
   /** Drops the sheet's table/pivot region layer and its pivot display layer (banding, header and subtotal
    * styles of the paged pivots): both are keyed on the pivot's placement, which a commit moves. */
-  invalidateRegionStyles(sheetId: string): void { this.regionStyleCache.invalidate(sheetId); this.pivotDisplayCache.invalidate(sheetId) }
+  invalidateRegionStyles(sheetId: string): void { this.invalidateCf(sheetId); this.regionStyleCache.invalidate(sheetId); this.pivotDisplayCache.invalidate(sheetId) }
   pivotDisplay(sheetId: string): PagedRegionStyleState { return this.pivotDisplayCache.get(sheetId) }
   subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
@@ -360,6 +427,9 @@ export class RemoteWorkbook implements WorkbookSource {
     return () => { this.sparklineEvictionListeners.delete(listener) }
   }
   takeSparklineChanges(sheetId: string): readonly { row: number; col: number }[] { const hosts = this.sparklineChanges.get(sheetId) ?? []; this.sparklineChanges.delete(sheetId); return hosts }
+  /** Task 7 handoff for Task 8: drains the sheet's queued CF dirty rectangles
+   * (bounded; overflow coalesces to a covering rectangle). */
+  takeCfDirtyRects(sheetId: string): readonly SourceRect[] { const rects = this.cfDirtyRects.get(sheetId) ?? []; this.cfDirtyRects.delete(sheetId); return rects }
 
   get isClosed(): boolean { return this.closed }
   /** @internal S10.2 tests: document-owned buffers this workbook still holds. */
@@ -586,6 +656,7 @@ export class RemoteWorkbook implements WorkbookSource {
    * structure generation so the viewer rebuilds geometry and drops tiles. */
   private setLayout(sheetId: string, layout: SheetLayout): boolean {
     if (JSON.stringify(layout) === JSON.stringify(this.layout(sheetId))) return false
+    this.invalidateCf(sheetId)
     this.layouts.set(sheetId, layout)
     this.geometries.delete(sheetId)
     this.stores.get(sheetId)?.relayout()
@@ -709,7 +780,10 @@ export class RemoteWorkbook implements WorkbookSource {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
-  notify(): void { for (const listener of [...this.listeners]) listener() }
+  notify(): void {
+    this.cfCache?.wakeWaiting()
+    for (const listener of [...this.listeners]) listener()
+  }
 
   /** One command with caller cancellation. Resolves CLOSED after release and
    * CANCELLED as soon as `signal` aborts (the worker gets a `cancel`). */
@@ -721,8 +795,10 @@ export class RemoteWorkbook implements WorkbookSource {
     const sparklineGrant = sparklineRead ? `sparkline-grant:${head.requestId}` : undefined
     const regionStyleRead = head.kind === 'read' && (head.query?.op === 'regionStyles' || head.query?.op === 'pivotDisplay')
     const regionStyleGrant = regionStyleRead ? `region-style-grant:${head.requestId}` : undefined
-    if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); return CLOSED }
-    if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); return CANCELLED }
+    const cfRead = head.kind === 'read' && head.query?.op === 'conditionalFormatting'
+    const cfGrant = cfRead ? `cf-grant:${head.requestId}` : undefined
+    if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); if (cfGrant) this.mainLedger.release('replies', cfGrant); return CLOSED }
+    if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); if (cfGrant) this.mainLedger.release('replies', cfGrant); return CANCELLED }
     const key = head.kind === 'read' ? `read:${head.query?.op}` : head.kind
     const scope = JSON.stringify([head.owner.docId, 'sheetId' in head.owner ? head.owner.sheetId : null, key])
     this.latestQueries.set(scope, head.requestId)
@@ -734,6 +810,7 @@ export class RemoteWorkbook implements WorkbookSource {
     const drawings = key === 'read:drawings' ? command as CommandOf<'read'> : undefined
     const sparklines = key === 'read:sparklines' ? command as CommandOf<'read'> : undefined
     const regionStyles = key === 'read:regionStyles' || key === 'read:pivotDisplay' ? command as CommandOf<'read'> : undefined
+    const cfPreparation = key === 'read:conditionalFormatting' ? command as CommandOf<'read'> : undefined
     let grant: string | undefined
     if (sparklines) {
       const grantBytes = sparklines.query.op === 'sparklines' ? sparklines.query.grantBytes : undefined
@@ -744,6 +821,12 @@ export class RemoteWorkbook implements WorkbookSource {
     } else if (regionStyles) {
       const grantBytes = regionStyles.query.op === 'regionStyles' || regionStyles.query.op === 'pivotDisplay' ? regionStyles.query.grantBytes : undefined
       const owner = `region-style-grant:${head.requestId}`
+      if (this.client.isPending(head.requestId)) { this.mainLedger.release('replies', owner); return CLOSED }
+      if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
+      grant = owner
+    } else if (cfPreparation) {
+      const grantBytes = cfPreparation.query.op === 'conditionalFormatting' ? cfPreparation.query.grantBytes : undefined
+      const owner = `cf-grant:${head.requestId}`
       if (this.client.isPending(head.requestId)) { this.mainLedger.release('replies', owner); return CLOSED }
       if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
       grant = owner
@@ -779,15 +862,20 @@ export class RemoteWorkbook implements WorkbookSource {
         // links were made; the existing cache displays this typed refusal.
         return { ...reply, result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: false, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } } as WorkerReply<K>
       }
-      this.capture(reply, scope, !drawings && !sparklines && !regionStyles)
+      this.capture(reply, scope, !drawings && !sparklines && !regionStyles && !cfPreparation)
       if (sparklines && signal?.aborted) this.mainLedger.settle(reply)
       if (regionStyles && signal?.aborted) this.mainLedger.settle(reply)
+      if (cfPreparation && signal?.aborted) this.mainLedger.settle(reply)
       return reply
     }, error => {
       // A grant is refunded only when the command provably never left: a
       // disposed client may still have its reply in flight (a closed
-      // workbook's ledger keeps that harmless overstatement).
-      if (grant ? error instanceof ViewerNotSentError : reservation) this.mainLedger.release('replies', (grant ?? reservation)!)
+      // workbook's ledger keeps that harmless overstatement). A closed
+      // workbook can never settle (its port is detached), so its grants are
+      // always safe to refund: abandoning an in-flight granted read at close
+      // must not strand the receiver grant (Task 9 display/copy scopes race
+      // close exactly this way on plain sheets).
+      if (grant ? error instanceof ViewerNotSentError || this.closed : reservation) this.mainLedger.release('replies', (grant ?? reservation)!)
       return CLOSED
     })
     if (!signal) return sent.finally(() => unsubscribe?.())
@@ -988,6 +1076,7 @@ export class RemoteWorkbook implements WorkbookSource {
     }
     this.identities.set(sheetId, delta.owner)
     if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
+    this.invalidateCf(sheetId)
     this.views.set(sheetId, view)
     // The adopted view (order bands with their display inverse, visibility words
     // and summaries) is charged while held (spec §§10.1, 12.4): by this workbook
@@ -1022,6 +1111,7 @@ export class RemoteWorkbook implements WorkbookSource {
     }
     this.identities.set(sheetId, delta.owner)
     if (delta.workbookOwner.globalViewGen >= this.owner.globalViewGen) this.owner = delta.workbookOwner
+    this.invalidateCf(sheetId)
     this.views.set(sheetId, view)
     const bandBytes = order.diagnostics.typedArrayBytes
     const visibilityBytes = view.visibility ? view.visibility.words.byteLength + view.visibility.summaries.byteLength : 0
@@ -1053,6 +1143,7 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed) return
     this.pivots.close()
     this.closed = true
+    this.notify()
     this.listeners.clear()
     this.sparklineEvictionListeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
@@ -1060,8 +1151,10 @@ export class RemoteWorkbook implements WorkbookSource {
     this.sparklineCache.close()
     this.regionStyleCache.close()
     this.pivotDisplayCache.close()
+    this.cfCache?.close()
     this.regionStyleEvictionListeners.clear()
     this.sparklineChanges.clear()
+    this.cfDirtyRects.clear()
     for (const entry of this.overflow.values()) entry.cache.close()
     this.overflow.clear()
     // Owned caches go with the document: nothing answers from them after close.

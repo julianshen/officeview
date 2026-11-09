@@ -9,6 +9,7 @@ import type { DxfStyle, TableStyleDef, TableStyleDiagnostic } from '../tableStyl
 import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
 import type { PivotDelta } from '../pivots/session/delta'
 import type { ChartModel } from '../../charts/model'
+import type { CfMemory, CfWorkBudget } from '../cf/limits'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
 /** The main-ledger grant a pivot open or apply reserves for its reply's fit cells (Task 29): the worker stops the
@@ -256,6 +257,8 @@ export interface RangeCompletion {
  * request's limit and the number of requests are unchanged. queryColumn is
  * bounded by its limit. External custom providers must meet the same contract. */
 export interface SourceStore {
+  /** Whole-sheet completeness; undefined cannot certify statistics bounds. */
+  readonly completeness?: Completeness
   readonly stamp: SourceStamp
   /** Structural generation for geometry-affecting metadata, including overlay merges. */
   readonly structureGen?: number
@@ -303,6 +306,23 @@ export interface SourceStore {
   readRegionStyles?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles>
   /** S13: clone-safe table/pivot/control descriptors for the main-thread display layer. */
   readPivotDisplay?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile?: ProfileId): Promise<RemotePivotDisplay>
+  /** Conditional-formatting preparation for the receiving CF layer: bounded,
+   * clone-safe winning cell states plus the shared definitions they were
+   * composed from. Absent when the store has no CF path (callers must
+   * feature-detect and never touch the store for such sheets). */
+  readConditionalFormatting?(request: CfReadRequest, memory?: CfMemory, options?: CfReadOptions): Promise<CfReadResult>
+}
+/** Read options for a CF preparation: the shared budget lives in the called
+ * memory account; callers cancel through the abort signal. `retainOutgoing`,
+ * when supplied, receives the release of the live outgoing lease the
+ * provider adopts on the shared account: the caller holds it through post
+ * and releases after drain instead of the provider refunding at return. */
+export interface CfReadOptions {
+  readonly signal?: AbortSignal
+  readonly budget?: () => CfWorkBudget
+  readonly envelopeBytes?: number
+  readonly retainOutgoing?: (release: () => void) => void
+  readonly dateContext?: import('../cf/predicates').CfDateContext
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
@@ -353,6 +373,148 @@ export interface RemotePivotDisplay {
   theme?: ThemeContext
   diagnostics: readonly (TableStyleDiagnostic | PivotDiagnostic)[]
   requiredBytes?: number
+}
+
+/** Receiver-granted CF preparation (Task 7): clone-safe winning cell states
+ * plus the shared definitions they were composed from. Plain data only —
+ * no Sets, Maps, or class instances — so structuredClone transfers it
+ * without a transfer list. */
+export interface CfReadStamp {
+  readonly owner: string
+  readonly sheetId: string
+  readonly workbookValueGen: number
+  readonly cfGen: number
+  readonly viewGen: number
+  readonly structureGen: number
+  readonly clockGen: number
+}
+export interface CfReadRequest {
+  readonly rects: readonly SourceRect[]
+  readonly stamp: CfReadStamp
+  readonly grantBytes: number
+}
+export interface CfCellStateWire {
+  readonly row: number
+  readonly col: number
+  readonly properties: Record<string, string | number | boolean | null>
+  readonly unresolvedWrites?: readonly string[]
+  readonly unresolvedReason?: string
+}
+export interface CfSharedDefinition {
+  readonly id: string
+  readonly version: number
+  readonly properties: Record<string, string | number | boolean | null>
+  readonly writes: readonly string[]
+}
+export interface CfReadDiagnostic {
+  readonly kind: 'unsupported' | 'resource-limit' | 'cancelled' | 'pending' | 'stale'
+  readonly feature: string
+  readonly message: string
+}
+export interface CfReadResult {
+  /** The stamp this preparation is valid for (authoritative; mirrors a live source read). */
+  readonly stamp: CfReadStamp
+  readonly sheetId: string
+  readonly kind: 'ready' | 'pending' | 'unresolved'
+  readonly reason?: string
+  readonly states: readonly CfCellStateWire[]
+  readonly definitions: readonly CfSharedDefinition[]
+  /** Hash of the normalized rule set the states were composed from; consumers
+   * pin entries by version and keep the old version charged until release. */
+  readonly definitionsVersion: number
+  readonly diagnostics: readonly CfReadDiagnostic[]
+  /** Sheets whose import had not reached the requested rects yet. */
+  readonly pendingSheetIds?: readonly string[]
+  /** Exact estimate when the receiver grant was too small; retry with at least this. */
+  readonly requiredBytes?: number
+}
+/** Reply envelope accounted on top of every CF read reply: the kernel-added
+ * command/owner/request/stamp framing around the payload (a 1,042 B empty
+ * wrapper with short identities, 594 B of which is wrapper overhead),
+ * measured with the same walker the kernel publishes with, plus margin.
+ * The preflight and post-build checks share this bound, so a fitting grant
+ * always admits an exact build; outliers fall back to the kernel walk. */
+export const CF_REPLY_ENVELOPE_BYTES = 1152
+function cfWireStringBytes(value: string): number {
+  return 16 + value.length * 2
+}
+function cfWireValueBytes(value: string | number | boolean | null | undefined): number {
+  return typeof value === 'string' ? cfWireStringBytes(value) : 8
+}
+/** Measured bytes of one properties object, mirroring the repository payload
+ * walker exactly (24 per object, 16 per property slot, keys counted once):
+ * shared helpers keep preflight and publication on one model. Exported so
+ * providers bound per-cell wire cost with the same arithmetic the reply is
+ * measured with. */
+export function measureCfPropertiesBytes(properties: Record<string, string | number | boolean | null>): number {
+  let bytes = 24
+  for (const key of Object.keys(properties)) {
+    void key
+    bytes += 16 + cfWireValueBytes(properties[key])
+  }
+  return bytes
+}
+/** Mirrors the Task 5/6 service's retained per-rule property accounting so the
+ * read-side estimate can never admit less than the producer checks. */
+export function cfRulePropertyBytes(rules: readonly { dxf?: Record<string, unknown> | undefined; writes: Iterable<string> }[]): number {
+  let bytes = 0
+  for (const rule of rules) {
+    const dxf: Record<string, unknown> = rule.dxf ?? {}
+    for (const key of Object.keys(dxf)) {
+      const value = dxf[key]
+      bytes += 192 + key.length * 4 + (typeof value === 'string' ? value.length * 2 : 16)
+    }
+    for (const w of rule.writes) bytes += 128 + String(w).length * 4
+  }
+  return bytes
+}
+/** Measured bytes of one wire cell state, mirroring the repository payload
+ * walker exactly (24 per object; 16 per property slot plus the walked value;
+ * arrays 16 + 8 per item plus walked elements; strings 16 + 2 per char;
+ * numbers, booleans and null 8; no cross-cell dedup). */
+export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason'>>): number {
+  // {row, col, properties} plus optional unresolvedWrites/unresolvedReason.
+  let bytes = 24 + (16 + 8) + (16 + 8) + (16 + measureCfPropertiesBytes(cell.properties))
+  if (cell.unresolvedWrites !== undefined) {
+    bytes += 16 + 16 + 8 * cell.unresolvedWrites.length
+    for (const w of cell.unresolvedWrites) bytes += cfWireStringBytes(w)
+  }
+  if (cell.unresolvedReason !== undefined) bytes += 16 + cfWireStringBytes(cell.unresolvedReason)
+  return bytes
+}
+/** Measured bytes of one shared definition (counted once however many cells reference it). */
+export function measureCfDefinitionBytes(definition: Pick<CfSharedDefinition, 'id' | 'version' | 'properties' | 'writes'>): number {
+  let bytes = 24 + (16 + cfWireStringBytes(definition.id)) + (16 + 8) + (16 + measureCfPropertiesBytes(definition.properties))
+  bytes += 16 + 16 + 8 * definition.writes.length
+  for (const w of definition.writes) bytes += cfWireStringBytes(w)
+  return bytes
+}
+export function measureCfDiagnosticBytes(diagnostic: Pick<CfReadDiagnostic, 'kind' | 'feature' | 'message'>): number {
+  return 24 + (16 + cfWireStringBytes(diagnostic.kind)) + (16 + cfWireStringBytes(diagnostic.feature)) + (16 + cfWireStringBytes(diagnostic.message))
+}
+/** Upper bound the provider checks before touching the source or building:
+ * envelope plus diagnostics plus each shared definition once plus a per-cell
+ * wire bound (framing included) the provider derives from the same wire
+ * measures, so a fitting grant always admits an exact build. Undefined when
+ * the bound itself is unrepresentable (fails closed instead of overflowing). */
+export function estimateCfPreparationBytes(cellCount: number, cellBytes: number, definitionBytes: number, diagnosticBytes: number, envelopeBytes: number): number | undefined {
+  for (const n of [cellCount, cellBytes, definitionBytes, diagnosticBytes, envelopeBytes]) {
+    if (!Number.isSafeInteger(n) || n < 0) return undefined
+  }
+  const cells = cellCount * cellBytes
+  if (!Number.isSafeInteger(cells)) return undefined
+  const total = envelopeBytes + diagnosticBytes + definitionBytes + cells
+  return Number.isSafeInteger(total) ? total : undefined
+}
+/** FNV-1a hash of the normalized rule set: identical definitions share one
+ * cache entry and one charged copy; any change yields a new version. */
+export function versionCfRules(normalized: string): number {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
 }
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,
@@ -627,6 +789,9 @@ export type SourceReadQuery =
   | { op: 'regionStyles'; grantBytes: number }
   /** S13 receiver-granted pivot/control descriptors. */
   | { op: 'pivotDisplay'; grantBytes: number }
+  /** Task 7: receiver-granted conditional-formatting preparation — bounded
+   * per-cell winning states plus shared rule definitions. */
+  | { op: 'conditionalFormatting'; rects: readonly SourceRect[]; stamp: CfReadStamp; grantBytes: number }
   /** S10.2: operation range detection (sort admission includes the structural
    * guard) run next to the store, so a paged sheet is not scanned strip by
    * strip across the worker boundary. Same detectors, same outcome. */
@@ -645,11 +810,14 @@ export type SourceReadResult =
   | { op: 'sparklines'; result: SheetSparklines }
   | { op: 'regionStyles'; result: RemoteRegionStyles }
   | { op: 'pivotDisplay'; result: RemotePivotDisplay }
+  | { op: 'conditionalFormatting'; result: CfReadResult }
   | { op: 'detectRange'; detection: RangeDetection }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
  * resident ones. Bounded by the styles part's small-part cap. */
 export interface WorkbookFormatting {
+  /** Shared workbook palette, included in the formatting payload's ownership. */
+  colors?: import('../sheetColors').SheetColorContext
   dateSystem: '1900' | '1904'
   styles: readonly XlsxCellStyle[]
   /** The default font's maximum digit width (column-width model); absent: 7px. */
@@ -675,6 +843,8 @@ export interface SheetLayout {
   /** S3: metadata-only fast path; false lets sheets without sparklines avoid
    * any per-frame preparation or worker request. */
   hasSparklines?: boolean
+  /** Task 9 CF metadata fast path; absent/false means no per-batch CF reads. */
+  hasConditionalFormatting?: boolean
   /** S8: table metadata fast path; absent/false has no per-frame style work. */
   hasRegionStyles?: boolean
   /** Number of table descriptors a bounded regionStyles read may return. */

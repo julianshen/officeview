@@ -63,7 +63,7 @@ export default defineConfig({
         // Likewise the slide appearance enrichment (src/pptx/appearance/index.ts).
         chunkFileNames: chunk => {
           const facade = chunk.facadeModuleId?.replace(/\\/g, '/') ?? ''
-          return facade.endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : facade.endsWith('/src/pptx/appearance/index.ts') ? 'appearance-[hash].js' : '[name]-[hash].js'
+          return facade.includes('/src/xlsx/cf/') ? 'cf-[hash].js' : facade.endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : facade.endsWith('/src/pptx/appearance/index.ts') ? 'appearance-[hash].js' : '[name]-[hash].js'
         },
       },
     },
