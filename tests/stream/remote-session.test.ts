@@ -20,7 +20,7 @@ const exampleManifest = (): Manifest => ({
   can: { search: false, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [{ id: 'carlito-regular', hash: 'f6418f708baede9789daef5d', alias: 'Calibri' }], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
-  notices: ['forensic-mark-stage-2'],
+  notices: ['forensic-off'],
 })
 
 const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')

@@ -1,10 +1,13 @@
 /** Render worker (§9.2): one DocumentHost per Bun Worker; one job at a time. */
+import { markRaster } from '../mark/mark-raster'
 import { DocumentHost, RenderRefusal, type MarkSpec, type Projection } from '../render'
 
 export type WorkerRequest =
   | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full' }
   | { type: 'render'; id: number; docKey: string; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
   | { type: 'drop'; id: number; docKey: string }
+  /** Layer-1 encode job (§9.4): canonical PNG → session-marked PNG. */
+  | { type: 'encode'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: { parses: number; pages: number; docs: number } } | { id: number; ok: false; error: string; refusal?: string; stats: { parses: number; pages: number; docs: number } }
 
 declare const self: Worker
@@ -21,7 +24,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }
       if (m.hangMs) { const until = performance.now() + m.hangMs; while (performance.now() < until) { /* test hook: a wedged paint */ } }
-      result = host.render(m.docKey, m)
+      result = m.type === 'encode' ? markRaster(m) : host.render(m.docKey, m)
     }
     const transfer: ArrayBuffer[] = []
     const r = result as { png?: Uint8Array; ops?: Uint8Array } | null

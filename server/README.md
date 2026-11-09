@@ -22,12 +22,28 @@ base64) and an allowed origin (`--origin` / `OV_STREAM_ORIGINS`).
   the demo pair (bare file names inside one directory).
 - **Protected by default.** Hidden content is removed before parsing
   (`src/policy.ts`, fail-closed); units ship as metadata-free PNGs with the
-  visible mark composited. The forensic pixel mark is Stage 2: until then the
-  manifest carries the `forensic-mark-stage-2` notice and the audit row
-  records `forensic: false`.
+  visible mark composited. Each raster unit also carries the session's own
+  invisible Layer-1 pixel mark (`l1-bch512x40@1`; `src/mark/`), added per
+  session after the shared cache. The audit row records the token, salt and
+  keyed message issued at HELLO, and separately the layers actually delivered
+  (`forensicLayers`, counts of marked/unmarked raster units); `untraceable` is
+  derived from what was delivered, never from issuance alone. Command units (`projection: 'relaxed'`) carry
+  no forensic mark yet (`forensic-commands-unmarked` notice); `forensicMark:
+  false` sends `forensic-off`. Audit rows live in memory until Stage 2b.
 - **Fonts.** `fontpack/` (20 OFL faces, `pack.json` pins their hashes);
   Calibri/Cambria/Arial/Helvetica/Times New Roman/Courier New are painted
   with their metric-compatible pack faces. Verify: `bun scripts/stream-s1/fontpack-lock.ts`.
+
+## Forensic mark (Stage 2a)
+
+The render cache holds one canonical PNG per unit; a forensic-on session's
+raster units then go through a per-session pool `encode` job (decode → embed
+the session's 512-sign code over the page-keyed basis → lossless re-encode),
+at most 2 in flight per session. Units too small to carry 512 cells ship with
+the visible mark only and a `diag forensic-unmarked`. Integration proof on
+served bytes (ΔE00, §13.5 survival at the Stage-0 τ, unmarked captures never
+attributing): `docs/validation/streaming-s2.md`. Detection tooling, τ
+recalibration and audit persistence are Stage 2b.
 
 ## The browser side (Stage 1d)
 

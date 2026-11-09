@@ -6,6 +6,12 @@ export interface Keys {
   kDoc: CryptoKey
   kToken: CryptoKey
   kAudit: Uint8Array
+  /** Layer-1 basis root; per-unit keys are deriveBasisKey(root, docRef, `${unitId}@${bucket}`) (§13.4). */
+  kBasisRoot: Uint8Array
+  /** Layer-1 message MAC key (§13.2). */
+  kMsg: Uint8Array
+  /** Bound into msg_40; one generation in Stage 2a (rotation is 2b). */
+  keyGeneration: number
 }
 
 async function hkdf(master: Uint8Array, info: string): Promise<Uint8Array> {
@@ -17,8 +23,8 @@ async function hkdf(master: Uint8Array, info: string): Promise<Uint8Array> {
 const hmacKey = (raw: Uint8Array) => crypto.subtle.importKey('raw', raw as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'])
 
 export async function deriveKeys(master: Uint8Array): Promise<Keys> {
-  const [d, t, a] = await Promise.all([hkdf(master, 'kDoc'), hkdf(master, 'kToken'), hkdf(master, 'kAudit')])
-  return { kDoc: await hmacKey(d), kToken: await hmacKey(t), kAudit: a }
+  const [d, t, a, b, m] = await Promise.all([hkdf(master, 'kDoc'), hkdf(master, 'kToken'), hkdf(master, 'kAudit'), hkdf(master, 'kBasis'), hkdf(master, 'kMsg')])
+  return { kDoc: await hmacKey(d), kToken: await hmacKey(t), kAudit: a, kBasisRoot: b, kMsg: m, keyGeneration: 1 }
 }
 
 export const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')

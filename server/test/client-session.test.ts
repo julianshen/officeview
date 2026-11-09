@@ -20,7 +20,7 @@ describe('StreamSession against the 1c server', () => {
     const h = await start(), f = factory(), notices: StreamNotice[] = []
     const s = await StreamSession.open({ kind: 'stream', url: h.url }, { client: f.client, onNotice: (n) => notices.push(n) })
     expect(s.manifest.recorder.projection).toBe('final-raster')
-    expect(notices.map((n) => n.code)).toContain('forensic-mark-stage-2')
+    expect(notices.map((n) => n.code).filter((c) => c.startsWith('forensic'))).toEqual([])
     const u = await s.unit(0, 1)
     if (u.kind !== 'raster') throw new Error('expected raster')
     expect(u.w).toBe(s.manifest.units.list[0]!.w)

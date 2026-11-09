@@ -18,16 +18,16 @@ async function rgba(png: Uint8Array, w: number, h: number) {
 }
 
 describe('§6.2 handshake', () => {
-  it('protected default: MANIFEST → READY → UNIT_RASTER equal to the pool raster', async () => {
+  it('protected default: MANIFEST → READY → UNIT_RASTER is the pool raster plus the session mark', async () => {
     const h = await start()
     const c = new Client(h.url)
     const m = await c.hello()
     expect(m.policy).toMatchObject({ protection: 'final-raster', contentPolicy: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' })
     expect(m.recorder.projection).toBe('final-raster')
     expect(m.recorder.requiredFaces).toEqual([])
-    expect(m.notices).toContain('forensic-mark-stage-2')
+    expect(m.notices.filter((n) => n.startsWith('forensic'))).toEqual([])
     expect(m.can).toMatchObject({ print: true, search: false, notes: false })
-    expect(h.stream.audit.get(m.session.sid)).toMatchObject({ viewerId: 'alice', markSettings: { visible: 'fixed', forensic: false }, untraceable: false })
+    expect(h.stream.audit.get(m.session.sid)).toMatchObject({ viewerId: 'alice', markSettings: { visible: 'fixed', forensic: false }, forensicLayers: [] })
     await c.ready()
     c.unit(10)
     const { unit, messages } = await c.unitMessages(10)
@@ -39,7 +39,13 @@ describe('§6.2 handshake', () => {
     const { docKey } = await host.open('x', deck, 'visible-only')
     const direct = host.render(docKey, { unitIndex: 0, scale: 1, projection: 'final-raster', mark: { kind: 'fixed' } })
     if (direct.kind !== 'raster') throw new Error('raster')
-    expect(Buffer.from(body.png).equals(Buffer.from(direct.png))).toBe(true)
+    // The canonical cache entry is the pool raster; the stream carries it plus this session's Layer-1 mark.
+    expect(Buffer.from(h.stream.canonicalOf(m.session.sid, 0, 1)!).equals(Buffer.from(direct.png))).toBe(true)
+    const [got, want] = [await rgba(body.png, body.w, body.h), await rgba(direct.png, body.w, body.h)]
+    let maxd = 0, changed = 0
+    for (let k = 0; k < got.length; k++) { const d = Math.abs(got[k]! - want[k]!); if (d) changed++; maxd = Math.max(maxd, d) }
+    expect(changed).toBeGreaterThan(0)
+    expect(maxd).toBeLessThanOrEqual(4)
     c.close(); h.stop()
   }, 30_000)
 

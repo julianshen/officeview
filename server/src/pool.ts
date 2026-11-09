@@ -11,6 +11,7 @@
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
+import type { MarkRasterResult } from './mark/mark-raster'
 import type { MarkSpec, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 
@@ -19,6 +20,8 @@ export class RenderTimeout extends Error { constructor() { super('render deadlin
 export class RenderFailed extends Error { constructor(m: string, readonly refusal?: string) { super(m); this.name = 'RenderFailed' } }
 
 export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'full'; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
+/** A per-session Layer-1 encode (§9.4); no document affinity. */
+export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
 export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
@@ -49,6 +52,7 @@ export class Pool {
   private nextId = 1
   private retired = 0
   private recycled = 0
+  private encodes = 0
   private readonly recyclePages: number
   private readonly openDeadlineMs: number
   private readonly now: () => number
@@ -176,6 +180,28 @@ export class Pool {
     }
   }
 
+  /** Same admission, deadline, crash and retire paths as `render`, on the
+   * least-loaded worker. `bytesEstimate` = w·h·4·3 (decode + marked copy +
+   * encode buffers). The PNG is copied to the worker, never transferred: the
+   * caller's bytes are the shared canonical cache entry. */
+  async encode(sessionId: string, job: EncodeJob, bytesEstimate: number): Promise<MarkRasterResult> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    const slot = [...this.slots].sort((a, b) => (Number(a.busy) - Number(b.busy)) || (a.queue.length - b.queue.length) || a.index - b.index)[0]!
+    try {
+      return await this.exclusive(slot, () => {
+        const msg: WorkerRequest = { type: 'encode', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
+        this.encodes++
+        return this.runJob(slot, admitted, msg) as Promise<MarkRasterResult>
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
   private finish(job: Job): void {
     const started = this.admission.finish(job, this.now())
     if (this.disposed) return
@@ -185,6 +211,13 @@ export class Pool {
   private async renderOn(slot: Slot, admitted: Job, job: RenderJob): Promise<RenderedUnit> {
     const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
     const msg: WorkerRequest = { type: 'render', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, projection: job.projection, mark: job.mark, ...(job.missingFaces ? { missingFaces: job.missingFaces } : {}), ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
+    const r = await this.runJob(slot, admitted, msg)
+    if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+    return r as RenderedUnit
+  }
+
+  /** Posts one admitted job under the render deadline; owns the retire paths. */
+  private async runJob(slot: Slot, admitted: Job, msg: WorkerRequest): Promise<unknown> {
     // The deadline covers the paint only (the worker is idle when we post).
     admitted.startedAt = this.now()
     const reply = await this.post(slot, msg, this.admission.caps.renderDeadlineMs + 1)
@@ -207,8 +240,7 @@ export class Pool {
       throw new RenderFailed(reply.error)
     }
     if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
-    if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
-    return reply.result as RenderedUnit
+    return reply.result
   }
 
   /** Terminates and respawns a slot; its documents re-open on demand.
@@ -247,7 +279,7 @@ export class Pool {
     return {
       workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
-      retired: this.retired, recycled: this.recycled, affinity: Object.fromEntries(this.affinity),
+      retired: this.retired, recycled: this.recycled, encodes: this.encodes, affinity: Object.fromEntries(this.affinity),
     }
   }
 
