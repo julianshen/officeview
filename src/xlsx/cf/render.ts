@@ -58,7 +58,6 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
       if (hold.kind !== 'reserved') throw new Error('CF page admission')
       try {
         const rows = new Uint32Array(1), cols = new Uint16Array(1)
-        const yielded = new Set<number>()
         let begin = 0, end = sheet.rows.length
         if (ordered && bounds && rects.length) {
           const first = Math.min(...rects.map(r => r.firstRow)), last = Math.max(...rects.map(r => r.lastRow))
@@ -78,7 +77,6 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
           const value: CfLiteral = isErr ? { kind: 'error', value: String(v) } : v === null ? { kind: 'blank' }
             : typeof v === 'number' ? { kind: 'number', value: v } : typeof v === 'boolean' ? { kind: 'boolean', value: v } : { kind: 'string', value: v }
           rows[0] = r; cols[0] = cell.col
-          yielded.add(r * 16384 + cell.col)
           yield { value: { rows, cols, values: [value] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } }
         } }
       } finally { hold.release() }

@@ -149,6 +149,9 @@ function evaluateText(
   evidence: CfEvidenceGate,
 ): CfOutcome<boolean> {
   if (needle.length === 0) return unmeasured()
+  // SEARCH wildcard semantics (* ? ~) are not implemented; leave unresolved
+  // rather than publishing an incorrect literal-substring decision.
+  if (/[?*~]/.test(needle)) return unmeasured()
   // notContainsText on numeric cells and blanks is explicitly unmeasured.
   if (type === 'notContainsText' && (value.kind === 'number' || value.kind === 'blank')) return unmeasured()
   let haystack: string | undefined
