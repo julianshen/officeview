@@ -230,6 +230,48 @@ function extractOrderedFormulas(rule: XmlNode, extension: 'legacy' | 'x14'): str
   return raw.map(normalizeFormulaOperand)
 }
 
+const DEFAULT_THEME_PALETTE: Record<string, string> = {
+  '0': 'FFFFFFFF',
+  '1': 'FF000000',
+  '2': 'FFEEECE1',
+  '3': 'FF1F497D',
+  '4': 'FF4F81BD',
+  '5': 'FFC0504D',
+  '6': 'FF9BBB59',
+  '7': 'FF8064A2',
+  '8': 'FF4BACC6',
+  '9': 'FFF79646',
+  '10': 'FF0000FF',
+  '11': 'FF800080',
+}
+
+const DEFAULT_INDEXED_PALETTE: Record<string, string> = {
+  '10': 'FFFF0000',
+  '12': 'FF0000FF',
+}
+
+function scaleColorMatches(colorNode: XmlNode, expected: string): boolean {
+  if (expected.toLowerCase() === 'auto') {
+    const autoAttr = attr(colorNode, 'auto')
+    return autoAttr === '1' || autoAttr === 'true'
+  }
+  const rgb = attr(colorNode, 'rgb')
+  if (rgb !== undefined) {
+    return rgb.toUpperCase() === expected.toUpperCase()
+  }
+  const theme = attr(colorNode, 'theme')
+  if (theme !== undefined) {
+    const mapped = DEFAULT_THEME_PALETTE[theme]
+    if (mapped && mapped.toUpperCase() === expected.toUpperCase()) return true
+  }
+  const indexed = attr(colorNode, 'indexed')
+  if (indexed !== undefined) {
+    const mapped = DEFAULT_INDEXED_PALETTE[indexed]
+    if (mapped && mapped.toUpperCase() === expected.toUpperCase()) return true
+  }
+  return false
+}
+
 function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
   if (attr(rule, 'type') !== marker.ruleType) return false
   if (marker.operator !== undefined && attr(rule, 'operator') !== marker.operator) return false
@@ -292,6 +334,40 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
       if (actualFormulas[i] !== expectedFormulas[i]) return false
     }
   }
+
+  // Exact ordered cfvo and color scale sequence
+  if (marker.scale !== undefined) {
+    const csNode = asNode(rule.colorScale) ?? asNode(rule['x14:colorScale'])
+    if (!csNode) return false
+
+    const cfvoNodes = asArray(csNode.cfvo ?? csNode['x14:cfvo'])
+      .map(asNode)
+      .filter((n): n is XmlNode => n !== undefined)
+    if (cfvoNodes.length !== marker.scale.cfvo.length) return false
+    for (let i = 0; i < marker.scale.cfvo.length; i++) {
+      const exp = marker.scale.cfvo[i]!
+      const actual = cfvoNodes[i]!
+      const actualType = attr(actual, 'type')
+      if (actualType !== exp.type) return false
+      const actualVal = attr(actual, 'val')
+      if (exp.val !== undefined) {
+        if (actualVal !== exp.val) return false
+      } else {
+        if (actualVal !== undefined) return false
+      }
+    }
+
+    const colorNodes = asArray(csNode.color ?? csNode['x14:color'])
+      .map(asNode)
+      .filter((n): n is XmlNode => n !== undefined)
+    if (colorNodes.length !== marker.scale.colors.length) return false
+    for (let i = 0; i < marker.scale.colors.length; i++) {
+      const expColor = marker.scale.colors[i]!
+      const actual = colorNodes[i]!
+      if (!scaleColorMatches(actual, expColor)) return false
+    }
+  }
+
   return true
 }
 
@@ -301,11 +377,11 @@ function findMatchedRuleInRoot(root: XmlNode, marker: CfPartMarker): XmlNode | u
   if (marker.extension === 'x14') {
     const extLst = asNode(docRoot?.extLst)
     for (const ext of asArray(extLst?.ext).map(asNode)) {
-      const cfContainer = asNode(ext?.conditionalFormattings)
-      for (const cf of asArray(cfContainer?.conditionalFormatting).map(asNode)) {
-        const sqref = normalizeSqref(textOf(cf?.sqref) ?? attr(cf, 'sqref'))
+      const cfContainer = asNode(ext?.conditionalFormattings) ?? asNode(ext?.['x14:conditionalFormattings'])
+      for (const cf of asArray(cfContainer?.conditionalFormatting ?? cfContainer?.['x14:conditionalFormatting']).map(asNode)) {
+        const sqref = normalizeSqref(textOf(cf?.sqref) ?? textOf(cf?.['xm:sqref']) ?? attr(cf, 'sqref'))
         if (sqref !== targetSqref) continue
-        for (const rule of asArray(cf?.cfRule).map(asNode)) {
+        for (const rule of asArray(cf?.cfRule ?? cf?.['x14:cfRule']).map(asNode)) {
           if (rule && ruleMatchesAttributes(rule, marker)) return rule
         }
       }

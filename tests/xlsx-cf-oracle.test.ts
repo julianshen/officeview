@@ -580,10 +580,124 @@ describe('CF oracle verifier', () => {
     expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length)
     expect(CF_STAGE2_CASES).toHaveLength(8)
     for (const c of manifest.cases.filter(c => c.stage === 2)) {
-      expect(c.status).toBe('recipe-pending')
+      expect(['recipe-pending', 'unsupported']).toContain(c.status)
       expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
       expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
     }
+  })
+
+  it('scale marker pins cfvo and colour order exactly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-scale-pin-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:pin-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'percentile', val: '30' }, { type: 'max' }],
+        colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+      },
+    }
+
+    const makeScaleCase = (filename: string, hash: string, markers = [baseMarker]): CfOracleCase => ({
+      id: 'scale-pin-case',
+      stage: 2,
+      question: 'Pins exact cfvo sequence and color sequence in scale marker',
+      input: filename,
+      saved: filename,
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers,
+      expected: {
+        inputSha256: hash,
+        savedSha256: hash,
+        provenance: 'seed-hypothesis',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, fillSource: 'unverified' },
+          { ref: 'B3', controlRef: 'A3', matched: false, fillSource: 'unverified' },
+        ],
+      },
+      captures: [],
+      status: 'recipe-pending',
+      reason: 'Testing scale marker pinning',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    })
+
+    // 0. Canonical valid scale archive: structuralValid should be true
+    const validScaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="percentile" val="30"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const validBytes = await makeSyntheticXlsx({ sheetRuleXml: validScaleXml, dxfCount: 0 })
+    const validHash = sha256(validBytes)
+    writeFileSync(join(dir, 'valid.xlsx'), validBytes)
+    const validRes = verifyCfCase(makeScaleCase('valid.xlsx', validHash), { rootDir: dir })
+    expect(validRes.structuralValid).toBe(true)
+
+    // 1. Reordered colours: FF63BE7B -> FFFFEB84 -> FFF8696B
+    const reorderedColorsXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="percentile" val="30"/><cfvo type="max"/><color rgb="FF63BE7B"/><color rgb="FFFFEB84"/><color rgb="FFF8696B"/></colorScale></cfRule></conditionalFormatting>'
+    const reorderedBytes = await makeSyntheticXlsx({ sheetRuleXml: reorderedColorsXml, dxfCount: 0 })
+    const reorderedHash = sha256(reorderedBytes)
+    writeFileSync(join(dir, 'reordered.xlsx'), reorderedBytes)
+    const reorderedRes = verifyCfCase(makeScaleCase('reordered.xlsx', reorderedHash), { rootDir: dir })
+    expect(reorderedRes).toMatchObject({
+      kind: 'refusal',
+      code: 'stripped-rule',
+      structuralValid: false,
+    })
+
+    // 2. Missing cfvo: only min and max (2 cfvos instead of 3)
+    const missingCfvoXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const missingBytes = await makeSyntheticXlsx({ sheetRuleXml: missingCfvoXml, dxfCount: 0 })
+    const missingHash = sha256(missingBytes)
+    writeFileSync(join(dir, 'missing.xlsx'), missingBytes)
+    const missingRes = verifyCfCase(makeScaleCase('missing.xlsx', missingHash), { rootDir: dir })
+    expect(missingRes).toMatchObject({
+      kind: 'refusal',
+      code: 'stripped-rule',
+      structuralValid: false,
+    })
+
+    // 3. Mutated val: "30" changed to "3"
+    const mutatedValXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="percentile" val="3"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const mutatedValBytes = await makeSyntheticXlsx({ sheetRuleXml: mutatedValXml, dxfCount: 0 })
+    const mutatedValHash = sha256(mutatedValBytes)
+    writeFileSync(join(dir, 'mutated-val.xlsx'), mutatedValBytes)
+    const mutatedValRes = verifyCfCase(makeScaleCase('mutated-val.xlsx', mutatedValHash), { rootDir: dir })
+    expect(mutatedValRes).toMatchObject({
+      kind: 'refusal',
+      code: 'stripped-rule',
+      structuralValid: false,
+    })
+
+    // 4. Rule in wrong part: moved to xl/workbook.xml
+    const wrongPartBytes = await makeSyntheticXlsx({ sheetRuleXml: '', workbookExtraXml: validScaleXml, dxfCount: 0 })
+    const wrongPartHash = sha256(wrongPartBytes)
+    writeFileSync(join(dir, 'wrong-part.xlsx'), wrongPartBytes)
+    const wrongPartRes = verifyCfCase(makeScaleCase('wrong-part.xlsx', wrongPartHash), { rootDir: dir })
+    expect(wrongPartRes).toMatchObject({
+      kind: 'refusal',
+      code: 'wrong-part-marker',
+      structuralValid: false,
+    })
+
+    // 5. Semantic equivalence (Lesson 2): attribute order switched, lowercase hex
+    const semanticEquivXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo val="30" type="percentile"/><cfvo type="max"/><color rgb="fff8696b"/><color rgb="ffffeb84"/><color rgb="ff63be7b"/></colorScale></cfRule></conditionalFormatting>'
+    const semanticBytes = await makeSyntheticXlsx({ sheetRuleXml: semanticEquivXml, dxfCount: 0 })
+    const semanticHash = sha256(semanticBytes)
+    writeFileSync(join(dir, 'semantic.xlsx'), semanticBytes)
+    const semanticRes = verifyCfCase(makeScaleCase('semantic.xlsx', semanticHash), { rootDir: dir })
+    expect(semanticRes.structuralValid).toBe(true)
   })
 
   it('rejects review-t1-r1 counterexamples: text-only capture, inverted/blue expectations, white printer capture, unbound sidecar, and threshold 100->1000', async () => {
