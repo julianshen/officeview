@@ -12,10 +12,11 @@ import { encodeRasterBody } from '../../src/stream/raster'
 import { AssetTooLarge, encodeAssets } from '../../src/stream/asset-wire'
 import { ASSET_ALLOWANCE } from '../../src/stream/remote/reservation'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
-import { AuditTable } from './audit'
+import { AuditTable, ForensicExhausted, msgHex, type Issued } from './audit'
+import { CODEC_ID } from './mark/params'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
-import { effectivePolicy, FORENSIC_NOTICE, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
+import { effectivePolicy, forensicNotices, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
@@ -56,6 +57,8 @@ export interface StreamServerOptions {
   path?: string
   /** §14 document-cache ceiling (tests shrink it). */
   documentCacheBytes?: number
+  /** Audit table (tests preset token exhaustion). */
+  audit?: AuditTable
 }
 
 interface Conn {
@@ -84,10 +87,10 @@ export function createStreamServer(o: StreamServerOptions) {
   const reapers = new Map<string, ReturnType<typeof setTimeout>>()
   const fingerprintOf = o.fingerprint ?? layoutFingerprint
   const table = new SessionTable()
-  const audit = new AuditTable()
+  const audit = o.audit ?? new AuditTable()
   const ipRates = new IpRates()
   const docs = new Map<string, DocState>()          // docRef → state
-  const sessionDoc = new Map<string, { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number }>()
+  const sessionDoc = new Map<string, { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -179,14 +182,21 @@ export function createStreamServer(o: StreamServerOptions) {
         return close(ws, (e as RenderFailed).refusal === 'unsupported-format' ? 'unsupported-format' : 'auth-failed')
       }
       if (gone(ws)) return
+      let forensic: Issued | undefined
+      if (policy.forensicMark) {
+        try { forensic = audit.issue(o.keys.kMsg, o.keys.keyGeneration) } catch (e) {
+          if (e instanceof ForensicExhausted) return close(ws, 'policy-refused')
+          throw e
+        }
+      }
       const sid = newSid()
       const token = await issueToken(o.keys.kToken, { docRef, sid, ttlSec: ttl, now: nowSec() })
       if (gone(ws)) return
       // Commit synchronously: nothing below awaits, so no close can interleave.
       const s = table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt: nowSec() })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
-      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: 1, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: false, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: null, forensicLayers: [] })
+      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensic: !!forensic, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, forensicLayers: forensic ? ['l1'] : [] })
       ws.data.sid = sid
       committed = true
       sendManifest(ws, reqId, sid, token.token)
@@ -255,7 +265,7 @@ export function createStreamServer(o: StreamServerOptions) {
       can: { search: false, copy: false, print: p.print, textA11y: false, present: false, notes: false, links: false },
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
-      notices: [FORENSIC_NOTICE, ...(p.relaxed ? ['relaxed-session'] : [])],
+      notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],
     }
     ws.data.phase = 'manifest'
     sendFrames(ws, [frame(KIND.MANIFEST, reqId, encodeManifest(m))!])
@@ -442,6 +452,8 @@ export function createStreamServer(o: StreamServerOptions) {
       return true
     },
     audit,
+    /** The sid's Layer-1 issuance (tests and the validation script). */
+    forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
     table,
     stats: () => ({ sockets: sockets.size, sessions: table.size, docs: docs.size, cache: { entries: renderCache.count, bytes: renderCache.size }, pool: o.pool.stats() }),
   }

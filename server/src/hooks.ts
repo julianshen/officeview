@@ -25,9 +25,9 @@ export interface EffectivePolicy {
   contentPolicy: 'visible-only' | 'full'
   projection: 'final-raster' | 'commands'
   visibleMark: 'fixed' | 'viewer' | 'off'
-  /** Always false in Stage 1: layer-1 is Stage 2 (manifest notice
-   * `forensic-mark-stage-2`); never claim a mark that is not applied. */
-  forensicMark: false
+  /** Layer-1 on final-raster units (Stage 2a). Command units carry no
+   * forensic mark until Layer 2; notices say so (never claim an unapplied mark). */
+  forensicMark: boolean
   /** What the developer asked for, recorded in the audit row. */
   forensicRequested: boolean
   print: boolean
@@ -36,7 +36,11 @@ export interface EffectivePolicy {
   relaxed: boolean
 }
 
-export const FORENSIC_NOTICE = 'forensic-mark-stage-2'
+/** Manifest notices for what the forensic mark actually covers (§13.1). */
+export function forensicNotices(p: Pick<EffectivePolicy, 'forensicMark' | 'projection'>): string[] {
+  if (!p.forensicMark) return ['forensic-off']
+  return p.projection === 'commands' ? ['forensic-commands-unmarked'] : []
+}
 
 export function effectivePolicy(d: AuthDecision): EffectivePolicy {
   const p = d.policy ?? {}
@@ -45,7 +49,7 @@ export function effectivePolicy(d: AuthDecision): EffectivePolicy {
   const visibleMark = p.visibleMark === 'viewer' || p.visibleMark === 'off' ? p.visibleMark : 'fixed'
   const forensicRequested = p.forensicMark !== false
   return {
-    contentPolicy, projection, visibleMark, forensicMark: false, forensicRequested,
+    contentPolicy, projection, visibleMark, forensicMark: forensicRequested, forensicRequested,
     print: p.print !== false, role: d.role === 'presenter' ? 'presenter' : 'audience',
     relaxed: contentPolicy !== 'visible-only' || projection !== 'final-raster' || visibleMark === 'off' || !forensicRequested,
   }

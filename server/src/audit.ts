@@ -36,17 +36,17 @@ const hexBits = (hex: string) => Array.from({ length: 40 }, (_, i) => (parseInt(
 
 export class AuditTable {
   private rows = new Map<string, AuditRow>()
-  private nextToken: number
+  private nextToken_: number
   /** Live keyed messages, as insertMessage's bit-string ids. */
   private used = new Set<string>()
   constructor(o: { firstToken?: number; used?: readonly string[] } = {}) {
-    this.nextToken = o.firstToken ?? 0
+    this.nextToken_ = o.firstToken ?? 0
     for (const h of o.used ?? []) this.used.add(hexBits(h))
   }
 
   issue(kMsg: Uint8Array, keyGeneration: number, draw?: () => number): Issued {
-    if (this.nextToken >= TOKEN_SPACE) throw new ForensicExhausted('24-bit token space exhausted')
-    const token24 = this.nextToken++ // never rewinds, even if the draw below fails
+    if (this.nextToken_ >= TOKEN_SPACE) throw new ForensicExhausted('24-bit token space exhausted')
+    const token24 = this.nextToken_++ // never rewinds, even if the draw below fails
     let r: { salt8: number; msg40: Uint8Array }
     try { r = insertMessage(kMsg, keyGeneration, token24, this.used, draw) } catch { throw new ForensicExhausted('no collision-free salt') }
     return { token24, salt8: r.salt8, msg40: r.msg40, code: extendedCodeword(r.msg40) }
@@ -68,4 +68,6 @@ export class AuditTable {
   }
   get size() { return this.rows.size }
   get liveMessages() { return this.used.size }
+  /** The token the next issue() will try. */
+  get nextToken() { return this.nextToken_ }
 }

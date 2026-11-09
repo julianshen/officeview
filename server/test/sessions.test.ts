@@ -32,9 +32,9 @@ describe('session table', () => {
   })
 })
 
-describe('effective policy (§2 item 5 defaults; Stage-1 forensic)', () => {
-  it('defaults are protected and never claim a forensic mark', () => {
-    expect(effectivePolicy({ policy: {} })).toEqual({ contentPolicy: 'visible-only', projection: 'final-raster', visibleMark: 'fixed', forensicMark: false, forensicRequested: true, print: true, role: 'audience', relaxed: false })
+describe('effective policy (§2 item 5 defaults; Stage-2a forensic)', () => {
+  it('defaults are protected and apply the forensic mark', () => {
+    expect(effectivePolicy({ policy: {} })).toEqual({ contentPolicy: 'visible-only', projection: 'final-raster', visibleMark: 'fixed', forensicMark: true, forensicRequested: true, print: true, role: 'audience', relaxed: false })
   })
   it('relaxations are flagged', () => {
     expect(effectivePolicy({ policy: { projection: 'relaxed' } }).projection).toBe('commands')

@@ -18,6 +18,7 @@ export interface RenderKeyFields {
   layoutFingerprint: string
   recorderVersion: 1
   scaleBucket: number
+  /** Keys the canonical tier only (§9.3): per-sid Layer-1 pixels are added after the cache, never stored in it. */
   markSettings: { visible: 'fixed' | 'viewer' | 'off'; text: string; forensic: false }
   projectionMode: 'final-raster' | 'commands'
   /** §6.4 projection id, XLSX viewStateHash, notes namespace — Stage 1: the
