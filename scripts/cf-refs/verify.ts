@@ -1946,6 +1946,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
     let captureMinPositive = Number.POSITIVE_INFINITY
     let captureMaxPositive = 0
+    let checkedColorCellCount = 0
     for (let i = 0; i < c.expected.cells.length; i++) {
       const exp = c.expected.cells[i]!
       const obs = observations[i]!
@@ -1954,19 +1955,37 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           ? (sidecar.observedCells as any[]).find(o => o.ref?.toUpperCase() === exp.ref.toUpperCase())
           : undefined
         const observedArgb = (sidecarObs?.fillRgb ?? sidecarObs?.displayFormatFill)?.toUpperCase()
+        const isDisplayFormat =
+          sidecarObs?.fillSource === 'excel-display-format' || exp.fillSource === 'excel-display-format'
 
-        if (exp.fillSource === 'excel-display-format') {
-          if (observedArgb && exp.fillRgb && observedArgb !== exp.fillRgb.toUpperCase()) {
+        if (isDisplayFormat && observedArgb) {
+          const dfRgb = parseArgbHex(observedArgb)
+          const fillPixelDelta = rgbMaxDelta(obs.bgRgb, dfRgb)
+          if (fillPixelDelta > 12) {
             return {
               kind: 'refusal',
               id: c.id,
               status: c.status,
-              code: 'cell-expectation-mismatch',
-              reason: `Trusted display-format ARGB ${observedArgb} for cell ${exp.ref} does not match expected ${exp.fillRgb}`,
+              code: 'fill-pixel-mismatch',
+              reason: `Cell ${exp.ref} (${cap.appearance}) display-format fill ${observedArgb} (${dfRgb.join(',')}) disagrees with screen pixel background (${obs.bgRgb.join(',')}); max channel delta ${fillPixelDelta} exceeds tolerance 12`,
               structuralValid: true,
             }
           }
-          passingCellRefs.add(exp.ref.toUpperCase())
+          if (exp.fillRgb !== undefined) {
+            if (observedArgb !== exp.fillRgb.toUpperCase()) {
+              return {
+                kind: 'refusal',
+                id: c.id,
+                status: c.status,
+                code: 'cell-expectation-mismatch',
+                reason: `Trusted display-format ARGB ${observedArgb} for cell ${exp.ref} does not match expected ${exp.fillRgb}`,
+                structuralValid: true,
+              }
+            }
+          }
+          checkedColorCellCount++
+          captureMinPositive = Math.min(captureMinPositive, obs.bgContrastDelta)
+          captureMaxPositive = Math.max(captureMaxPositive, obs.bgContrastDelta)
         } else if (exp.fillRgb !== undefined) {
           const targetRgb = parseArgbHex(exp.fillRgb)
           const fillErr = rgbMaxDelta(obs.bgRgb, targetRgb)
@@ -1990,6 +2009,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
               structuralValid: true,
             }
           }
+          checkedColorCellCount++
           captureMinPositive = Math.min(captureMinPositive, obs.bgContrastDelta)
           captureMaxPositive = Math.max(captureMaxPositive, obs.bgContrastDelta)
         } else {
@@ -2278,12 +2298,30 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
       }
     }
 
-    const hasScaleFills =
-      c.stage === 2 &&
-      c.markers.some(m => m.ruleType === 'colorScale') &&
-      c.expected.cells.some(cell => cell.matched && cell.fillSource === 'excel-display-format')
+    const isScaleCase = c.stage === 2 && c.markers.some(m => m.ruleType === 'colorScale')
 
-    if (!hasScaleFills) {
+    if (isScaleCase) {
+      if (checkedColorCellCount === 0 || !Number.isFinite(captureMinPositive)) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'no-cells-checked',
+          reason: `No colour scale cells were checked in capture ${cap.pngPath} (${cap.appearance}) (minContrast=${captureMinPositive}, checkedCount=${checkedColorCellCount})`,
+          structuralValid: true,
+        }
+      }
+      if (captureMaxPositive < 16) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'unchanged-control-capture',
+          reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive scale cell contrast (max delta ${captureMaxPositive})`,
+          structuralValid: true,
+        }
+      }
+    } else {
       if (!Number.isFinite(captureMinPositive) || captureMinPositive < 16) {
         return {
           kind: 'refusal',

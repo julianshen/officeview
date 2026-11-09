@@ -245,6 +245,8 @@ export type CfRefusalCode =
   | 'semantic-evidence-pending'
   | 'unsupported-capability'
   | 'fill-unobserved'
+  | 'fill-pixel-mismatch'
+  | 'no-cells-checked'
 
 export interface VerifiedEvidence {
   kind: 'verified'

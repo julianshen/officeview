@@ -634,7 +634,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         return {
           ...exp,
           fillSource: 'excel-display-format' as const,
-          fillRgb: col.displayFormatFill,
         }
       }
       return exp

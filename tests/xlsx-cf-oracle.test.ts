@@ -779,7 +779,11 @@ describe('CF oracle verifier', () => {
       tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
     })
 
-    const writeSidecar = (geomSource = 'excel-measured', observedArgb = 'FFFF0000') => {
+    const writeSidecar = (
+      geomSource = 'excel-measured',
+      observedArgb = 'FFFF0000',
+      fillSource: 'excel-display-format' | 'pixel-matched' = 'excel-display-format',
+    ) => {
       writeFileSync(
         join(dir, 'scale.json'),
         JSON.stringify({
@@ -801,8 +805,8 @@ describe('CF oracle verifier', () => {
           pngSha256: validPngHash,
           capturedAt: '2026-11-06T08:00:00Z',
           observedCells: [
-            { ref: 'B2', fillSource: 'excel-display-format', fillRgb: observedArgb },
-            { ref: 'B3', fillSource: 'excel-display-format', fillRgb: 'FFFFFFFF' },
+            { ref: 'B2', fillSource, fillRgb: observedArgb },
+            { ref: 'B3', fillSource, fillRgb: 'FFFFFFFF' },
           ],
         }),
       )
@@ -831,23 +835,33 @@ describe('CF oracle verifier', () => {
     })
 
     // 3. OD-5 calibrated pixel-matched with excel-measured geometry verifies
-    writeSidecar('excel-measured')
+    writeSidecar('excel-measured', 'FFFFC7CE', 'pixel-matched')
     // validPng has #ffc7ce at B2, target FFFFC7CE
     const cPixelMatched = makeCase('pixel-matched')
     cPixelMatched.expected.cells[0].fillRgb = 'FFFFC7CE'
     const pixelMatchedRes = verifyCfCase(cPixelMatched, { rootDir: dir })
     expect(pixelMatchedRes.kind).toBe('verified')
 
-    // 4. Trusted ARGB (fillSource: 'excel-display-format') verifies even when pixel advice disagrees
+    // 4. Trusted ARGB (fillSource: 'excel-display-format') must agree with screen pixel (delta <= 12); refuses with fill-pixel-mismatch otherwise
     writeSidecar('excel-measured', 'FFFF0000')
     const trustedArgbCase = makeCase('excel-display-format')
     trustedArgbCase.expected.cells[0].fillRgb = 'FFFF0000'
-    // validPng has #ffc7ce (delta > 28 from FFFF0000), but trusted ARGB overrides pixel advice
+    // validPng has #ffc7ce (delta > 12 from FFFF0000), so display-format and screen pixel mismatch
     const trustedRes = verifyCfCase(trustedArgbCase, { rootDir: dir })
-    expect(trustedRes.kind).toBe('verified')
+    expect(trustedRes).toMatchObject({
+      kind: 'refusal',
+      code: 'fill-pixel-mismatch',
+    })
+
+    // 4b. When display-format ARGB agrees with screen pixel within 12, it verifies
+    writeSidecar('excel-measured', 'FFFFC7CE')
+    const agreedCase = makeCase('excel-display-format')
+    agreedCase.expected.cells[0].fillRgb = 'FFFFC7CE'
+    const agreedRes = verifyCfCase(agreedCase, { rootDir: dir })
+    expect(agreedRes.kind).toBe('verified')
 
     // 5. Trusted ARGB that differs from expectation gets cell-expectation-mismatch
-    writeSidecar('excel-measured', 'FF00FF00') // observed green vs expected red
+    writeSidecar('excel-measured', 'FFFFC7CE') // observed FFFFC7CE matches pixel, but differs from expected FFFF0000
     const mismatchArgbCase = makeCase('excel-display-format')
     mismatchArgbCase.expected.cells[0].fillRgb = 'FFFF0000'
     const mismatchRes = verifyCfCase(mismatchArgbCase, { rootDir: dir })
@@ -1131,7 +1145,7 @@ describe('CF oracle verifier', () => {
         pngSha256: validPngHash,
         capturedAt: '2026-11-06T08:00:00Z',
         observedCells: [
-          { ref: 'B2', fillSource: 'excel-display-format', fillRgb: 'FFFF0000' },
+          { ref: 'B2', fillSource: 'excel-display-format', fillRgb: 'FFFFC7CE' },
           { ref: 'B3', fillSource: 'excel-display-format', fillRgb: 'FFFFFFFF' },
         ],
       }),
@@ -1156,7 +1170,7 @@ describe('CF oracle verifier', () => {
         positiveRefs: ['B2'],
         negativeRefs: ['B3'],
         cells: [
-          { ref: 'B2', controlRef: 'A2', matched: true, fillRgb: 'FFFF0000', scaleApplied: true, fillSource: 'excel-display-format' },
+          { ref: 'B2', controlRef: 'A2', matched: true, fillRgb: 'FFFFC7CE', scaleApplied: true, fillSource: 'excel-display-format' },
           { ref: 'B3', controlRef: 'B2', matched: false, scaleApplied: false, fillSource: 'unverified' },
         ],
       },
@@ -1234,6 +1248,122 @@ describe('CF oracle verifier', () => {
     // Reconstructed concatenated channel strings from run 2 (previously misparsed as VBA BGR integers)
     expect(parseExcelColorToArgb('248105107')).toBe(EXCEL_RED)
     expect(parseExcelColorToArgb('99190123')).toBe(EXCEL_GREEN)
+  })
+
+  it('refuses with no-cells-checked when zero colour cells are verified', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-no-cells-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:no-cells-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFF0000', 'FF00FF00'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    // Unmatched cells B2, B3 must not be highlighted so they pass background checks
+    const validPng = makeCapturePng(false)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    writeFileSync(
+      join(dir, 'scale.json'),
+      JSON.stringify({
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: xlsxHash,
+        sheet: 'Sheet1',
+        range: 'A1:B3',
+        savedSha256: xlsxHash,
+        pngSha256: validPngHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: [],
+      }),
+    )
+
+    // A case where cells has no matched scale cells that undergo color comparison
+    const testCase: CfOracleCase = {
+      id: 'scale-no-cells-case',
+      stage: 2,
+      question: 'Scale zero checked cells test',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: [],
+        negativeRefs: ['B2', 'B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+          { ref: 'B3', controlRef: 'A3', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    }
+
+    const res = verifyCfCase(testCase, { rootDir: dir })
+    expect(res).toMatchObject({
+      kind: 'refusal',
+      code: 'no-cells-checked',
+    })
+  })
+
+  it('preserves seed hypothesis cell expectations without circular copy of observed display-format fill', () => {
+    // Stage 2 scale cases must retain their authored expected cells without circular copy of observed fillRgb
+    const s2Cases = CF_CASES.filter(c => c.stage === 2 && c.markers.some(m => m.ruleType === 'colorScale'))
+    expect(s2Cases.length).toBeGreaterThan(0)
+    for (const c of s2Cases) {
+      // Authored seed hypothesis expectations for scale cells must never pre-populate observed fillRgb
+      for (const cell of c.expected.cells) {
+        if (cell.matched && cell.scaleApplied) {
+          expect(cell.fillRgb, `Case ${c.id} scale cell ${cell.ref} has circular or authored fillRgb`).toBeUndefined()
+        }
+      }
+    }
   })
 
   it('rejects review-t1-r1 counterexamples: text-only capture, inverted/blue expectations, white printer capture, unbound sidecar, and threshold 100->1000', async () => {
