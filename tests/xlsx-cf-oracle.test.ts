@@ -1035,6 +1035,23 @@ describe('CF oracle verifier', () => {
     }
     const resColors = verifyCfCase(testColorsCase, { rootDir: dir })
     expect(resColors).toMatchObject({ structuralValid: true })
+
+    // 3. Composition case H2:H5 (scale:composition-scale-stopIfTrue) matches Excel-resaved rule where stopIfTrue is dropped
+    const compCase = CF_CASES.find(c => c.id === 'stage2-scale-composition')!
+    const canonCompXml =
+      '<conditionalFormatting sqref="H2:H5"><cfRule type="colorScale" priority="12"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const canonCompBytes = await makeSyntheticXlsx({ sheetRuleXml: canonCompXml, dxfCount: 0 })
+    writeFileSync(join(dir, 'canon-comp.xlsx'), canonCompBytes)
+    const markerStop = compCase.markers.find(m => m.capabilityId === 'scale:composition-scale-stopIfTrue')!
+    const testCompCase = {
+      ...compCase,
+      markers: [markerStop],
+      input: 'canon-comp.xlsx',
+      saved: 'canon-comp.xlsx',
+      expected: { ...compCase.expected, inputSha256: sha256(canonCompBytes), savedSha256: sha256(canonCompBytes) },
+    }
+    const resComp = verifyCfCase(testCompCase, { rootDir: dir })
+    expect(resComp).toMatchObject({ structuralValid: true })
   })
 
   it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {

@@ -289,7 +289,13 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
   if (marker.stopIfTrue !== undefined) {
     const stopAttr = attr(rule, 'stopIfTrue')
     const actualStop = stopAttr === '1' || stopAttr === 'true'
-    if (actualStop !== marker.stopIfTrue) return false
+    if (actualStop !== marker.stopIfTrue) {
+      if (marker.ruleType === 'colorScale' && marker.stopIfTrue === true && !actualStop) {
+        // Excel canonically strips stopIfTrue on colorScale rules upon resave
+      } else {
+        return false
+      }
+    }
   }
   if (marker.aboveAverage !== undefined) {
     const aaAttr = attr(rule, 'aboveAverage')
