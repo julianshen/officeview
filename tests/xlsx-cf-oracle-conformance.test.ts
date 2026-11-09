@@ -280,6 +280,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
   })
 
   it('asserts Stage 2 colour-scale cells remain withheld until evidence is verified (Lesson 1)', async () => {
+    let checkedCount = 0
     const stage2Cases = manifest.cases.filter(c => c.stage === 2)
     for (const c of stage2Cases) {
       const savedPath = join(REPO_ROOT, c.saved)
@@ -292,18 +293,30 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       if (!paint) continue
 
       for (const exp of c.expected?.cells ?? []) {
+        const scaleMarker = c.markers.find(m => m.ruleType === 'colorScale' && isCellInSqref(exp.ref, m.sqref))
+        if (!scaleMarker) continue
+        if (!(exp.scaleApplied ?? exp.matched)) continue
+
         const { row, col } = refToRowCol(exp.ref)
         const st = paint.layer.styleAt(row, col, undefined)
+
         // Until scale:* capabilities are evidenced and verified,
         // no CF colour-scale fill may be applied to any Stage 2 cell.
-        if (exp.fillRgb && (exp.scaleApplied ?? exp.matched)) {
+        if (c.id === 'stage2-scale-composition' && (exp.ref === 'B2' || exp.ref === 'B3')) {
+          // B2/B3 has a winning Stage 1 cellIs dxf fill, not a scale fill
+          expect(st?.fillColor, `${c.id}:${exp.ref} cellIs dxf fill`).toBe('FFFFC7CE')
+        } else {
           expect(
             st?.fillColor,
             `Stage 2 cell ${c.id}:${exp.ref} colour scale fill must be withheld while unverified`,
-          ).not.toBe(exp.fillRgb)
+          ).toBeUndefined()
         }
+        checkedCount++
       }
       paint.dispose()
     }
+
+    expect(checkedCount).toBeGreaterThan(0)
+    expect(checkedCount).toBe(206)
   })
 })
