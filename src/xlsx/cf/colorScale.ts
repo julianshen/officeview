@@ -414,6 +414,16 @@ export function resolveScaleThresholds(
   return { kind: 'ready', value: thresholds }
 }
 
+/** Clamped position of `v` in [lo, hi], overflow-safe: finite thresholds of opposite sign near the double limit
+ * overflow `hi - lo`, so such spans are normalised in halves. Undefined only if the result is still non-finite, in which
+ * case the caller withholds instead of publishing a wrong colour. */
+export function safeFraction(v: number, lo: number, hi: number): number | undefined {
+  let span = hi - lo, offset = v - lo
+  if (!Number.isFinite(span) || !Number.isFinite(offset)) { span = hi / 2 - lo / 2; offset = v / 2 - lo / 2 }
+  const fraction = offset / span
+  return Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : undefined
+}
+
 /**
  * Computes the interpolated ARGB colour for a cell value.
  * Pure function: fails closed when evidence is absent or cell value is outside bounds.
@@ -482,7 +492,8 @@ export function scaleColorAt(
           return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
         }
       }
-      const fraction = Math.max(0, Math.min(1, (numericVal - tLow) / (tHigh - tLow)))
+      const fraction = safeFraction(numericVal, tLow, tHigh)
+      if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
     }
 
@@ -493,7 +504,8 @@ export function scaleColorAt(
       }
     }
 
-    const fraction = Math.max(0, Math.min(1, (numericVal - t0) / (t1 - t0)))
+    const fraction = safeFraction(numericVal, t0, t1)
+      if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
     return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
   } else {
     // 3-point scale
@@ -526,11 +538,13 @@ export function scaleColorAt(
 
     if (numericVal <= t1) {
       if (t0 === t1) return { kind: 'ready', value: c1 }
-      const fraction = Math.max(0, Math.min(1, (numericVal - t0) / (t1 - t0)))
+      const fraction = safeFraction(numericVal, t0, t1)
+      if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       return { kind: 'ready', value: interpolateScaleColor(c0, c1, fraction, colorSpace, rounding) }
     } else {
       if (t1 === t2) return { kind: 'ready', value: c2 }
-      const fraction = Math.max(0, Math.min(1, (numericVal - t1) / (t2 - t1)))
+      const fraction = safeFraction(numericVal, t1, t2)
+      if (fraction === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
       return { kind: 'ready', value: interpolateScaleColor(c1, c2, fraction, colorSpace, rounding) }
     }
   }

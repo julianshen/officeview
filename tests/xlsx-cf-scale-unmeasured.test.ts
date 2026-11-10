@@ -135,3 +135,26 @@ describe('M6: a scale positive does not switch off the Stage 1 multi-positive gu
     batch?.dispose()
   })
 })
+
+describe('bot P2: finite thresholds whose span overflows interpolate correctly, never a wrong colour', () => {
+  const ev = ['scale:interpolation-color-space', 'scale:interpolation-rounding-ladder', 'scale:degenerate-values-beyond-bounds']
+  const at = (v: number) => withExactCfEvidence(ev, () => scaleColorAt(v, two(num(-1e308), num(1e308)), [-1e308, 1e308]))
+  it('2-point [-1e308, 1e308]: endpoints are the endpoint colours, the midpoint is a blend', () => {
+    expect(at(-1e308)).toEqual({ kind: 'ready', value: C[0] })
+    expect(at(1e308)).toEqual({ kind: 'ready', value: C[2] })
+    const mid = at(0)
+    expect(mid.kind).toBe('ready')
+    expect(mid.kind === 'ready' && mid.value).not.toBe(C[0])
+    expect(mid.kind === 'ready' && mid.value).not.toBe(C[2])
+    expect(mid.kind === 'ready' && mid.value).not.toBe(0)
+  })
+  it('3-point with an overflowing outer span keeps its segments', () => {
+    const out = (v: number) => withExactCfEvidence(ev, () => scaleColorAt(v, three(num(-1e308), num(0), num(1e308)), [-1e308, 0, 1e308]))
+    expect(out(-1e308)).toEqual({ kind: 'ready', value: C[0] })
+    expect(out(0)).toEqual({ kind: 'ready', value: C[1] })
+    expect(out(1e308)).toEqual({ kind: 'ready', value: C[2] })
+  })
+  it('ordinary spans still interpolate', () => {
+    expect(withExactCfEvidence(ev, () => scaleColorAt(5, two(num(0), num(10)), [0, 10])).kind).toBe('ready')
+  })
+})

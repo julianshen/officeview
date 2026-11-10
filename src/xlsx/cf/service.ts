@@ -2,7 +2,7 @@ import { PackageError } from '../../core/package-error'
 import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
-import { resolveScaleThresholds, scaleColorAt } from './colorScale'
+import { resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
 import { resolveCfCellStyle } from './dxf'
 import { CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
@@ -214,7 +214,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     if (numVal !== undefined && thresh.value.length >= 2) {
                       const tMin = Math.min(...thresh.value)
                       const tMax = Math.max(...thresh.value)
-                      fraction = tMax === tMin ? 1 : Math.max(0, Math.min(1, (numVal - tMin) / (tMax - tMin)))
+                      fraction = tMax === tMin ? 1 : safeFraction(numVal, tMin, tMax)
                     }
                     outcomes.push({ kind: 'ready', value: { argb: colorOut.value, fraction } })
                   } else {
