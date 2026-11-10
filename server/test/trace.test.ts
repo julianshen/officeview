@@ -55,9 +55,11 @@ function jpegBytes(b: Bitmap, q: number): Uint8Array {
 describe('tau', () => {
   it('declared table and lookup', () => {
     expect(TAU_TABLE.map((t) => t.m)).toEqual([2 ** 16, 2 ** 20, 2 ** 24])
-    expect(TAU_TABLE[0]).toMatchObject({ abs: 7.99, margin: 3.85, source: 'stage-0 provisional' })
-    expect(TAU_TABLE[1]!.abs).toBeCloseTo(Math.sqrt(7.99 ** 2 + 2 * Math.log(16)), 12)
-    expect(TAU_TABLE[2]).toMatchObject({ abs: 8.66, margin: 3.85 })
+    // Stage 2b calibration (docs/validation/streaming-s2b.md): fitted at 2^16, union rule above.
+    expect(TAU_TABLE[0]).toMatchObject({ abs: 7.93, margin: 3.45, source: expect.stringMatching(/^stage-2b calibrate [0-9a-f]+$/) })
+    expect(TAU_TABLE[1]).toMatchObject({ abs: 8.27, margin: 3.45 })
+    expect(TAU_TABLE[2]).toMatchObject({ abs: 8.6, margin: 3.45 })
+    for (let i = 1; i < 3; i++) expect(TAU_TABLE[i]!.abs).toBeCloseTo(Math.sqrt(7.93 ** 2 + 2 * Math.log(TAU_TABLE[i]!.m / 2 ** 16)), 1)
     expect(tauFor(1).m).toBe(2 ** 16); expect(tauFor(2 ** 16).m).toBe(2 ** 16)
     expect(tauFor(2 ** 16 + 1).m).toBe(2 ** 20); expect(tauFor(MAX_CANDIDATES).m).toBe(2 ** 24)
     expect(MAX_CANDIDATES).toBe(2 ** 22)

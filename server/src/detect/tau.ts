@@ -1,11 +1,11 @@
 /** §13.2 decision thresholds by declared candidate-table size M. A trace over
  * `count` candidates uses the next declared M at or above `count`. */
 export const TAU_TABLE: ReadonlyArray<{ m: number; abs: number; margin: number; source: string }> = Object.freeze([
-  { m: 2 ** 16, abs: 7.99, margin: 3.85, source: 'stage-0 provisional' },
-  // Gaussian-tail extrapolation from 2^16: +2 ln(2^20 / 2^16) under the square.
-  { m: 2 ** 20, abs: Math.sqrt(7.99 ** 2 + 2 * Math.log(16)), margin: 3.85, source: 'stage-0 provisional' },
-  // The fitted-tail value (Stage 0's τ ≈ 8.66 at 2^24).
-  { m: 2 ** 24, abs: 8.66, margin: 3.85, source: 'stage-0 provisional' },
+  // Fitted (Stage-0 `calibrate`, upper-decile Gaussian tail at 1e-6) over 2160 null trace() decisions at 2^16.
+  { m: 2 ** 16, abs: 7.93, margin: 3.45, source: 'stage-2b calibrate 6e2129af' },
+  // Stage-0 union rule from the fitted 2^16 value: sqrt(τ² + 2 ln(M / 2^16)).
+  { m: 2 ** 20, abs: 8.27, margin: 3.45, source: 'stage-2b calibrate 6e2129af' },
+  { m: 2 ** 24, abs: 8.6, margin: 3.45, source: 'stage-2b calibrate 6e2129af' },
 ].map((t) => Object.freeze(t)))
 
 /** The most candidates one decision scores (the detector's matrix bound); above it the tool refuses. */

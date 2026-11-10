@@ -65,7 +65,10 @@ at most 2 in flight per session. Units too small to carry 512 cells ship with
 the visible mark only and a `diag forensic-unmarked`. Integration proof on
 served bytes (ΔE00, §13.5 survival at the Stage-0 τ, unmarked captures never
 attributing): `docs/validation/streaming-s2.md`. Detection tooling, τ
-recalibration and audit persistence are Stage 2b.
+recalibration and audit persistence are Stage 2b; the τ table the trace tool
+ships (`server/src/detect/tau.ts`) and the Stage-2 gate (survival, null false
+attribution, collusion and capture-geometry batteries through `trace()` on
+served bytes) are in `docs/validation/streaming-s2b.md`.
 
 ## Investigator tool: `detect` (Stage 2b)
 
