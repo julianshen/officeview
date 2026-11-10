@@ -33,6 +33,12 @@ function refToRowCol(ref: string): { row: number; col: number } {
   return { row, col: col - 1 }
 }
 
+/** The viewer evaluates TODAY() in the workbook/viewer time zone (host default). The Excel observation was taken in
+ * `requiredTimeZone`, so a conformance run evaluates in that zone instead of inheriting the CI host's (UTC). */
+function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } }): { evaluation?: { timeZone: string } } {
+  return c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}
+}
+
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
 
@@ -120,7 +126,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       }
       try {
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
-        const doc = await parseXlsx(await OfficePackage.load(bytes))
+        const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
         const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
         const dateContext = c.clockRequirement ? {
           clockSerial: c.clockRequirement.anchorSerial,
@@ -259,7 +265,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       }
       try {
         const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
-        const doc = await parseXlsx(await OfficePackage.load(bytes))
+        const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
         const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
         const dateContext = c.clockRequirement ? {
           clockSerial: c.clockRequirement.anchorSerial,
@@ -438,5 +444,28 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Runtime rejection of painted wrong colour or diverged outcome:
     expect(() => validateFinding({ outcome: 'diverged' as any, reason: 'invalid' })).toThrow(/Non-withheld outcome/)
     expect(() => validateFinding({ outcome: 'painted' as any, reason: 'wrong colour' })).toThrow(/Non-withheld outcome/)
+  })
+
+  it('Stage 1 clock cases are host-time-zone independent (CI runs in UTC)', async () => {
+    const previous = process.env.TZ
+    process.env.TZ = 'UTC'
+    try {
+      expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
+      for (const id of ['stage1-timeperiod-today-clock', 'stage1-timeperiod-today-clock-2']) {
+        const c = manifest.cases.find(x => x.id === id)!
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`))
+        try {
+          const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
+          const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+            const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext: { clockSerial: c.clockRequirement!.anchorSerial, dateSystem: c.clockRequirement!.dateSystem } })
+          const stale = refToRowCol(c.clockRequirement!.staleCacheCellRef)
+          expect(paint!.layer.styleAt(stale.row, stale.col, undefined)?.fillColor, `${id} stale TODAY() cell refreshes to the anchor day`).toBe('FFFFC7CE')
+          paint!.dispose()
+        } finally { vi.useRealTimers() }
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous
+    }
   })
 })

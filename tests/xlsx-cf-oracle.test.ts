@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
 import { afterEach, describe, expect, it } from 'vitest'
+
+const hasOsacompile = process.platform === 'darwin' && spawnSync('which', ['osacompile']).status === 0
 import { compareCfCase } from '../scripts/cf-compare'
 import { assertCanCloseWorkbook, filterCasesForStage, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
@@ -975,7 +977,8 @@ describe('CF oracle verifier', () => {
     expect(retainedStage1?.expected.inputSha256).toBe('deadbeef11111111111111111111111111111111111111111111111111111111')
   })
 
-  it('compiles all probe AppleScripts under osacompile with zero syntax errors', () => {
+  // osacompile ships with macOS only: skipped (by name) on Linux CI, strict wherever it exists.
+  it.skipIf(!hasOsacompile)('compiles all probe AppleScripts under osacompile with zero syntax errors', () => {
     for (const c of CF_CASES) {
       const refs = c.expected.cells.map(x => x.ref)
       const scripts = [
