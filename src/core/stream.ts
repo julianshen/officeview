@@ -13,6 +13,7 @@
  */
 
 import { watermarkFromHeaders, type WatermarkOptions } from './watermark'
+import { isStreamSource, StreamSourceMisuseError } from '../stream/source'
 import { throwIfAborted } from './package-error'
 
 export interface Progress {
@@ -40,6 +41,8 @@ export type ByteSource = DirectByteSource | Promise<DirectByteSource>
  * cookies). Prefer a `Request` when you also need method/mode/cache control.
  */
 export interface HttpSource {
+  /** Never set: keeps a StreamSource (`kind: 'stream'`) from being typed as one (§6.1). */
+  kind?: never
   url: string
   headers?: HeadersInit
   credentials?: RequestCredentials
@@ -219,6 +222,7 @@ export async function readSource(
     const resolved = await (source as Promise<DirectByteSource>)
     return readSource(resolved, onProgress, onProtection, onWatermark, signal)
   }
+  if (isStreamSource(source)) throw new StreamSourceMisuseError()
   // A Request already bundles url + headers + credentials (+ method/mode),
   // so fetch it as-is. Realm note: a cross-realm Request fails instanceof
   // and falls through to the { url } branch below, which still forwards its
@@ -369,6 +373,7 @@ export async function openByteStream(source: ByteSource, listeners: OpenSourceLi
   if (typeof (source as Promise<DirectByteSource> | null)?.then === 'function') {
     return openByteStream(await (source as Promise<DirectByteSource>), listeners, signal)
   }
+  if (isStreamSource(source)) throw new StreamSourceMisuseError()
   if (typeof Request !== 'undefined' && source instanceof Request) return openFetch(source, undefined, listeners, signal)
   if (source instanceof Response) return openResponse(source, listeners, signal)
   if (source instanceof Blob) return { kind: 'blob', blob: source }

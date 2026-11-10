@@ -1,0 +1,7 @@
+41fe5b635137c768cfa99c803c0f9369973bf4d6089fe1450f927670acaa2883  scripts/stream-s0/showplan/classify.ts
+0047ec0fd010ae11ed026b1c59e5276210adc72216f876f73a17a16ad7ffe129  scripts/stream-s0/showplan/client.ts
+1749c256c403c37e2a21ece9afeead9c36d1b517682a1b1677539de27af3b270  scripts/stream-s0/showplan/dom.ts
+f81ba66b1cacd654fa3e9f778bbbd7c44cd656f2f837f4dfe3fc5e7b44c4556d  scripts/stream-s0/showplan/schema.ts
+b9798f9b1069c41db1f497a5a7e4c833efa28eed859cc538fdd3a62e0fb28d22  scripts/stream-s0/showplan/serialize.ts
+35a6c9bacc58c7746141fafc5bc3eb8167c0d806be5952d2705b42dab7ded1b7  scripts/stream-s0/t5-showplan.ts
+23cb9dcb92102b484230830a5728fb0cbfdf219102c89df38f8f5f6d582476f9  tests/stream-s0/t5-showplan.test.ts

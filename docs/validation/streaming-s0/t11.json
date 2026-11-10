@@ -1,0 +1,28 @@
+{
+  "status": "RED",
+  "ceiling": 38720,
+  "transitiveGzipBytes": 417436,
+  "indexOnlyGzipBytes": 35978,
+  "perChunk": [
+    {
+      "file": "importSession-CVQDRSWC.js",
+      "gzipBytes": 1171
+    },
+    {
+      "file": "index.js",
+      "gzipBytes": 35978
+    },
+    {
+      "file": "office-worker-DkKoHW-2.js",
+      "gzipBytes": 380287
+    }
+  ],
+  "moduleMapHash": "a0669339ada2a01085db11e6ebc77fb8914ff42ff6ee16b19c6437a919674dc3",
+  "checkEager": "eager modules: 155\npaged worker chunks ok: pagedImport-CFHiZh0W.js, viewerLargeSource-B56utudt.js\neager graph ok",
+  "corePurity": "stage1",
+  "note": "Gate 1 sums gzip over the static chunk closure of dist/index.js; eager-budget.ts today measures index.js alone (indexOnlyGzipBytes). Core entry + purity assert are Stage 1.",
+  "gate": "t11",
+  "backend": "node-canvas",
+  "gitSha": "dd68bc35316de0a72e4d0d7b9288f4730cf105f9",
+  "generatedAt": "2026-11-08T12:18:35.897Z"
+}

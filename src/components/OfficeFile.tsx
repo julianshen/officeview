@@ -12,6 +12,10 @@ import type { PackageErrorCode } from '../core/package-error'
 import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
 import { ImportRefusal, type RefusalReason } from '../xlsx/storage/importSession'
 import { pagedWorkbookOf } from './pagedDocument'
+import { isStreamSource, type StreamSource } from '../stream/source'
+import type { RemoteOfficeDoc } from '../stream/remote/remote-doc'
+import type { StreamErrorCode } from '../stream/remote/errors'
+import type { StreamClientFactory, StreamNotice } from '../stream/remote/session'
 
 export type { AnyDoc } from './loadOfficeSource'
 
@@ -24,9 +28,21 @@ export type OfficeFileState =
   | { status: 'loading' }
   /** `code`/`reason` are set when a spreadsheet was refused by admission
    * (`reason: 'limit'` names the applied limit; `'paged-not-yet'` is no longer produced). */
-  | { status: 'error'; message: string; code?: PackageErrorCode; reason?: RefusalReason }
+  | { status: 'error'; message: string; code?: PackageErrorCode | StreamErrorCode; reason?: RefusalReason }
   /** `notices`: user-visible load notices (e.g. saved values shown, data not shown). */
-  | { status: 'ready'; document: AnyDoc; notices?: readonly string[] }
+  | { status: 'ready'; document: AnyDoc | RemoteOfficeDoc; notices?: readonly string[] }
+
+/** A byte source, a stream source (§6.1), or a promise of either. */
+export type OfficeSource = ByteSource | StreamSource | Promise<ByteSource | StreamSource>
+/** Stream-session options (§8.2); ignored for byte sources. */
+export interface StreamOptions {
+  /** WebSocket factory (default `new WebSocket(url)`). */
+  streamClient?: StreamClientFactory
+  /** Where the host serves the pinned font pack (`pack.json` + TTFs). */
+  streamFonts?: { baseUrl: string }
+  /** Load notices and unit diagnostics of a stream session. */
+  onStreamNotice?: (notice: StreamNotice) => void
+}
 
 /**
  * Load an office file from any byte source — bytes in memory, a Blob, a
@@ -57,8 +73,8 @@ export interface ViewerWorkerPort {
 }
 
 export function useOfficeFile(
-  source: ByteSource | null | undefined,
-  options: {
+  source: OfficeSource | null | undefined,
+  options: StreamOptions & {
     onProgress?: (p: Progress) => void
     onProtection?: ProtectionListener
     onWatermark?: WatermarkListener
@@ -89,21 +105,30 @@ export function useOfficeFile(
   // first load, so a later mode change keeps the loaded document (a worker-backed
   // one stays in the interactive viewer) instead of re-reading a drained body;
   // re-readable sources (bytes, Blob, URL) re-open under the new route.
+  const streamRef = useRef(options)
+  streamRef.current = options
   const routeKey = source && oneShot(source) ? null : pagedRoute
   useEffect(() => {
     let cancelled = false
     // No source: the previous cleanup released its document, so stop rendering it.
     if (!source) { setState({ status: 'loading' }); return }
-    let loaded: AnyDoc | undefined
+    let loaded: AnyDoc | RemoteOfficeDoc | undefined
     // One controller per source: cleanup aborts the download, the spool,
     // the verification pass and the parse, and the loader releases the spool.
     const controller = new AbortController()
     setState({ status: 'loading' })
+    // §6.3: the mode is the branch. A stream source (or a promise of one) opens
+    // a session through the lazy remote chunk and never reaches a byte reader.
+    const openRemote = (src: StreamSource) => import('../stream/remote/open').then((m) => m.openRemoteDocument(src, {
+      signal: controller.signal, client: streamRef.current.streamClient, fonts: streamRef.current.streamFonts,
+      onNotice: (n) => { if (!cancelled) streamRef.current.onStreamNotice?.(n) },
+    }))
+    const load = (src: ByteSource | StreamSource): Promise<AnyDoc | RemoteOfficeDoc> => isStreamSource(src) ? openRemote(src) : loadLocal(src)
     // onProtection: protection events from a cancelled load are dropped: the ref
     // below always points at the latest render's callback, which would otherwise
     // tag the old policy with the current data (see the source-tagged state
     // in <OfficeFile>) and let a stale download overwrite the live policy.
-    loadOfficeSource(source, {
+    const loadLocal = (src: ByteSource) => loadOfficeSource(src, {
       signal: controller.signal,
       onProgress: (p) => progressRef.current?.(p),
       onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
@@ -122,36 +147,46 @@ export function useOfficeFile(
         },
       } : {}),
     })
+    const pending = isStreamSource(source) ? openRemote(source)
+      : isThenable(source) ? source.then(load)
+        : loadLocal(source)
+    pending
       .then((document) => {
-        // A worker-backed document belongs to this load: released with it.
-        if (cancelled) { void pagedWorkbookOf(document)?.release(); return }
+        // A worker-backed (or remote) document belongs to this load: released with it.
+        if (cancelled) { release(document); return }
         loaded = document
+        if (isRemote(document)) { setState({ status: 'ready', document }); return }
         const notices = documentNotices(document)
         setState(notices.length > 0 ? { status: 'ready', document, notices } : { status: 'ready', document })
       })
       .catch((e: unknown) => {
         if (cancelled) return
         const message = e instanceof Error ? e.message : String(e)
-        setState(e instanceof ImportRefusal ? { status: 'error', message, code: e.code, reason: e.reason } : { status: 'error', message })
+        const code = (e as { name?: string; code?: StreamErrorCode }).name === 'StreamSessionError' ? (e as { code: StreamErrorCode }).code : undefined
+        setState(e instanceof ImportRefusal ? { status: 'error', message, code: e.code, reason: e.reason } : code ? { status: 'error', message, code } : { status: 'error', message })
       })
     return () => {
       cancelled = true
       controller.abort()
-      void pagedWorkbookOf(loaded)?.release()
+      release(loaded)
     }
   }, [source, routeKey])
   return state
 }
 
-const oneShot = (s: ByteSource): boolean =>
+const isThenable = <T,>(s: unknown): s is Promise<T> => typeof (s as { then?: unknown } | null)?.then === 'function'
+const isRemote = (d: unknown): d is RemoteOfficeDoc => (d as { kind?: unknown } | undefined)?.kind === 'remote'
+const release = (d: AnyDoc | RemoteOfficeDoc | undefined) => { if (isRemote(d)) d.close(); else void pagedWorkbookOf(d)?.release() }
+
+const oneShot = (s: OfficeSource): boolean =>
   typeof (s as { then?: unknown }).then === 'function'
   || (typeof Request !== 'undefined' && s instanceof Request)
   || (typeof Response !== 'undefined' && s instanceof Response)
   || (typeof ReadableStream !== 'undefined' && s instanceof ReadableStream)
 
-export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
-  /** The office file: bytes, a Blob, a fetch() Response, a ReadableStream, a URL ({ url, headers }), a Request, or a promise of any of these. */
-  data: ByteSource | null | undefined
+export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'>, StreamOptions {
+  /** The office file: bytes, a Blob, a fetch() Response, a ReadableStream, a URL ({ url, headers }), a Request, or a promise of any of these — or a `{ kind: 'stream', url }` source that opens a server stream session (§6.1). */
+  data: OfficeSource | null | undefined
   /**
    * Rendered while loading. A function form receives live progress so the
    * host can show a real bar: loading={({ loaded, total }) => <Bar pct={...} />}.
@@ -180,6 +215,9 @@ export const OfficeFile = forwardRef(function OfficeFile({
   allowPrint = true,
   watermark,
   viewerWorker,
+  streamClient,
+  streamFonts,
+  onStreamNotice,
   ...rest
 }: OfficeFileProps, ref: Ref<OfficeViewerHandle>): ReactElement {
   const [progress, setProgress] = useState<Progress | undefined>(undefined)
@@ -189,11 +227,11 @@ export const OfficeFile = forwardRef(function OfficeFile({
   // source it arrived with. Policy lives in state — not props — so there is
   // no boolean for devtools to flip. The merge below is deliberately
   // most-restrictive-wins: a server denial cannot be re-enabled from props.
-  const [headerPolicy, setHeaderPolicy] = useState<{ source: ByteSource | null | undefined; policy: ProtectionPolicy }>()
+  const [headerPolicy, setHeaderPolicy] = useState<{ source: OfficeSource | null | undefined; policy: ProtectionPolicy }>()
   // Same sealing rule for the watermark: it belongs to the source it arrived
   // with, so a stale download can never stamp the next document.
   const [headerMark, setHeaderMark] = useState<{
-    source: ByteSource | null | undefined
+    source: OfficeSource | null | undefined
     mark: WatermarkOptions | undefined
   }>()
   // File name (spec §6.5), sealed to its source like the policy above: the
@@ -201,7 +239,7 @@ export const OfficeFile = forwardRef(function OfficeFile({
   // resolves to (which reports no headers). Headers win whichever lands
   // first. The parser is lazy (out of the eager entry); a name that resolves
   // after its source was replaced is dropped so it never overwrites the live one.
-  const [named, setNamed] = useState<{ source: ByteSource | null | undefined; name: string | undefined }>()
+  const [named, setNamed] = useState<{ source: OfficeSource | null | undefined; name: string | undefined }>()
   const current = useRef(data)
   current.current = data
   const name = (from: unknown, disposition?: string | null, keep?: boolean) => {
@@ -215,8 +253,11 @@ export const OfficeFile = forwardRef(function OfficeFile({
     onHeaders: (h, url) => name({ url }, h.get('content-disposition')),
     interactiveSheets: rest.interactiveSheets,
     viewerWorker,
+    ...(streamClient ? { streamClient } : {}),
+    ...(streamFonts ? { streamFonts } : {}),
+    ...(onStreamNotice ? { onStreamNotice } : {}),
   })
-  useEffect(() => { Promise.resolve(data).then((s) => name(s, null, true), () => {}) }, [data])
+  useEffect(() => { Promise.resolve(data).then((s) => { if (!isStreamSource(s)) name(s, null, true) }, () => {}) }, [data])
   const serverPolicy = headerPolicy && headerPolicy.source === data ? headerPolicy.policy : undefined
   const effectiveAllowCopy = allowCopy && (serverPolicy?.allowCopy ?? true)
   const effectiveAllowPrint = allowPrint && (serverPolicy?.allowPrint ?? true)

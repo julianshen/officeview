@@ -742,6 +742,45 @@ state**/shadow fields); PATH_*/PATH_END {FILL,STROKE,FILL_STROKE,CLIP};
 GLYPH_RUN (f64 advances + string; **no outline opcodes**); IMAGE_DRAW;
 TILE; RASTER_BLOCK.
 
+#### Assigned opcodes (Stage 1b)
+
+Each opcode is one u8. Multi-byte operands are LE; coordinates/advances are
+IEEE-754 f64. Strings are u32 UTF-8 byte length followed by exactly those bytes.
+
+| code | op | operands (LE) |
+|---|---|---|
+| 1 | STATE_PUSH | — |
+| 2 | STATE_POP | — |
+| 3 | TRANSFORM | u8 mode: 0 setTransform / 1 transform + 6 × f64 a b c d e f; 2 translate / 3 scale + 2 × f64 x y; 4 rotate + 1 × f64 angle (radians) |
+| 4 | STYLE_COLOR | u8 target (0 fill, 1 stroke, 2 shadow) + string |
+| 5 | STYLE_OBJ | u8 target (0 fill, 1 stroke) + u32 assetId |
+| 6 | STATE_SETUP | u32 field mask + present fields in mask-bit order (see `StateFields`) |
+| 7 | PATH | u8 sub (0 begin, 1 moveTo, 2 lineTo, 3 quad, 4 bezier, 5 arc, 6 arcTo, 7 ellipse, 8 rect, 9 roundRect, 10 close) + f64 args (+ u8 ccw for arc/ellipse; roundRect radii as u8 count + f64s) |
+| 8 | PATH_END | u8 mode (0 fill, 1 stroke, 2 fill_stroke, 3 clip) + u8 rule (0 nonzero, 1 evenodd) |
+| 9 | RECT | u8 mode (0 fillRect, 1 strokeRect, 2 clearRect) + 4 × f64 |
+| 10 | GLYPH_RUN | u8 mode (0 fill, 1 stroke) + string text + f64 x + f64 y + u8 hasMax + f64 maxWidth? + u32 n + n × f64 advances |
+| 11 | IMAGE_DRAW | u32 assetId + u8 argc (3, 5, 9) + (argc − 1) × f64 |
+| 12 | TILE | u32 w + u32 h + f64 dx + f64 dy + u32 byteLen + RGBA bytes |
+| 13 | RASTER_BLOCK | reserved for §7.7; decoder rejects in 1b |
+
+
+STATE_SETUP mask bits 0–23, in order: lineWidth, lineCap, lineJoin,
+miterLimit, lineDash (u16 count + f64s), lineDashOffset, globalAlpha,
+globalCompositeOperation, imageSmoothingEnabled, imageSmoothingQuality,
+letterSpacing, wordSpacing, direction, lang, fontKerning, fontVariantCaps,
+shadowBlur, shadowOffsetX, shadowOffsetY, font, textAlign, textBaseline,
+fontStretch, textRendering. Reserved mask bits, enum codes, and malformed
+UTF-8 refuse the unit. Enum u8 indices start at zero in these orders:
+lineCap [butt, round, square]; lineJoin [round, bevel, miter];
+imageSmoothingQuality [low, medium, high]; direction [inherit, ltr, rtl];
+fontKerning [auto, normal, none]; textAlign [left, right, center, start, end];
+textBaseline [top, hanging, middle, alphabetic, ideographic, bottom];
+textRendering [auto, optimizeSpeed, optimizeLegibility, geometricPrecision].
+Booleans are 0/1. roundRect carries 1–4 f64 radii; TILE byteLen equals
+w × h × 4. Command unit opCount is the number of complete ops; raster/tile
+unit bodies are opaque here and carry opCount zero. byteLen counts the body
+only, excluding the 13-byte unit header.
+
 ### 7.6 Versioning, tiles, runtime fallback
 
 Version compatibility is the §6.2 set intersection; the §7.1 header's `ver`

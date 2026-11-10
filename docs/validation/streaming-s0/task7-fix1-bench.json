@@ -1,0 +1,24 @@
+{
+  "gate": "T9-prepared-candidates",
+  "status": "REPORTED",
+  "gitSha": "766abc6544b313b282656e9963124753cc3e575e",
+  "generatedAt": "2026-11-08T09:20:15.498Z",
+  "backend": "@napi-rs/canvas",
+  "runtime": "v22.22.3",
+  "M": 65536,
+  "ownedBytes": 33554432,
+  "inputReads": 65536,
+  "prepareMs": 165.19716599999992,
+  "warmups": 2,
+  "decisionMs": [
+    66.90770900000007,
+    67.06770799999958,
+    67.17041699999936,
+    67.21545799999967,
+    67.24645800000053,
+    67.31483300000036,
+    67.43470799999977
+  ],
+  "medianMs": 67.21545799999967,
+  "note": "Shared-machine wall time, not an assertion or full-search calibration; same-size capture, real distinct BCH candidates"
+}

@@ -9,6 +9,8 @@ coverage/
 # parent directory is itself excluded.
 corpus/*
 !corpus/corpus.lock.json
+corpus-s0/*
+!corpus-s0/corpus.lock.json
 # Native Office captures and rendered images stay local; scripts/reports are versioned.
 validation/office-reference/*.pdf
 validation/office-reference/*.png
@@ -30,3 +32,4 @@ site/public/samples/
 # Task 15 engine oracle scratch (build-engine.ts)
 tests/fixtures/xlsx-pivots/engine/.work/
 tests/fixtures/xlsx-pivots/engine/.probes/
+.s0-cache/

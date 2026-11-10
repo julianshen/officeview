@@ -1,3 +1,4 @@
+import { installedCanvasBackend } from './canvas-backend'
 /** Identity-coordinate text metrics shared by drawing layout and text recording. */
 const measurers = new WeakMap<CanvasRenderingContext2D, (text: string) => TextMetrics>()
 
@@ -24,8 +25,10 @@ export function createLocalTextMeasurer(base: CanvasRenderingContext2D): (text: 
   const cached = measurers.get(base)
   if (cached) return cached
   let canvas: HTMLCanvasElement
+  const backend = installedCanvasBackend()
   const ownerDocument = base.canvas.ownerDocument ?? (typeof document !== 'undefined' ? document : undefined)
-  if (ownerDocument) canvas = ownerDocument.createElement('canvas')
+  if (backend) canvas = backend.createCanvas(4, 4) as unknown as HTMLCanvasElement
+  else if (ownerDocument) canvas = ownerDocument.createElement('canvas')
   else {
     // Both OffscreenCanvas and node-canvas accept width/height without a DOM.
     const Canvas = base.canvas.constructor as unknown as new (width: number, height: number) => HTMLCanvasElement

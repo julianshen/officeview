@@ -1,0 +1,22 @@
+{
+  "gate": "T9-null-smoke",
+  "status": "GREEN",
+  "backend": "@napi-rs/canvas",
+  "gitSha": "767e26ec88dec38550a5f755b2377861a3896c6c",
+  "generatedAt": "2026-11-08T09:08:00.602Z",
+  "measurements": [
+    {
+      "kind": "unmarked",
+      "samples": 12288,
+      "mean": 0.0011484085197206392,
+      "std": 0.9937983198499535
+    },
+    {
+      "kind": "wrong-key",
+      "samples": 12288,
+      "mean": 0.0021140494138387656,
+      "std": 0.9982397572855789
+    }
+  ],
+  "note": "12 captures per null class, 1024 real BCH candidates; no full-search false-attribution calibration claimed"
+}
