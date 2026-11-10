@@ -5,7 +5,7 @@
  * literals. These tests pin the tracking budget, the pressure-sample gate,
  * and deliberate-leak detection before the audit functions use them.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { checkPressureSample, createTrackingBudget } from '../scripts/cf-refs/audit'
 
 describe('tracking budget observes real holds', () => {
@@ -120,7 +120,12 @@ describe('pressure functions observe real work (no literals)', () => {
 
   it('shared rules admit with observed visits and outcomes', async () => {
     const { pressureSharedRules } = await import('../scripts/cf-refs/audit')
-    const s = await pressureSharedRules()
+    // The CF work budget has a 50 ms wall-clock active limit; on a loaded CI runner the 100-rule scan can exceed it and
+    // refuse for a reason unrelated to what this scenario proves (admission, observed visits, zero net bytes). Freeze
+    // the budget's clock so admission is deterministic; yield checkpoints still trigger on work units.
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
+    let s: Awaited<ReturnType<typeof pressureSharedRules>>
+    try { s = await pressureSharedRules() } finally { clock.mockRestore() }
     expect(s.outcome).toBe('admitted')
     expect(s.sourceReads).toBeGreaterThan(0)
     expect(s.peakBytes).toBeGreaterThan(0)
