@@ -63,14 +63,14 @@ describe('forensic policy', () => {
   it('a resume keeps the original token and issues no new row', async () => {
     const h = await start({ doc: corpus('pypptx-test.pptx') })
     const c0 = new Client(h.url), m0 = await c0.hello(); await c0.ready()
-    const before = h.stream.forensicOf(m0.session.sid)!, next = h.stream.audit.nextToken
+    const before = h.stream.forensicOf(m0.session.sid)!, next = h.stream.audit.nextToken(1)
     const ws = c0.ws as WebSocket & { terminate?: () => void }
     if (ws.terminate) ws.terminate(); else ws.close(1001)
     await c0.closed; await Bun.sleep(50)
     const c = new Client(h.url), m = await c.hello({ resume: { sid: m0.session.sid, resumeProof: m0.session.token } })
     expect(m.session.sid).toBe(m0.session.sid)
     expect(h.stream.forensicOf(m.session.sid)).toBe(before)
-    expect(h.stream.audit.nextToken).toBe(next)
+    expect(h.stream.audit.nextToken(1)).toBe(next)
     c.close(); h.stop()
   })
 })

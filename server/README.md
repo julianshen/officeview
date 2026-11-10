@@ -24,6 +24,19 @@ switch `current` to it, and keep every older generation until the audit rows
 issued under it have expired, so leaked captures from that era stay traceable.
 `OV_STREAM_KEY` alone is a keyring with generation 1.
 
+**Audit store.** `OV_AUDIT_DB=<path>` (required outside `--demo`; `--demo`
+keeps an in-memory store) names a SQLite file (`bun:sqlite`, WAL,
+`synchronous=FULL`, created mode 0600; keep it on local disk and back it up
+with its `-wal`/`-shm` files). It holds the write-once audit rows, one
+delivery record per `(sid, unit, scale)` served to a forensic session (status
+`l1` or `unmarked` with its reason, plus the SHA-256 of the canonical PNG the
+mark was applied to), the per-generation token counters, and the trace tool's
+detection log. Ordering: a session's row is durable before its manifest is
+sent, and a delivery record before its frames; a failed write refuses (HELLO
+closes 4009 `policy-refused`; a unit is refused `policy-refused`), never sends
+unrecorded. Rows and their deliveries are deleted after 90 days (at startup
+and hourly); token counters are never reset.
+
 - **One endpoint.** `GET /stream` WebSocket upgrade from an allowlisted
   `Origin`; every other HTTP request is 404. There is no file route.
 - **Your hooks.** `authorize(req)` decides the viewer and per-session policy;

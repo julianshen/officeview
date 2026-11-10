@@ -2,7 +2,7 @@
 import { loadKeyring, type Keyring } from './keyring'
 
 export class ConfigError extends Error {
-  constructor(readonly code: 'missing-key' | 'bad-key' | 'bad-arg', message: string) {
+  constructor(readonly code: 'missing-key' | 'bad-key' | 'bad-arg' | 'missing-audit', message: string) {
     super(message)
     this.name = 'ConfigError'
   }
@@ -14,6 +14,8 @@ export interface ServerConfig {
   docDir: string
   originAllowlist: string[]
   keyring: Keyring
+  /** Durable audit store path (`OV_AUDIT_DB`); `':memory:'` under `--demo`. */
+  auditDb: string
   /** True when `--demo` generated the key: sessions die with the process. */
   ephemeral: boolean
 }
@@ -34,5 +36,7 @@ export function loadConfig(env: Record<string, string | undefined>, argv: readon
   const origins = [...(flag(argv, '--origin')?.split(',') ?? []), ...(env.OV_STREAM_ORIGINS?.split(',') ?? [])].map((s) => s.trim()).filter(Boolean)
   const docDir = flag(argv, '--doc-dir') ?? env.OV_STREAM_DOC_DIR ?? ''
   const { keyring, ephemeral } = loadKeyring(env, demo)
-  return { port, demo, docDir, originAllowlist: origins, keyring, ephemeral }
+  const auditDb = demo ? ':memory:' : env.OV_AUDIT_DB ?? ''
+  if (!auditDb) throw new ConfigError('missing-audit', 'OV_AUDIT_DB=<path> is required outside --demo')
+  return { port, demo, docDir, originAllowlist: origins, keyring, auditDb, ephemeral }
 }

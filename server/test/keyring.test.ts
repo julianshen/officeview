@@ -94,7 +94,7 @@ describe('keyring', () => {
   })
 
   it('loadConfig exposes the keyring', () => {
-    const c = loadConfig({ OV_STREAM_KEY: b64(k1) }, [])
+    const c = loadConfig({ OV_STREAM_KEY: b64(k1), OV_AUDIT_DB: ':memory:' }, [])
     expect(c.keyring.current).toBe(1)
     expect(c.ephemeral).toBe(false)
   })
