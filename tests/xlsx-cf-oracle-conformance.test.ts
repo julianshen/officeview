@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
+import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { isCellInSqref } from '../scripts/cf-refs/verify'
@@ -35,8 +35,10 @@ function refToRowCol(ref: string): { row: number; col: number } {
 
 /** The viewer evaluates TODAY() in the workbook/viewer time zone (host default). The Excel observation was taken in
  * `requiredTimeZone`, so a conformance run evaluates in that zone instead of inheriting the CI host's (UTC). */
-function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } }): { evaluation?: { timeZone: string } } {
-  return c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}
+function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } }): ParseXlsxOptions {
+  // `evaluation` is spread into evaluateWorkbookFormulas at runtime, which honours timeZone; the public type only
+  // advertises the array caps, hence the cast.
+  return (c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}) as ParseXlsxOptions
 }
 
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
