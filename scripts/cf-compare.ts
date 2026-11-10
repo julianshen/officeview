@@ -174,9 +174,12 @@ export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<strin
   if (!cap?.sidecarPath) return undefined
   const path = resolve(rootDir, cap.sidecarPath)
   if (!existsSync(path)) return undefined
-  const sidecar = JSON.parse(readFileSync(path, 'utf8')) as { observedCells?: Array<{ ref: string; fillRgb?: string }> }
+  const sidecar = JSON.parse(readFileSync(path, 'utf8')) as { observedCells?: Array<{ ref: string; fillRgb?: string; fillSource?: string; hidden?: boolean }> }
   const out = new Map<string, string>()
-  for (const cell of sidecar.observedCells ?? []) if (cell.fillRgb) out.set(cell.ref, cell.fillRgb.toUpperCase())
+  // Same trust boundary as tests/xlsx-cf-oracle-conformance.test.ts: Excel display-format fills of visible cells only.
+  for (const cell of sidecar.observedCells ?? []) {
+    if (cell.fillRgb && cell.fillSource === 'excel-display-format' && !cell.hidden) out.set(cell.ref, cell.fillRgb.toUpperCase())
+  }
   return out
 }
 
@@ -186,6 +189,15 @@ export function verifyCaseCells(
   actualAt: (row: number, col: number) => ActualCellOutcome,
 ): string | undefined {
   const observed = stage2ObservedFills(c, rootDir)
+  // Fail closed (final review I4): a measured Stage 2 case is verified against Excel-observed fills only. A missing
+  // sidecar, a sidecar with no trusted fills, or a run that compared zero non-withheld cells verified NOTHING and
+  // must refuse, never fall through to seed expectations (which carry no fillRgb) or pass vacuously.
+  const measuredStage2 = c.stage === 2 && c.status === 'measured'
+  if (measuredStage2) {
+    const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+    if (!observed) return `Stage 2 case ${c.id}: Excel observation sidecar${cap?.sidecarPath ? ` ${cap.sidecarPath}` : ''} is missing; nothing to verify against`
+    if (observed.size === 0) return `Stage 2 case ${c.id}: sidecar has no trusted excel-display-format fills; nothing to verify against`
+  }
   if (!observed) return verifyCellExpectations(c, actualAt)
   const contradicted = new Set(
     c.expected.cells.filter(e => e.matched && e.scaleApplied && observed.get(e.ref) === 'FFFFFFFF').map(e => e.ref),
@@ -195,13 +207,18 @@ export function verifyCaseCells(
     actualAt,
   )
   if (mismatch) return mismatch
+  let compared = 0
   for (const [ref, want] of observed) {
     const pos = parseA1(ref)
     if (!pos) return `Invalid observed cell reference: ${ref}`
     const actual = actualAt(pos.row, pos.col)
     if (actual.unresolved) continue
+    compared++
     const got = (actual.applied && actual.style?.fillColor ? String(actual.style.fillColor) : 'FFFFFFFF').toUpperCase()
     if (got !== want) return `Cell ${ref} observed Excel fill ${want}, got ${got}`
+  }
+  if (measuredStage2 && compared === 0) {
+    return `Stage 2 case ${c.id}: every observed cell was withheld; compared zero cells, so nothing was verified`
   }
   return undefined
 }
