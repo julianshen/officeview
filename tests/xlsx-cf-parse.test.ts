@@ -7,6 +7,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { createCfMemory } from '../src/xlsx/cf/limits'
 import { CF_LIMITS } from '../src/xlsx/cf/limits'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
+import { withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
 import { attachCfSheetRules, parseCfSheet, type CfParseMeta, type CfStylesSource } from '../src/xlsx/cf/parse'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import type { CfLease, CfRule, CfSheetRules } from '../src/xlsx/cf/model'
@@ -82,6 +83,36 @@ describe('CF rule parsing: all 18 types', () => {
     expect(scale.definition).toMatchObject({ kind: 'unresolved', type: 'colorScale' })
     expect(scale.writes.has('colorScale')).toBe(true)
     expect(scale.writes.has('fill')).toBe(true)
+
+    // Stage 2 Task 13 sibling assertion: proves the rule resolves under evidence
+    withInjectedCfEvidence(
+      [
+        'scale:thresholds-min-max',
+        'scale:thresholds-percentile-inc-exc',
+        'scale:interpolation-spec-palette',
+      ],
+      () => {
+      const withEvidence = parse(
+        `<conditionalFormatting sqref="B2:B20 D2:D20">` +
+          `<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>100</formula></cfRule>` +
+          `</conditionalFormatting>` +
+          `<conditionalFormatting sqref="B2:B20">` +
+          `<cfRule type="top10" dxfId="0" priority="2" rank="3"/>` +
+          `<cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule>` +
+          `</conditionalFormatting>`,
+      )
+      const evScale = ruleByPriority(withEvidence.value.rules, 3)
+      expect(evScale.definition).toMatchObject({
+        kind: 'colorScale',
+        points: [
+          { bound: { type: 'min' }, argb: 0xfff8696b },
+          { bound: { type: 'percentile', value: 50 }, argb: 0xffffeb84 },
+          { bound: { type: 'max' }, argb: 0xff63be7b },
+        ],
+      })
+      expect(evScale.writes.has('colorScale')).toBe(true)
+      expect(evScale.writes.has('fill')).toBe(true)
+    })
 
     const bad = parse(
       `<conditionalFormatting sqref="B2:B3">` +

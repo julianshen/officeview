@@ -93,6 +93,11 @@ export interface CfPartMarker {
    * Empty array `[]` pins the absence of formula children; 2 elements pin both `between`/`notBetween` operands.
    */
   formulas: readonly string[]
+  /** Expected `<colorScale>` definition pinned in cfvo and color sequence. */
+  scale?: {
+    cfvo: readonly { type: string; val?: string }[]
+    colors: readonly string[]
+  }
   /** Expected `<dxf>` resolved from `xl/styles.xml` via `@dxfId` (legacy) or inline `<x14:dxf>` (x14). */
   dxf?: CfDxfExpectation
 }
@@ -106,6 +111,10 @@ export interface CfCellExpectation {
   matched: boolean
   /** Expected winning background fill ARGB hex (`FFFFC7CE`) when matched. */
   fillRgb?: string
+  /** Source and trust level for fill evidence. */
+  fillSource?: 'excel-display-format' | 'pixel-matched' | 'unverified'
+  /** Whether a colour-scale rule applied formatting to this cell. */
+  scaleApplied?: boolean
   /** Expected winning font color ARGB hex (`FF9C0006`) when matched. */
   fontRgb?: string
   /** Expected winning bold state when overridden by DXF. */
@@ -139,6 +148,11 @@ export interface CfExpectedOutcome {
   negativeRefs: readonly string[]
   /** Independently recorded per-cell outcomes. */
   cells: readonly CfCellExpectation[]
+  /** Optional dynamic refresh observation recorded after live edit without saving. */
+  dynamicRefresh?: {
+    pre: Record<string, string>
+    post: Record<string, string>
+  }
 }
 
 export interface CfCaptureSpec {
@@ -230,6 +244,9 @@ export type CfRefusalCode =
   | 'unchanged-control-capture'
   | 'semantic-evidence-pending'
   | 'unsupported-capability'
+  | 'fill-unobserved'
+  | 'fill-pixel-mismatch'
+  | 'no-cells-checked'
 
 export interface VerifiedEvidence {
   kind: 'verified'
@@ -2389,3 +2406,1305 @@ export const CF_STAGE1_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE1_CA
       'While unmeasured or refused, rule is marked unresolved (not known not-matched): if stopIfTrue=true it stop-taints all lower-priority rules on overlapping cells; otherwise its CfWriteMask taints overlapping properties so lower-priority rules cannot paint a potentially wrong winner.',
   })),
 )
+
+export const CF_STAGE2_CASES: readonly CfOracleCase[] = [
+  // 1. stage2-scale-interpolation
+  {
+    id: 'stage2-scale-interpolation',
+    stage: 2,
+    question:
+      'Precondition probe (S2-A). Rounding ladder: 2-colour FF000000->FFFFFFFF, num 0 / num 510, values 0, 1, 3, 5, 255, 509, 510. Colour space: FFFF0000->FF0000FF min/max on 0, 50, 100. Spec palette: 3-colour scale FFF8696B/FFFFEB84/FF63BE7B, min/percentile 50/max over 1..9, plus midpoint threshold. Screen and printer appearances.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-interpolation.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-interpolation.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:E22',
+    requiredAppearances: ['screen', 'printer'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:interpolation-precondition-probe',
+        sqref: 'B2:B8',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFFF0000', 'FF00FF00'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:interpolation-rounding-ladder',
+        sqref: 'C2:C8',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'num', val: '0' }, { type: 'num', val: '510' }],
+          colors: ['FF000000', 'FFFFFFFF'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:interpolation-color-space',
+        sqref: 'D2:D4',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFFF0000', 'FF0000FF'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:interpolation-spec-palette',
+        sqref: 'E2:E11',
+        ruleType: 'colorScale',
+        priority: 4,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'percentile', val: '50' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8',
+        'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8',
+        'D2', 'D3', 'D4',
+        'E2', 'E3', 'E4', 'E5', 'E6', 'E7', 'E8', 'E9', 'E10', 'E11',
+      ],
+      negativeRefs: [
+        'B13', 'B14', 'B15', 'B16', 'B17', 'B18', 'B19',
+        'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19',
+        'D13', 'D14', 'D15',
+        'E13', 'E14', 'E15', 'E16', 'E17', 'E18', 'E19', 'E20', 'E21', 'E22',
+      ],
+      cells: [
+        { ref: 'B2', controlRef: 'B13', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B3', controlRef: 'B14', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B4', controlRef: 'B15', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B5', controlRef: 'B16', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B6', controlRef: 'B17', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B7', controlRef: 'B18', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B8', controlRef: 'B19', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B13', controlRef: 'B2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B14', controlRef: 'B3', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B15', controlRef: 'B4', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B16', controlRef: 'B5', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B17', controlRef: 'B6', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B18', controlRef: 'B7', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B19', controlRef: 'B8', matched: false, scaleApplied: false, fillSource: 'unverified' },
+
+        { ref: 'C2', controlRef: 'C13', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C3', controlRef: 'C14', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C4', controlRef: 'C15', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C5', controlRef: 'C16', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C6', controlRef: 'C17', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C7', controlRef: 'C18', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C8', controlRef: 'C19', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C13', controlRef: 'C2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C14', controlRef: 'C3', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C15', controlRef: 'C4', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C16', controlRef: 'C5', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C17', controlRef: 'C6', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C18', controlRef: 'C7', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C19', controlRef: 'C8', matched: false, scaleApplied: false, fillSource: 'unverified' },
+
+        { ref: 'D2', controlRef: 'D13', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'D3', controlRef: 'D14', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'D4', controlRef: 'D15', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'D13', controlRef: 'D2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'D14', controlRef: 'D3', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'D15', controlRef: 'D4', matched: false, scaleApplied: false, fillSource: 'unverified' },
+
+        { ref: 'E2', controlRef: 'E13', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E3', controlRef: 'E14', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E4', controlRef: 'E15', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E5', controlRef: 'E16', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E6', controlRef: 'E17', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E7', controlRef: 'E18', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E8', controlRef: 'E19', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E9', controlRef: 'E20', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E10', controlRef: 'E21', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E11', controlRef: 'E22', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'E13', controlRef: 'E2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E14', controlRef: 'E3', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E15', controlRef: 'E4', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E16', controlRef: 'E5', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E17', controlRef: 'E6', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E18', controlRef: 'E7', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E19', controlRef: 'E8', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E20', controlRef: 'E9', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E21', controlRef: 'E10', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'E22', controlRef: 'E11', matched: false, scaleApplied: false, fillSource: 'unverified' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-interpolation.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-interpolation.json',
+      },
+      {
+        appearance: 'printer',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-interpolation-printer.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-interpolation-printer.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 2. stage2-scale-thresholds
+  {
+    id: 'stage2-scale-thresholds',
+    stage: 2,
+    question:
+      'min/max; num inside and outside the data range; percent 25 over 0..100 data; a 3-colour min / percentile 30 / max scale over the scope values {1,2,3,4,10}; percent/percentile -10 and 150; Excel 2007 min val="0"; min mid-list or max first; num val="$A$1". Dynamic refresh on max cell edit.',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-thresholds.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-thresholds.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:I12',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-min-max',
+        sqref: 'B2:B6',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-num-bounds',
+        sqref: 'C2:C6',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-percent',
+        sqref: 'D2:D6',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'percent', val: '25' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-percentile-inc-exc',
+        sqref: 'E2:E6',
+        ruleType: 'colorScale',
+        priority: 4,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'percentile', val: '30' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-percent-percentile-out-of-bounds',
+        sqref: 'F2:F6',
+        ruleType: 'colorScale',
+        priority: 5,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'percent', val: '-10' }, { type: 'percentile', val: '150' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-legacy-min-val-0',
+        sqref: 'G2:G6',
+        ruleType: 'colorScale',
+        priority: 6,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min', val: '0' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-min-midlist-max-first',
+        sqref: 'H2:H6',
+        ruleType: 'colorScale',
+        priority: 7,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'max' }, { type: 'min' }],
+          colors: ['FF63BE7B', 'FFF8696B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:thresholds-num-val-reference',
+        sqref: 'I2:I6',
+        ruleType: 'colorScale',
+        priority: 8,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'num', val: '$A$1' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6',
+        'C2', 'C3', 'C4', 'C5', 'C6',
+        'D2', 'D3', 'D4', 'D5', 'D6',
+        'E2', 'E3', 'E4', 'E5', 'E6',
+        'F2', 'F3', 'F4', 'F5', 'F6',
+        'G2', 'G3', 'G4', 'G5', 'G6',
+        'H2', 'H3', 'H4', 'H5', 'H6',
+        'I2', 'I3', 'I4', 'I5', 'I6',
+      ],
+      negativeRefs: [
+        'B8', 'B9', 'B10', 'B11', 'B12',
+        'C8', 'C9', 'C10', 'C11', 'C12',
+        'D8', 'D9', 'D10', 'D11', 'D12',
+        'E8', 'E9', 'E10', 'E11', 'E12',
+        'F8', 'F9', 'F10', 'F11', 'F12',
+        'G8', 'G9', 'G10', 'G11', 'G12',
+        'H8', 'H9', 'H10', 'H11', 'H12',
+        'I8', 'I9', 'I10', 'I11', 'I12',
+      ],
+      cells: [
+        ...['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].flatMap(col => [
+          ...[2, 3, 4, 5, 6].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 6}`,
+            matched: true,
+            scaleApplied: true,
+            fillSource: 'unverified' as const,
+          })),
+          ...[8, 9, 10, 11, 12].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r - 6}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+          })),
+        ]),
+      ],
+      dynamicRefresh: { pre: {}, post: {} },
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-thresholds.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-thresholds.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 3. stage2-scale-degenerate
+  {
+    id: 'stage2-scale-degenerate',
+    stage: 2,
+    question:
+      'All values equal; a single numeric cell; inverted num 100 -> num 10; a 3-colour midpoint num above max; values below and above num bounds. Never assume clamping (S2-E).',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-degenerate.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-degenerate.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F12',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:degenerate-equal-values',
+        sqref: 'B2:B6',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:degenerate-single-cell',
+        sqref: 'C2',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:degenerate-inverted-thresholds',
+        sqref: 'D2:D6',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'num', val: '100' }, { type: 'num', val: '10' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:degenerate-midpoint-above-max',
+        sqref: 'E2:E6',
+        ruleType: 'colorScale',
+        priority: 4,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'num', val: '200' }, { type: 'num', val: '100' }],
+          colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:degenerate-values-beyond-bounds',
+        sqref: 'F2:F6',
+        ruleType: 'colorScale',
+        priority: 5,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6',
+        'C2',
+        'D2', 'D3', 'D4', 'D5', 'D6',
+        'E2', 'E3', 'E4', 'E5', 'E6',
+        'F2', 'F3', 'F4', 'F5', 'F6',
+      ],
+      negativeRefs: [
+        'B8', 'B9', 'B10', 'B11', 'B12',
+        'C8',
+        'D8', 'D9', 'D10', 'D11', 'D12',
+        'E8', 'E9', 'E10', 'E11', 'E12',
+        'F8', 'F9', 'F10', 'F11', 'F12',
+      ],
+      cells: [
+        ...['B', 'D', 'E', 'F'].flatMap(col => [
+          ...[2, 3, 4, 5, 6].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 6}`,
+            matched: true,
+            scaleApplied: true,
+            fillSource: 'unverified' as const,
+          })),
+          ...[8, 9, 10, 11, 12].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r - 6}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+          })),
+        ]),
+        { ref: 'C2', controlRef: 'C8', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C8', controlRef: 'C2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-degenerate.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-degenerate.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 4. stage2-scale-participation
+  {
+    id: 'stage2-scale-participation',
+    stage: 2,
+    question:
+      'Numbers, a date-formatted serial, TRUE/FALSE, text "5", #N/A, #DIV/0!, "", an unstored blank, and a formula with a cached number. A variant in which one error is present tests whether the other cells still colour (S2-G).',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-participation.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-participation.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:C22',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:participation-types',
+        sqref: 'B2:B11',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:participation-error-presence',
+        sqref: 'C2:C11',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11',
+        'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11',
+      ],
+      negativeRefs: [
+        'B13', 'B14', 'B15', 'B16', 'B17', 'B18', 'B19', 'B20', 'B21', 'B22',
+        'C13', 'C14', 'C15', 'C16', 'C17', 'C18', 'C19', 'C20', 'C21', 'C22',
+      ],
+      cells: [
+        ...['B', 'C'].flatMap(col => [
+          ...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 11}`,
+            matched: true,
+            scaleApplied: true,
+            fillSource: 'unverified' as const,
+          })),
+          ...[13, 14, 15, 16, 17, 18, 19, 20, 21, 22].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r - 11}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+          })),
+        ]),
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-participation.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-participation.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 5. stage2-scale-colors
+  {
+    id: 'stage2-scale-colors',
+    stage: 2,
+    question:
+      'Endpoints with theme colour and tint ±0.4, indexed, alpha 00, auto, and a custom non-Office theme1.xml. Check resolution order against applyTint (S2-F, spec §9.1).',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-colors.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-colors.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F12',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:colors-theme-tint',
+        sqref: 'B2:B6',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FF4F81BD', 'FFC0504D'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:colors-indexed',
+        sqref: 'C2:C6',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFFF0000', 'FF0000FF'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:colors-alpha-00',
+        sqref: 'D2:D6',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['00F8696B', '0063BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:colors-auto',
+        sqref: 'E2:E6',
+        ruleType: 'colorScale',
+        priority: 4,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['auto', 'auto'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:colors-custom-theme',
+        sqref: 'F2:F6',
+        ruleType: 'colorScale',
+        priority: 5,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FF336699', 'FF99CC33'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6',
+        'C2', 'C3', 'C4', 'C5', 'C6',
+        'D2', 'D3', 'D4', 'D5', 'D6',
+        'E2', 'E3', 'E4', 'E5', 'E6',
+        'F2', 'F3', 'F4', 'F5', 'F6',
+      ],
+      negativeRefs: [
+        'B8', 'B9', 'B10', 'B11', 'B12',
+        'C8', 'C9', 'C10', 'C11', 'C12',
+        'D8', 'D9', 'D10', 'D11', 'D12',
+        'E8', 'E9', 'E10', 'E11', 'E12',
+        'F8', 'F9', 'F10', 'F11', 'F12',
+      ],
+      cells: [
+        ...['B', 'C', 'D', 'E', 'F'].flatMap(col => [
+          ...[2, 3, 4, 5, 6].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 6}`,
+            matched: true,
+            scaleApplied: true,
+            fillSource: 'unverified' as const,
+          })),
+          ...[8, 9, 10, 11, 12].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r - 6}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+          })),
+        ]),
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-colors.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-colors.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 6. stage2-scale-scope
+  {
+    id: 'stage2-scale-scope',
+    stage: 2,
+    question:
+      'Disjoint B2:B4 D2:D4; the same rule duplicated in two <conditionalFormatting> blocks; a hidden row; an autofilter-hidden row; a merged B8:C9 inside the scope; whole-column F:F with 5 populated rows (S2-H).',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-scope.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-scope.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F20',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:scope-disjoint',
+        sqref: 'B2:B4 D2:D4',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:scope-duplicate-blocks',
+        sqref: 'B2:B6',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:scope-hidden-row',
+        sqref: 'C2:C6',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:scope-autofilter-hidden-row',
+        sqref: 'D2:D6',
+        ruleType: 'colorScale',
+        priority: 4,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:scope-merged-cell',
+        sqref: 'B8:C9',
+        ruleType: 'colorScale',
+        priority: 5,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:scope-whole-column',
+        sqref: 'F1:F1048576',
+        ruleType: 'colorScale',
+        priority: 6,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6',
+        'C2', 'C3', 'C4', 'C5', 'C6',
+        'D2', 'D3', 'D4', 'D5', 'D6',
+        'B8', 'C8', 'B9', 'C9',
+        'F2', 'F3', 'F4', 'F5', 'F6',
+        'F13', 'F14', 'F15', 'F16', 'F17',
+      ],
+      negativeRefs: [
+        'B13', 'B14', 'B15', 'B16', 'B17',
+        'C13', 'C14', 'C15', 'C16', 'C17',
+        'D13', 'D14', 'D15', 'D16', 'D17',
+        'B18', 'C18', 'B19', 'C19',
+      ],
+      cells: [
+        ...['B', 'C', 'D'].flatMap(col => [
+          ...[2, 3, 4, 5, 6].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 11}`,
+            matched: true,
+            scaleApplied: true,
+            fillSource: 'unverified' as const,
+          })),
+          ...[13, 14, 15, 16, 17].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r - 11}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+          })),
+        ]),
+        ...[2, 3, 4, 5, 6].map(r => ({
+          ref: `F${r}`,
+          controlRef: `E${r}`,
+          matched: true,
+          scaleApplied: true,
+          fillSource: 'unverified' as const,
+        })),
+        ...[13, 14, 15, 16, 17].map(r => ({
+          ref: `F${r}`,
+          controlRef: `E${r}`,
+          matched: true,
+          scaleApplied: true,
+          fillSource: 'unverified' as const,
+        })),
+        { ref: 'B8', controlRef: 'B18', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C8', controlRef: 'C18', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B9', controlRef: 'B19', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'C9', controlRef: 'C19', matched: true, scaleApplied: true, fillSource: 'unverified' },
+        { ref: 'B18', controlRef: 'B8', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C18', controlRef: 'C8', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'B19', controlRef: 'B9', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        { ref: 'C19', controlRef: 'C9', matched: false, scaleApplied: false, fillSource: 'unverified' },
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-scope.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-scope.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 7. stage2-scale-composition
+  {
+    id: 'stage2-scale-composition',
+    stage: 2,
+    question:
+      'DXF fill p1 with scale p2, and scale p1 with DXF fill p2, plus equal-priority variants; scale with a font-only DXF; a matching and a non-matching DXF stopIfTrue ahead of a scale; a scale with stopIfTrue="1" ahead of a DXF fill; two overlapping scales; a text cell in the scale range with a lower DXF fill; own fill and a table-styled base under a scale. Include unresolved expression stub at p1 (S2-I, S2-J).',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-composition.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-composition.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:L10',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-dxf-p1-scale-p2',
+        sqref: 'B2:B5',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-scale-p1-dxf-p2',
+        sqref: 'C2:C5',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-equal-priority',
+        sqref: 'D2:D5',
+        ruleType: 'colorScale',
+        priority: 5,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-font-only-dxf',
+        sqref: 'E2:E5',
+        ruleType: 'colorScale',
+        priority: 7,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-matching-stopIfTrue-ahead',
+        sqref: 'F2:F5',
+        ruleType: 'colorScale',
+        priority: 9,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-non-matching-stopIfTrue-ahead',
+        sqref: 'G2:G5',
+        ruleType: 'colorScale',
+        priority: 11,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-scale-stopIfTrue',
+        sqref: 'H2:H5',
+        ruleType: 'colorScale',
+        priority: 12,
+        stopIfTrue: true,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-overlapping-scales',
+        sqref: 'I2:I5',
+        ruleType: 'colorScale',
+        priority: 14,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-text-cell-lower-dxf',
+        sqref: 'J2:J5',
+        ruleType: 'colorScale',
+        priority: 16,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-own-fill-and-table',
+        sqref: 'K2:K5',
+        ruleType: 'colorScale',
+        priority: 18,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:composition-unresolved-expression-stub',
+        sqref: 'L2:L5',
+        ruleType: 'colorScale',
+        priority: 20,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [
+        'B2', 'B3', 'B4', 'B5',
+        'C2', 'C3', 'C4', 'C5',
+        'D2', 'D3', 'D4', 'D5',
+        'E2', 'E3', 'E4', 'E5',
+        'F2', 'F3', 'F4', 'F5',
+        'G2', 'G3', 'G4', 'G5',
+        'H2', 'H3', 'H4', 'H5',
+        'I2', 'I3', 'I4', 'I5',
+        'J2', 'J3', 'J4', 'J5',
+        'K2', 'K3', 'K4', 'K5',
+        'L2', 'L3', 'L4', 'L5',
+      ],
+      negativeRefs: [
+        'B7', 'B8', 'B9', 'B10',
+        'C7', 'C8', 'C9', 'C10',
+        'D7', 'D8', 'D9', 'D10',
+        'E7', 'E8', 'E9', 'E10',
+        'F7', 'F8', 'F9', 'F10',
+        'G7', 'G8', 'G9', 'G10',
+        'H7', 'H8', 'H9', 'H10',
+        'I7', 'I8', 'I9', 'I10',
+        'J7', 'J8', 'J9', 'J10',
+        'K7', 'K8', 'K9', 'K10',
+        'L7', 'L8', 'L9', 'L10',
+      ],
+      cells: [
+        ...['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].flatMap(col => [
+          ...[2, 3, 4, 5].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 5}`,
+            matched: true,
+            scaleApplied: true,
+            fillSource: 'unverified' as const,
+          })),
+          ...[7, 8, 9, 10].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r - 5}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+          })),
+        ]),
+      ],
+    },
+    captures: [
+      {
+        appearance: 'screen',
+        pngPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-composition.png',
+        sidecarPath: 'tests/fixtures/xlsx-cf/refs/stage2-scale-composition.json',
+      },
+    ],
+    status: 'recipe-pending',
+    reason: 'Awaiting host Excel 16.114 execution and verified display-format interior color observations',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+
+  // 8. stage2-scale-unresolved-shapes
+  {
+    id: 'stage2-scale-unresolved-shapes',
+    stage: 2,
+    question:
+      'Record Excel open/repair/strip outcome for: 2 cfvo with 3 colours; a cfvo without type; a formula cfvo; activePresent="1"; a standalone x14 colorScale with literal and reference xm:f (OD-3: recorded for writer-shape inventory, lifts no Stage 2 capability). Where Excel repairs, status is unsupported. Viewer expectation is refusal either way (S2-C, S2-K).',
+    input: 'tests/fixtures/xlsx-cf/inputs/stage2-scale-unresolved-shapes.xlsx',
+    saved: 'tests/fixtures/xlsx-cf/stage2-scale-unresolved-shapes.xlsx',
+    sheet: 'Sheet1',
+    range: 'A1:F12',
+    requiredAppearances: ['screen'],
+    markers: [
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:unresolved-2cfvo-3colors',
+        sqref: 'B2:B6',
+        ruleType: 'colorScale',
+        priority: 1,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:unresolved-cfvo-without-type',
+        sqref: 'C2:C6',
+        ruleType: 'colorScale',
+        priority: 2,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: '' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:unresolved-cfvo-formula',
+        sqref: 'D2:D6',
+        ruleType: 'colorScale',
+        priority: 3,
+        formulas: ['SUM(A1:A5)'],
+        scale: {
+          cfvo: [{ type: 'formula', val: 'SUM(A1:A5)' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'legacy',
+        capabilityId: 'scale:unresolved-active-present',
+        sqref: 'E2:E6',
+        ruleType: 'colorScale',
+        priority: 4,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+      {
+        part: 'xl/worksheets/sheet1.xml',
+        extension: 'x14',
+        capabilityId: 'scale:unresolved-x14-standalone',
+        sqref: 'F2:F6',
+        ruleType: 'colorScale',
+        priority: 5,
+        formulas: [],
+        scale: {
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          colors: ['FFF8696B', 'FF63BE7B'],
+        },
+      },
+    ],
+    expected: {
+      inputSha256: '',
+      savedSha256: '',
+      provenance: 'seed-hypothesis',
+      positiveRefs: [],
+      negativeRefs: [
+        'B2', 'B3', 'B4', 'B5', 'B6',
+        'C2', 'C3', 'C4', 'C5', 'C6',
+        'D2', 'D3', 'D4', 'D5', 'D6',
+        'E2', 'E3', 'E4', 'E5', 'E6',
+        'F2', 'F3', 'F4', 'F5', 'F6',
+      ],
+      cells: [
+        ...['B', 'C', 'D', 'E', 'F'].flatMap(col => [
+          ...[2, 3, 4, 5, 6].map(r => ({
+            ref: `${col}${r}`,
+            controlRef: `${col}${r + 6}`,
+            matched: false,
+            scaleApplied: false,
+            fillSource: 'unverified' as const,
+            note: 'unresolved shape fails closed (no match / plain)',
+          })),
+        ]),
+      ],
+    },
+    captures: [],
+    status: 'unsupported',
+    reason: 'Unsupported or invalid colorScale constructs fail closed per Ruling S2-C and S2-K',
+    tolerance: DEFAULT_TOLERANCE,
+  },
+]
+
+const S2_RULINGS: Record<string, string> = {
+  'scale:interpolation-precondition-probe':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-A (precondition probe requires display format interior color to differ from base interior color)',
+  'scale:interpolation-rounding-ladder':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-B (interpolation rounding has no default; requires verified rounding ladder evidence)',
+  'scale:interpolation-color-space':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-B (color space has no default; requires verified color space evidence)',
+  'scale:interpolation-spec-palette':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-A and S2-B',
+  'scale:thresholds-min-max':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-C',
+  'scale:thresholds-num-bounds':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-C',
+  'scale:thresholds-percent':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-C',
+  'scale:thresholds-percentile-inc-exc':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-L (exact percentile only, PERCENTILE.INC per spec §5.8)',
+  'scale:thresholds-percent-percentile-out-of-bounds':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-E (bound domain outside 0..100)',
+  'scale:thresholds-legacy-min-val-0':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-D (legacy cfvo shape type="min" val="0")',
+  'scale:thresholds-min-midlist-max-first':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-D (positional cfvo shapes)',
+  'scale:thresholds-num-val-reference':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-C (reference or formula val="$A$1" stays cf-unsupported-rule until Stage 5)',
+  'scale:degenerate-equal-values':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-E (v_min = v_max)',
+  'scale:degenerate-single-cell':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-E (single numeric cell)',
+  'scale:degenerate-inverted-thresholds':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-E (inverted thresholds t_low >= t_high)',
+  'scale:degenerate-midpoint-above-max':
+    'While unmeasured or refused, rule is unresolved per Ruling S2-E (3-colour midpoint outside endpoints)',
+  'scale:degenerate-values-beyond-bounds':
+    'While unmeasured or refused, cell is unresolved per Ruling S2-E (values beyond num bounds; clamping never assumed)',
+  'scale:participation-types':
+    'While unmeasured or refused, non-numeric cells are unresolved per Ruling S2-G',
+  'scale:participation-error-presence':
+    'While unmeasured or refused, scope containing error makes rule unresolved per Ruling S2-G',
+  'scale:colors-theme-tint':
+    'While unmeasured or refused, theme+tint scale is unresolved per Ruling S2-F and OD-4',
+  'scale:colors-indexed':
+    'While unmeasured or refused, indexed color scale is unresolved per Ruling S2-F',
+  'scale:colors-alpha-00':
+    'While unmeasured or refused, alpha other than FF is unresolved per Ruling S2-F',
+  'scale:colors-auto':
+    'While unmeasured or refused, auto color scale is unresolved per Ruling S2-F',
+  'scale:colors-custom-theme':
+    'While unmeasured or refused, custom theme scale is unresolved per Ruling S2-F',
+  'scale:scope-disjoint':
+    'While unmeasured or refused, disjoint scope is unresolved per Ruling S2-H',
+  'scale:scope-duplicate-blocks':
+    'While unmeasured or refused, duplicated conditionalFormatting blocks are unresolved per Ruling S2-H',
+  'scale:scope-hidden-row':
+    'While unmeasured or refused, scope with hidden rows is unresolved per Ruling S2-H',
+  'scale:scope-autofilter-hidden-row':
+    'While unmeasured or refused, scope with autofilter-hidden rows is unresolved per Ruling S2-H',
+  'scale:scope-merged-cell':
+    'While unmeasured or refused, merged cells in scale scope are unresolved per Ruling S2-H',
+  'scale:scope-whole-column':
+    'While unmeasured or refused, whole-column scale scope is unresolved per Ruling S2-H',
+  'scale:composition-dxf-p1-scale-p2':
+    'While unmeasured or refused, fill composition is unresolved per Ruling S2-I',
+  'scale:composition-scale-p1-dxf-p2':
+    'While unmeasured or refused, fill composition is unresolved per Ruling S2-I',
+  'scale:composition-equal-priority':
+    'While unmeasured or refused, equal-priority composition is unresolved per Ruling S2-I',
+  'scale:composition-font-only-dxf':
+    'While unmeasured or refused, font DXF merge is unresolved per Ruling S2-I',
+  'scale:composition-matching-stopIfTrue-ahead':
+    'While unmeasured or refused, matching stopIfTrue ahead is unresolved per Ruling S2-I',
+  'scale:composition-non-matching-stopIfTrue-ahead':
+    'While unmeasured or refused, non-matching stopIfTrue ahead is unresolved per Ruling S2-I',
+  'scale:composition-scale-stopIfTrue':
+    'While unmeasured or refused, scale with stopIfTrue="1" is unresolved per Ruling S2-J and OD-1',
+  'scale:composition-overlapping-scales':
+    'While unmeasured or refused, overlapping scales withhold fill per Ruling S2-I',
+  'scale:composition-text-cell-lower-dxf':
+    'While unmeasured or refused, text cell in scale range is unresolved per Ruling S2-I',
+  'scale:composition-own-fill-and-table':
+    'While unmeasured or refused, own fill and table base under scale are unresolved per Ruling S2-I',
+  'scale:composition-unresolved-expression-stub':
+    'While unmeasured or refused, expression stub stop-taints lower rules per Ruling S2-I',
+  'scale:unresolved-2cfvo-3colors':
+    'Always unsupported per Ruling S2-C (count mismatch cfvo vs colors)',
+  'scale:unresolved-cfvo-without-type':
+    'Always unsupported per Ruling S2-C (cfvo without type gives cf-invalid-cfvo)',
+  'scale:unresolved-cfvo-formula':
+    'Always unsupported per Ruling S2-C (formula cfvo deferred to Stage 5)',
+  'scale:unresolved-active-present':
+    'Always unsupported per Ruling S2-C',
+  'scale:unresolved-x14-standalone':
+    'Always cf-unsupported-rule per Ruling S2-K and OD-3 (standalone x14 colorScale out of scope for Stage 2, lifts no capability)',
+}
+
+/**
+ * Final review I5 / Ruling F-2: measured Stage 2 capabilities whose committed fixture CANNOT discriminate the
+ * question the capability asks. They stay in the catalog (the case, its markers and its measurement are real) but
+ * the audit reports them `unverified-nondiscriminating`, `verifiedCapabilities.ts` never lists them, and the src
+ * gate for each therefore withholds the shape until a discriminating fixture is re-measured in Excel.
+ */
+export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
+  'scale:colors-custom-theme':
+    'stage2-scale-colors has no custom theme: its saved workbook carries the stock Office theme and the rule uses plain rgb, so no non-Office theme colour is ever resolved. Re-measure with a non-Office theme1.xml and theme-index endpoints.',
+  'scale:scope-disjoint':
+    'The B2:B4 D2:D4 rule overlaps the B2:B6 and D2:D6 rules and its only non-hidden cells are withheld (S2-I overlapping scales); both rectangles also hold identical values, so union and per-rectangle statistics give the same colours. Re-measure with a non-overlapping disjoint rule over different values.',
+  'scale:scope-hidden-row':
+    'The hidden row holds 30, neither the minimum (10) nor the maximum (50) of the column, so including or excluding it paints identical colours. Re-measure with the hidden row holding the extremum.',
+  'scale:scope-autofilter-hidden-row':
+    'The saved stage2-scale-scope workbook has no autoFilter element; D2:D6 is a plain scale over the same manually hidden non-extremal row. Re-measure with a real autofilter hiding the extremal row.',
+  'scale:scope-merged-cell':
+    'B8:C9 holds 100 in every cell, so the degenerate equal-values colour results whatever the merge participation. Re-measure with non-equal values inside a merged scope.',
+  'scale:scope-whole-column':
+    'Every compared F:F cell sits in a scope containing hidden row 4, so it is withheld by the hidden-row gate: no painted conformance cell backs the whole-column shape. Re-measure with no hidden row in the column.',
+  'scale:scope-duplicate-blocks':
+    'Duplicate identical scales overlap, so every compared cell is withheld (S2-I overlapping scales) and identical rules give identical min/max statistics either way. Re-measure with a duplicate whose result differs from a single rule.',
+}
+
+/** Complete capability-to-evidence registry for all Stage 2 markers. */
+export const CF_STAGE2_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE2_CASES.flatMap(c =>
+  c.markers.map((m): CfCapabilityEntry => ({
+    capabilityId: m.capabilityId,
+    caseId: c.id,
+    category: m.ruleType,
+    description: `${c.id} :: ${m.extension} ${m.ruleType} scale on ${m.sqref}`,
+    absentOrDivergentFormulaPolicy:
+      m.scale
+        ? `Requires exact ordered cfvo/color scale bounds [${m.scale.cfvo.map(v => v.type + (v.val ? `=${v.val}` : '')).join(', ')}]`
+        : 'Requires exact ordered cfvo/color bounds',
+    failClosedDisposition:
+      S2_RULINGS[m.capabilityId] ??
+      'While unmeasured or refused, rule is marked unresolved (not known not-matched): write mask taints overlapping properties so lower-priority rules cannot paint a potentially wrong winner.',
+  })),
+)
+
+export const CF_CASES: readonly CfOracleCase[] = [...CF_STAGE1_CASES, ...CF_STAGE2_CASES]
+
+export const CF_CAPABILITIES: readonly CfCapabilityEntry[] = [
+  ...CF_STAGE1_CAPABILITIES,
+  ...CF_STAGE2_CAPABILITIES,
+]

@@ -328,6 +328,8 @@ export function resolveCfCellStyle(
     } else if ('fill.bg' in p) {
       out.fillColor = color(p['fill.bg'])
     }
+  } else if (state.visual?.colorScale) {
+    out.fillColor = (state.visual.colorScale.argb >>> 0).toString(16).toUpperCase().padStart(8, '0')
   }
   for (const side of ['left', 'right', 'top', 'bottom'] as const) {
     const path = `border.${side}`

@@ -2,6 +2,7 @@ import { PackageError } from '../../core/package-error'
 import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
+import { resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
 import { resolveCfCellStyle } from './dxf'
 import { CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
@@ -13,7 +14,7 @@ const blank: CfLiteral = Object.freeze({ kind: 'blank' })
 const inside = (r: SourceRect, row: number, col: number) => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
 function statistical(rule: CfRule) {
   const d = rule.definition
-  return d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
+  return d.kind === 'colorScale' || d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
 }
 
 /** A caller-owned, single-generation statistics lease set. The caller admits
@@ -47,6 +48,9 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
       const v = (rule.dxf as Record<string, unknown>)[key]
       propertyBytes += 192 + key.length * 4 + (typeof v === 'string' ? v.length * 2 : 16)
     }
+    if (rule.definition.kind === 'colorScale') {
+      propertyBytes += 88
+    }
     for (const key of rule.writes) propertyBytes += 128 + String(key).length * 4
   }
   const bound = 2048 + sourceRects.length * 160 + rules.rules.length * 640 + cells * (512 + propertyBytes)
@@ -55,7 +59,9 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
-  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext } = {}) {
+  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext;
+    /** Merged regions of the sheet (final review I5): a scale scope that intersects one is an unmeasured shape. */
+    merges?: readonly SourceRect[] } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -128,11 +134,39 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
           const boundsBudget = createCfWorkBudget({ signal, noTimeLimit: true })
           if (await source.bounds(stamp.sheetId, boundsBudget, signal) === undefined) return snapshot('cf-pending-data')
+          // Scope shapes whose committed Excel fixture cannot discriminate them (Ruling F-2, final review I5): each is
+          // gated on its capability, which is unverified in production, so these scales are withheld.
+          const scopeBlock = new Map<CfRule, CfOutcome<never>>()
+          const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined): Promise<void> => {
+            const unmeasured = (): void => { scopeBlock.set(rule, { kind: 'unresolved', reason: 'cf-unmeasured-capability' }) }
+            if (rule.ranges.length > 1 && !evidence.allows('scale:scope-disjoint')) return unmeasured()
+            // Whole-column scope: the fixture's column held a hidden row, so no painted cell backs it (Ruling F-2).
+            if (rule.ranges.some(r => r.firstRow === 0 && r.lastRow >= 1048575) && !evidence.allows('scale:scope-whole-column')) return unmeasured()
+            // Duplicate blocks: another scale rule over the identical ranges.
+            const key = (r: CfRule) => r.ranges.map(x => `${x.firstRow},${x.lastRow},${x.firstCol},${x.lastCol}`).join(';')
+            if (!evidence.allows('scale:scope-duplicate-blocks') && ordered.some(o => o !== rule && o.definition.kind === 'colorScale' && key(o) === key(rule))) return unmeasured()
+            if (options.merges?.length) {
+              await work(Math.min(rule.ranges.length * options.merges.length, 1 << 20))
+              const merged = options.merges.some(m => rule.ranges.some(r => m.firstRow <= r.lastRow && m.lastRow >= r.firstRow && m.firstCol <= r.lastCol && m.lastCol >= r.firstCol))
+              if (merged && !evidence.allows('scale:scope-merged-cell')) return unmeasured()
+            }
+            // An autofilter writes ordinary hidden-row records, so the two cases are indistinguishable here.
+            if (prepared?.hasHiddenRows && (!evidence.allows('scale:scope-hidden-row') || !evidence.allows('scale:scope-autofilter-hidden-row'))) return unmeasured()
+            if (prepared?.hasErrors && !evidence.allows('scale:participation-error-presence')) return unmeasured()
+          }
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
             const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
-            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...options.statisticsOptions })
+            const d = rule.definition
+            const needsSorted = d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile') : undefined
+            const statOpts = needsSorted !== undefined ? { ...options.statisticsOptions, sorted: needsSorted } : options.statisticsOptions
+            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...statOpts })
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
+          }
+          budget.resume()
+          for (const rule of ordered) if (rule.definition.kind === 'colorScale') {
+            const prepared = stats.get(rule)
+            await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined)
           }
           budget.resume()
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
@@ -141,7 +175,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             const textHold = memory.reserve(textBytes)
             if (textHold.kind !== 'reserved') return { kind: 'unresolved', reason: 'cf-resource-limit' }
             try {
-              const matching: CfRule[] = [], outcomes: CfOutcome<boolean>[] = []
+              const matching: CfRule[] = [], outcomes: CfOutcome<unknown>[] = []
+              let isTextInScale = false
               for (const rule of ordered) {
                 await work()
                 let covered = false
@@ -150,24 +185,69 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 matching.push(rule)
                 if (value.kind === 'string') await work(value.value.length + 1)
                 const preparedStats = stats.get(rule)
-                outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
-                  : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
+                if (rule.definition.kind === 'colorScale') {
+                  if (value.kind === 'string') isTextInScale = true
+                  const blocked = scopeBlock.get(rule)
+                  if (blocked) {
+                    outcomes.push(blocked)
+                    continue
+                  }
+                  if (preparedStats?.kind === 'unresolved') {
+                    outcomes.push(preparedStats)
+                    continue
+                  }
+                  if (preparedStats?.kind !== 'ready') {
+                    outcomes.push({ kind: 'unresolved', reason: 'cf-no-statistics' })
+                    continue
+                  }
+                  const thresh = resolveScaleThresholds(rule.definition.points, preparedStats.value.value, { hasEvidence: cap => evidence.allows(cap) })
+                  if (thresh.kind !== 'ready') {
+                    outcomes.push(thresh)
+                    continue
+                  }
+                  const colorOut = scaleColorAt(value, rule.definition.points, thresh.value, { hasEvidence: cap => evidence.allows(cap) })
+                  if (colorOut.kind === 'ready') {
+                    let numVal: number | undefined
+                    if (typeof value === 'number') numVal = value
+                    else if (value.kind === 'number') numVal = value.value
+                    let fraction: number | undefined
+                    if (numVal !== undefined && thresh.value.length >= 2) {
+                      const tMin = Math.min(...thresh.value)
+                      const tMax = Math.max(...thresh.value)
+                      fraction = tMax === tMin ? 1 : safeFraction(numVal, tMin, tMax)
+                    }
+                    outcomes.push({ kind: 'ready', value: { argb: colorOut.value, fraction } })
+                  } else {
+                    outcomes.push(colorOut)
+                  }
+                } else {
+                  outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
+                    : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
+                }
               }
               // The pure compositor implements the candidate ordering contract; enabling
               // multi-positive precedence in production still requires its oracle.
-              let positives = 0
+              // Stage 1 multi-positive guards apply to every NON-scale positive, independent of whether a scale
+              // also matched or where it sorts (final review M6). Scale-vs-DXF precedence is composeCell's job
+              // (scale:composition-* evidence); only DXF-vs-DXF ties and stacking are guarded here.
+              let dxfPositives = 0
               const priorities = new Set<number>()
               for (let i = 0; i < outcomes.length; i++) {
                 await work()
                 const outcome = outcomes[i]!
                 if (outcome.kind !== 'ready' || !outcome.value) continue
+                if (matching[i]!.definition.kind === 'colorScale') continue
                 const priority = matching[i]!.priority
-                if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) {
+                  return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                }
                 priorities.add(priority)
-                if (++positives > 1 && (!evidence.allows('priority:fill-winner')
-                  || !evidence.allows('priority:orthogonal-font-bold'))) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                if (++dxfPositives > 1 && (!evidence.allows('priority:fill-winner')
+                  || !evidence.allows('priority:orthogonal-font-bold'))) {
+                  return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                }
               }
-              return Object.freeze({ kind: 'ready', value: await composeCellAsync(matching, outcomes, work) })
+              return Object.freeze({ kind: 'ready', value: await composeCellAsync(matching, outcomes, work, { hasEvidence: cap => evidence.allows(cap), isTextCellInScale: isTextInScale }) })
             } finally { textHold.release() }
           }
           for await (const page of source.pages(stamp.sheetId, rects, budget, signal)) {

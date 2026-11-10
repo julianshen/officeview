@@ -475,7 +475,7 @@ describe('Stage 1 comparison findings (Task 14, docs/validation/xlsx-pivots.md "
     const dark2 = (await load('pivot-dark-2')).sheet
     expect(styleOf(dark2, 'B7')?.borderColors?.top).toBe(styleOf(dark2, 'B6')?.borderColors?.bottom)
     // An equal-precedence edge keeps each cell's own line (B7 bottom is the wholeTable inner line).
-    expect(styleOf(dark2, 'B7')?.borderColors?.bottom).toBe('FFC1E5F5')
+    expect(styleOf(dark2, 'B7')?.borderColors?.bottom).toBe('FFC0E6F5')
   })
 })
 

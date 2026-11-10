@@ -28,6 +28,9 @@ import { verifyCfCase } from './verify'
 import {
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
+  CF_STAGE2_CAPABILITIES,
+  CF_STAGE2_NONDISCRIMINATING,
+  CF_STAGE2_CASES,
   type CfManifest,
   type CfOracleCase,
   type CfOracleStatus,
@@ -39,6 +42,7 @@ import { createCfMemory, createCfWorkBudget } from '../../src/xlsx/cf/limits'
 import { estimateCfPrepareBytes } from '../../src/xlsx/cf/service'
 import { residentSource } from '../../src/xlsx/cf/render'
 import { createCfStatistics } from '../../src/xlsx/cf/statistics'
+import { computeMetrics } from '../../src/xlsx/render'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
 
@@ -56,7 +60,7 @@ export interface Stage1CaseAudit {
 export interface Stage1CapabilityAudit {
   capabilityId: string
   caseId: string
-  disposition: 'verified' | 'supported-structural' | 'refused-unsupported' | 'unaccounted'
+  disposition: 'verified' | 'supported-structural' | 'refused-unsupported' | 'unverified-nondiscriminating' | 'unaccounted'
 }
 
 export interface Stage1AuditReport {
@@ -79,6 +83,8 @@ export interface Stage1AuditReport {
     capabilities: number
     covered: number
     verifiedCapabilities: number
+    /** Measured but non-discriminating (Ruling F-2): withheld in production until re-measured. */
+    unverifiedCapabilities?: number
   }
 }
 
@@ -155,12 +161,13 @@ function auditCase(c: CfOracleCase, rootDir: string): Stage1CaseAudit {
 
 export function auditStage1Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage1AuditReport {
   const rootDir = options.rootDir ?? process.cwd()
+  const stage1ManifestCases = manifest.cases.filter(c => c.stage === 1 || (!c.stage && !c.id.startsWith('stage2')))
   const catalogIds = CF_STAGE1_CASES.map(c => c.id)
-  const manifestIds = new Set(manifest.cases.map(c => c.id))
+  const manifestIds = new Set(stage1ManifestCases.map(c => c.id))
   const missingCases = catalogIds.filter(id => !manifestIds.has(id))
   const catalogSet = new Set(catalogIds)
-  const extraCases = manifest.cases.map(c => c.id).filter(id => !catalogSet.has(id))
-  const perCase = manifest.cases.map(c => auditCase(c, rootDir))
+  const extraCases = stage1ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
+  const perCase = stage1ManifestCases.map(c => auditCase(c, rootDir))
   const perCapability: Stage1CapabilityAudit[] = CF_STAGE1_CAPABILITIES.map(entry => {
     const owning = perCase.find(p => p.id === entry.caseId)
     let disposition: Stage1CapabilityAudit['disposition'] = 'unaccounted'
@@ -194,6 +201,61 @@ export function auditStage1Manifest(manifest: CfManifest, options: { rootDir?: s
       capabilities: perCapability.length,
       covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
       verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+    },
+  }
+}
+
+export type Stage2CaseAudit = Stage1CaseAudit
+export type Stage2CapabilityAudit = Stage1CapabilityAudit
+export type Stage2AuditReport = Stage1AuditReport
+
+export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage2AuditReport {
+  const rootDir = options.rootDir ?? process.cwd()
+  const stage2ManifestCases = manifest.cases.filter(c => c.stage === 2 || c.id.startsWith('stage2'))
+  const catalogIds = CF_STAGE2_CASES.map(c => c.id)
+  const manifestIds = new Set(stage2ManifestCases.map(c => c.id))
+  const missingCases = catalogIds.filter(id => !manifestIds.has(id))
+  const catalogSet = new Set(catalogIds)
+  const extraCases = stage2ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
+  const perCase = stage2ManifestCases.map(c => auditCase(c, rootDir))
+  const perCapability: Stage2CapabilityAudit[] = CF_STAGE2_CAPABILITIES.map(entry => {
+    const owning = perCase.find(p => p.id === entry.caseId)
+    let disposition: Stage2CapabilityAudit['disposition'] = 'unaccounted'
+    if (owning?.structuralValid) {
+      disposition = owning.status === 'unsupported' ? 'refused-unsupported' : owning.code === undefined || owning.status === 'measured' ? 'verified' : 'supported-structural'
+      if (owning.status === 'measured' && owning.code !== undefined) disposition = 'supported-structural'
+      // A measured but non-discriminating capability is never reported verified (Ruling F-2).
+      if (disposition === 'verified' && CF_STAGE2_NONDISCRIMINATING[entry.capabilityId] !== undefined) disposition = 'unverified-nondiscriminating'
+    }
+    return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
+  })
+  const stage2Ids = new Set(CF_STAGE2_CAPABILITIES.map(entry => entry.capabilityId))
+  const unknownNonDiscriminating = Object.keys(CF_STAGE2_NONDISCRIMINATING).filter(id => !stage2Ids.has(id) || !CF_STAGE2_NONDISCRIMINATING[id]!.trim())
+  const caseOk = (p: Stage2CaseAudit): boolean => {
+    if (p.status === 'measured') return p.structuralValid && p.code === undefined
+    return p.structuralValid
+  }
+  const structuralValid = perCase.filter(p => p.structuralValid).length
+  const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownNonDiscriminating.length === 0
+  const gate = stageGateStatus(perCapability)
+  return {
+    ok,
+    perCase,
+    perCapability,
+    missingCases,
+    extraCases,
+    stageComplete: ok && gate.complete,
+    blockedCapabilities: gate.blocked,
+    summary: {
+      cases: perCase.length,
+      structuralValid,
+      verified: perCase.filter(p => p.status === 'measured' && p.code === undefined).length,
+      unsupported: perCase.filter(p => p.status === 'unsupported').length,
+      pending: perCase.filter(p => p.status === 'recipe-pending' || p.status === 'geometry-unverified').length,
+      capabilities: perCapability.length,
+      covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
+      verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+      unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
     },
   }
 }
@@ -277,6 +339,24 @@ export const cellIsRule = (priority: number, range: { firstRow: number; lastRow:
   writes: new Set(['numFmt']),
   dxf: { 'numFmt.code': '0.00' },
   definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 50 }], dialect: 'base', formulas: [] },
+})
+
+export const scaleRule = (priority: number, range: { firstRow: number; lastRow: number; firstCol: number; lastCol: number }, points?: unknown[]) => ({
+  id: priority,
+  priority,
+  documentOrder: priority,
+  stopIfTrue: false,
+  ranges: [range],
+  writes: new Set(['colorScale', 'fill']),
+  definition: {
+    kind: 'colorScale',
+    points: points ?? [
+      { bound: { type: 'min' }, argb: 0xfff8696b },
+      { bound: { type: 'max' }, argb: 0xff63be7b },
+    ],
+    dialect: 'base',
+    formulas: [],
+  },
 })
 
 function wholeColumnRule(): Record<string, unknown> {
@@ -512,6 +592,175 @@ export async function pressureStatisticsVisits(): Promise<PressureSample> {
   }
 }
 
+/** A 1M-row DECLARED A:A scope holding only 100 stored cells, requested by 100 scales that share one statistics scan
+ * (Lesson 3). This proves the sparse scan (reads = stored cells, not 1M) and the shared scan; it is NOT a populated
+ * 1M-row scope (final review M5). */
+export async function pressureScale1MRowSharedStatistics(): Promise<PressureSample> {
+  const started = Date.now()
+  const sheet = numericSheet(100, scaleRule(0, { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }))
+  const memory = createCfMemory()
+  const stamp = { owner: 'audit', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const source = residentSource(sheet, stamp, memory, 'engine')
+  const session = createCfStatistics(memory, { retainEntries: true })
+  const work = createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 })
+  const wholeCol = [{ firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }]
+  const scopes = Array.from({ length: 100 }, () => wholeCol)
+  const outs = await session.prepareStatistics(
+    scopes,
+    stamp,
+    source,
+    work,
+    { signal: new AbortController().signal },
+  )
+  const ready = outs.find(o => o.kind === 'ready')
+  if (!ready || ready.kind !== 'ready') throw new Error('statistics scan must admit')
+  const stats = ready.value.value
+  const visited = stats.storedCells
+  const peak = memory.peakBytes
+  for (const o of outs) {
+    if (o.kind === 'ready') o.value.release()
+  }
+  session.dispose()
+  return {
+    name: 'scale-sparse-1M-declared-shared-statistics',
+    outcome: 'admitted',
+    peakBytes: peak,
+    netBytes: memory.currentBytes,
+    sourceReads: visited,
+    cellsWithResults: stats.spanCells,
+    wallMs: Date.now() - started,
+  }
+}
+
+/** An invalid (out-of-range) percentile bound withholds its own scale (cf-invalid-bound) while a min/max scale over
+ * another column still renders. It is NOT a sorted-copy reservation refusal: the cf-resource-limit refusal path is
+ * covered in tests/xlsx-cf-statistics.test.ts (final review M5). */
+export async function pressureRefusedPercentileWithMinMax(): Promise<PressureSample> {
+  const started = Date.now()
+  const cells: XlsxCell[] = []
+  for (let row = 0; row < 10; row++) {
+    cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row + 1) * 10, hasCachedValue: true })
+  }
+  for (let row = 0; row < 10; row++) {
+    cells.push({ ref: `B${row + 1}`, row, col: 1, styleIndex: 0, value: (row + 1) * 10, hasCachedValue: true })
+  }
+  const minMaxRule = scaleRule(1, { firstRow: 0, lastRow: 9, firstCol: 0, lastCol: 0 })
+  const refusedPercentileRule = {
+    id: 2,
+    priority: 2,
+    documentOrder: 1,
+    stopIfTrue: false,
+    ranges: [{ firstRow: 0, lastRow: 9, firstCol: 1, lastCol: 1 }],
+    writes: new Set(['colorScale', 'fill']),
+    definition: {
+      kind: 'colorScale',
+      points: [
+        { bound: { type: 'percentile', value: -10 }, argb: 0xfff8696b },
+        { bound: { type: 'max' }, argb: 0xff63be7b },
+      ],
+      dialect: 'base',
+      formulas: [],
+    },
+  }
+  const inner: XlsxSheet = {
+    name: 'P',
+    sheetId: 'p',
+    rows: [{ index: 0, cells }],
+    cols: [],
+    mergeRefs: [],
+    mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [minMaxRule as never, refusedPercentileRule as never] },
+  } as unknown as XlsxSheet
+  const { sheet, visits } = countingSheetCells(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [
+      { r0: 0, r1: 9, c0: 0, c1: 0 },
+      { r0: 0, r1: 9, c0: 1, c1: 1 },
+    ],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  if (scope === undefined) throw new Error('scope must admit')
+  const visited = visits()
+  let renderedCells = 0
+  for (let row = 0; row < 10; row++) {
+    const descA = scope.describe(row, 0)
+    if (descA !== undefined && descA.text !== 'Conditional formatting unavailable') {
+      renderedCells++
+    }
+    const descB = scope.describe(row, 1)
+    if (descB?.text !== 'Conditional formatting unavailable') {
+      throw new Error(`percentile cell B${row + 1} must withhold as unavailable, got ${descB?.text}`)
+    }
+  }
+  const peakBytes = peak()
+  scope.dispose()
+  return {
+    name: 'invalid-percentile-bound-withheld-with-min-max-rendered',
+    outcome: 'admitted',
+    peakBytes,
+    netBytes: net(),
+    sourceReads: visited,
+    cellsWithResults: renderedCells,
+    wallMs: Date.now() - started,
+  }
+}
+
+/** Whole-column scope CF ranges do not extend extents (Lesson 4). */
+export async function pressureScaleWholeColumnExtents(): Promise<PressureSample> {
+  const started = Date.now()
+  const dataRows = 10
+  const cells: XlsxCell[] = []
+  for (let r = 0; r < dataRows; r++) {
+    cells.push({ ref: `A${r + 1}`, row: r, col: 0, styleIndex: 0, value: (r + 1) * 10, hasCachedValue: true })
+  }
+  const wholeColumnScale = scaleRule(1, { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 })
+  const inner: XlsxSheet = {
+    name: 'WCExtents',
+    sheetId: 'wc',
+    rows: Array.from({ length: dataRows }, (_, r) => ({
+      index: r,
+      cells: [cells[r]!],
+    })),
+    cols: [],
+    mergeRefs: [],
+    mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [wholeColumnScale as never] },
+  } as unknown as XlsxSheet
+  const m = computeMetrics(inner)
+  if (m.rowHeightsPx.length !== dataRows || m.heightPx > 1000) {
+    throw new Error(`CF scale extended metrics extent: ${m.rowHeightsPx.length} rows, height ${m.heightPx}px`)
+  }
+  const { sheet, visits } = countingSheetCells(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: dataRows - 1, c0: 0, c1: 0 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  if (scope === undefined) throw new Error('scope must admit')
+  const visited = visits()
+  let renderedCells = 0
+  for (let r = 0; r < dataRows; r++) {
+    const desc = scope.describe(r, 0)
+    if (desc !== undefined && desc.text !== 'Conditional formatting unavailable') renderedCells++
+  }
+  const peakBytes = peak()
+  scope.dispose()
+  return {
+    name: 'scale-whole-column-extents',
+    outcome: 'admitted',
+    peakBytes,
+    netBytes: net(),
+    sourceReads: visited,
+    cellsWithResults: renderedCells,
+    wallMs: Date.now() - started,
+  }
+}
+
 export interface CycleSample {
   cycles: number
   reads: number
@@ -676,18 +925,21 @@ function printCase(entry: { id: string; status: string; structuralValid: boolean
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
-  if (stage !== 1) {
+  if (stage !== 1 && stage !== 2) {
     // eslint-disable-next-line no-console
-    console.error('Only --stage 1 is implemented')
+    console.error('Only --stage 1 and --stage 2 are implemented')
     process.exit(2)
   }
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
   const outDir = args.includes('--out') ? resolve(args[args.indexOf('--out') + 1]!) : undefined
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
-  const report = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
+  const report = stage === 1
+    ? auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
+    : auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
   if (args.includes('--write')) {
-    const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-    const content = `/**
+    if (stage === 1) {
+      const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+      const content = `/**
  * Verified conditional formatting capabilities for Stage 1.
  * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
  * Checked by tests/xlsx-cf-stage1.test.ts.
@@ -696,9 +948,35 @@ export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
 ${verified.map(id => `  '${id}',`).join('\n')}
 ])
 `
-    writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
-    // eslint-disable-next-line no-console
-    console.log(`wrote ${verified.length} verified capabilities to src/xlsx/cf/verifiedCapabilities.ts`)
+      writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
+      // eslint-disable-next-line no-console
+      console.log(`wrote ${verified.length} verified capabilities to src/xlsx/cf/verifiedCapabilities.ts`)
+    } else {
+      const stage1Report = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
+      const stage1Verified = stage1Report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+      const stage2Verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+      const allVerified = [...new Set([...stage1Verified, ...stage2Verified])].sort()
+      const content = `/**
+ * Verified conditional formatting capabilities for Stage 1 and Stage 2.
+ * Generated via bun scripts/cf-refs/audit.ts --stage 2 --write.
+ * Checked by tests/xlsx-cf-stage1.test.ts and tests/xlsx-cf-stage2.test.ts.
+ */
+export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
+${stage1Verified.map(id => `  '${id}',`).join('\n')}
+])
+
+export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
+${stage2Verified.map(id => `  '${id}',`).join('\n')}
+])
+
+export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
+${allVerified.map(id => `  '${id}',`).join('\n')}
+])
+`
+      writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
+      // eslint-disable-next-line no-console
+      console.log(`wrote ${allVerified.length} verified capabilities (${stage1Verified.length} S1, ${stage2Verified.length} S2) to src/xlsx/cf/verifiedCapabilities.ts`)
+    }
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)
@@ -706,58 +984,86 @@ ${verified.map(id => `  '${id}',`).join('\n')}
   console.log(`manifest: ${report.summary.structuralValid}/${report.summary.cases} structural, capabilities ${report.summary.covered}/${report.summary.capabilities}, missing=[${report.missingCases.join(',')}] extra=[${report.extraCases.join(',')}]`)
   // eslint-disable-next-line no-console
   console.log('--- pressure ---')
-  const whole = await pressureWholeColumn()
-  // eslint-disable-next-line no-console
-  console.log(`${whole.outcome} ${whole.name}: peak=${whole.peakBytes} net=${whole.netBytes} reads=${whole.sourceReads} cells=${whole.cellsWithResults} (${whole.wallMs}ms context only)${whole.reason ? ` — ${whole.reason}` : ''}`)
-  checkPressureSample(whole, { expectOutcome: 'refused' })
-  const shared = await pressureSharedRules()
-  // eslint-disable-next-line no-console
-  console.log(`${shared.outcome} ${shared.name}: peak=${shared.peakBytes} net=${shared.netBytes} reads=${shared.sourceReads} cells=${shared.cellsWithResults} (${shared.wallMs}ms context only)`)
-  checkPressureSample(shared, { expectOutcome: 'admitted' })
-  const bounds = pressureRangeBoundaries()
-  // eslint-disable-next-line no-console
-  console.log(`boundaries: per-call 256=${bounds.admitted256rects ? 'admitted' : 'REFUSED'} 257=${bounds.refused257rects ? 'refused' : 'ADMITTED'} total-ranges 16384=${bounds.admitted16384Ranges ? 'admitted' : 'REFUSED'} 16385=${bounds.refused16385Ranges ? 'refused' : 'ADMITTED'} rules 4096=${bounds.admitted4096Rules ? 'admitted' : 'REFUSED'} 4097=${bounds.refused4097Rules ? 'refused' : 'ADMITTED'}`)
-  if (!bounds.admitted256rects || !bounds.refused257rects || !bounds.admitted16384Ranges || !bounds.refused16385Ranges || !bounds.admitted4096Rules || !bounds.refused4097Rules) throw new Error('cap boundaries inexact')
+
+  let stage1Pressure: { whole: PressureSample; shared: PressureSample; bounds: ReturnType<typeof pressureRangeBoundaries>; refusedSheet: PressureSample; stats: PressureSample } | undefined
+  let stage2Pressure: { scaleShared: PressureSample; percentile: PressureSample; extents: PressureSample } | undefined
+
+  if (stage === 1) {
+    const whole = await pressureWholeColumn()
+    // eslint-disable-next-line no-console
+    console.log(`${whole.outcome} ${whole.name}: peak=${whole.peakBytes} net=${whole.netBytes} reads=${whole.sourceReads} cells=${whole.cellsWithResults} (${whole.wallMs}ms context only)${whole.reason ? ` — ${whole.reason}` : ''}`)
+    checkPressureSample(whole, { expectOutcome: 'refused' })
+    const shared = await pressureSharedRules()
+    // eslint-disable-next-line no-console
+    console.log(`${shared.outcome} ${shared.name}: peak=${shared.peakBytes} net=${shared.netBytes} reads=${shared.sourceReads} cells=${shared.cellsWithResults} (${shared.wallMs}ms context only)`)
+    checkPressureSample(shared, { expectOutcome: 'admitted' })
+    const bounds = pressureRangeBoundaries()
+    // eslint-disable-next-line no-console
+    console.log(`boundaries: per-call 256=${bounds.admitted256rects ? 'admitted' : 'REFUSED'} 257=${bounds.refused257rects ? 'refused' : 'ADMITTED'} total-ranges 16384=${bounds.admitted16384Ranges ? 'admitted' : 'REFUSED'} 16385=${bounds.refused16385Ranges ? 'refused' : 'ADMITTED'} rules 4096=${bounds.admitted4096Rules ? 'admitted' : 'REFUSED'} 4097=${bounds.refused4097Rules ? 'refused' : 'ADMITTED'}`)
+    if (!bounds.admitted256rects || !bounds.refused257rects || !bounds.admitted16384Ranges || !bounds.refused16385Ranges || !bounds.admitted4096Rules || !bounds.refused4097Rules) throw new Error('cap boundaries inexact')
+    const refusedSheet = await pressureRefusedSheet()
+    // eslint-disable-next-line no-console
+    console.log(`${refusedSheet.outcome} ${refusedSheet.name}: peak=${refusedSheet.peakBytes} net=${refusedSheet.netBytes} reads=${refusedSheet.sourceReads} (${refusedSheet.wallMs}ms context only)`)
+    checkPressureSample(refusedSheet, { expectOutcome: 'refused' })
+    const stats = await pressureStatisticsVisits()
+    // eslint-disable-next-line no-console
+    console.log(`${stats.outcome} ${stats.name}: peak=${stats.peakBytes} net=${stats.netBytes} visits=${stats.sourceReads} span=${stats.cellsWithResults} (${stats.wallMs}ms context only)`)
+    checkPressureSample(stats, { expectOutcome: 'admitted' })
+    stage1Pressure = { whole, shared, bounds, refusedSheet, stats }
+  } else {
+    const scaleShared = await pressureScale1MRowSharedStatistics()
+    // eslint-disable-next-line no-console
+    console.log(`${scaleShared.outcome} ${scaleShared.name}: peak=${scaleShared.peakBytes} net=${scaleShared.netBytes} reads=${scaleShared.sourceReads} cells=${scaleShared.cellsWithResults} (${scaleShared.wallMs}ms context only)`)
+    checkPressureSample(scaleShared, { expectOutcome: 'admitted' })
+    const percentile = await pressureRefusedPercentileWithMinMax()
+    // eslint-disable-next-line no-console
+    console.log(`${percentile.outcome} ${percentile.name}: peak=${percentile.peakBytes} net=${percentile.netBytes} reads=${percentile.sourceReads} cells=${percentile.cellsWithResults} (${percentile.wallMs}ms context only)`)
+    checkPressureSample(percentile, { expectOutcome: 'admitted' })
+    const extents = await pressureScaleWholeColumnExtents()
+    // eslint-disable-next-line no-console
+    console.log(`${extents.outcome} ${extents.name}: peak=${extents.peakBytes} net=${extents.netBytes} reads=${extents.sourceReads} cells=${extents.cellsWithResults} (${extents.wallMs}ms context only)`)
+    checkPressureSample(extents, { expectOutcome: 'admitted' })
+    stage2Pressure = { scaleShared, percentile, extents }
+  }
+
   const distinct = await pressureDistinctRanges()
   // eslint-disable-next-line no-console
   console.log(`${distinct.outcome} ${distinct.name}: peak=${distinct.peakBytes} net=${distinct.netBytes} reads=${distinct.sourceReads} cells=${distinct.cellsWithResults} (${distinct.wallMs}ms context only)`)
   checkPressureSample(distinct, { expectOutcome: 'refused' })
-  const refusedSheet = await pressureRefusedSheet()
-  // eslint-disable-next-line no-console
-  console.log(`${refusedSheet.outcome} ${refusedSheet.name}: peak=${refusedSheet.peakBytes} net=${refusedSheet.netBytes} reads=${refusedSheet.sourceReads} (${refusedSheet.wallMs}ms context only)`)
-  checkPressureSample(refusedSheet, { expectOutcome: 'refused' })
-  const stats = await pressureStatisticsVisits()
-  // eslint-disable-next-line no-console
-  console.log(`${stats.outcome} ${stats.name}: peak=${stats.peakBytes} net=${stats.netBytes} visits=${stats.sourceReads} span=${stats.cellsWithResults} (${stats.wallMs}ms context only)`)
-  checkPressureSample(stats, { expectOutcome: 'admitted' })
+
   const cycles = await pressureCycles(20)
   // eslint-disable-next-line no-console
   console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
   if (cycles.maxPeakBytes <= 0) throw new Error('cycles observed no allocation')
   if (cycles.reads < cycles.cycles * 4) throw new Error(`cycles issued ${cycles.reads} reads, expected at least ${cycles.cycles * 4} (ready + cancelled + mid-flight + retry per cycle)`)
+
   const baseline = await baselineNoCf()
   // eslint-disable-next-line no-console
   console.log(`no-cf baseline: reserves=${baseline.paintReserves} reads=${baseline.sourceReads} scopeBuilt=${baseline.scopeBuilt}`)
   if (baseline.paintReserves !== 0 || baseline.sourceReads !== 0 || baseline.scopeBuilt) throw new Error('no-CF path did CF work')
+
   const eager = auditEagerBoundary(REPO_ROOT)
   // eslint-disable-next-line no-console
   console.log(`module graph: ${eager.checked ? (eager.passed ? 'pass' : 'FAIL') : 'deferred'} — ${eager.reason}`)
   if (eager.checked && !eager.passed) throw new Error('eager boundary violated')
+
   const unexpected = report.perCase.filter(c => !c.structuralValid)
   const ok = report.ok && unexpected.length === 0
   // eslint-disable-next-line no-console
-  console.log(`summary: ok=${ok} structural=${report.summary.structuralValid}/${report.summary.cases} unsupported=${report.summary.unsupported} pending=${report.summary.pending} stageComplete=${report.stageComplete} blockedCapabilities=${report.blockedCapabilities.length}`)
+  console.log(`summary: ok=${ok} structural=${report.summary.structuralValid}/${report.summary.cases} unsupported=${report.summary.unsupported} pending=${report.summary.pending} unverifiedNonDiscriminating=${report.summary.unverifiedCapabilities ?? 0} stageComplete=${report.stageComplete} blockedCapabilities=${report.blockedCapabilities.length}`)
+
   if (outDir) {
     mkdirSync(outDir, { recursive: true })
-    writeFileSync(join(outDir, 'stage1-audit.json'), JSON.stringify({ report, whole, shared, bounds, refusedSheet, stats, cycles, baseline, eager }, null, 2))
+    const outData = stage === 1
+      ? { report, ...stage1Pressure, distinct, cycles, baseline, eager }
+      : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
+    writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }
+
   if (!ok) process.exit(1)
-  // Structural integrity without verified independent semantic evidence is a
-  // blocked gate, never green Stage 1 evidence. Missing captures block here;
-  // nothing is manufactured to make this pass.
   if (!report.stageComplete) {
     // eslint-disable-next-line no-console
-    console.error(`BLOCKED: Stage 1 semantic evidence incomplete — ${report.blockedCapabilities.length} supported capabilities lack verified captures: ${report.blockedCapabilities.slice(0, 8).join(',')}${report.blockedCapabilities.length > 8 ? ',…' : ''}`)
+    console.error(`BLOCKED: Stage ${stage} semantic evidence incomplete — ${report.blockedCapabilities.length} supported capabilities lack verified captures: ${report.blockedCapabilities.slice(0, 8).join(',')}${report.blockedCapabilities.length > 8 ? ',…' : ''}`)
     process.exit(1)
   }
 }

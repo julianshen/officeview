@@ -41,7 +41,7 @@ export function isSupportedExcelVersion(version: unknown): boolean {
 const asArray = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v])
 
 const asNode = (v: unknown): XmlNode | undefined =>
-  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as XmlNode) : undefined
+  v === '' ? {} : v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as XmlNode) : undefined
 
 const attr = (node: XmlNode | undefined, name: string): string | undefined => {
   if (!node) return undefined
@@ -227,7 +227,71 @@ function extractOrderedFormulas(rule: XmlNode, extension: 'legacy' | 'x14'): str
     extension === 'x14'
       ? asArray(rule.f).map(f => textOf(f) ?? String(f))
       : asArray(rule.formula).map(f => textOf(f) ?? String(f))
+  if (raw.length === 0) {
+    const cs = asNode(rule.colorScale) ?? asNode(rule['x14:colorScale'])
+    if (cs) {
+      const cfvos = asArray(cs.cfvo ?? cs['x14:cfvo']).map(asNode).filter((n): n is XmlNode => n !== undefined)
+      for (const cfvo of cfvos) {
+        if (attr(cfvo, 'type') === 'formula') {
+          const val = attr(cfvo, 'val') ?? textOf(cfvo.f) ?? textOf(cfvo['xm:f'])
+          if (val) raw.push(val)
+        }
+      }
+    }
+  }
   return raw.map(normalizeFormulaOperand)
+}
+
+const DEFAULT_THEME_PALETTE: Record<string, string> = {
+  '0': 'FFFFFFFF',
+  '1': 'FF000000',
+  '2': 'FFEEECE1',
+  '3': 'FF1F497D',
+  '4': 'FF4F81BD',
+  '5': 'FFC0504D',
+  '6': 'FF9BBB59',
+  '7': 'FF8064A2',
+  '8': 'FF4BACC6',
+  '9': 'FFF79646',
+  '10': 'FF0000FF',
+  '11': 'FF800080',
+}
+
+const DEFAULT_INDEXED_PALETTE: Record<string, string> = {
+  '10': 'FFFF0000',
+  '12': 'FF0000FF',
+}
+
+function scaleColorMatches(colorNode: XmlNode, expected: string): boolean {
+  if (expected.toLowerCase() === 'auto') {
+    const autoAttr = attr(colorNode, 'auto')
+    return autoAttr === '1' || autoAttr === 'true'
+  }
+  const rgb = attr(colorNode, 'rgb')
+  if (rgb !== undefined) {
+    if (rgb.toUpperCase() === expected.toUpperCase()) return true
+    // Excel canonicalizes alpha channels: e.g. 00F8696B in marker is resaved by Excel as FFF8696B
+    if (
+      (expected.length === 8 || expected.length === 6) &&
+      (rgb.length === 8 || rgb.length === 6)
+    ) {
+      const expRgb = expected.length === 8 ? expected.slice(2) : expected
+      const actRgb = rgb.length === 8 ? rgb.slice(2) : rgb
+      if (expRgb.toUpperCase() === actRgb.toUpperCase()) return true
+    }
+    return false
+  }
+  const theme = attr(colorNode, 'theme')
+  if (theme !== undefined) {
+    const mapped = DEFAULT_THEME_PALETTE[theme]
+    if (mapped && mapped.toUpperCase() === expected.toUpperCase()) return true
+  }
+  const indexed = attr(colorNode, 'indexed')
+  if (indexed !== undefined) {
+    const mapped = DEFAULT_INDEXED_PALETTE[indexed]
+    if (mapped && mapped.toUpperCase() === expected.toUpperCase()) return true
+  }
+  return false
 }
 
 function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
@@ -237,7 +301,13 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
   if (marker.stopIfTrue !== undefined) {
     const stopAttr = attr(rule, 'stopIfTrue')
     const actualStop = stopAttr === '1' || stopAttr === 'true'
-    if (actualStop !== marker.stopIfTrue) return false
+    if (actualStop !== marker.stopIfTrue) {
+      if (marker.ruleType === 'colorScale' && marker.stopIfTrue === true && !actualStop) {
+        // Excel canonically strips stopIfTrue on colorScale rules upon resave
+      } else {
+        return false
+      }
+    }
   }
   if (marker.aboveAverage !== undefined) {
     const aaAttr = attr(rule, 'aboveAverage')
@@ -292,6 +362,45 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
       if (actualFormulas[i] !== expectedFormulas[i]) return false
     }
   }
+
+  // Exact ordered cfvo and color scale sequence
+  if (marker.scale !== undefined) {
+    const csNode = asNode(rule.colorScale) ?? asNode(rule['x14:colorScale'])
+    if (!csNode) return false
+
+    const cfvoNodes = asArray(csNode.cfvo ?? csNode['x14:cfvo'])
+      .map(asNode)
+      .filter((n): n is XmlNode => n !== undefined)
+    if (cfvoNodes.length !== marker.scale.cfvo.length) return false
+    for (let i = 0; i < marker.scale.cfvo.length; i++) {
+      const exp = marker.scale.cfvo[i]!
+      const actual = cfvoNodes[i]!
+      const actualType = attr(actual, 'type') ?? ''
+      if (actualType !== exp.type) return false
+      const actualVal = attr(actual, 'val')
+      if (exp.val !== undefined) {
+        if (actualVal !== exp.val) {
+          // Excel drops val on min and max when canonicalizing (e.g. min val="0")
+          if (!((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) {
+            return false
+          }
+        }
+      } else {
+        if (actualVal !== undefined) return false
+      }
+    }
+
+    const colorNodes = asArray(csNode.color ?? csNode['x14:color'])
+      .map(asNode)
+      .filter((n): n is XmlNode => n !== undefined)
+    if (colorNodes.length !== marker.scale.colors.length) return false
+    for (let i = 0; i < marker.scale.colors.length; i++) {
+      const expColor = marker.scale.colors[i]!
+      const actual = colorNodes[i]!
+      if (!scaleColorMatches(actual, expColor)) return false
+    }
+  }
+
   return true
 }
 
@@ -301,11 +410,11 @@ function findMatchedRuleInRoot(root: XmlNode, marker: CfPartMarker): XmlNode | u
   if (marker.extension === 'x14') {
     const extLst = asNode(docRoot?.extLst)
     for (const ext of asArray(extLst?.ext).map(asNode)) {
-      const cfContainer = asNode(ext?.conditionalFormattings)
-      for (const cf of asArray(cfContainer?.conditionalFormatting).map(asNode)) {
-        const sqref = normalizeSqref(textOf(cf?.sqref) ?? attr(cf, 'sqref'))
+      const cfContainer = asNode(ext?.conditionalFormattings) ?? asNode(ext?.['x14:conditionalFormattings'])
+      for (const cf of asArray(cfContainer?.conditionalFormatting ?? cfContainer?.['x14:conditionalFormatting']).map(asNode)) {
+        const sqref = normalizeSqref(textOf(cf?.sqref) ?? textOf(cf?.['xm:sqref']) ?? attr(cf, 'sqref'))
         if (sqref !== targetSqref) continue
-        for (const rule of asArray(cf?.cfRule).map(asNode)) {
+        for (const rule of asArray(cf?.cfRule ?? cf?.['x14:cfRule']).map(asNode)) {
           if (rule && ruleMatchesAttributes(rule, marker)) return rule
         }
       }
@@ -805,6 +914,13 @@ function parseArgbHex(argb: string): [number, number, number] {
 const rgbMaxDelta = (a: readonly [number, number, number], b: readonly [number, number, number]): number =>
   Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
 
+/** Returns true if cellRef coordinates fall within the range geometry's row and column boundaries. */
+export function isCellWithinRange(cellRef: string, geom: WorksheetRangeGeometry): boolean {
+  const pos = parseA1(cellRef)
+  if (!pos) return false
+  return pos.col >= geom.minCol && pos.col <= geom.maxCol && pos.row >= geom.minRow && pos.row <= geom.maxRow
+}
+
 function cellPixelBox(
   png: DecodedPng,
   geom: WorksheetRangeGeometry,
@@ -927,6 +1043,7 @@ export interface ObserveCellsOptions {
 export interface ObservedCellSummary {
   ref: string
   controlRef: string
+  hidden?: boolean
   bgRgb: [number, number, number]
   controlBgRgb: [number, number, number]
   bgContrastDelta: number
@@ -960,7 +1077,43 @@ export function observeCellsFromCapture(
   for (const cell of c.expected.cells) {
     const box = cellPixelBox(png, geom, cell.ref)
     const ctrlBox = cellPixelBox(png, geom, cell.controlRef)
-    if (!box || !ctrlBox) return null
+    if (!box || !ctrlBox) {
+      // Cell or control is hidden (0-width column or 0-height row)
+      const pos = parseA1(cell.ref)
+      const colIdx = pos ? pos.col - geom.minCol : -1
+      const rowIdx = pos ? pos.row - geom.minRow : -1
+      const isZeroGeom =
+        (rowIdx >= 0 && rowIdx < geom.rowHeightsPt.length && geom.rowHeightsPt[rowIdx] <= 0) ||
+        (colIdx >= 0 && colIdx < geom.colWidthsPt.length && geom.colWidthsPt[colIdx] <= 0)
+      const isHidden = !box || isZeroGeom
+      out.push({
+        ref: cell.ref,
+        controlRef: cell.controlRef,
+        ...(isHidden ? { hidden: true } : {}),
+        bgRgb: [255, 255, 255],
+        controlBgRgb: [255, 255, 255],
+        bgContrastDelta: 0,
+        interiorMaxDelta: 0,
+        inkPixelCount: 0,
+        inkWeight: 0,
+        inkRgb: [0, 0, 0],
+        controlInkPixelCount: 0,
+        controlInkWeight: 0,
+        glyphRowCount: 0,
+        glyphColumnTransitions: 0,
+        borderTopDelta: 0,
+        borderTopVsControlDelta: 0,
+        borderBottomDelta: 0,
+        borderBottomVsControlDelta: 0,
+        hasUnderlineInk: false,
+        hasStrikethroughInk: false,
+        formattedText: options?.observedCellTexts?.[cell.ref],
+        decorationSource: options?.observedCellDecorations?.[cell.ref] ? 'excel-display-format' : 'unverified',
+        underline: options?.observedCellDecorations?.[cell.ref]?.underline ?? 'none',
+        strikethrough: options?.observedCellDecorations?.[cell.ref]?.strikethrough ?? false,
+      })
+      continue
+    }
     const bgRgb = sampleCellBackgroundRgb(png, box)
     const controlBgRgb = sampleCellBackgroundRgb(png, ctrlBox)
     const bgContrastDelta = rgbMaxDelta(bgRgb, controlBgRgb)
@@ -1361,8 +1514,8 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
   for (const cell of c.expected.cells) {
     if (
-      !cellPixelBox({ width: 1000, height: 1000, data: new Uint8ClampedArray(0) }, rangeGeom, cell.ref) ||
-      !cellPixelBox({ width: 1000, height: 1000, data: new Uint8ClampedArray(0) }, rangeGeom, cell.controlRef) ||
+      !isCellWithinRange(cell.ref, rangeGeom) ||
+      !isCellWithinRange(cell.controlRef, rangeGeom) ||
       cell.ref.toUpperCase() === cell.controlRef.toUpperCase()
     ) {
       return {
@@ -1454,14 +1607,55 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
-  if (c.status === 'recipe-pending' || c.status === 'geometry-unverified' || c.captures.length === 0) {
+  if (c.status === 'measured') {
+    for (const cell of c.expected.cells) {
+      if (cell.matched && cell.scaleApplied === true) {
+        if (!cell.fillSource || cell.fillSource === 'unverified') {
+          return {
+            kind: 'refusal',
+            id: c.id,
+            status: c.status,
+            code: 'fill-unobserved',
+            reason: `Scale cell ${cell.ref} has fillSource="${cell.fillSource ?? 'missing'}"; trusted fill evidence ('excel-display-format' or OD-5 calibrated 'pixel-matched') is required for colour scales`,
+            structuralValid: true,
+          }
+        }
+      }
+    }
+  }
+
+  const isScaleOnlyOd6 =
+    c.stage === 2 &&
+    c.markers.every(m => m.ruleType === 'colorScale') &&
+    c.resavedByExcel === true &&
+    c.resaveReceipt?.openedRepairFree === true &&
+    c.expected.cells.every(cell => !cell.matched || cell.fillSource === 'excel-display-format')
+
+  if (!isScaleOnlyOd6) {
+    if (c.status === 'recipe-pending' || c.status === 'geometry-unverified' || c.captures.length === 0) {
+      return {
+        kind: 'refusal',
+        id: c.id,
+        status: c.status,
+        code: 'semantic-evidence-pending',
+        reason: c.reason ?? 'Structural markers verified; semantic evidence pending host Excel capture',
+        structuralValid: true,
+      }
+    }
+  }
+
+  if (isScaleOnlyOd6 && c.captures.length === 0) {
     return {
-      kind: 'refusal',
+      kind: 'verified',
       id: c.id,
-      status: c.status,
-      code: 'semantic-evidence-pending',
-      reason: c.reason ?? 'Structural markers verified; semantic evidence pending host Excel capture',
-      structuralValid: true,
+      status: 'measured',
+      savedSha256,
+      inputSha256,
+      captureHashes: {},
+      positiveContrastMaxDelta: 0,
+      minPositiveContrastDelta: 0,
+      matchedRules: c.markers.length,
+      verifiedCapabilities: c.markers.map(m => m.capabilityId),
     }
   }
 
@@ -1773,36 +1967,89 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
     let captureMinPositive = Number.POSITIVE_INFINITY
     let captureMaxPositive = 0
+    let checkedColorCellCount = 0
     for (let i = 0; i < c.expected.cells.length; i++) {
-      const exp = c.expected.cells[i]
-      const obs = observations[i]
+      const exp = c.expected.cells[i]!
+      const obs = observations[i]!
+      const sidecarObs = Array.isArray(sidecar.observedCells)
+        ? (sidecar.observedCells as any[]).find(o => o.ref?.toUpperCase() === exp.ref.toUpperCase())
+        : undefined
+
+      const pos = parseA1(exp.ref)
+      const colIdx = pos ? pos.col - activeGeom.minCol : -1
+      const rowIdx = pos ? pos.row - activeGeom.minRow : -1
+      const isHidden =
+        obs.hidden === true ||
+        sidecarObs?.hidden === true ||
+        (rowIdx >= 0 && rowIdx < activeGeom.rowHeightsPt.length && activeGeom.rowHeightsPt[rowIdx] <= 0) ||
+        (colIdx >= 0 && colIdx < activeGeom.colWidthsPt.length && activeGeom.colWidthsPt[colIdx] <= 0)
+
       if (exp.matched) {
-        if (exp.fillRgb !== undefined) {
-          const targetRgb = parseArgbHex(exp.fillRgb)
-          const fillErr = rgbMaxDelta(obs.bgRgb, targetRgb)
-          if (fillErr > 28) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'cell-expectation-mismatch',
-              reason: `Cell ${exp.ref} (${cap.appearance}) expected fill ${exp.fillRgb} (${targetRgb.join(',')}), but observed background RGB (${obs.bgRgb.join(',')}) (delta ${fillErr})`,
-              structuralValid: true,
+        const observedArgb = (sidecarObs?.fillRgb ?? sidecarObs?.displayFormatFill)?.toUpperCase()
+        const isDisplayFormat =
+          sidecarObs?.fillSource === 'excel-display-format' || exp.fillSource === 'excel-display-format'
+
+        if (isDisplayFormat && observedArgb) {
+          if (!isHidden) {
+            const dfRgb = parseArgbHex(observedArgb)
+            const fillPixelDelta = rgbMaxDelta(obs.bgRgb, dfRgb)
+            if (fillPixelDelta > 12) {
+              return {
+                kind: 'refusal',
+                id: c.id,
+                status: c.status,
+                code: 'fill-pixel-mismatch',
+                reason: `Cell ${exp.ref} (${cap.appearance}) display-format fill ${observedArgb} (${dfRgb.join(',')}) disagrees with screen pixel background (${obs.bgRgb.join(',')}); max channel delta ${fillPixelDelta} exceeds tolerance 12`,
+                structuralValid: true,
+              }
             }
           }
-          if (obs.bgContrastDelta < 16) {
-            return {
-              kind: 'refusal',
-              id: c.id,
-              status: c.status,
-              code: 'unchanged-control-capture',
-              reason: `Positive cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) does not differ from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}); delta ${obs.bgContrastDelta}`,
-              structuralValid: true,
+          if (exp.fillRgb !== undefined) {
+            if (observedArgb !== exp.fillRgb.toUpperCase()) {
+              return {
+                kind: 'refusal',
+                id: c.id,
+                status: c.status,
+                code: 'cell-expectation-mismatch',
+                reason: `Trusted display-format ARGB ${observedArgb} for cell ${exp.ref} does not match expected ${exp.fillRgb}`,
+                structuralValid: true,
+              }
             }
           }
-          captureMinPositive = Math.min(captureMinPositive, obs.bgContrastDelta)
-          captureMaxPositive = Math.max(captureMaxPositive, obs.bgContrastDelta)
-        } else {
+          if (!isHidden) {
+            checkedColorCellCount++
+            captureMinPositive = Math.min(captureMinPositive, obs.bgContrastDelta)
+            captureMaxPositive = Math.max(captureMaxPositive, obs.bgContrastDelta)
+          }
+        } else if (exp.fillRgb !== undefined) {
+          if (!isHidden) {
+            const targetRgb = parseArgbHex(exp.fillRgb)
+            const fillErr = rgbMaxDelta(obs.bgRgb, targetRgb)
+            if (fillErr > 28) {
+              return {
+                kind: 'refusal',
+                id: c.id,
+                status: c.status,
+                code: 'cell-expectation-mismatch',
+                reason: `Cell ${exp.ref} (${cap.appearance}) expected fill ${exp.fillRgb} (${targetRgb.join(',')}), but observed background RGB (${obs.bgRgb.join(',')}) (delta ${fillErr})`,
+                structuralValid: true,
+              }
+            }
+            if (obs.bgContrastDelta < 16) {
+              return {
+                kind: 'refusal',
+                id: c.id,
+                status: c.status,
+                code: 'unchanged-control-capture',
+                reason: `Positive cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) does not differ from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}); delta ${obs.bgContrastDelta}`,
+                structuralValid: true,
+              }
+            }
+            checkedColorCellCount++
+            captureMinPositive = Math.min(captureMinPositive, obs.bgContrastDelta)
+            captureMaxPositive = Math.max(captureMaxPositive, obs.bgContrastDelta)
+          }
+        } else if (!isHidden) {
           const marker = c.markers.find(m => isCellInSqref(exp.ref, m.sqref))
           const clearsFill = marker?.dxf?.clearPatternNone === true
           if (clearsFill) {
@@ -1843,11 +2090,12 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
         // Non-fill glyph ink validation
         const requiresGlyph =
-          exp.fontRgb !== undefined ||
-          exp.bold !== undefined ||
-          exp.underline !== undefined ||
-          exp.strikethrough !== undefined ||
-          exp.formattedText !== undefined
+          !isHidden &&
+          (exp.fontRgb !== undefined ||
+            exp.bold !== undefined ||
+            exp.underline !== undefined ||
+            exp.strikethrough !== undefined ||
+            exp.formattedText !== undefined)
         if (requiresGlyph) {
           if (obs.inkPixelCount < 6 || obs.glyphRowCount < 5 || obs.glyphColumnTransitions < 4) {
             return {
@@ -1861,7 +2109,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           }
         }
 
-        if (exp.fontRgb !== undefined) {
+        if (!isHidden && exp.fontRgb !== undefined) {
           const targetFontRgb = parseArgbHex(exp.fontRgb)
           const fontErr = rgbMaxDelta(obs.inkRgb, targetFontRgb)
           if (fontErr > 45) {
@@ -1876,7 +2124,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           }
         }
 
-        if (exp.bold === true) {
+        if (!isHidden && exp.bold === true) {
           const controlIsBold = obs.controlInkWeight >= 0.06
           const passesBold = controlIsBold
             ? obs.inkWeight >= obs.controlInkWeight * 0.95
@@ -1891,7 +2139,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
               structuralValid: true,
             }
           }
-        } else if (exp.bold === false) {
+        } else if (!isHidden && exp.bold === false) {
           if (
             obs.inkWeight >= obs.controlInkWeight * 1.08 ||
             obs.inkPixelCount >= obs.controlInkPixelCount + 4
@@ -1907,7 +2155,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           }
         }
 
-        if (exp.borderTop === true) {
+        if (!isHidden && exp.borderTop === true) {
           if (obs.borderTopDelta < 24 || obs.borderTopVsControlDelta < 20) {
             return {
               kind: 'refusal',
@@ -1920,7 +2168,7 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
           }
         }
 
-        if (exp.borderBottom === true) {
+        if (!isHidden && exp.borderBottom === true) {
           if (obs.borderBottomDelta < 24 || obs.borderBottomVsControlDelta < 20) {
             return {
               kind: 'refusal',
@@ -2048,38 +2296,81 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
             structuralValid: true,
           }
         }
-        if (obs.bgContrastDelta > 12) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'cell-expectation-mismatch',
-            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}) by ${obs.bgContrastDelta}`,
-            structuralValid: true,
+        const isScaleCase = c.stage === 2 || c.markers.some(m => m.ruleType === 'colorScale')
+        if (isScaleCase) {
+          if (!isHidden) {
+            const defaultBg: [number, number, number] = [255, 255, 255]
+            const bgDelta = rgbMaxDelta(obs.bgRgb, defaultBg)
+            if (bgDelta > 12) {
+              return {
+                kind: 'refusal',
+                id: c.id,
+                status: c.status,
+                code: 'cell-expectation-mismatch',
+                reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from default background (${defaultBg.join(',')}) by ${bgDelta}`,
+                structuralValid: true,
+              }
+            }
           }
-        }
-        if (obs.interiorMaxDelta > 14) {
-          return {
-            kind: 'refusal',
-            id: c.id,
-            status: c.status,
-            code: 'cell-expectation-mismatch',
-            reason: `Unmatched cell ${exp.ref} (${cap.appearance}) interior unexpectedly differs from control ${exp.controlRef} by ${obs.interiorMaxDelta}`,
-            structuralValid: true,
+        } else if (!isHidden) {
+          if (obs.bgContrastDelta > 12) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Unmatched cell ${exp.ref} (${cap.appearance}) background (${obs.bgRgb.join(',')}) unexpectedly differs from control ${exp.controlRef} (${obs.controlBgRgb.join(',')}) by ${obs.bgContrastDelta}`,
+              structuralValid: true,
+            }
+          }
+          if (obs.interiorMaxDelta > 14) {
+            return {
+              kind: 'refusal',
+              id: c.id,
+              status: c.status,
+              code: 'cell-expectation-mismatch',
+              reason: `Unmatched cell ${exp.ref} (${cap.appearance}) interior unexpectedly differs from control ${exp.controlRef} by ${obs.interiorMaxDelta}`,
+              structuralValid: true,
+            }
           }
         }
         passingCellRefs.add(exp.ref.toUpperCase())
       }
     }
 
-    if (!Number.isFinite(captureMinPositive) || captureMinPositive < 16) {
-      return {
-        kind: 'refusal',
-        id: c.id,
-        status: c.status,
-        code: 'unchanged-control-capture',
-        reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive cell contrast (min delta ${captureMinPositive})`,
-        structuralValid: true,
+    const isScaleCase = c.stage === 2 && c.markers.some(m => m.ruleType === 'colorScale')
+
+    if (isScaleCase) {
+      if (checkedColorCellCount === 0 || !Number.isFinite(captureMinPositive)) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'no-cells-checked',
+          reason: `No colour scale cells were checked in capture ${cap.pngPath} (${cap.appearance}) (minContrast=${captureMinPositive}, checkedCount=${checkedColorCellCount})`,
+          structuralValid: true,
+        }
+      }
+      if (captureMaxPositive < 16) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'unchanged-control-capture',
+          reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive scale cell contrast (max delta ${captureMaxPositive})`,
+          structuralValid: true,
+        }
+      }
+    } else {
+      if (!Number.isFinite(captureMinPositive) || captureMinPositive < 16) {
+        return {
+          kind: 'refusal',
+          id: c.id,
+          status: c.status,
+          code: 'unchanged-control-capture',
+          reason: `Capture ${cap.pngPath} (${cap.appearance}) has insufficient positive cell contrast (min delta ${captureMinPositive})`,
+          structuralValid: true,
+        }
       }
     }
 
@@ -2118,5 +2409,26 @@ export function isCapabilityVerified(
   const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId))
   if (!owningCase) return false
   const res = verifyCfCase(owningCase, options)
-  return res.kind === 'verified' && res.verifiedCapabilities.includes(capabilityId)
+  if (res.kind !== 'verified' || !res.verifiedCapabilities.includes(capabilityId)) return false
+
+  // Precondition-probe check for scale:* capabilities
+  if (capabilityId.startsWith('scale:') && capabilityId !== 'scale:interpolation-precondition-probe') {
+    const probeCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === 'scale:interpolation-precondition-probe'))
+    const probeVerified = probeCase ? verifyCfCase(probeCase, options).kind === 'verified' : false
+
+    if (!probeVerified) {
+      const hasOd6Fallback =
+        owningCase.resavedByExcel === true &&
+        owningCase.resaveReceipt?.openedRepairFree === true &&
+        owningCase.expected.cells.some(cell => cell.matched && cell.fillSource === 'excel-display-format')
+      const hasOd5Fallback =
+        owningCase.expected.cells.some(cell => cell.matched && cell.fillSource === 'pixel-matched')
+
+      if (!hasOd6Fallback && !hasOd5Fallback) {
+        return false
+      }
+    }
+  }
+
+  return true
 }

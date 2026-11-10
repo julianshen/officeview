@@ -61,7 +61,7 @@ const inside = (r: SheetRect, row: number, col: number) => row >= r.minRow && ro
  * pays these few property reads and nothing else, with no allocation and no style lookup.
  */
 export const mayHaveRegionGrid = (sheet: XlsxSheet): boolean =>
-  Boolean(sheet.pivotTables?.length || sheet.pivotRegions?.length || sheet.regionStyles || styledTable(sheet))
+  Boolean(sheet.pivotTables?.length || sheet.pivotRegions?.length || sheet.regionStyles || styledTable(sheet) || sheet.conditionalFormatting?.rules.length)
 /** Only a table with a style name joins the region layer (regionLayer.ts tableStyleRegions); a sheet holds few tables. */
 function styledTable(sheet: XlsxSheet): boolean {
   for (const table of sheet.tables ?? []) if (table.styleInfo?.name) return true

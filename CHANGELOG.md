@@ -12,6 +12,17 @@ in git history.
 
 ### Added
 
+- **Excel colour scales (view-only).** Two- and three-colour conditional formatting scales now paint in
+  resident, worker-backed and paged views, in print and export, with min/max/num/percent/percentile thresholds,
+  theme/indexed/rgb endpoint colours and fill-slot composition against other rules. Fills match Excel's display
+  format exactly on 364 of 398 measured cells; the other 34 stay withheld and keep their base formatting
+  (overlapping scales, expression rules with stop-if-true, text cells under a lower fill, and scales over hidden
+  rows, merged regions, disjoint ranges, whole-column or duplicated scopes, or non-Office theme palettes, whose Excel behaviour the saved fixtures
+  could not discriminate and which are re-measured later). Three-colour inversions and ties, lone out-of-range
+  percent or percentile bounds, and equal-priority fills with the scale first also stay withheld. Accessible descriptions read the cell's
+  position in the range. Formula thresholds, `activePresent`, and standalone x14 scales remain unresolved.
+  Details are in `docs/validation/xlsx-cf.md`.
+
 - **Pivot slicer and timeline controls (Stage 5, view only).** Single-target slicer
   selection/clear and timeline range, level and clear actions update resident or
   worker-backed pivots without editing the file. Timeline labels use measured

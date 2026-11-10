@@ -9,7 +9,15 @@ import { xlsxBytes, xlsxEntries, SS_NS } from './helpers/xlsx-package'
 import { buildZip } from './helpers/zip-builder'
 import * as formatting from '../src/xlsx/storage/pagedFormatting'
 import * as capturing from '../src/xlsx/cf/capture'
-const styles = { colors: {}, dxfNodes: [] }
+const styles = {
+  colors: {
+    theme: {
+      accent1: '4F81BD',
+      accent2: 'C0504D',
+    },
+  },
+  dxfNodes: [],
+}
 const base = '<conditionalFormatting sqref="B2:B4"><cfRule type="cellIs" priority="1" operator="greaterThan"><formula>2</formula></cfRule></conditionalFormatting>'
 const wrap = (s: string) => `<worksheet xmlns="${SS_NS}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">${s}</worksheet>`
 async function stream(xml: string, split = 1e9) {
@@ -21,7 +29,19 @@ async function stream(xml: string, split = 1e9) {
 }
 describe('paged CF capture', () => {
   it('resident and streamed CF are deep equal at every chunk boundary', async () => {
-    const xml = wrap(base + '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1=&quot;茶&quot;</xm:f></x14:cfRule><xm:sqref>C1</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>')
+    const twoColorScale = '<conditionalFormatting sqref="D2:D10"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const threeColorScale = '<conditionalFormatting sqref="E2:E10"><cfRule type="colorScale" priority="4"><colorScale><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const themeScale = '<conditionalFormatting sqref="F2:F10"><cfRule type="colorScale" priority="5"><colorScale><cfvo type="min"/><cfvo type="max"/><color theme="4" tint="-0.4"/><color theme="5" tint="0.4"/></colorScale></cfRule></conditionalFormatting>'
+    const x14Scale = '<x14:conditionalFormatting><x14:cfRule type="colorScale" priority="6" id="{01234567-89AB-CDEF-0123-456789ABCDE0}"><x14:colorScale><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:color rgb="FFFF0000"/><x14:color rgb="FF00FF00"/></x14:colorScale></x14:cfRule><xm:sqref>G1:G10</xm:sqref></x14:conditionalFormatting>'
+    const xml = wrap(
+      base +
+        twoColorScale +
+        threeColorScale +
+        themeScale +
+        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1=&quot;茶&quot;</xm:f></x14:cfRule><xm:sqref>C1</xm:sqref></x14:conditionalFormatting>' +
+        x14Scale +
+        '</x14:conditionalFormattings></ext></extLst>',
+    )
     const expected = parseCfSheet(parseXml(xml), styles, createCfMemory()).value
     for (let i = 0; i <= new TextEncoder().encode(xml).length; i++) {
       const result = await stream(xml, i)

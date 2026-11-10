@@ -295,7 +295,7 @@ Per host row (meanAbs / rowMax / strong, from `bun scripts/sparkline-compare.ts 
   (`renderSheet`: fills, sparklines, then cell content), the same order. This is one observation at one pixel, from a mask-excluded patch,
   so it is not gated.
 - **Colours.** J2, J3 and J7 have strong 0: their non-zero meanAbs is anti-aliasing and the one level of colour rounding
-  above. XlsxWriter's presets (style 1: accent1 of the Office 2007 theme, tint −0.5 → (36,64,98) in Excel, FF254061 in the
+  above. XlsxWriter's presets (style 1: accent1 of the Office 2007 theme, tint −0.5 → (36,64,98) in Excel, FF244062 in the
   parse test) resolve through the workbook's own theme, the negative-tint trap below.
 
 ## Scope verification (spec §4)

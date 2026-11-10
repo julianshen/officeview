@@ -41,7 +41,7 @@ describe('XlsxWriter-written sparkline workbook', () => {
     expect(at(map, 9).g).toMatchObject({ minAxisType: 'group', maxAxisType: 'group' })
     // Excel's style presets are theme colours with tints: style 1 is accent1 darkened 50 %. XlsxWriter ships the
     // Office 2007 theme (accent1 4F81BD), so this pins that the workbook's own theme is used, not the Office default.
-    expect(at(map, 1).g.colors.series).toBe('FF254061')
+    expect(at(map, 1).g.colors.series).toBe('FF244062')
     expect(at(map, 11).g).toMatchObject({ high: true, low: true })
   })
 

@@ -147,3 +147,83 @@ describe('print Paintable carries CF fill', () => {
     expect(pink).toBeGreaterThan(500)
   }, 60000)
 })
+
+describe('Stage 2 scale cases verify exact Excel-observed fills on interactive and paged adapters', () => {
+  for (const mode of ['interactive', 'paged'] as const) {
+    it(`${mode}: every measured scale case passes against observed fills`, async () => {
+      const manifest = loadManifest()
+      for (const c of manifest.cases.filter(entry => entry.stage === 2 && entry.status === 'measured')) {
+        const res = await compareCfCase(c, mode, { rootDir: REPO_ROOT })
+        expect(res.outcome, `${c.id}: ${res.reason}`).toBe('pass')
+        expect(res.outputHash).toMatch(/^[0-9a-f]{64}$/)
+      }
+    }, 120000)
+  }
+
+  it('a wrong painted fill fails against the observed sidecar (mutant)', async () => {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-interpolation')!
+    const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb?: string }> }
+    const target = sidecar.observedCells.find(cell => cell.fillRgb && cell.fillRgb !== 'FFFFFFFF')!
+    const { parseA1 } = await import('../scripts/cf-refs/verify')
+    const pos = parseA1(target.ref)!
+    const mismatch = verifyCaseCells(c, REPO_ROOT, (row, col) => row === pos.row && col === pos.col
+      ? { applied: true, style: { fillColor: 'FF000000' } }
+      : { applied: false, unresolved: true })
+    expect(mismatch).toContain(`Cell ${target.ref} observed Excel fill`)
+  })
+})
+
+describe('Stage 2 cf-compare refuses to pass having compared nothing (I4)', () => {
+  const everyCellPainted = () => ({ applied: true, style: { fillColor: 'FF000000' } })
+  const everyCellWithheld = () => ({ applied: false, unresolved: true })
+
+  async function scratchRoot(mutateSidecar: ((sidecar: { observedCells: Array<Record<string, unknown>> }) => void) | 'missing') {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-interpolation')!
+    const root = mkdtempSync(join(tmpdir(), 'cf-compare-i4-'))
+    const sidecarPath = c.captures[0]!.sidecarPath
+    mkdirSync(dirname(join(root, sidecarPath)), { recursive: true })
+    if (mutateSidecar !== 'missing') {
+      const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, sidecarPath), 'utf8')) as { observedCells: Array<Record<string, unknown>> }
+      mutateSidecar(sidecar)
+      writeFileSync(join(root, sidecarPath), JSON.stringify(sidecar))
+    }
+    return { c, root }
+  }
+
+  it('a missing sidecar refuses instead of falling back to fill-less seed expectations', async () => {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const { c, root } = await scratchRoot('missing')
+    expect(verifyCaseCells(c, root, everyCellPainted)).toContain('sidecar')
+  })
+
+  it('a sidecar with no trusted excel-display-format fills refuses', async () => {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const { c, root } = await scratchRoot(sidecar => { for (const cell of sidecar.observedCells) delete cell.fillRgb })
+    expect(verifyCaseCells(c, root, everyCellPainted)).toContain('no trusted')
+    const untrusted = await scratchRoot(sidecar => { for (const cell of sidecar.observedCells) cell.fillSource = 'pixel-sample' })
+    expect(verifyCaseCells(untrusted.c, untrusted.root, everyCellPainted)).toContain('no trusted')
+  })
+
+  it('hidden cells are not compared (same trust filter as the conformance test)', async () => {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const { c, root } = await scratchRoot(sidecar => { for (const cell of sidecar.observedCells) cell.hidden = true })
+    expect(verifyCaseCells(c, root, everyCellPainted)).toContain('no trusted')
+  })
+
+  it('a product that withholds every cell compared zero cells and refuses', async () => {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-interpolation')!
+    const reason = verifyCaseCells(c, REPO_ROOT, everyCellWithheld)
+    expect(reason).toContain('compared zero cells')
+  })
+
+  it('control: the real measured run still passes on both adapters (the wrong-fill mutant is covered above)', async () => {
+    const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-interpolation')!
+    for (const mode of ['interactive', 'paged'] as const) {
+      expect((await compareCfCase(c, mode, { rootDir: REPO_ROOT })).outcome).toBe('pass')
+    }
+  }, 60000)
+})

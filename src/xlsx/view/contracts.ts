@@ -399,6 +399,7 @@ export interface CfCellStateWire {
   readonly properties: Record<string, string | number | boolean | null>
   readonly unresolvedWrites?: readonly string[]
   readonly unresolvedReason?: string
+  readonly scale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
 }
 export interface CfSharedDefinition {
   readonly id: string
@@ -472,7 +473,7 @@ export function cfRulePropertyBytes(rules: readonly { dxf?: Record<string, unkno
  * walker exactly (24 per object; 16 per property slot plus the walked value;
  * arrays 16 + 8 per item plus walked elements; strings 16 + 2 per char;
  * numbers, booleans and null 8; no cross-cell dedup). */
-export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason'>>): number {
+export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & Partial<Pick<CfCellStateWire, 'unresolvedWrites' | 'unresolvedReason' | 'scale'>>): number {
   // {row, col, properties} plus optional unresolvedWrites/unresolvedReason.
   let bytes = 24 + (16 + 8) + (16 + 8) + (16 + measureCfPropertiesBytes(cell.properties))
   if (cell.unresolvedWrites !== undefined) {
@@ -480,6 +481,11 @@ export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & P
     for (const w of cell.unresolvedWrites) bytes += cfWireStringBytes(w)
   }
   if (cell.unresolvedReason !== undefined) bytes += 16 + cfWireStringBytes(cell.unresolvedReason)
+  if (cell.scale !== undefined) {
+    // 16 prop slot + 24 scale object + 24 ruleId + 24 argb = 88 bytes
+    bytes += 16 + 24 + (16 + 8) + (16 + 8)
+    if (cell.scale.fraction !== undefined) bytes += 16 + 8
+  }
   return bytes
 }
 /** Measured bytes of one shared definition (counted once however many cells reference it). */

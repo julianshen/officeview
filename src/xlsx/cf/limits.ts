@@ -1,7 +1,12 @@
 import { CF_PAINT_BATCH_CELLS } from '../cfLoader'
 import type { AllocationContext, AllocationReservation } from '../view/allocationAccount'
 import { measurePayloadBytes } from '../view/payloadBytes'
+import { measureCfCellBytes } from '../view/contracts'
 import type { CfDiagnostic, CfLease, CfOutcome } from './model'
+
+/** Upper bound of the wire bytes one scale visual adds to a cell state, DERIVED from the wire measurer so the grant
+ * estimate cannot drift from `measureCfCellBytes` (it includes the optional `fraction`). */
+export const CF_SCALE_CELL_BYTES: number = measureCfCellBytes({ properties: {}, scale: { ruleId: 0, argb: 0, fraction: 0 } }) - measureCfCellBytes({ properties: {} })
 
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,

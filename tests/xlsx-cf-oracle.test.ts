@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,15 +7,29 @@ import { fileURLToPath } from 'node:url'
 import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
 import { afterEach, describe, expect, it } from 'vitest'
+
+const hasOsacompile = process.platform === 'darwin' && spawnSync('which', ['osacompile']).status === 0
 import { compareCfCase } from '../scripts/cf-compare'
-import { assertCanCloseWorkbook, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
+import { assertCanCloseWorkbook, filterCasesForStage, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
+  CF_CAPABILITIES,
+  CF_CASES,
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
+  CF_STAGE2_CAPABILITIES,
+  CF_STAGE2_CASES,
   type CfManifest,
   type CfOracleCase,
+  type CfPartMarker,
   type CfResaveReceipt,
 } from '../scripts/cf-refs/cases'
+import {
+  buildColorProbeScript,
+  buildColorScaleCriteriaProbeScript,
+  buildDecorationProbeScript,
+  buildTextProbeScript,
+  parseExcelColorToArgb,
+} from '../scripts/cf-refs/capture'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
 import {
   type ComputeGeometryOptions,
@@ -22,6 +37,7 @@ import {
   computeWorksheetRangeGeometry,
   decodePngSync,
   isCapabilityVerified,
+  isCellWithinRange,
   isSupportedExcelVersion,
   observeCellsFromCapture,
   parseA1,
@@ -551,10 +567,11 @@ describe('CF oracle verifier', () => {
 
   it('verifies all Stage 1 manifest cases have valid structural markers and honest status', () => {
     const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
-    expect(manifest.cases.map(c => c.id)).toEqual(CF_STAGE1_CASES.map(c => c.id))
-    expect(manifest.cases).toHaveLength(13)
+    const stage1Cases = manifest.cases.filter(c => c.stage === 1 || !c.stage)
+    expect(stage1Cases.map(c => c.id)).toEqual(CF_STAGE1_CASES.map(c => c.id))
+    expect(stage1Cases).toHaveLength(13)
 
-    for (const c of manifest.cases) {
+    for (const c of stage1Cases) {
       expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
       expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
       const result = verifyCfCase(c, { rootDir: REPO_ROOT })
@@ -564,6 +581,938 @@ describe('CF oracle verifier', () => {
       } else {
         expect(result.status).toBe('measured')
       }
+    }
+  })
+
+  it('stage 2 cases join the manifest and stage 1 cases are unchanged', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
+    expect(CF_STAGE1_CAPABILITIES.length).toBeGreaterThanOrEqual(90)
+    expect(CF_STAGE2_CAPABILITIES.length).toBeGreaterThan(0)
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length)
+    expect(CF_STAGE2_CASES).toHaveLength(8)
+    for (const c of manifest.cases.filter(c => c.stage === 2)) {
+      expect(['recipe-pending', 'unsupported', 'measured']).toContain(c.status)
+      expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
+  it('scale marker pins cfvo and colour order exactly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-scale-pin-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:pin-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'percentile', val: '30' }, { type: 'max' }],
+        colors: ['FFF8696B', 'FFFFEB84', 'FF63BE7B'],
+      },
+    }
+
+    const makeScaleCase = (filename: string, hash: string, markers = [baseMarker]): CfOracleCase => ({
+      id: 'scale-pin-case',
+      stage: 2,
+      question: 'Pins exact cfvo sequence and color sequence in scale marker',
+      input: filename,
+      saved: filename,
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers,
+      expected: {
+        inputSha256: hash,
+        savedSha256: hash,
+        provenance: 'seed-hypothesis',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, fillSource: 'unverified' },
+          { ref: 'B3', controlRef: 'A3', matched: false, fillSource: 'unverified' },
+        ],
+      },
+      captures: [],
+      status: 'recipe-pending',
+      reason: 'Testing scale marker pinning',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    })
+
+    // 0. Canonical valid scale archive: structuralValid should be true
+    const validScaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="percentile" val="30"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const validBytes = await makeSyntheticXlsx({ sheetRuleXml: validScaleXml, dxfCount: 0 })
+    const validHash = sha256(validBytes)
+    writeFileSync(join(dir, 'valid.xlsx'), validBytes)
+    const validRes = verifyCfCase(makeScaleCase('valid.xlsx', validHash), { rootDir: dir })
+    expect(validRes).toMatchObject({ structuralValid: true })
+
+    // 1. Reordered colours: FF63BE7B -> FFFFEB84 -> FFF8696B
+    const reorderedColorsXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="percentile" val="30"/><cfvo type="max"/><color rgb="FF63BE7B"/><color rgb="FFFFEB84"/><color rgb="FFF8696B"/></colorScale></cfRule></conditionalFormatting>'
+    const reorderedBytes = await makeSyntheticXlsx({ sheetRuleXml: reorderedColorsXml, dxfCount: 0 })
+    const reorderedHash = sha256(reorderedBytes)
+    writeFileSync(join(dir, 'reordered.xlsx'), reorderedBytes)
+    const reorderedRes = verifyCfCase(makeScaleCase('reordered.xlsx', reorderedHash), { rootDir: dir })
+    expect(reorderedRes).toMatchObject({
+      kind: 'refusal',
+      code: 'stripped-rule',
+      structuralValid: false,
+    })
+
+    // 2. Missing cfvo: only min and max (2 cfvos instead of 3)
+    const missingCfvoXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const missingBytes = await makeSyntheticXlsx({ sheetRuleXml: missingCfvoXml, dxfCount: 0 })
+    const missingHash = sha256(missingBytes)
+    writeFileSync(join(dir, 'missing.xlsx'), missingBytes)
+    const missingRes = verifyCfCase(makeScaleCase('missing.xlsx', missingHash), { rootDir: dir })
+    expect(missingRes).toMatchObject({
+      kind: 'refusal',
+      code: 'stripped-rule',
+      structuralValid: false,
+    })
+
+    // 3. Mutated val: "30" changed to "3"
+    const mutatedValXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="percentile" val="3"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const mutatedValBytes = await makeSyntheticXlsx({ sheetRuleXml: mutatedValXml, dxfCount: 0 })
+    const mutatedValHash = sha256(mutatedValBytes)
+    writeFileSync(join(dir, 'mutated-val.xlsx'), mutatedValBytes)
+    const mutatedValRes = verifyCfCase(makeScaleCase('mutated-val.xlsx', mutatedValHash), { rootDir: dir })
+    expect(mutatedValRes).toMatchObject({
+      kind: 'refusal',
+      code: 'stripped-rule',
+      structuralValid: false,
+    })
+
+    // 4. Rule in wrong part: moved to xl/workbook.xml
+    const wrongPartBytes = await makeSyntheticXlsx({ sheetRuleXml: '', workbookExtraXml: validScaleXml, dxfCount: 0 })
+    const wrongPartHash = sha256(wrongPartBytes)
+    writeFileSync(join(dir, 'wrong-part.xlsx'), wrongPartBytes)
+    const wrongPartRes = verifyCfCase(makeScaleCase('wrong-part.xlsx', wrongPartHash), { rootDir: dir })
+    expect(wrongPartRes).toMatchObject({
+      kind: 'refusal',
+      code: 'wrong-part-marker',
+      structuralValid: false,
+    })
+
+    // 5. Semantic equivalence (Lesson 2): attribute order switched, lowercase hex
+    const semanticEquivXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo val="30" type="percentile"/><cfvo type="max"/><color rgb="fff8696b"/><color rgb="ffffeb84"/><color rgb="ff63be7b"/></colorScale></cfRule></conditionalFormatting>'
+    const semanticBytes = await makeSyntheticXlsx({ sheetRuleXml: semanticEquivXml, dxfCount: 0 })
+    const semanticHash = sha256(semanticBytes)
+    writeFileSync(join(dir, 'semantic.xlsx'), semanticBytes)
+    const semanticRes = verifyCfCase(makeScaleCase('semantic.xlsx', semanticHash), { rootDir: dir })
+    expect(semanticRes).toMatchObject({ structuralValid: true })
+  })
+
+  it('scale fill requires trusted fill evidence', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-scale-fill-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:fill-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFF0000', 'FF00FF00'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    const validPng = makeCapturePng(true)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    const makeCase = (fillSource?: 'excel-display-format' | 'pixel-matched' | 'unverified'): CfOracleCase => ({
+      id: 'scale-fill-case',
+      stage: 2,
+      question: 'Scale fill trust evidence',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, fillRgb: 'FFFF0000', scaleApplied: true, fillSource },
+          { ref: 'B3', controlRef: 'A3', matched: false, scaleApplied: false, fillSource },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    })
+
+    const writeSidecar = (
+      geomSource = 'excel-measured',
+      observedArgb = 'FFFF0000',
+      fillSource: 'excel-display-format' | 'pixel-matched' = 'excel-display-format',
+    ) => {
+      writeFileSync(
+        join(dir, 'scale.json'),
+        JSON.stringify({
+          excelVersion: '16.114',
+          route: 'copy-picture',
+          appearance: 'screen',
+          scale: 1,
+          pxPerPt: 1,
+          width: 168,
+          height: 54,
+          colWidthsPt: [84, 84],
+          rowHeightsPt: [18, 18, 18],
+          geometrySource: geomSource,
+          resavedByExcel: true,
+          resaveSavedSha256: xlsxHash,
+          sheet: 'Sheet1',
+          range: 'A1:B3',
+          savedSha256: xlsxHash,
+          pngSha256: validPngHash,
+          capturedAt: '2026-11-06T08:00:00Z',
+          observedCells: [
+            { ref: 'B2', fillSource, fillRgb: observedArgb },
+            { ref: 'B3', fillSource, fillRgb: 'FFFFFFFF' },
+          ],
+        }),
+      )
+    }
+
+    // 1. Missing fillSource or 'unverified' -> fill-unobserved
+    writeSidecar('excel-measured')
+    const unverifiedRes = verifyCfCase(makeCase('unverified'), { rootDir: dir })
+    expect(unverifiedRes).toMatchObject({
+      kind: 'refusal',
+      code: 'fill-unobserved',
+    })
+
+    const missingSourceRes = verifyCfCase(makeCase(undefined), { rootDir: dir })
+    expect(missingSourceRes).toMatchObject({
+      kind: 'refusal',
+      code: 'fill-unobserved',
+    })
+
+    // 2. Geometry must be excel-measured before pixel sample (T1-A(a))
+    writeSidecar('calc-estimated')
+    const unverifiedGeomRes = verifyCfCase(makeCase('pixel-matched'), { rootDir: dir })
+    expect(unverifiedGeomRes).toMatchObject({
+      kind: 'refusal',
+      code: 'geometry-mismatch',
+    })
+
+    // 3. OD-5 calibrated pixel-matched with excel-measured geometry verifies
+    writeSidecar('excel-measured', 'FFFFC7CE', 'pixel-matched')
+    // validPng has #ffc7ce at B2, target FFFFC7CE
+    const cPixelMatched = makeCase('pixel-matched')
+    cPixelMatched.expected.cells[0].fillRgb = 'FFFFC7CE'
+    const pixelMatchedRes = verifyCfCase(cPixelMatched, { rootDir: dir })
+    expect(pixelMatchedRes.kind).toBe('verified')
+
+    // 4. Trusted ARGB (fillSource: 'excel-display-format') must agree with screen pixel (delta <= 12); refuses with fill-pixel-mismatch otherwise
+    writeSidecar('excel-measured', 'FFFF0000')
+    const trustedArgbCase = makeCase('excel-display-format')
+    trustedArgbCase.expected.cells[0].fillRgb = 'FFFF0000'
+    // validPng has #ffc7ce (delta > 12 from FFFF0000), so display-format and screen pixel mismatch
+    const trustedRes = verifyCfCase(trustedArgbCase, { rootDir: dir })
+    expect(trustedRes).toMatchObject({
+      kind: 'refusal',
+      code: 'fill-pixel-mismatch',
+    })
+
+    // 4b. When display-format ARGB agrees with screen pixel within 12, it verifies
+    writeSidecar('excel-measured', 'FFFFC7CE')
+    const agreedCase = makeCase('excel-display-format')
+    agreedCase.expected.cells[0].fillRgb = 'FFFFC7CE'
+    const agreedRes = verifyCfCase(agreedCase, { rootDir: dir })
+    expect(agreedRes.kind).toBe('verified')
+
+    // 5. Trusted ARGB that differs from expectation gets cell-expectation-mismatch
+    writeSidecar('excel-measured', 'FFFFC7CE') // observed FFFFC7CE matches pixel, but differs from expected FFFF0000
+    const mismatchArgbCase = makeCase('excel-display-format')
+    mismatchArgbCase.expected.cells[0].fillRgb = 'FFFF0000'
+    const mismatchRes = verifyCfCase(mismatchArgbCase, { rootDir: dir })
+    expect(mismatchRes).toMatchObject({
+      kind: 'refusal',
+      code: 'cell-expectation-mismatch',
+    })
+
+    // 6. OD-6: trusted ARGB + resave receipt with NO PNG promotes semantic capability unconditionally
+    const od6NoPngCase = makeCase('excel-display-format')
+    od6NoPngCase.captures = []
+    const od6Res = verifyCfCase(od6NoPngCase, { rootDir: dir })
+    expect(od6Res.kind).toBe('verified')
+
+    // 7. Precondition probe failure refuses scale:* capabilities unless OD-5 or OD-6 engages
+    const manifestFixture: CfManifest = {
+      version: 1,
+      excelBuild: '16.114',
+      locale: 'zh-TW',
+      dateSystem: '1900',
+      hostTimeZone: 'Asia/Taipei',
+      generatedAt: '2026-11-06T00:00:00Z',
+      cases: [
+        {
+          id: 'probe-case',
+          stage: 2,
+          question: 'Precondition probe',
+          input: 'scale.xlsx',
+          saved: 'scale.xlsx',
+          sheet: 'Sheet1',
+          range: 'A1:B3',
+          requiredAppearances: ['screen'],
+          markers: [
+            {
+              part: 'xl/worksheets/sheet1.xml',
+              extension: 'legacy',
+              capabilityId: 'scale:interpolation-precondition-probe',
+              sqref: 'B2:B3',
+              ruleType: 'colorScale',
+              priority: 1,
+              formulas: [],
+            },
+          ],
+          expected: {
+            inputSha256: xlsxHash,
+            savedSha256: xlsxHash,
+            provenance: 'seed-hypothesis',
+            positiveRefs: ['B2'],
+            negativeRefs: ['B3'],
+            cells: [{ ref: 'B2', controlRef: 'A2', matched: true }, { ref: 'B3', controlRef: 'A3', matched: false }],
+          },
+          captures: [],
+          status: 'recipe-pending', // Refused!
+          tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+        },
+        od6NoPngCase, // Has OD-6 fallback
+      ],
+    }
+
+    // OD-6 fallback engages -> capability verified despite probe failure
+    expect(isCapabilityVerified('scale:fill-test', manifestFixture, { rootDir: dir })).toBe(true)
+
+    // Without OD-5 or OD-6 fallback, capability is refused when probe fails
+    const noFallbackCase = makeCase('unverified')
+    manifestFixture.cases[1] = noFallbackCase
+    expect(isCapabilityVerified('scale:fill-test', manifestFixture, { rootDir: dir })).toBe(false)
+  })
+
+  it('stage filtering in generate, build, and capture touches only the specified stage', async () => {
+    // 1. filterCasesForStage enforces that --stage 2 returns strictly stage 2 buildable cases
+    const stage2Cases = filterCasesForStage(CF_CASES as CfOracleCase[], 2)
+    expect(stage2Cases.length).toBe(7)
+    expect(stage2Cases.every(c => c.stage === 2)).toBe(true)
+    expect(stage2Cases.some(c => c.stage === 1)).toBe(false)
+    expect((CF_CASES as CfOracleCase[]).filter(c => c.stage === 2)).toHaveLength(8)
+
+    // 2. filterCasesForStage with --stage 1 returns strictly stage 1 buildable cases
+    const stage1Cases = filterCasesForStage(CF_CASES as CfOracleCase[], 1)
+    expect(stage1Cases.length).toBe(12)
+    expect(stage1Cases.every(c => c.stage === 1)).toBe(true)
+    expect(stage1Cases.some(c => c.stage === 2)).toBe(false)
+    expect((CF_CASES as CfOracleCase[]).filter(c => c.stage === 1)).toHaveLength(13)
+
+    // 3. generateAllStage1 with stage: 2 preserves existing Stage 1 cases in manifest
+    const dir = mkdtempSync(join(tmpdir(), 'cf-stage-filter-'))
+    const fixtureDir = join(dir, 'tests/fixtures/xlsx-cf')
+    mkdirSync(join(fixtureDir, 'inputs'), { recursive: true })
+    mkdirSync(join(fixtureDir, 'refs'), { recursive: true })
+
+    const fakeStage1Case: CfOracleCase = {
+      ...(CF_CASES.find(c => c.id === 'stage1-cellis-literals') as CfOracleCase),
+      expected: {
+        ...(CF_CASES.find(c => c.id === 'stage1-cellis-literals') as CfOracleCase).expected,
+        inputSha256: 'deadbeef11111111111111111111111111111111111111111111111111111111',
+      },
+    }
+    const initialManifest: CfManifest = {
+      version: 1,
+      excelBuild: '16.114',
+      locale: 'zh-TW',
+      dateSystem: '1900',
+      hostTimeZone: 'Asia/Taipei',
+      generatedAt: '2026-11-06T00:00:00Z',
+      cases: [fakeStage1Case],
+    }
+    writeFileSync(join(fixtureDir, 'manifest.json'), JSON.stringify(initialManifest, null, 2))
+
+    // Generating stage: 2 must NOT overwrite the fake Stage 1 case
+    const genManifest = await generateAllStage1({ rootDir: dir, stage: 2 })
+    const retainedStage1 = genManifest.cases.find(c => c.id === 'stage1-cellis-literals')
+    expect(retainedStage1?.expected.inputSha256).toBe('deadbeef11111111111111111111111111111111111111111111111111111111')
+  })
+
+  // osacompile ships with macOS only: skipped (by name) on Linux CI, strict wherever it exists.
+  it.skipIf(!hasOsacompile)('compiles all probe AppleScripts under osacompile with zero syntax errors', () => {
+    for (const c of CF_CASES) {
+      const refs = c.expected.cells.map(x => x.ref)
+      const scripts = [
+        buildTextProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        buildDecorationProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        buildColorProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        buildColorScaleCriteriaProbeScript(`${c.id}.xlsx`, c.sheet),
+      ]
+      for (const lines of scripts) {
+        const full = ['tell application "Microsoft Excel"', ...lines, 'end tell'].join('\n')
+        const res = spawnSync('osacompile', ['-o', '/dev/null'], { input: full, encoding: 'utf8' })
+        expect(res.status, `osacompile failed for ${c.id}: ${res.stderr}`).toBe(0)
+      }
+    }
+  }, 30_000)
+
+  it('correctly validates cell coordinates within range even with hidden rows (stage2-scale-scope)', () => {
+    const scopeCase = CF_CASES.find(c => c.id === 'stage2-scale-scope')!
+    const file = readFileSync(resolve(REPO_ROOT, scopeCase.input))
+    const parts = readZipPartsSync(new Uint8Array(file))!
+    const geom = computeWorksheetRangeGeometry(parts, scopeCase.range)!
+
+    // B4 (row 4 hidden) and control B15 are both inside capture range A1:F20
+    expect(isCellWithinRange('B4', geom)).toBe(true)
+    expect(isCellWithinRange('B15', geom)).toBe(true)
+    expect(isCellWithinRange('A1', geom)).toBe(true)
+    expect(isCellWithinRange('F20', geom)).toBe(true)
+    expect(isCellWithinRange('G20', geom)).toBe(false)
+    expect(isCellWithinRange('F21', geom)).toBe(false)
+
+    // verifyCfCase structural validation must NOT refuse stage2-scale-scope on B4/B15
+    const res = verifyCfCase(scopeCase, { rootDir: REPO_ROOT })
+    expect(res).toMatchObject({ structuralValid: true })
+    if (res.kind === 'refusal') {
+      expect(res.code).not.toBe('cell-expectation-mismatch')
+    }
+  })
+
+  it('guards every cell and criterion query inside per-item try blocks in probe AppleScripts', () => {
+    const testRefs = ['B2', 'B8']
+    const colorScript = buildColorProbeScript('wb.xlsx', 'Sheet1', testRefs).join('\n')
+    const decScript = buildDecorationProbeScript('wb.xlsx', 'Sheet1', testRefs).join('\n')
+    const textScript = buildTextProbeScript('wb.xlsx', 'Sheet1', testRefs).join('\n')
+    const critScript = buildColorScaleCriteriaProbeScript('wb.xlsx', 'Sheet1').join('\n')
+
+    // Every cell query in color probe must be guarded by try ... end try with "missing value" fallback
+    for (const ref of testRefs) {
+      expect(colorScript).toMatch(new RegExp(`set dfColor to "missing value"[\\s\\S]*?try[\\s\\S]*?display format of range "${ref}"[\\s\\S]*?end try`))
+      expect(colorScript).toMatch(new RegExp(`set baseColor to "missing value"[\\s\\S]*?try[\\s\\S]*?interior object of range "${ref}"[\\s\\S]*?end try`))
+    }
+
+    // Every cell query in decoration probe must be guarded by try ... end try with "missing value" fallback
+    for (const ref of testRefs) {
+      expect(decScript).toMatch(new RegExp(`set uVal to "missing value"[\\s\\S]*?try[\\s\\S]*?underline of font object of display format of range "${ref}"[\\s\\S]*?end try`))
+      expect(decScript).toMatch(new RegExp(`set sVal to "missing value"[\\s\\S]*?try[\\s\\S]*?strikethrough of font object of display format of range "${ref}"[\\s\\S]*?end try`))
+    }
+
+    // Text probe must also guard string value query per cell
+    for (const ref of testRefs) {
+      expect(textScript).toMatch(new RegExp(`set tVal to ""[\\s\\S]*?try[\\s\\S]*?string value of range "${ref}"[\\s\\S]*?end try`))
+    }
+
+    // Criteria probe must guard criterion type query
+    expect(critScript).toMatch(/set cType to "missing value"[\s\S]*?try[\s\S]*?color scale criterion type of crit[\s\S]*?end try/)
+  })
+
+  it('accepts Excel canonical forms for min/max cfvo val omission and alpha normalization', async () => {
+    // 1. Thresholds case G2:G6 (type="min" val="0") matches Excel-resaved G2:G6 where val is dropped
+    const thresholdsCase = CF_CASES.find(c => c.id === 'stage2-scale-thresholds')!
+    const canonThresholdsXml =
+      '<conditionalFormatting sqref="G2:G6"><cfRule type="colorScale" priority="6"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const dir = mkdtempSync(join(tmpdir(), 'cf-canon-'))
+    const canonThresholdsBytes = await makeSyntheticXlsx({ sheetRuleXml: canonThresholdsXml, dxfCount: 0 })
+    writeFileSync(join(dir, 'canon-thresholds.xlsx'), canonThresholdsBytes)
+    const markerLegacy = thresholdsCase.markers.find(m => m.capabilityId === 'scale:thresholds-legacy-min-val-0')!
+    const testCase = {
+      ...thresholdsCase,
+      markers: [markerLegacy],
+      input: 'canon-thresholds.xlsx',
+      saved: 'canon-thresholds.xlsx',
+      expected: { ...thresholdsCase.expected, inputSha256: sha256(canonThresholdsBytes), savedSha256: sha256(canonThresholdsBytes) },
+    }
+    const resThresholds = verifyCfCase(testCase, { rootDir: dir })
+    expect(resThresholds).toMatchObject({ structuralValid: true })
+
+    // 2. Colors case D2:D6 (00F8696B) matches Excel-resaved D2:D6 where alpha is normalized to FFF8696B
+    const colorsCase = CF_CASES.find(c => c.id === 'stage2-scale-colors')!
+    const canonColorsXml =
+      '<conditionalFormatting sqref="D2:D6"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const canonColorsBytes = await makeSyntheticXlsx({ sheetRuleXml: canonColorsXml, dxfCount: 0 })
+    writeFileSync(join(dir, 'canon-colors.xlsx'), canonColorsBytes)
+    const markerAlpha = colorsCase.markers.find(m => m.capabilityId === 'scale:colors-alpha-00')!
+    const testColorsCase = {
+      ...colorsCase,
+      markers: [markerAlpha],
+      input: 'canon-colors.xlsx',
+      saved: 'canon-colors.xlsx',
+      expected: { ...colorsCase.expected, inputSha256: sha256(canonColorsBytes), savedSha256: sha256(canonColorsBytes) },
+    }
+    const resColors = verifyCfCase(testColorsCase, { rootDir: dir })
+    expect(resColors).toMatchObject({ structuralValid: true })
+
+    // 3. Composition case H2:H5 (scale:composition-scale-stopIfTrue) matches Excel-resaved rule where stopIfTrue is dropped
+    const compCase = CF_CASES.find(c => c.id === 'stage2-scale-composition')!
+    const canonCompXml =
+      '<conditionalFormatting sqref="H2:H5"><cfRule type="colorScale" priority="12"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const canonCompBytes = await makeSyntheticXlsx({ sheetRuleXml: canonCompXml, dxfCount: 0 })
+    writeFileSync(join(dir, 'canon-comp.xlsx'), canonCompBytes)
+    const markerStop = compCase.markers.find(m => m.capabilityId === 'scale:composition-scale-stopIfTrue')!
+    const testCompCase = {
+      ...compCase,
+      markers: [markerStop],
+      input: 'canon-comp.xlsx',
+      saved: 'canon-comp.xlsx',
+      expected: { ...compCase.expected, inputSha256: sha256(canonCompBytes), savedSha256: sha256(canonCompBytes) },
+    }
+    const resComp = verifyCfCase(testCompCase, { rootDir: dir })
+    expect(resComp).toMatchObject({ structuralValid: true })
+  })
+
+  it('does not falsely refuse unmatched cells in colour-scale cases when controlRef is a scale cell', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-unmatched-scale-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:unmatched-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFF0000', 'FF00FF00'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    const validPng = makeCapturePng(true)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    writeFileSync(
+      join(dir, 'scale.json'),
+      JSON.stringify({
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: xlsxHash,
+        sheet: 'Sheet1',
+        range: 'A1:B3',
+        savedSha256: xlsxHash,
+        pngSha256: validPngHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: [
+          { ref: 'B2', fillSource: 'excel-display-format', fillRgb: 'FFFFC7CE' },
+          { ref: 'B3', fillSource: 'excel-display-format', fillRgb: 'FFFFFFFF' },
+        ],
+      }),
+    )
+
+    // Unmatched cell B3 has controlRef pointing to scale cell B2.
+    // The verifier must validate B3 against default background without refusing due to contrast against B2.
+    const testCase: CfOracleCase = {
+      id: 'scale-unmatched-case',
+      stage: 2,
+      question: 'Scale unmatched cell control comparison',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, fillRgb: 'FFFFC7CE', scaleApplied: true, fillSource: 'excel-display-format' },
+          { ref: 'B3', controlRef: 'B2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    }
+
+    const verified = verifyCfCase(testCase, { rootDir: dir })
+    expect(verified.kind).toBe('verified')
+  })
+
+  it('calibrates parseExcelColorToArgb against DXF_RED FFFFC7CE across all return shapes', () => {
+    const DXF_RED = 'FFFFC7CE'
+
+    // 1. AppleScript 16-bit RGBColor record / list {65535, 51118, 52942}
+    expect(parseExcelColorToArgb([65535, 51118, 52942])).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('{65535, 51118, 52942}')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('65535, 51118, 52942')).toBe(DXF_RED)
+
+    // 2. 8-bit RGB [255, 199, 206]
+    expect(parseExcelColorToArgb([255, 199, 206])).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('{255, 199, 206}')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('255, 199, 206')).toBe(DXF_RED)
+
+    // 3. Classic VBA BGR integer (0xCE_C7_FF = 13551615)
+    expect(parseExcelColorToArgb(13551615)).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('13551615')).toBe(DXF_RED)
+
+    // 4. Hex string #FFC7CE or FFFFC7CE
+    expect(parseExcelColorToArgb('#FFC7CE')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('FFFFC7CE')).toBe(DXF_RED)
+    expect(parseExcelColorToArgb('ffc7ce')).toBe(DXF_RED)
+
+    // 5. Extremes and primary colors
+    expect(parseExcelColorToArgb([65535, 0, 0])).toBe('FFFF0000')
+    expect(parseExcelColorToArgb([0, 65535, 0])).toBe('FF00FF00')
+    expect(parseExcelColorToArgb([0, 0, 65535])).toBe('FF0000FF')
+    expect(parseExcelColorToArgb([65535, 65535, 65535])).toBe('FFFFFFFF')
+    expect(parseExcelColorToArgb([0, 0, 0])).toBe('FF000000')
+
+    // 6. Null / none / empty / invalid shapes
+    expect(parseExcelColorToArgb(null)).toBeNull()
+    expect(parseExcelColorToArgb(undefined)).toBeNull()
+    expect(parseExcelColorToArgb('none')).toBeNull()
+    expect(parseExcelColorToArgb('')).toBeNull()
+    expect(parseExcelColorToArgb('missing value')).toBeNull()
+  })
+
+  it('decodes Excel standard red F8696B and green 63BE7B from raw AppleScript return shapes', () => {
+    const EXCEL_RED = 'FFF8696B'
+    const EXCEL_GREEN = 'FF63BE7B'
+
+    // Comma-delimited list string from AppleScript with text item delimiters set to ","
+    expect(parseExcelColorToArgb('248, 105, 107')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('248,105,107')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('{248, 105, 107}')).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb([248, 105, 107])).toBe(EXCEL_RED)
+    expect(parseExcelColorToArgb('99, 190, 123')).toBe(EXCEL_GREEN)
+
+    // Undelimited channel strings are ambiguous and must be refused as unparseable null
+    expect(parseExcelColorToArgb('248105107')).toBeNull()
+    expect(parseExcelColorToArgb('99190123')).toBeNull()
+  })
+
+  it('refuses with no-cells-checked when zero colour cells are verified', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-no-cells-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:no-cells-test',
+      sqref: 'B2:B3',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFF0000', 'FF00FF00'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B3"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    // Unmatched cells B2, B3 must not be highlighted so they pass background checks
+    const validPng = makeCapturePng(false)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    writeFileSync(
+      join(dir, 'scale.json'),
+      JSON.stringify({
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: xlsxHash,
+        sheet: 'Sheet1',
+        range: 'A1:B3',
+        savedSha256: xlsxHash,
+        pngSha256: validPngHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: [],
+      }),
+    )
+
+    // A case where cells has no matched scale cells that undergo color comparison
+    const testCase: CfOracleCase = {
+      id: 'scale-no-cells-case',
+      stage: 2,
+      question: 'Scale zero checked cells test',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: [],
+        negativeRefs: ['B2', 'B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: false, scaleApplied: false, fillSource: 'unverified' },
+          { ref: 'B3', controlRef: 'A3', matched: false, scaleApplied: false, fillSource: 'unverified' },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    }
+
+    const res = verifyCfCase(testCase, { rootDir: dir })
+    expect(res).toMatchObject({
+      kind: 'refusal',
+      code: 'no-cells-checked',
+    })
+  })
+
+  it('skips fill-vs-pixel comparison for hidden cells and marks them hidden: true without counting towards checked cells', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-hidden-cell-'))
+    dirs.push(dir)
+
+    const baseMarker: CfPartMarker = {
+      part: 'xl/worksheets/sheet1.xml',
+      extension: 'legacy',
+      capabilityId: 'scale:hidden-cell-test',
+      sqref: 'B2:B4',
+      ruleType: 'colorScale',
+      priority: 1,
+      formulas: [],
+      scale: {
+        cfvo: [{ type: 'min' }, { type: 'max' }],
+        colors: ['FFFFC7CE', 'FF63BE7B'],
+      },
+    }
+
+    const scaleXml =
+      '<conditionalFormatting sqref="B2:B4"><cfRule type="colorScale" priority="1"><colorScale><cfvo type="min"/><cfvo type="max"/><color rgb="FFFFC7CE"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>'
+    const xlsxBytes = await makeSyntheticXlsx({ sheetRuleXml: scaleXml, dxfCount: 0 })
+    const xlsxHash = sha256(xlsxBytes)
+    writeFileSync(join(dir, 'scale.xlsx'), xlsxBytes)
+
+    // B2 is rendered red (#ffc7ce); B4 is hidden (row height 0) so it has no pixels
+    const validPng = makeCapturePng(true)
+    const validPngHash = sha256(validPng)
+    writeFileSync(join(dir, 'scale.png'), validPng)
+
+    writeFileSync(
+      join(dir, 'scale.json'),
+      JSON.stringify({
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18, 0], // row 4 has height 0 (hidden)
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: xlsxHash,
+        sheet: 'Sheet1',
+        range: 'A1:B4',
+        savedSha256: xlsxHash,
+        pngSha256: validPngHash,
+        capturedAt: '2026-11-06T08:00:00Z',
+        observedCells: [
+          { ref: 'B2', fillSource: 'excel-display-format', fillRgb: 'FFFFC7CE' },
+          { ref: 'B4', fillSource: 'excel-display-format', fillRgb: 'FF63BE7B' }, // disagrees with white pixel
+        ],
+      }),
+    )
+
+    const testCase: CfOracleCase = {
+      id: 'scale-hidden-cell-case',
+      stage: 2,
+      question: 'Scale hidden cell handling',
+      input: 'scale.xlsx',
+      saved: 'scale.xlsx',
+      sheet: 'Sheet1',
+      range: 'A1:B4',
+      requiredAppearances: ['screen'],
+      markers: [baseMarker],
+      expected: {
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        provenance: 'excel-observed',
+        positiveRefs: ['B2', 'B4'],
+        negativeRefs: [],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, scaleApplied: true, fillSource: 'excel-display-format' },
+          { ref: 'B4', controlRef: 'A4', matched: true, scaleApplied: true, fillSource: 'excel-display-format' },
+        ],
+      },
+      resavedByExcel: true,
+      resaveReceipt: {
+        openedRepairFree: true,
+        excelVersion: '16.114',
+        inputSha256: xlsxHash,
+        savedSha256: xlsxHash,
+        resavedAt: '2026-11-06T08:00:00Z',
+      },
+      captures: [
+        {
+          appearance: 'screen',
+          pngPath: 'scale.png',
+          sidecarPath: 'scale.json',
+          pngSha256: validPngHash,
+        },
+      ],
+      status: 'measured',
+      tolerance: { meanAbs: 0.015, rowMax: 0.08, strong: 12 },
+    }
+
+    // 1. Verification succeeds because B4's fill-vs-pixel mismatch is skipped
+    const res = verifyCfCase(testCase, { rootDir: dir })
+    expect(res.kind).toBe('verified')
+
+    // 2. If all scale cells are hidden (e.g. only B4), verifyCfCase must refuse with no-cells-checked
+    const allHiddenCase: CfOracleCase = {
+      ...testCase,
+      expected: {
+        ...testCase.expected,
+        positiveRefs: ['B4'],
+        cells: [
+          { ref: 'B4', controlRef: 'A4', matched: true, scaleApplied: true, fillSource: 'excel-display-format' },
+        ],
+      },
+    }
+    const allHiddenRes = verifyCfCase(allHiddenCase, { rootDir: dir })
+    expect(allHiddenRes).toMatchObject({
+      kind: 'refusal',
+      code: 'no-cells-checked',
+    })
+  })
+
+  it('preserves seed hypothesis cell expectations without circular copy of observed display-format fill', () => {
+    // Stage 2 scale cases must retain their authored expected cells without circular copy of observed fillRgb
+    const s2Cases = CF_CASES.filter(c => c.stage === 2 && c.markers.some(m => m.ruleType === 'colorScale'))
+    expect(s2Cases.length).toBeGreaterThan(0)
+    for (const c of s2Cases) {
+      // Authored seed hypothesis expectations for scale cells must never pre-populate observed fillRgb
+      for (const cell of c.expected.cells) {
+        if (cell.matched && cell.scaleApplied) {
+          expect(cell.fillRgb, `Case ${c.id} scale cell ${cell.ref} has circular or authored fillRgb`).toBeUndefined()
+        }
+      }
+    }
+  })
+
+  it('expects whole-column scale cells F13..F17 in stage2-scale-scope as matched against unformatted column E', () => {
+    const scopeCase = CF_CASES.find(c => c.id === 'stage2-scale-scope')!
+    expect(scopeCase).toBeDefined()
+
+    const wholeColRefs = ['F13', 'F14', 'F15', 'F16', 'F17']
+    for (const ref of wholeColRefs) {
+      expect(scopeCase.expected.positiveRefs).toContain(ref)
+      expect(scopeCase.expected.negativeRefs).not.toContain(ref)
+    }
+
+    for (let r = 2; r <= 6; r++) {
+      const fCell = scopeCase.expected.cells.find(cell => cell.ref === `F${r}`)
+      expect(fCell).toBeDefined()
+      expect(fCell!.matched).toBe(true)
+      expect(fCell!.scaleApplied).toBe(true)
+      expect(fCell!.controlRef).toBe(`E${r}`)
+    }
+
+    for (let r = 13; r <= 17; r++) {
+      const fCell = scopeCase.expected.cells.find(cell => cell.ref === `F${r}`)
+      expect(fCell).toBeDefined()
+      expect(fCell!.matched).toBe(true)
+      expect(fCell!.scaleApplied).toBe(true)
+      expect(fCell!.controlRef).toBe(`E${r}`)
     }
   })
 
@@ -2129,6 +3078,21 @@ describe('CF oracle verifier', () => {
       expect(fillCheck.kind === 'refusal' ? fillCheck.code : '').toBe('cell-expectation-mismatch')
     } finally {
       rmSync(testDir, { recursive: true, force: true })
+    }
+  })
+
+  it('structurally verifies stage2-scale-unresolved-shapes as unsupported-capability refusal', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const unresolvedCase = manifest.cases.find(c => c.id === 'stage2-scale-unresolved-shapes')!
+    expect(unresolvedCase).toBeDefined()
+    expect(unresolvedCase.status).toBe('unsupported')
+
+    const res = verifyCfCase(unresolvedCase, { rootDir: REPO_ROOT })
+    expect(res.kind).toBe('refusal')
+    if (res.kind === 'refusal') {
+      expect(res.structuralValid).toBe(true)
+      expect(res.status).toBe('unsupported')
+      expect(res.code).toBe('unsupported-capability')
     }
   })
 })

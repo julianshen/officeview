@@ -996,6 +996,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
         dateContext,
+        hiddenRows: (this.sheet.metadata?.hiddenRows ?? []).map(run => ({ firstRow: run.r0, lastRow: run.r1, firstCol: 0, lastCol: 16383 })),
+        merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
         ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
       }
       return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
@@ -1728,6 +1730,9 @@ export interface CfRemotePrepareOptions {
    * — and skips its own sizing and serialization when they verify. */
   readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** Sheet layout facts the scale scope gates need (hidden rows, merged regions), in CF rect naming. */
+  readonly hiddenRows?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
+  readonly merges?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
 }
 export async function prepareCfRemote(
   request: CfReadRequest,
@@ -1979,41 +1984,42 @@ async function prepareCfRemoteOnce(
   // 24 object + 3x16 property slots + 2x8 numbers + 16 props slot + properties,
   // plus 8 for the states-array element slot the walker charges per item.
   // Partial wins undershoot; taint-heavy outliers are caught post-build.
+  const hasScale = rules.rules.some(r => r.definition.kind === 'colorScale')
   let perCell = 96
   for (const rule of rules.rules) perCell += measureCfPropertiesBytes((rule.dxf ?? {}) as Record<string, string | number | boolean | null>)
+  const perCellScale = perCell + (hasScale ? limitsModule.CF_SCALE_CELL_BYTES : 0)
   if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
   const estimate = estimateCfPreparationBytes(cells, perCell, 0, 0, 0)
-  if (estimate === undefined) {
+  const estimateWithScale = estimateCfPreparationBytes(cells, perCellScale, 0, 0, 0)
+  if (estimate === undefined || estimateWithScale === undefined) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
   const boundedEstimate = templateBytes + estimate + envelopeBytes
+  const boundedEstimateWithScale = templateBytes + estimateWithScale + envelopeBytes
   if (!Number.isSafeInteger(boundedEstimate) || boundedEstimate > grantBytes) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'),
-      requiredBytes: boundedEstimate,
+      requiredBytes: hasScale ? boundedEstimateWithScale : boundedEstimate,
     }
   }
-  // Grow the metadata hold into the working hold: one reservation covers the
-  // metadata build above plus the per-cell states, known diagnostics and
-  // framing below, so the peak is admitted exactly once on the (possibly
-  // shared) account. The grant gate stays diagnostics-free above.
-  const workingTarget = boundedEstimate + diagBytes
+  const scaleGrantTarget = hasScale ? Math.min(grantBytes, boundedEstimateWithScale) : 0
+  const workingTarget = Math.max(boundedEstimate, scaleGrantTarget) + diagBytes
   if (!Number.isSafeInteger(workingTarget) || !working.grow(workingTarget)) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'),
-      requiredBytes: boundedEstimate,
+      requiredBytes: hasScale ? boundedEstimateWithScale : boundedEstimate,
     }
   }
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext })
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {
     if (signal?.aborted) throw cancelled()
@@ -2079,7 +2085,17 @@ async function prepareCfRemoteOnce(
             continue
           }
           const won = at.value.unresolvedWrites !== undefined ? [...at.value.unresolvedWrites] as string[] : undefined
-          states.push({ row, col, properties: { ...at.value.properties }, ...(won === undefined ? {} : { unresolvedWrites: won }) })
+          const scale = at.value.visual?.colorScale ? {
+            ruleId: at.value.visual.colorScale.ruleId,
+            argb: at.value.visual.colorScale.argb,
+            ...(at.value.visual.colorScale.fraction !== undefined ? { fraction: at.value.visual.colorScale.fraction } : {}),
+          } : undefined
+          states.push({
+            row, col,
+            properties: { ...at.value.properties },
+            ...(won === undefined ? {} : { unresolvedWrites: won }),
+            ...(scale ? { scale } : {}),
+          })
         }
       }
     }
@@ -2094,44 +2110,76 @@ async function prepareCfRemoteOnce(
     // Post-build measurement uses the same payload walker the kernel publishes
     // with, so preflight, publication and adoption share one framing model.
     // Every walk admits its traversal workspace on the shared account.
-    const measureBuilt = (withDiagnostics: boolean): number | undefined => {
+    const measureBuilt = (candidateStates: typeof states, withDiagnostics: boolean): number | undefined => {
       const candidate: CfReadResult = {
-        sheetId, stamp: liveStamp, kind: 'ready', states, definitions,
+        sheetId, stamp: liveStamp, kind: 'ready', states: candidateStates, definitions,
         definitionsVersion: version, diagnostics: withDiagnostics ? diagnostics : [],
       }
       return limitsModule.measureCfWalkedBytes(candidate, memory)
     }
-    const fullBytes = measureBuilt(true)
+    const fullBytes = measureBuilt(states, true)
     if (fullBytes === undefined) {
-      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: estimate }
-    }
-    const baseBytes = measureBuilt(false)
-    if (baseBytes === undefined) {
-      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: estimate }
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: hasScale ? estimateWithScale : estimate }
     }
     const fullWithEnvelope = fullBytes + envelopeBytes
-    const baseWithEnvelope = baseBytes + envelopeBytes
-    if (baseWithEnvelope > grantBytes) {
-      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
+
+    let finalStates = states
+    let finalDiagnostics: readonly CfReadResult['diagnostics'][number][] = diagnostics
+
+    if (fullWithEnvelope <= grantBytes) {
+      if (working.bytes < fullWithEnvelope && !working.grow(fullWithEnvelope + diagBytes)) {
+        return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory.'), requiredBytes: undefined }
+      }
+      finalStates = states
+      finalDiagnostics = diagnostics
+    } else {
+      // Full payload exceeds grant. Check if states with scale fit without diagnostics
+      const fullNoDiagBytes = measureBuilt(states, false)
+      if (fullNoDiagBytes !== undefined && fullNoDiagBytes + envelopeBytes <= grantBytes) {
+        finalStates = states
+        finalDiagnostics = []
+      } else if (hasScale) {
+        // Scale payload exceeds grant: omit scale field from states
+        const statesWithoutScale = states.map(s => {
+          if (s.scale !== undefined) {
+            const { scale: _, ...rest } = s
+            return rest
+          }
+          return s
+        })
+        const grantDiag: CfReadResult['diagnostics'][number] = {
+          kind: 'resource-limit',
+          feature: 'cf-grant-required',
+          message: 'Conditional formatting scale fill omitted due to receiver grant limit.',
+        }
+        const diagWithGrant = [...diagnostics, grantDiag]
+        const withGrantDiagBytes = limitsModule.measureCfWalkedBytes({
+          sheetId, stamp: liveStamp, kind: 'ready', states: statesWithoutScale, definitions,
+          definitionsVersion: version, diagnostics: diagWithGrant,
+        }, memory)
+
+        if (withGrantDiagBytes !== undefined && withGrantDiagBytes + envelopeBytes <= grantBytes) {
+          finalStates = statesWithoutScale
+          finalDiagnostics = diagWithGrant
+        } else {
+          const withoutGrantDiagBytes = measureBuilt(statesWithoutScale, false)
+          if (withoutGrantDiagBytes !== undefined && withoutGrantDiagBytes + envelopeBytes <= grantBytes) {
+            finalStates = statesWithoutScale
+            finalDiagnostics = []
+          } else {
+            return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
+          }
+        }
+      } else {
+        return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
+      }
     }
-    const omitted = fullWithEnvelope > grantBytes ? [] : diagnostics
-    // Publish the share only after all admission succeeds — never on a
-    // refusal or withhold path, and only with its own charged lease (no
-    // unowned table entries). The recheck runs before any commit and the
-    // commit runs only after the outgoing adopt: a concurrent preparation
-    // may have committed while this one built, and recheck plus adopt plus
-    // commit are synchronous with no await between, so the second publisher
-    // reuses the winner instead of overwriting (and leaking) its lease.
-    // Skipping the commit on pressure — or on a pressure retry, which must
-    // not re-retain what it just reclaimed — is fail-soft: sharing is an
-    // optimization; the adopted result stays fully owned. Winner and local
-    // build have identical content, so the walked sizes checked above hold
-    // for either array.
+
     const live = peekSharedCfDefinitions(rules, version)
     const published = live ?? definitions
     const result: CfReadResult = {
-      sheetId, stamp: liveStamp, kind: 'ready', states, definitions: published,
-      definitionsVersion: version, diagnostics: omitted,
+      sheetId, stamp: liveStamp, kind: 'ready', states: finalStates, definitions: published,
+      definitionsVersion: version, diagnostics: finalDiagnostics,
     }
     // Transfer live outgoing ownership: adopt the wire result on the shared
     // account instead of refunding before return, so no window exists where

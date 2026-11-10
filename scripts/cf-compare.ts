@@ -161,6 +161,68 @@ export function verifyCellExpectations(
   return undefined
 }
 
+/**
+ * Stage 2 scale expectations carry seed flags (`matched`/`scaleApplied`) that Excel's
+ * display-format measurement may contradict (boolean/text cells and DXF-stopped cells keep
+ * the base fill). The measured sidecar `observedCells[].fillRgb` is the oracle, so Stage 2
+ * cases are verified against it exactly: an unpainted cell must observe FFFFFFFF.
+ * Cells the product withholds (unresolved) are reported, never counted as matches.
+ */
+export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<string, string> | undefined {
+  if (c.stage !== 2) return undefined
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  if (!cap?.sidecarPath) return undefined
+  const path = resolve(rootDir, cap.sidecarPath)
+  if (!existsSync(path)) return undefined
+  const sidecar = JSON.parse(readFileSync(path, 'utf8')) as { observedCells?: Array<{ ref: string; fillRgb?: string; fillSource?: string; hidden?: boolean }> }
+  const out = new Map<string, string>()
+  // Same trust boundary as tests/xlsx-cf-oracle-conformance.test.ts: Excel display-format fills of visible cells only.
+  for (const cell of sidecar.observedCells ?? []) {
+    if (cell.fillRgb && cell.fillSource === 'excel-display-format' && !cell.hidden) out.set(cell.ref, cell.fillRgb.toUpperCase())
+  }
+  return out
+}
+
+export function verifyCaseCells(
+  c: CfOracleCase,
+  rootDir: string,
+  actualAt: (row: number, col: number) => ActualCellOutcome,
+): string | undefined {
+  const observed = stage2ObservedFills(c, rootDir)
+  // Fail closed (final review I4): a measured Stage 2 case is verified against Excel-observed fills only. A missing
+  // sidecar, a sidecar with no trusted fills, or a run that compared zero non-withheld cells verified NOTHING and
+  // must refuse, never fall through to seed expectations (which carry no fillRgb) or pass vacuously.
+  const measuredStage2 = c.stage === 2 && c.status === 'measured'
+  if (measuredStage2) {
+    const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+    if (!observed) return `Stage 2 case ${c.id}: Excel observation sidecar${cap?.sidecarPath ? ` ${cap.sidecarPath}` : ''} is missing; nothing to verify against`
+    if (observed.size === 0) return `Stage 2 case ${c.id}: sidecar has no trusted excel-display-format fills; nothing to verify against`
+  }
+  if (!observed) return verifyCellExpectations(c, actualAt)
+  const contradicted = new Set(
+    c.expected.cells.filter(e => e.matched && e.scaleApplied && observed.get(e.ref) === 'FFFFFFFF').map(e => e.ref),
+  )
+  const mismatch = verifyCellExpectations(
+    { ...c, expected: { ...c.expected, cells: c.expected.cells.filter(e => !contradicted.has(e.ref)) } },
+    actualAt,
+  )
+  if (mismatch) return mismatch
+  let compared = 0
+  for (const [ref, want] of observed) {
+    const pos = parseA1(ref)
+    if (!pos) return `Invalid observed cell reference: ${ref}`
+    const actual = actualAt(pos.row, pos.col)
+    if (actual.unresolved) continue
+    compared++
+    const got = (actual.applied && actual.style?.fillColor ? String(actual.style.fillColor) : 'FFFFFFFF').toUpperCase()
+    if (got !== want) return `Cell ${ref} observed Excel fill ${want}, got ${got}`
+  }
+  if (measuredStage2 && compared === 0) {
+    return `Stage 2 case ${c.id}: every observed cell was withheld; compared zero cells, so nothing was verified`
+  }
+  return undefined
+}
+
 export async function compareInteractiveViewport(c: CfOracleCase, rootDir: string): Promise<CfCompareResult> {
   const oracleRef = `${c.id} [${c.status}]`
   const workbookHash = c.expected.savedSha256
@@ -209,7 +271,8 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
           const props = outcome.value.properties as Record<string, unknown>
           const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify(props[k])}`).join('+')
           const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites].sort().join('+') : ''
-          lines.push(`${row},${col}:ready:${values}|${writes}`)
+          const cs = outcome.value.visual?.colorScale
+          lines.push(`${row},${col}:ready:${values}|${writes}${cs ? `|scale:${cs.ruleId}:${(cs.argb >>> 0).toString(16)}:${cs.fraction ?? ''}` : ''}`)
           outcomes.set(`${row},${col}`, { kind: 'ready', properties: props, writes: outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : [] })
         } else {
           lines.push(`${row},${col}:${outcome.kind}:${outcome.kind === 'unresolved' ? outcome.reason : ''}`)
@@ -251,7 +314,7 @@ export async function compareInteractiveViewport(c: CfOracleCase, rootDir: strin
     }
   }
   const peakBytes = peak()
-  const mismatch = verifyCellExpectations(c, (row, col) => {
+  const mismatch = verifyCaseCells(c, rootDir, (row, col) => {
     const outcome = outcomes.get(`${row},${col}`)
     const style = scope ? scope.effectiveStyle(row, col, base as never) : (base as never)
     const hasStyle = Boolean(style && style !== base && Object.keys(style).length > 0)
@@ -343,7 +406,8 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       .map(s => {
         const props = s.properties ?? {}
         const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify((props as Record<string, unknown>)[k])}`).join('+')
-        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}`
+        const scale = s.scale ? `|scale:${s.scale.ruleId}:${(s.scale.argb >>> 0).toString(16)}:${s.scale.fraction ?? ''}` : ''
+        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}${scale}`
       })
     const { resolveCfCellStyle } = await import('../src/xlsx/cf/dxf')
     const pkg = await OfficePackage.load(saved)
@@ -353,13 +417,17 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
     const base = {}
     const stateMap = new Map<string, (typeof result.states)[number]>()
     for (const s of result.states) stateMap.set(`${s.row},${s.col}`, s)
-    const mismatch = verifyCellExpectations(c, (row, col) => {
+    const mismatch = verifyCaseCells(c, rootDir, (row, col) => {
       const s = stateMap.get(`${row},${col}`)
       if (!s) return { applied: false, unresolved: true }
       const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
       const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
-      if (!hasProps) return { applied: false, unresolved }
-      const style = resolveCfCellStyle(base as never, { properties: s.properties }, colors)
+      const hasScale = s.scale?.argb !== undefined
+      if (!hasProps && !hasScale) return { applied: false, unresolved }
+      const style = resolveCfCellStyle(base as never, {
+        properties: s.properties,
+        ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
+      }, colors)
       return { applied: true, unresolved, style }
     })
     const outputHash = sha256Hex(lines)

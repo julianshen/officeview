@@ -53,3 +53,116 @@ it('actual print pages share the prepared fill, border and number format with sc
     expect(fills).toContain('#00ff00'); expect(strokes).toContain('#ff0000')
   } } finally { batch?.dispose() }
 })
+it('print output at screen and PRINT_SCALE = 2 carries the prepared scale fill', async () => {
+  const { withInjectedCfEvidence } = await import('../src/xlsx/cf/evidence')
+  const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const { computeMetrics, computePrintMetrics, renderPrintPage } = await import('../src/xlsx/render')
+  const scaleEvidence = [
+    'scale:interpolation-color-space',
+    'scale:interpolation-rounding-ladder',
+    'scale:thresholds-min-max',
+  ]
+  await withInjectedCfEvidence(scaleEvidence, async () => {
+    const sheet: XlsxSheet = {
+      name: 'CFScale',
+      rows: [
+        { index: 0, cells: [{ row: 0, col: 0, ref: 'A1', value: 10, styleIndex: 0 }] },
+        { index: 1, cells: [{ row: 1, col: 0, ref: 'A2', value: 70, styleIndex: 0 }] },
+      ],
+      cols: [],
+      merges: [],
+      mergeRanges: [],
+      conditionalFormatting: {
+        diagnostics: [],
+        rules: [
+          {
+            id: 1,
+            priority: 1,
+            documentOrder: 0,
+            stopIfTrue: false,
+            ranges: [{ firstRow: 0, lastRow: 1, firstCol: 0, lastCol: 0 }],
+            writes: new Set(['colorScale', 'fill']),
+            definition: {
+              kind: 'colorScale',
+              points: [
+                { bound: { type: 'min' }, argb: 0xffff0000 },
+                { bound: { type: 'max' }, argb: 0xff00ff00 },
+              ],
+              dialect: 'base',
+              formulas: [],
+            },
+          },
+        ],
+      },
+    }
+    const batch = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+    expect(batch).toBeDefined()
+    const m = computeMetrics(sheet)
+    const print = computePrintMetrics(sheet, m)
+
+    // Interactive screen fill
+    const screenFillA1 = batch!.layer.styleAt(0, 0, undefined)?.fillColor
+    const screenFillA2 = batch!.layer.styleAt(1, 0, undefined)?.fillColor
+    expect(screenFillA1).toBe('FFFF0000')
+    expect(screenFillA2).toBe('FF00FF00')
+
+    // At PRINT_SCALE = 2:
+    const PRINT_SCALE = 2
+    const canvas = createCanvas(print.paperPx.width * PRINT_SCALE, print.paperPx.height * PRINT_SCALE)
+    const ctx = canvas.getContext('2d')
+    ctx.scale(PRINT_SCALE, PRINT_SCALE)
+
+    const fills: string[] = []
+    const origFillRect = ctx.fillRect.bind(ctx)
+    ctx.fillRect = (x, y, w, h) => {
+      fills.push(String(ctx.fillStyle).toLowerCase())
+      origFillRect(x, y, w, h)
+    }
+
+    renderPrintPage(sheet, ctx as unknown as CanvasRenderingContext2D, m, print, 0, 0, undefined, { conditionalFormatting: batch })
+
+    // Exact ARGB matches interactive state
+    expect(fills).toContain('#ff0000')
+    expect(fills).toContain('#00ff00')
+
+    batch?.dispose()
+  })
+})
+it('print uses verified measured printer-appearance variant (stage2-scale-interpolation-printer.json)', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { withInjectedCfEvidence } = await import('../src/xlsx/cf/evidence')
+  const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
+  const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+  const { parseXlsx } = await import('../src/xlsx/parse')
+  const { OfficePackage } = await import('../src/core/zip')
+
+  const scaleEvidence = [
+    'scale:interpolation-color-space',
+    'scale:interpolation-rounding-ladder',
+    'scale:thresholds-min-max',
+    'scale:thresholds-num-bounds',
+    'scale:thresholds-percentile-inc-exc',
+  ]
+  await withInjectedCfEvidence(scaleEvidence, async () => {
+    const fixturePath = path.resolve(__dirname, 'fixtures/xlsx-cf/refs/stage2-scale-interpolation-printer.json')
+    const xlsxPath = path.resolve(__dirname, 'fixtures/xlsx-cf/stage2-scale-interpolation.xlsx')
+    const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
+    expect(fixture.appearance).toBe('printer')
+
+    const bytes = new Uint8Array(fs.readFileSync(xlsxPath))
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    const sheet = doc.sheets[0]!
+    const batch = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+    expect(batch).toBeDefined()
+
+    // B2 is min (10) -> red FFFF0000
+    const b2Observed = fixture.observedCells.find((c: any) => c.ref === 'B2')
+    expect(b2Observed.fillRgb).toBe('FFFF0000')
+    const styleB2 = batch!.layer.styleAt(1, 1, undefined)
+    expect(styleB2?.fillColor).toBe('FFFF0000')
+
+    batch?.dispose()
+  })
+})

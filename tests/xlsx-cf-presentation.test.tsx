@@ -469,6 +469,44 @@ describe('format budget refusal releases descriptor workspace', () => {
     expect(name).not.toContain(longFormula.slice(0, 32))
     expect(name.length).toBeLessThanOrEqual(128)
   })
+
+  it('chunks large viewport rects so preparation does not exceed admitted batch', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const xlsxPath = path.resolve(__dirname, 'fixtures/xlsx-cf/stage1-numfmt-accessibility.xlsx')
+    const bytes = new Uint8Array(fs.readFileSync(xlsxPath))
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    const sheet = doc.sheets[0]!
+    const { budget } = trackingBudget()
+    // A single large rect of 66 rows x 27 cols = 1782 cells (typical 50% zoom viewport)
+    const scope = await prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 65, c0: 0, c1: 26 }],
+      signal: new AbortController().signal,
+      budget,
+    })
+    expect(scope).toBeDefined()
+    const styleB2 = scope!.effectiveStyle(1, 1, undefined)
+    expect(styleB2?.formatCode).toBe('0.00')
+    expect(styleB2?.fillColor).toBe('FFFFC7CE')
+    scope?.dispose()
+  })
+
+  it('refuses a single rect over the per-call prepared-cell cap instead of slicing it', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const bytes = new Uint8Array(fs.readFileSync(path.resolve(__dirname, 'fixtures/xlsx-cf/stage1-numfmt-accessibility.xlsx')))
+    const sheet = (await parseXlsx(await OfficePackage.load(bytes))).sheets[0]!
+    const { budget } = trackingBudget()
+    await expect(prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 1048575, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      budget,
+    })).rejects.toMatchObject({ code: 'resource-limit' })
+  })
 })
 
 describe('regression bot P2: clockGen in cfTextKey', () => {

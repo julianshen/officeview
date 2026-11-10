@@ -1631,8 +1631,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
-    if(paintedCf.current!==cfLiveKey)renderer.cache.invalidate(key=>key.identity.sheetId===activeSheetId)
-    paintedCf.current=cfLiveKey
+    // A CF generation change that keeps the asset lease (clock rollover, text generation) keeps the tile identity too,
+    // and CF paint reaches beyond a rule's own cells (merged surfaces, overflowing text, sorted display rows), so the
+    // whole sheet's tiles repaint. Lease-replacing paths already invalidate the sheet above.
+    if (paintedCf.current !== cfLiveKey) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    paintedCf.current = cfLiveKey
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)

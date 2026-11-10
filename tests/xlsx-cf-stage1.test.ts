@@ -17,13 +17,13 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { auditStage1Manifest, stageGateStatus, type Stage1AuditReport } from '../scripts/cf-refs/audit'
-import { CF_STAGE1_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
+import { CF_STAGE1_CAPABILITIES, CF_STAGE2_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 import { prepareCfTextScope, prepareCfWireScope } from '../src/xlsx/cf/text'
 import { createCfService } from '../src/xlsx/cf/service'
 import { createCfMemory, CF_LIMITS } from '../src/xlsx/cf/limits'
 import { residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import type { XlsxSheet } from '../src/xlsx/types'
@@ -101,12 +101,14 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
     const auditVerified = new Set(
       report.perCapability.filter(c => c.disposition === 'verified').map(c => c.capabilityId),
     )
-    expect(VERIFIED_CAPABILITIES).toEqual(auditVerified)
-    expect(VERIFIED_CAPABILITIES.size).toBe(110)
+    const stage1Verified = VERIFIED_STAGE1_CAPABILITIES ?? VERIFIED_CAPABILITIES
+    expect(stage1Verified).toEqual(auditVerified)
+    expect(stage1Verified.size).toBe(110)
   })
 
   it('every evidence.allows literal under src/ resolves to a catalog ID (C1)', () => {
-    const catalogIds = new Set(CF_STAGE1_CAPABILITIES.map(c => c.capabilityId))
+    // Stage 2 scale gates (final review I5) also read evidence.allows literals under src/xlsx/cf.
+    const catalogIds = new Set([...CF_STAGE1_CAPABILITIES, ...CF_STAGE2_CAPABILITIES].map(c => c.capabilityId))
     const cfDir = join(REPO_ROOT, 'src/xlsx/cf')
     const files = readdirSync(cfDir).filter(f => f.endsWith('.ts'))
     const literalPattern = /evidence\.allows\(\s*['"]([^'"]+)['"]/g
@@ -158,10 +160,11 @@ describe('stage gate status distinguishes verified completion from blocked evide
 describe('every unresolved capability refuses atomically on both paths', () => {
   it('all product-marked unresolved rules withhold on resident and wire scopes', async () => {
     const manifest = loadManifest()
+    const stage1Cases = manifest.cases.filter(c => c.stage === 1 || !c.stage)
     const seen = new Map<string, { ruleType: string; reason: string }>()
     let unresolvedCount = 0
     let probedCells = 0
-    for (const c of manifest.cases) {
+    for (const c of stage1Cases) {
       const sheet = await sheetFromSaved(c.input, c.saved)
       const rules = sheet.conditionalFormatting?.rules ?? []
       const unresolved = rules.filter(rule => {
@@ -195,7 +198,10 @@ describe('every unresolved capability refuses atomically on both paths', () => {
               for (let row = r.r0; row <= r.r1; row++) {
                 const outcome = lease.value.at(row, r.c0)
                 if (outcome.kind === 'unresolved' && outcome.reason === 'cf-outside-preparation') continue
-              const hasProperties = outcome.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
+              // A resolved colour-scale visual is a winning paint just like winning properties
+              // (Stage 2): the fill must reach the effective style on every path.
+              const hasProperties = outcome.kind === 'ready'
+                && (Object.keys(outcome.value.properties).length > 0 || outcome.value.visual?.colorScale !== undefined)
               const writes = outcome.kind === 'ready' ? outcome.value.unresolvedWrites : undefined
               const hasWrites = writes !== undefined && (writes as ReadonlySet<string>).size !== undefined
                 ? (writes as ReadonlySet<string>).size > 0
@@ -293,11 +299,12 @@ describe('unresolved rules withhold through the real paged worker route', () => 
     const { createPagedWorkbookSource } = await import('../src/xlsx/view/pagedSource')
     const { createCfMemory } = await import('../src/xlsx/cf/limits')
     const manifest = loadManifest()
+    const stage1Cases = manifest.cases.filter(c => c.stage === 1 || !c.stage)
     let rules = 0
     let cells = 0
     let readyReads = 0
     let pendingReads = 0
-    for (const c of manifest.cases) {
+    for (const c of stage1Cases) {
       const sheet = await sheetFromSaved(c.input, c.saved)
       const unresolved = (sheet.conditionalFormatting?.rules ?? []).filter(rule => {
         const definition = (rule as { definition?: { kind?: string } }).definition

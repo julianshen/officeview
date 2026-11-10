@@ -18,7 +18,8 @@
  * partial model.
  */
 import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type XmlNode } from '../../core/xml'
-import type { SheetColorContext } from '../sheetColors'
+import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
+import { hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
 import {
@@ -29,18 +30,21 @@ import {
   type CfMemory,
   type CfReservation,
 } from './limits'
-import type {
-  CfCellState,
-  CfDefinition,
-  CfLease,
-  CfLiteral,
-  CfOperator,
-  CfRule,
-  CfRuleOrigin,
-  CfRuleType,
-  CfSheetRules,
-  CfTimePeriod,
-  CfWriteMask,
+import {
+  COLOR_SCALE_WRITES,
+  type CfCellState,
+  type CfDefinition,
+  type CfLease,
+  type CfLiteral,
+  type CfOperator,
+  type CfRule,
+  type CfRuleOrigin,
+  type CfRuleType,
+  type CfScaleBound,
+  type CfScalePoint,
+  type CfSheetRules,
+  type CfTimePeriod,
+  type CfWriteMask,
 } from './model'
 import { X14_MAIN_NS } from '../tableStyles/parseStylesExtras'
 
@@ -607,7 +611,269 @@ interface BodyInputs {
   cfvoMissingType: boolean
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
+  colorScaleNode: XmlNode | undefined
+  ns: string | undefined
   origin: CfRuleOrigin
+}
+
+export interface CfScaleBoundInput {
+  readonly type: string
+  readonly value?: number
+  readonly val?: string
+}
+
+export type CfScaleColorInput =
+  | string
+  | {
+      readonly rgb?: string
+      readonly theme?: string | number
+      readonly tint?: string | number
+      readonly indexed?: string | number
+      readonly auto?: string | boolean
+      readonly customTheme?: boolean
+    }
+
+/** The theme palette Excel actually rendered in stage2-scale-colors (clrScheme "Office", 2023+). Theme-coloured scale
+ * endpoints were measured against this palette only: any other palette (a custom theme, or the theme-less fallback)
+ * needs `scale:colors-custom-theme`, which no committed fixture can discriminate (Ruling F-2), so it withholds. */
+export const MEASURED_CF_OFFICE_THEME: Readonly<Record<string, string>> = Object.freeze({
+  dk1: '000000', lt1: 'FFFFFF', dk2: '0E2841', lt2: 'E8E8E8', accent1: '156082', accent2: 'E97132',
+  accent3: '196B24', accent4: '0F9ED5', accent5: 'A02B93', accent6: '4EA72E', hlink: '467886', folHlink: '96607D',
+})
+
+function isMeasuredOfficeTheme(theme: Readonly<Record<string, string>> | undefined): boolean {
+  if (!theme) return false
+  for (const [slot, hex] of Object.entries(MEASURED_CF_OFFICE_THEME)) {
+    if ((theme[slot] ?? '').replace(/^#/, '').toUpperCase() !== hex) return false
+  }
+  return true
+}
+
+/**
+ * Computes the set of scale:* capability IDs required to authorize a colour-scale rule.
+ * Fail-closed: the rule resolves iff every required capability has evidence.
+ */
+export function scaleRequiredCapabilities(
+  bounds: readonly CfScaleBoundInput[],
+  colours: readonly CfScaleColorInput[],
+): Set<string> {
+  const req = new Set<string>()
+
+  // 1. Scale shape / point count
+  if (bounds.length === 3 || colours.length === 3) {
+    req.add('scale:interpolation-spec-palette')
+  }
+
+  // 2. Cfvo bounds features
+  for (let i = 0; i < bounds.length; i++) {
+    const b = bounds[i]!
+    const type = b.type
+
+    if (type === 'min' || type === 'max') {
+      req.add('scale:thresholds-min-max')
+      if (b.val !== undefined) {
+        req.add('scale:thresholds-legacy-min-val-0')
+      }
+      if (type === 'min' && i !== 0) {
+        req.add('scale:thresholds-min-midlist-max-first')
+      }
+      if (type === 'max' && i !== bounds.length - 1) {
+        req.add('scale:thresholds-min-midlist-max-first')
+      }
+    } else if (type === 'num') {
+      req.add('scale:thresholds-num-bounds')
+    } else if (type === 'percent') {
+      req.add('scale:thresholds-percent')
+      const val = b.value ?? (b.val !== undefined ? Number(b.val) : undefined)
+      if (val !== undefined && (val < 0 || val > 100)) {
+        req.add('scale:thresholds-percent-percentile-out-of-bounds')
+      }
+    } else if (type === 'percentile') {
+      req.add('scale:thresholds-percentile-inc-exc')
+      const val = b.value ?? (b.val !== undefined ? Number(b.val) : undefined)
+      if (val !== undefined && (val < 0 || val > 100)) {
+        req.add('scale:thresholds-percent-percentile-out-of-bounds')
+      }
+    }
+  }
+
+  // 3. Colour features
+  for (const c of colours) {
+    if (typeof c === 'string') {
+      const clean = c.trim()
+      if (clean === 'auto') {
+        req.add('scale:colors-auto')
+      } else if (clean.startsWith('theme:') || clean.startsWith('theme')) {
+        req.add('scale:colors-theme-tint')
+      } else if (clean.startsWith('indexed:') || clean.startsWith('indexed')) {
+        req.add('scale:colors-indexed')
+      } else if (clean.length === 8 && !clean.toUpperCase().startsWith('FF')) {
+        req.add('scale:colors-alpha-00')
+      }
+    } else if (typeof c === 'object' && c !== null) {
+      if (c.auto === true || c.auto === '1' || c.auto === 'true') {
+        req.add('scale:colors-auto')
+      }
+      if (c.theme !== undefined) {
+        req.add('scale:colors-theme-tint')
+        if (c.customTheme) req.add('scale:colors-custom-theme')
+      }
+      if (c.indexed !== undefined) {
+        req.add('scale:colors-indexed')
+      }
+      if (c.rgb !== undefined && c.rgb.length === 8 && !c.rgb.toUpperCase().startsWith('FF')) {
+        req.add('scale:colors-alpha-00')
+      }
+    }
+  }
+
+  return req
+}
+
+function parseColorScaleRule(
+  fin: SheetFinalizer,
+  inputs: BodyInputs,
+  finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
+  finishUnresolved: (reason: string, writes: CfWriteMask) => number,
+): number {
+  const slot = COLOR_SCALE_WRITES
+
+  // OD-3 / S2-K: any standalone x14 scale, literal or reference xm:f -> cf-unsupported-rule
+  if (inputs.origin.dialect === 'x14') {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+
+  // S2-C: activePresent="1" -> cf-unsupported-rule
+  if (inputs.origin.activePresent) {
+    return finishUnresolved('cf-unsupported-rule', slot)
+  }
+
+  const host = inputs.colorScaleNode
+  if (!host) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+
+  // S2-C: missing type -> cf-invalid-cfvo
+  if (inputs.cfvoMissingType) {
+    return finishUnresolved('cf-invalid-cfvo', slot)
+  }
+
+  const cfvos = kids(host, 'cfvo', inputs.ns)
+  const colors = kids(host, 'color', inputs.ns)
+
+  // S2-C: exactly 2+2 or 3+3 cfvo/color children; any other count -> cf-invalid-rule
+  if (cfvos.length !== colors.length || (cfvos.length !== 2 && cfvos.length !== 3)) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+
+  const bounds: CfScaleBound[] = []
+  const boundsInput: CfScaleBoundInput[] = []
+
+  for (let i = 0; i < cfvos.length; i++) {
+    const cfvoNode = cfvos[i]!
+    const a = attrs(cfvoNode)
+    const cfvoType = a['type']
+    const val = a['val']
+
+    if (!cfvoType) {
+      return finishUnresolved('cf-invalid-cfvo', slot)
+    }
+
+    if (cfvoType === 'formula') {
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+
+    if (
+      cfvoType !== 'min' &&
+      cfvoType !== 'max' &&
+      cfvoType !== 'num' &&
+      cfvoType !== 'percent' &&
+      cfvoType !== 'percentile'
+    ) {
+      return finishUnresolved('cf-invalid-cfvo', slot)
+    }
+
+    if (cfvoType === 'min') {
+      bounds.push({ type: 'min' })
+      boundsInput.push({ type: 'min', val })
+    } else if (cfvoType === 'max') {
+      bounds.push({ type: 'max' })
+      boundsInput.push({ type: 'max', val })
+    } else {
+      if (val === undefined) {
+        return finishUnresolved('cf-invalid-cfvo', slot)
+      }
+      const cleanVal = val.trim().replace(/^=/, '').trim()
+      const isNumericLiteral = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(cleanVal)
+      if (!isNumericLiteral) {
+        // Reference or formula val="$A$1" stays cf-unsupported-rule until Stage 5
+        const isFormulaOrRef =
+          /^\$?[A-Za-z]{1,3}\$?\d+$/.test(cleanVal) ||
+          /[A-Za-z_][A-Za-z0-9_]*\(/.test(cleanVal) ||
+          cleanVal.startsWith('$') ||
+          cleanVal.startsWith('=') ||
+          cleanVal === '$A$1'
+        if (isFormulaOrRef) {
+          return finishUnresolved('cf-unsupported-rule', slot)
+        }
+        return finishUnresolved('cf-invalid-cfvo', slot)
+      }
+
+      const numVal = Number(cleanVal)
+      if (!Number.isFinite(numVal)) {
+        return finishUnresolved('cf-invalid-cfvo', slot)
+      }
+
+      bounds.push({ type: cfvoType, value: numVal })
+      boundsInput.push({ type: cfvoType, value: numVal, val })
+    }
+  }
+
+  const colorInputs: CfScaleColorInput[] = []
+  const officeTheme = isMeasuredOfficeTheme(fin.styles.colors.theme)
+  for (let i = 0; i < colors.length; i++) {
+    const colorAttrs = attrs(colors[i]!)
+    colorInputs.push(colorAttrs['theme'] !== undefined && !officeTheme ? { ...colorAttrs, customTheme: true } : colorAttrs)
+  }
+
+  // Fail-closed authorization across every feature used by the rule
+  const required = scaleRequiredCapabilities(boundsInput, colorInputs)
+  for (const cap of required) {
+    if (!hasEvidence(cap)) {
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+  }
+
+  // Resolve endpoint colours (S2-F, Item 12)
+  const points: CfScalePoint[] = []
+
+  for (let i = 0; i < colors.length; i++) {
+    const colorNode = colors[i]!
+    const ca = attrs(colorNode)
+
+    const resolvedHex = resolveSheetColor(ca, fin.styles.colors)
+    if (!resolvedHex) {
+      // auto / undefined / unknown reference: no #000000 fallback, resolve to unresolved
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+
+    const cleanHex = resolvedHex.toUpperCase()
+    const fullHex = cleanHex.length === 6 ? `FF${cleanHex}` : cleanHex
+    const argb = parseInt(fullHex, 16)
+    if (!Number.isFinite(argb)) {
+      return finishUnresolved('cf-unsupported-rule', slot)
+    }
+
+    points.push({ bound: bounds[i]!, argb })
+  }
+
+  return finishResolved(
+    {
+      kind: 'colorScale',
+      points: points as [CfScalePoint, CfScalePoint] | [CfScalePoint, CfScalePoint, CfScalePoint],
+    },
+    slot,
+  )
 }
 
 function buildRuleBody(
@@ -708,10 +974,10 @@ function buildRuleBody(
   // single-range sqref. Anything else stays unresolved.
   const anchor = ranges.length === 1 ? anchorOf(ranges[0]!) : undefined
 
-  const finishResolved = (definition: Record<string, unknown>): number => {
+  const finishResolved = (definition: Record<string, unknown>, extraWrites?: CfWriteMask): number => {
     fin.rules.push({
       id: -1, priority, documentOrder, ranges, stopIfTrue: stop,
-      writes: withDxf(), definition: { ...inputs.origin, ...definition } as CfDefinition, dxf: dxfProps,
+      writes: withDxf(extraWrites), definition: { ...inputs.origin, ...definition } as CfDefinition, dxf: dxfProps,
     })
     return actual
   }
@@ -803,12 +1069,12 @@ function buildRuleBody(
       }
       return finishResolved({ kind: 'predicate', type: type as 'duplicateValues' | 'uniqueValues' })
     }
-    case 'colorScale':
+    case 'colorScale': {
+      return parseColorScaleRule(fin, inputs, finishResolved, finishUnresolved)
+    }
     case 'dataBar':
     case 'iconSet': {
-      // Ruling I1: colorScale occupies the fill slot in addition to colorScale so
-      // unresolved colorScale taints/blocks lower-priority fills.
-      const slot = new Set(type === 'colorScale' ? ['colorScale', 'fill'] : [type])
+      const slot = new Set([type])
       if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', withDxf(slot))
       if (inputs.iconProblem) return finishUnresolved(inputs.iconProblem, withDxf(slot))
       return finishUnresolved('cf-unsupported-rule', withDxf(slot))
@@ -881,6 +1147,7 @@ interface VisualFacts {
   cfvoMissingType: boolean
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
+  colorScaleNode?: XmlNode
 }
 
 function scanRuleVisual(
@@ -927,7 +1194,7 @@ function scanRuleVisual(
     const setName = attrs(host)['iconSet']
     if (setName !== undefined && ICON_SETS.get(setName) === undefined) iconProblem = 'cf-unsupported-icon'
   }
-  return { cfvoCount, cfvoMissingType, customIcons, iconProblem }
+  return { cfvoCount, cfvoMissingType, customIcons, iconProblem, ...(type === 'colorScale' ? { colorScaleNode: host } : {}) }
 }
 
 function readRuleInputs(
@@ -952,6 +1219,7 @@ function readRuleInputs(
   let cfvoMissingType = false
   let customIcons = 0
   let iconProblem: 'cf-unsupported-icon' | undefined
+  let colorScaleNode: XmlNode | undefined
   if (VISUAL_TYPES.has(type)) {
     const scan = scanRuleVisual(fin, ruleNode, dialect === 'base' ? ns : X14_MAIN_NS, type)
     if (!scan) return { ok: false, reason: 'cf-resource-limit' }
@@ -959,6 +1227,7 @@ function readRuleInputs(
     cfvoMissingType = scan.cfvoMissingType
     customIcons = scan.customIcons
     iconProblem = scan.iconProblem
+    colorScaleNode = scan.colorScaleNode
   }
   const textAttr = a['text']
   if (textAttr !== undefined && textAttr.length > CF_LIMITS.textUnits) {
@@ -1010,6 +1279,8 @@ function readRuleInputs(
         cfvoMissingType,
         customIcons,
         iconProblem,
+        colorScaleNode,
+        ns: dialect === 'base' ? ns : X14_MAIN_NS,
         origin,
       },
       bound,

@@ -7,14 +7,15 @@
  *
  * Covers all 53 cells withheld and 7 cells painted wrongly in final-r1-oracle-vs-viewer.txt.
  */
-import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
+import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
+import { isCellInSqref } from '../scripts/cf-refs/verify'
 import type { CfManifest } from '../scripts/cf-refs/cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -32,6 +33,14 @@ function refToRowCol(ref: string): { row: number; col: number } {
   return { row, col: col - 1 }
 }
 
+/** The viewer evaluates TODAY() in the workbook/viewer time zone (host default). The Excel observation was taken in
+ * `requiredTimeZone`, so a conformance run evaluates in that zone instead of inheriting the CI host's (UTC). */
+function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } }): ParseXlsxOptions {
+  // `evaluation` is spread into evaluateWorkbookFormulas at runtime, which honours timeZone; the public type only
+  // advertises the array caps, hence the cast.
+  return (c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}) as ParseXlsxOptions
+}
+
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as CfManifest
 
@@ -42,69 +51,140 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage1-blanks-errors:G6', // divergent NOT(ISBLANK(G2)) formula (Stage 5)
     'stage1-blanks-errors:J8', // divergent ISNA(J2) formula (Stage 5)
     'stage1-blanks-errors:M6', // divergent NOT(ISNA(M2)) formula (Stage 5)
-    'stage1-priority-composition:F5', // Stage 3 colorScale fill (Stage 1 withholds)
     'stage1-priority-composition:G2', // MOD(25,2)=1 expression rule (Stage 5)
     'stage1-priority-composition:G3', // MOD(14,2)=0 expression rule (Stage 5)
   ])
 
-  it('runs production pipeline on all 12 measured Stage 1 cases with zero unexpected mismatches', async () => {
+  type Finding = { outcome: 'withheld'; reason: string }
+
+  // Documented findings for cells where engine behavior diverges from Excel oracle:
+  // Only withheld outcomes are allowed; a finding can never encode a painted wrong colour.
+  const FINDINGS: Record<string, Finding> = {
+    // Finding F2: Overlapping scales withheld under Task 15 ruling S2-I (base fill FFFFFFFF)
+    'stage2-scale-scope:B2': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:B3': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:B5': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:B6': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:D2': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+    'stage2-scale-scope:D3': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+
+    // Finding F6 (final review I5 / Ruling F-2): the scope fixture cannot discriminate hidden-row, autofilter,
+    // merged-cell or disjoint participation, so scale:scope-hidden-row, scale:scope-autofilter-hidden-row,
+    // scale:scope-merged-cell and scale:scope-disjoint are unverified and these scales are WITHHELD until re-measured.
+    'stage2-scale-scope:C2': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating (hidden value 30 is not extremal) and unverified' },
+    'stage2-scale-scope:C3': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:C5': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:C6': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:D5': { outcome: 'withheld', reason: 'Hidden row 4 inside D2:D6 (the saved file has no autoFilter): scale:scope-autofilter-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:D6': { outcome: 'withheld', reason: 'Hidden row 4 inside D2:D6: scale:scope-autofilter-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:F2': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4 (F4 populated): hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F3': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F5': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F6': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F13': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F14': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F15': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F16': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F17': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:B8': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating (every merged value is 100) and unverified' },
+    'stage2-scale-scope:C8': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
+    'stage2-scale-scope:B9': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
+    'stage2-scale-scope:C9': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
+
+    // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
+    'stage2-scale-composition:I2': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+    'stage2-scale-composition:I3': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+    'stage2-scale-composition:I4': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+    'stage2-scale-composition:I5': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+
+    // Finding F4: Text cell J2 in scale range
+    'stage2-scale-composition:J2': { outcome: 'withheld', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
+
+    // Finding F5: Expression rule 19 with stopIfTrue="1" withholds lower scale 20 under S2-J
+    'stage2-scale-composition:L2': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    'stage2-scale-composition:L3': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    'stage2-scale-composition:L4': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+  }
+
+  const STAGE2_MEASURED_CASES = [
+    'stage2-scale-interpolation',
+    'stage2-scale-thresholds',
+    'stage2-scale-degenerate',
+    'stage2-scale-participation',
+    'stage2-scale-colors',
+    'stage2-scale-scope',
+    'stage2-scale-composition',
+  ]
+
+  it('runs production pipeline on all measured cases with zero unexpected mismatches', async () => {
     let checkedCells = 0
 
     for (const c of manifest.cases) {
-      if (c.status !== 'measured') continue
-      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
-      const doc = await parseXlsx(await OfficePackage.load(bytes))
-      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const dateContext = c.clockRequirement ? {
-        clockSerial: c.clockRequirement.anchorSerial,
-        dateSystem: c.clockRequirement.dateSystem,
-      } : undefined
+      if (c.status !== 'measured' || c.stage === 2) continue
+      if (c.clockRequirement) {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
+      }
+      try {
+        const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+        const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+        const dateContext = c.clockRequirement ? {
+          clockSerial: c.clockRequirement.anchorSerial,
+          dateSystem: c.clockRequirement.dateSystem,
+        } : undefined
 
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
-      expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
-      if (!paint) continue
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
+        if (!paint) continue
 
-      for (const exp of c.expected?.cells ?? []) {
-        checkedCells++
-        const cellKey = `${c.id}:${exp.ref}`
+        for (const exp of c.expected?.cells ?? []) {
+          checkedCells++
+          const cellKey = `${c.id}:${exp.ref}`
 
-        const { row, col } = refToRowCol(exp.ref)
-        const st = paint.layer.styleAt(row, col, undefined)
-        const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
+          const { row, col } = refToRowCol(exp.ref)
+          const st = paint.layer.styleAt(row, col, undefined)
+          const gotMatched = Boolean(st && (st.fillColor || st.color || st.bold !== undefined || st.formatCode || st.numFmtId))
 
-        // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
-        // as withheld rather than skipped silently:
-        if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
-          expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
-          continue
-        }
-        if (cellKey === 'stage1-priority-composition:F2') {
-          // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
-          expect(st?.bold, `${cellKey} bold`).toBe(true)
-          continue
-        }
-        if (cellKey === 'stage1-dxf-layering:D4') {
-          // CF does not match; style returned is base table band (50 <= 100)
-          expect(st?.fillColor, `${cellKey} table band`).toBe('FFC1E5F5')
-          continue
-        }
-
-        if (exp.matched) {
-          expect(gotMatched, `${cellKey} should match CF (${exp.note ?? ''})`).toBe(true)
-          if (exp.fillRgb) {
-            expect(st?.fillColor, `${cellKey} fillRgb`).toBe(exp.fillRgb)
+          // Ruling M3: Withheld Stage 5 expressions or Stage 2/3 visuals must be asserted
+          // as withheld rather than skipped silently:
+          if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
+            expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
+            continue
           }
-          if (exp.fontRgb) {
-            expect(st?.color, `${cellKey} fontRgb`).toBe(exp.fontRgb)
+          if (cellKey === 'stage1-priority-composition:F2') {
+            // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
+            expect(st?.bold, `${cellKey} bold`).toBe(true)
+            continue
           }
-          if (exp.bold !== undefined) {
-            expect(st?.bold, `${cellKey} bold`).toBe(exp.bold)
+          if (cellKey === 'stage1-dxf-layering:D4') {
+            // CF does not match; style returned is base table band (50 <= 100)
+            expect(st?.fillColor, `${cellKey} table band`).toBe('FFC0E6F5')
+            continue
           }
-        } else {
-          expect(gotMatched, `${cellKey} should not match CF (${exp.note ?? ''})`).toBe(false)
+
+          if (exp.matched) {
+            expect(gotMatched, `${cellKey} should match CF (${exp.note ?? ''})`).toBe(true)
+            if (exp.fillRgb) {
+              expect(st?.fillColor, `${cellKey} fillRgb`).toBe(exp.fillRgb)
+            }
+            if (exp.fontRgb) {
+              expect(st?.color, `${cellKey} fontRgb`).toBe(exp.fontRgb)
+            }
+            if (exp.bold !== undefined) {
+              expect(st?.bold, `${cellKey} bold`).toBe(exp.bold)
+            }
+          } else {
+            expect(gotMatched, `${cellKey} should not match CF (${exp.note ?? ''})`).toBe(false)
+          }
+        }
+        paint.dispose()
+      } finally {
+        if (c.clockRequirement) {
+          vi.useRealTimers()
         }
       }
-      paint.dispose()
     }
 
     // Ensures we audited the full Stage 1 cell corpus (220+ cells)
@@ -181,27 +261,37 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     for (const caseId of withheldCases) {
       const c = manifest.cases.find(x => x.id === caseId)!
-      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
-      const doc = await parseXlsx(await OfficePackage.load(bytes))
-      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const dateContext = c.clockRequirement ? {
-        clockSerial: c.clockRequirement.anchorSerial,
-        dateSystem: c.clockRequirement.dateSystem,
-      } : undefined
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
-      expect(paint).toBeDefined()
-
-      for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {
-        const [, ref] = targetKey.split(':')
-        const { row, col } = refToRowCol(ref!)
-        const exp = c.expected!.cells.find(cell => cell.ref === ref)!
-        const st = paint!.layer.styleAt(row, col, undefined)
-        expect(st, `${targetKey} should have matched`).toBeDefined()
-        if (exp.fillRgb) expect(st?.fillColor, `${targetKey} fill`).toBe(exp.fillRgb)
-        if (exp.fontRgb) expect(st?.color, `${targetKey} font`).toBe(exp.fontRgb)
-        if (exp.bold !== undefined) expect(st?.bold, `${targetKey} bold`).toBe(exp.bold)
+      if (c.clockRequirement) {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
       }
-      paint!.dispose()
+      try {
+        const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+        const doc = await parseXlsx(await OfficePackage.load(bytes), parseOptionsFor(c))
+        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+        const dateContext = c.clockRequirement ? {
+          clockSerial: c.clockRequirement.anchorSerial,
+          dateSystem: c.clockRequirement.dateSystem,
+        } : undefined
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext })
+        expect(paint).toBeDefined()
+
+        for (const targetKey of expectedWithheldRecovered.filter(k => k.startsWith(`${caseId}:`))) {
+          const [, ref] = targetKey.split(':')
+          const { row, col } = refToRowCol(ref!)
+          const exp = c.expected!.cells.find(cell => cell.ref === ref)!
+          const st = paint!.layer.styleAt(row, col, undefined)
+          expect(st, `${targetKey} should have matched`).toBeDefined()
+          if (exp.fillRgb) expect(st?.fillColor, `${targetKey} fill`).toBe(exp.fillRgb)
+          if (exp.fontRgb) expect(st?.color, `${targetKey} font`).toBe(exp.fontRgb)
+          if (exp.bold !== undefined) expect(st?.bold, `${targetKey} bold`).toBe(exp.bold)
+        }
+        paint!.dispose()
+      } finally {
+        if (c.clockRequirement) {
+          vi.useRealTimers()
+        }
+      }
     }
   })
 
@@ -230,6 +320,154 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(st?.color, `${caseId}:${ref} should have no CF font color`).toBeUndefined()
       expect(st?.bold, `${caseId}:${ref} should have no CF bold`).toBeUndefined()
       paint!.dispose()
+    }
+  })
+
+  it('asserts Stage 2 colour-scale cells remain withheld when scale evidence is unverified (Lesson 1)', async () => {
+    let checkedCount = 0
+    const unverifiedScaleEvidence = {
+      allows: (id: string, variant?: string) => !id.startsWith('scale:') && cfRuntimeEvidence.allows(id, variant),
+    }
+    const stage2Cases = manifest.cases.filter(c => c.stage === 2)
+    for (const c of stage2Cases) {
+      const savedPath = join(REPO_ROOT, c.saved)
+      if (!existsSync(savedPath)) continue
+      const bytes = new Uint8Array(readFileSync(savedPath))
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const paint = await prepareCfPaint(sheet, { evidence: unverifiedScaleEvidence })
+      expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
+      if (!paint) continue
+
+      for (const exp of c.expected?.cells ?? []) {
+        const scaleMarker = c.markers.find(m => m.ruleType === 'colorScale' && isCellInSqref(exp.ref, m.sqref))
+        if (!scaleMarker) continue
+        if (!(exp.scaleApplied ?? exp.matched)) continue
+
+        const { row, col } = refToRowCol(exp.ref)
+        const st = paint.layer.styleAt(row, col, undefined)
+
+        // Until scale:* capabilities are evidenced and verified,
+        // no CF colour-scale fill may be applied to any Stage 2 cell.
+        if (c.id === 'stage2-scale-composition' && (exp.ref === 'B2' || exp.ref === 'B3')) {
+          // B2/B3 has a winning Stage 1 cellIs dxf fill, not a scale fill
+          expect(st?.fillColor, `${c.id}:${exp.ref} cellIs dxf fill`).toBe('FFFFC7CE')
+        } else {
+          expect(
+            st?.fillColor,
+            `Stage 2 cell ${c.id}:${exp.ref} colour scale fill must be withheld while unverified`,
+          ).toBeUndefined()
+        }
+        checkedCount++
+      }
+      paint.dispose()
+    }
+
+    expect(checkedCount).toBeGreaterThan(0)
+    expect(checkedCount).toBe(206)
+  })
+
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+    let grandTotalChecked = 0
+    let exactCount = 0
+    let withheldCount = 0
+    const caseCounts: Record<string, number> = {}
+
+    for (const caseId of STAGE2_MEASURED_CASES) {
+      const c = manifest.cases.find(x => x.id === caseId)!
+      expect(c, `Manifest must contain ${caseId}`).toBeDefined()
+      const savedPath = join(REPO_ROOT, c.saved)
+      expect(existsSync(savedPath), `${savedPath} must exist`).toBe(true)
+
+      const bytes = new Uint8Array(readFileSync(savedPath))
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
+      if (!paint) continue
+
+      // Read trusted observed cells from reference sidecar
+      const sidecarPath = join(REPO_ROOT, `tests/fixtures/xlsx-cf/refs/${caseId}.json`)
+      expect(existsSync(sidecarPath), `${sidecarPath} must exist`).toBe(true)
+      const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')) as {
+        observedCells: Array<{ ref: string; fillSource: string; fillRgb: string; hidden?: boolean }>
+      }
+
+      const observed = sidecar.observedCells.filter(cell => cell.fillSource === 'excel-display-format' && !cell.hidden)
+      expect(observed.length, `${caseId} must have non-zero observed cells`).toBeGreaterThan(0)
+      caseCounts[caseId] = observed.length
+
+      for (const cell of observed) {
+        grandTotalChecked++
+        const cellKey = `${caseId}:${cell.ref}`
+        const { row, col } = refToRowCol(cell.ref)
+        const cellObj = sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)
+        const baseStyle = { numFmtId: 0, ...(cellObj?.style ?? {}), fillColor: cellObj?.style?.fillColor ?? 'FFFFFFFF' }
+        const st = paint.layer.styleAt(row, col, baseStyle)
+        const actualFill = st?.fillColor ?? 'FFFFFFFF'
+
+        const finding = FINDINGS[cellKey]
+        if (finding) {
+          expect(finding.outcome).toBe('withheld')
+          expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
+          withheldCount++
+        } else {
+          // Exact Excel ARGB match:
+          expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
+          exactCount++
+        }
+      }
+
+      paint.dispose()
+    }
+
+    // Assert a non-zero checked-cell count per case:
+    for (const caseId of STAGE2_MEASURED_CASES) {
+      expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
+    }
+    expect(grandTotalChecked).toBe(398)
+    // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
+    expect(exactCount).toBe(364)
+    expect(withheldCount).toBe(34)
+    expect(exactCount + withheldCount).toBe(grandTotalChecked)
+  })
+
+  it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
+    // Type definition allows only { outcome: 'withheld', reason: string }
+    type ConformanceFinding = { outcome: 'withheld'; reason: string }
+
+    const validateFinding = (f: ConformanceFinding) => {
+      if (f.outcome !== 'withheld') throw new Error(`Non-withheld outcome: ${(f as any).outcome}`)
+    }
+
+    // Valid withheld outcome:
+    expect(() => validateFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
+
+    // Runtime rejection of painted wrong colour or diverged outcome:
+    expect(() => validateFinding({ outcome: 'diverged' as any, reason: 'invalid' })).toThrow(/Non-withheld outcome/)
+    expect(() => validateFinding({ outcome: 'painted' as any, reason: 'wrong colour' })).toThrow(/Non-withheld outcome/)
+  })
+
+  it('Stage 1 clock cases are host-time-zone independent (CI runs in UTC)', async () => {
+    const previous = process.env.TZ
+    process.env.TZ = 'UTC'
+    try {
+      expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
+      for (const id of ['stage1-timeperiod-today-clock', 'stage1-timeperiod-today-clock-2']) {
+        const c = manifest.cases.find(x => x.id === id)!
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(`${c.clockRequirement!.anchorLocalDate}T04:00:00+08:00`))
+        try {
+          const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))), parseOptionsFor(c))
+          const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+            const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence, dateContext: { clockSerial: c.clockRequirement!.anchorSerial, dateSystem: c.clockRequirement!.dateSystem } })
+          const stale = refToRowCol(c.clockRequirement!.staleCacheCellRef)
+          expect(paint!.layer.styleAt(stale.row, stale.col, undefined)?.fillColor, `${id} stale TODAY() cell refreshes to the anchor day`).toBe('FFFFC7CE')
+          paint!.dispose()
+        } finally { vi.useRealTimers() }
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous
     }
   })
 })

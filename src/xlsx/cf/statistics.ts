@@ -20,6 +20,7 @@
 import { PackageError } from '../../core/package-error'
 import { hostTask } from '../view/scheduler'
 import type {
+  CfDiagnostic,
   CfLease,
   CfLiteral,
   CfOutcome,
@@ -74,6 +75,8 @@ export interface CfRangeStatistics {
   readonly storedCells: number
   /** Whether the scope rectangle intersects any hidden row. */
   readonly hasHiddenRows?: boolean
+  /** Whether the scanned scope holds at least one error value (never counted in numeric stats). */
+  readonly hasErrors?: boolean
 }
 
 export interface CfStatisticsOptions {
@@ -82,6 +85,25 @@ export interface CfStatisticsOptions {
   readonly hiddenRows?: readonly SourceRect[]
   readonly signal?: AbortSignal
   readonly maxEntries?: number
+  /** Whether sortedAsc needs to be populated. Default true for top10 / percentile. */
+  readonly sorted?: boolean
+  readonly diagnostics?: Array<CfDiagnostic> | { record(kind: string, feature: string, msg: string): void } | ((diag: CfDiagnostic) => void)
+}
+
+function reportStatisticsDiag(options?: Omit<CfStatisticsOptions, 'maxEntries'>): void {
+  if (!options?.diagnostics) return
+  const diag: CfDiagnostic = {
+    kind: 'unsupported',
+    feature: 'cf-resource-limit',
+    message: 'Conditional formatting statistics range exceeded resource limits.',
+  }
+  if (Array.isArray(options.diagnostics)) {
+    options.diagnostics.push(diag)
+  } else if (typeof (options.diagnostics as any).record === 'function') {
+    (options.diagnostics as any).record(diag.kind, diag.feature, diag.message)
+  } else if (typeof options.diagnostics === 'function') {
+    options.diagnostics(diag)
+  }
 }
 
 export interface CfStatisticsSession {
@@ -469,9 +491,12 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     hidden: 'include' | 'exclude',
     hiddenRows: readonly SourceRect[],
     key: string,
+    sorted: boolean = true,
   ): Promise<BuiltOutcome> {
     // Admit the initial workspace before building anything.
-    const initial = 256 + Math.min(Math.max(spanCells, 1), INITIAL_NUMERIC_CAPACITY) * 8 * 2 + 256
+    const initial = sorted
+      ? 256 + Math.min(Math.max(spanCells, 1), INITIAL_NUMERIC_CAPACITY) * 8 * 2 + 256
+      : 512
     if (!checkCap(initial)) {
       return { kind: 'unresolved', reason: 'cf-resource-limit' }
     }
@@ -491,9 +516,9 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     }
     try {
       if (signal.aborted) throw cancelled()
-      let capacity = Math.min(Math.max(spanCells, 1), INITIAL_NUMERIC_CAPACITY)
-      let values = new Float64Array(capacity)
-      let scratch = new Float64Array(capacity)
+      let capacity = sorted ? Math.min(Math.max(spanCells, 1), INITIAL_NUMERIC_CAPACITY) : 0
+      let values = sorted ? new Float64Array(capacity) : new Float64Array(0)
+      let scratch = sorted ? new Float64Array(capacity) : new Float64Array(0)
       const seen = needsDedup ? new Set<number>() : undefined
       const frequencies = new Map<string, number>()
       // Neumaier compensated summation: exact for cancellation patterns.
@@ -507,6 +532,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       let storedBlanks = 0
       const spend: SpendState = { pending: 0, signal, budget }
       const ensureCapacity = async (needed: number): Promise<boolean> => {
+        if (!sorted) return true
         if (needed <= values.length) return true
         let next = values.length
         while (next < needed) next += NUMERIC_GROW_CHUNK
@@ -541,7 +567,8 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
               const value = items[i]!
               // In Excel, duplicateValues/uniqueValues counts frequency across all
               // rectangles in the sqref list (e.g. H2:H4 H3:H5 counts H3 in both ranges).
-              if (value.kind === 'number') {
+              // Scales with sorted: false use O(1) streaming workspace and skip frequencies.
+              if (sorted && value.kind === 'number') {
                 const nkey = 'n:' + String(value.value)
                 if (!frequencies.has(nkey)) {
                   if (!growHold(128)) {
@@ -549,7 +576,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                   }
                 }
                 frequencies.set(nkey, (frequencies.get(nkey) ?? 0) + 1)
-              } else if (value.kind === 'string' || value.kind === 'boolean') {
+              } else if (sorted && (value.kind === 'string' || value.kind === 'boolean')) {
                 const textLen = value.kind === 'string' ? value.value.length : 0
                 if (!growHold(64 + textLen * 2 + 16)) {
                   return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -574,19 +601,21 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                 }
               } else if (value.kind === 'error') {
                 hasErrors = true
-                const errLen = value.value.length
-                if (!growHold(64 + errLen * 2 + 16)) {
-                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
-                }
-                const k = cfValueKey(value)!
-                const prior = frequencies.get(k)
-                if (prior === undefined) {
-                  if (!growHold(64)) {
+                if (sorted) {
+                  const errLen = value.value.length
+                  if (!growHold(64 + errLen * 2 + 16)) {
                     return { kind: 'unresolved', reason: 'cf-resource-limit' }
                   }
-                  frequencies.set(k, 1)
-                } else {
-                  frequencies.set(k, prior + 1)
+                  const k = cfValueKey(value)!
+                  const prior = frequencies.get(k)
+                  if (prior === undefined) {
+                    if (!growHold(64)) {
+                      return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                    }
+                    frequencies.set(k, 1)
+                  } else {
+                    frequencies.set(k, prior + 1)
+                  }
                 }
                 if (!(await spendUnits(spend, 2))) {
                   return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -610,10 +639,13 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
                 continue
               }
               if (value.kind === 'number') {
-                if (!(await ensureCapacity(numericCount + 1))) {
-                  return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                if (sorted) {
+                  if (!(await ensureCapacity(numericCount + 1))) {
+                    return { kind: 'unresolved', reason: 'cf-resource-limit' }
+                  }
+                  values[numericCount] = value.value
                 }
-                values[numericCount++] = value.value
+                numericCount++
                 // Neumaier update.
                 const t = sum + value.value
                 if (Math.abs(sum) >= Math.abs(value.value)) compensation += sum - t + value.value
@@ -631,7 +663,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       }
       if (signal.aborted) throw cancelled()
       const totalBlanks = storedBlanks + Math.max(0, spanCells - stored)
-      if (totalBlanks > 0) {
+      if (sorted && totalBlanks > 0) {
         if (!frequencies.has('s:')) {
           if (!growHold(64)) {
             return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -648,18 +680,20 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       if (!stampsMatch(live, stamp)) {
         return { kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId] }
       }
-      // Cooperative ascending sort for top/bottom cutoffs.
-      if (!(await cooperativeSort(values, scratch, numericCount, {
-        pending: 0, signal, budget,
-      }))) {
-        return { kind: 'unresolved', reason: 'cf-resource-limit' }
+      if (sorted) {
+        // Cooperative ascending sort for top/bottom cutoffs.
+        if (!(await cooperativeSort(values, scratch, numericCount, {
+          pending: 0, signal, budget,
+        }))) {
+          return { kind: 'unresolved', reason: 'cf-resource-limit' }
+        }
+        if (signal.aborted) throw cancelled()
       }
-      if (signal.aborted) throw cancelled()
       const mean = Number.isFinite(sum) && numericCount > 0 ? sum / numericCount : undefined
       // Two-pass population variance around the compensated mean.
       let devSq = 0
       let devComp = 0
-      if (mean !== undefined) {
+      if (sorted && mean !== undefined) {
         for (let i = 0; i < numericCount; i++) {
           const dev = values[i]! - mean
           if (!(await spendUnits(spend, 1))) {
@@ -679,15 +713,20 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       const varianceSample = mean === undefined || hasErrors || numericCount <= 1 || !Number.isFinite(devSq + devComp)
         ? undefined
         : Math.max(0, (devSq + devComp) / (numericCount - 1))
-      // Admit the retained copy before building it.
-      if (!growHold(numericCount * 8 + 64)) {
-        return { kind: 'unresolved', reason: 'cf-resource-limit' }
+      let retained: Float64Array
+      if (sorted) {
+        // Admit the retained copy before building it.
+        if (!growHold(numericCount * 8 + 64)) {
+          return { kind: 'unresolved', reason: 'cf-resource-limit' }
+        }
+        retained = new Float64Array(numericCount)
+        if (!(await copyInto(retained, 0, values.subarray(0, numericCount), numericCount, spend))) {
+          return { kind: 'unresolved', reason: 'cf-resource-limit' }
+        }
+        if (signal.aborted) throw cancelled()
+      } else {
+        retained = new Float64Array(0)
       }
-      const retained = new Float64Array(numericCount)
-      if (!(await copyInto(retained, 0, values.subarray(0, numericCount), numericCount, spend))) {
-        return { kind: 'unresolved', reason: 'cf-resource-limit' }
-      }
-      if (signal.aborted) throw cancelled()
       let freqBytes = 0
       for (const [k, v] of frequencies) freqBytes += 64 + k.length * 2 + 8 + `${v}`.length * 2
       const bytes = 256 + retained.length * 8 + freqBytes
@@ -712,6 +751,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         spanCells,
         storedCells: stored,
         hasHiddenRows,
+        hasErrors,
       }
       // Atomically transfer the workspace peak into the adopted candidate:
       // no refund-then-rereserve window where the result sits uncharged.
@@ -729,6 +769,12 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
     } catch (error) {
       if (isCancel(error) || signal.aborted) throw cancelled()
       if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
+      if (
+        (error instanceof Error && (error.name === 'CfPageFault' || (error as any).fault === 'incomplete')) ||
+        (error instanceof PackageError && (error.code as string) === 'pending-data')
+      ) {
+        return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
+      }
       throw error
     } finally {
       if (adoptedLease === undefined) {
@@ -858,27 +904,38 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         for (const o of out) if (o.kind === 'ready') o.value.release()
         throw cancelled()
       }
-      const key = `${stamp.sheetId}|${stamp.owner}|${stamp.structureGen}|${stamp.workbookValueGen}|${scopeKey(scope)}|${hiddenKey(hidden, hiddenRows)}`
-      const refused = refusalCache.get(key)
+      const needSorted = options.sorted !== false
+      const sortSuffix = needSorted ? '' : '|nosort'
+      const baseKey = `${stamp.sheetId}|${stamp.owner}|${stamp.structureGen}|${stamp.workbookValueGen}|${scopeKey(scope)}|${hiddenKey(hidden, hiddenRows)}`
+      const key = `${baseKey}${sortSuffix}`
+      const refused = !needSorted ? refusalCache.get(key) : refusalCache.get(key)
       if (refused !== undefined) {
         if (!checkLive(stamp)) {
           out.push({ kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId] })
         } else {
+          if (refused.reason === 'cf-resource-limit') {
+            reportStatisticsDiag(options)
+          }
           out.push(refused)
         }
         continue
       }
-      const hit = cache.get(key)
+      const sortedHit = cache.get(baseKey)
+      const ownHit = cache.get(key)
+      const hit = !needSorted ? (ownHit ?? sortedHit) : ownHit
+      const ownerKey = (!needSorted && ownHit === undefined && sortedHit !== undefined) ? baseKey : key
       if (hit !== undefined) {
         // Warm hit: revalidate the live source before publishing, then share
-        // the adopted charge. No loops, no new scan.
+        // the adopted charge. No loops, no new scan. Keep the entry under its
+        // owning key (sorted) instead of aliasing it under |nosort, so LRU
+        // updates and lease release cannot desync (bot P2).
         if (!checkLive(stamp)) {
           out.push({ kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId] })
           continue
         }
-        cache.delete(key)
-        cache.set(key, hit)
-        out.push(makeOutcome(key, hit))
+        cache.delete(ownerKey)
+        cache.set(ownerKey, hit)
+        out.push(makeOutcome(ownerKey, hit))
         continue
       }
       if (!checkLive(stamp)) {
@@ -971,6 +1028,12 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
             } catch (error) {
               if (isCancel(error) || controller.signal.aborted) throw cancelled()
               if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              if (
+                (error instanceof Error && (error.name === 'CfPageFault' || (error as any).fault === 'incomplete')) ||
+                (error instanceof PackageError && (error.code as string) === 'pending-data')
+              ) {
+                return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
+              }
               throw error
             }
             if (clamped.length === 0 || span === 0) {
@@ -1000,10 +1063,16 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
             // Overlap exists exactly when the union is smaller than the sum.
             const needsDedup = span < clampedSum
             try {
-              return await build(clamped, span, declared, needsDedup, stamp, source, budget, controller.signal, hidden, hiddenRows, key)
+              return await build(clamped, span, declared, needsDedup, stamp, source, budget, controller.signal, hidden, hiddenRows, key, needSorted)
             } catch (error) {
               if (isCancel(error) || controller.signal.aborted) throw cancelled()
               if (isBudgetRefusal(error)) return { kind: 'unresolved', reason: 'cf-resource-limit' }
+              if (
+                (error instanceof Error && (error.name === 'CfPageFault' || (error as any).fault === 'incomplete')) ||
+                (error instanceof PackageError && (error.code as string) === 'pending-data')
+              ) {
+                return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
+              }
               throw error
             }
           } finally {
@@ -1053,6 +1122,9 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         for (const o of out) if (o.kind === 'ready') o.value.release()
         throw error
       })
+      if (outcome.kind === 'unresolved' && outcome.reason === 'cf-resource-limit') {
+        reportStatisticsDiag(options)
+      }
       out.push(outcome)
     }
     return out
