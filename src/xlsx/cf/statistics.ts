@@ -920,16 +920,21 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         }
         continue
       }
-      const hit = !needSorted ? (cache.get(key) ?? cache.get(baseKey)) : cache.get(key)
+      const sortedHit = cache.get(baseKey)
+      const ownHit = cache.get(key)
+      const hit = !needSorted ? (ownHit ?? sortedHit) : ownHit
+      const ownerKey = (!needSorted && ownHit === undefined && sortedHit !== undefined) ? baseKey : key
       if (hit !== undefined) {
         // Warm hit: revalidate the live source before publishing, then share
-        // the adopted charge. No loops, no new scan.
+        // the adopted charge. No loops, no new scan. Keep the entry under its
+        // owning key (sorted) instead of aliasing it under |nosort, so LRU
+        // updates and lease release cannot desync (bot P2).
         if (!checkLive(stamp)) {
           out.push({ kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId] })
           continue
         }
-        cache.delete(key)
-        cache.set(key, hit)
+        cache.delete(ownerKey)
+        cache.set(ownerKey, hit)
         out.push(makeOutcome(key, hit))
         continue
       }
