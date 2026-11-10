@@ -1,7 +1,8 @@
 import type { XlsxSheet } from '../types'
 import type { CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory } from './limits'
-import { createCfService, estimateCfPrepareBytes } from './service'
+import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
+import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
 import { residentSource, storeCfSource } from './render'
 import { cfRuntimeEvidence } from './predicates'
@@ -262,6 +263,19 @@ export async function prepareCfTextScope(
     return undefined
   }
   const account = createCfMemory({ limitBytes: CF_LIMITS.scratchBytes, context: budgetAllocationContext(request.budget) })
+  // One statistics session spans every chunk: each statistical rule's scope (scale, top10, aboveAverage,
+  // duplicates) is scanned once per generation instead of once per 1000-cell chunk.
+  const statistics: CfPaintStatistics = { session: createCfStatistics(account), stamp: undefined as unknown as CfStamp, results: new Map() }
+  let statisticsReleased = false
+  const closeAccount = (): void => {
+    if (!statisticsReleased) {
+      statisticsReleased = true
+      for (const outcome of statistics.results.values()) if (outcome.kind === 'ready') { try { outcome.value.release() } catch { /* release-only path */ } }
+      statistics.results.clear()
+      try { statistics.session.dispose() } catch { /* release-only path */ }
+    }
+    account.close()
+  }
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
@@ -278,12 +292,13 @@ export async function prepareCfTextScope(
         structureGen: request.store?.structureGen ?? 0,
         clockGen: 0,
       }
+      statistics.stamp = stamp
       const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
       const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
-        if (request.signal.aborted) { account.close(); return fail() }
-        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext })
+        if (request.signal.aborted) { closeAccount(); return fail() }
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics })
         let lease: CfLease<CfPrepared>
         try {
           lease = await service.prepareCf(
@@ -306,7 +321,7 @@ export async function prepareCfTextScope(
                   if (outcome.reason === 'cf-outside-preparation') continue
                   // Admit the retained copy before constructing it, like wins.
                   const occupied = measureCfCellBytes({ properties: {}, unresolvedWrites: undefined, unresolvedReason: outcome.reason })
-                  if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
+                  if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); closeAccount(); throw refused('CF text preparation exceeds its admitted batch') }
                   admit(occupied)
                   bytes += occupied
                   states.set(row * 16384 + col, { properties: {}, writes: undefined, reason: outcome.reason })
@@ -318,7 +333,7 @@ export async function prepareCfTextScope(
                 // for measurement; the stored copy is built after admission).
                 const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
                 const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale })
-                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
+                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); closeAccount(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 const properties: Record<string, string | number | boolean | null> = {}
@@ -331,7 +346,7 @@ export async function prepareCfTextScope(
           try { lease.release() } finally { service.dispose() }
         }
       }
-    account.close()
+    closeAccount()
     let disposed = false
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
@@ -349,7 +364,7 @@ export async function prepareCfTextScope(
     // signal); admitted-budget refusal propagates so engines can classify it;
     // anything else fails closed to no scope. Held bytes are always released.
     states.clear()
-    account.close()
+    closeAccount()
     try { request.budget.release(bytes) } catch { /* release-only path */ }
     if (request.signal.aborted) return undefined
     if (error instanceof PackageError && error.code === 'resource-limit') throw error
