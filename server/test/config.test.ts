@@ -14,7 +14,7 @@ describe('config', () => {
   })
   it('demo without a key generates an ephemeral 32-byte key', () => {
     const c = loadConfig({}, ['--demo', '--origin', 'http://a,http://b', '--doc-dir', 'corpus'])
-    expect(c.masterKey.length).toBe(32)
+    expect(c.keyring.keys.get(1)!.length).toBe(32)
     expect(c.ephemeral).toBe(true)
     expect(c.originAllowlist).toEqual(['http://a', 'http://b'])
     expect(c.docDir).toBe('corpus')
@@ -22,7 +22,7 @@ describe('config', () => {
   it('a supplied key is used and not ephemeral', () => {
     const c = loadConfig({ OV_STREAM_KEY: key(32) }, [])
     expect(c.ephemeral).toBe(false)
-    expect(c.masterKey[0]).toBe(7)
+    expect(c.keyring.keys.get(1)![0]).toBe(7)
   })
 })
 

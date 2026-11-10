@@ -13,7 +13,16 @@ bun run test:server                 # bun test (napi preload via bunfig)
 ```
 
 Outside `--demo` the server refuses to start without `OV_STREAM_KEY` (32 bytes,
-base64) and an allowed origin (`--origin` / `OV_STREAM_ORIGINS`).
+base64) or `OV_STREAM_KEYRING`, and an allowed origin (`--origin` /
+`OV_STREAM_ORIGINS`). Setting both key variables is an error.
+
+**Key rotation.** `OV_STREAM_KEYRING=<path>` names a JSON file
+`{"current": 2, "keys": {"1": "<base64 32 B>", "2": "<base64 32 B>"}}`
+(generations are integers 1..255). New sessions are issued under `current`;
+each audit row records its `keyGeneration`. To rotate: add a new generation,
+switch `current` to it, and keep every older generation until the audit rows
+issued under it have expired, so leaked captures from that era stay traceable.
+`OV_STREAM_KEY` alone is a keyring with generation 1.
 
 - **One endpoint.** `GET /stream` WebSocket upgrade from an allowlisted
   `Origin`; every other HTTP request is 404. There is no file route.

@@ -17,7 +17,7 @@ export async function startServer(argv: readonly string[], env: Record<string, s
   const origins = config.originAllowlist.length ? config.originAllowlist : config.demo ? ['http://localhost:5173'] : []
   if (!origins.length) throw new Error('no allowed origin: pass --origin or OV_STREAM_ORIGINS')
   const pool = new Pool()
-  const stream = createStreamServer({ keys: await deriveKeys(config.masterKey), originAllowlist: origins, pool, ...demoHooks(config) })
+  const stream = createStreamServer({ keys: await deriveKeys(config.keyring.keys.get(config.keyring.current)!, config.keyring.current), originAllowlist: origins, pool, ...demoHooks(config) })
   const server = Bun.serve({ port: config.port, fetch: stream.fetch as never, websocket: stream.websocket as never })
   return { server, stream, pool, origins, stop() { server.stop(true); pool.dispose() } }
 }
