@@ -182,6 +182,24 @@ describe('CF Stage 2 Task 15 — Scale worker payload and invalidation', () => {
     })
   })
 
+  it('the advertised requiredBytes of a refused scale read is enough to carry every scale (retry at exactly that grant)', async () => {
+    const cellCount = 1000
+    const cells = Array.from({ length: cellCount }, (_, i) => ({ row: i, col: 0, value: nc(i) }))
+    const rules: CfSheetRules = { diagnostics: [], rules: [scaleRule(0, cellCount - 1, 0, 0)] }
+    const st = stamp(1, { cfGen: cfRulesVersion(rules) })
+    await withInjectedCfEvidence(scaleEvidence, async () => {
+      const refused = await prepareCfRemote(cfRequest([rect(0, cellCount - 1)], st, 4096), SHEET, fakeSource(cells, { stamp: st }), rules, createCfMemory({}), { budget: frozenBudget })
+      const required = (refused as { requiredBytes?: number }).requiredBytes
+      expect(refused.kind).not.toBe('ready')
+      expect(required).toBeGreaterThan(4096)
+      const retry = await prepareCfRemote(cfRequest([rect(0, cellCount - 1)], st, required!), SHEET, fakeSource(cells, { stamp: st }), rules, createCfMemory({}), { budget: frozenBudget })
+      expect(retry.kind).toBe('ready')
+      if (retry.kind !== 'ready') throw new Error('expected ready')
+      expect(retry.states.filter(state => state.scale !== undefined)).toHaveLength(cellCount)
+      releaseSharedCfDefinitions(rules)
+    })
+  })
+
   it('clone copies are counted on both sides until adoption', async () => {
     // Setup cache host that monitors ledger allocations for grant and replies
     const granted = new Map<string, number>()
