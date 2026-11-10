@@ -471,8 +471,7 @@ export async function compareCfCase(
   const appearance = mode === 'print' ? 'printer' : 'screen'
   const cap = c.captures.find(x => x.appearance === appearance)
   if (!cap) {
-    // A missing Excel capture is unverified fidelity, never a measured pass or a product failure (T1-A(c)).
-    return { id: c.id, mode, outcome: 'recipe-pending', reason: `*unverified*: no ${appearance} capture configured for ${c.id}` }
+    return { id: c.id, mode, outcome: 'fail', reason: `No ${appearance} capture configured for ${c.id}` }
   }
 
   const sidecarAbs = resolve(rootDir, cap.sidecarPath)

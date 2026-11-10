@@ -197,7 +197,10 @@ describe('every unresolved capability refuses atomically on both paths', () => {
               for (let row = r.r0; row <= r.r1; row++) {
                 const outcome = lease.value.at(row, r.c0)
                 if (outcome.kind === 'unresolved' && outcome.reason === 'cf-outside-preparation') continue
-              const hasProperties = outcome.kind === 'ready' && Object.keys(outcome.value.properties).length > 0
+              // A resolved colour-scale visual is a winning paint just like winning properties
+              // (Stage 2): the fill must reach the effective style on every path.
+              const hasProperties = outcome.kind === 'ready'
+                && (Object.keys(outcome.value.properties).length > 0 || outcome.value.visual?.colorScale !== undefined)
               const writes = outcome.kind === 'ready' ? outcome.value.unresolvedWrites : undefined
               const hasWrites = writes !== undefined && (writes as ReadonlySet<string>).size !== undefined
                 ? (writes as ReadonlySet<string>).size > 0
