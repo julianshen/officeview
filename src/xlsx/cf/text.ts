@@ -1,5 +1,5 @@
 import type { XlsxSheet } from '../types'
-import type { CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
+import type { CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes } from './service'
 import { resolveCfCellStyle } from './dxf'
@@ -37,7 +37,7 @@ const DESCRIPTOR_WORKSPACE_BYTES = 2048
 const DESCRIPTOR_CACHE_KEYS = 32
 /** Mirrors the service per-call limits so every chunk is admittable. */
 const CHUNK_RECTS = 256
-const CHUNK_CELLS = 5000
+const CHUNK_CELLS = 1000
 
 /** Bridges a caller's FormatBudget into a CfMemory allocation context so every
  * resident byte — service workspace, shared statistics, transient text and
@@ -152,10 +152,16 @@ function chunkRects(rects: readonly SourceRect[]): SourceRect[][] {
   let current: SourceRect[] = [], area = 0
   const flush = (): void => { if (current.length) { chunks.push(current); current = []; area = 0 } }
   for (const rect of rects) {
-    const rectArea = (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1)
-    if (current.length >= CHUNK_RECTS || area + rectArea > CHUNK_CELLS) flush()
-    current.push(rect)
-    area += rectArea
+    const cols = rect.c1 - rect.c0 + 1
+    const maxRows = Math.max(1, Math.floor(CHUNK_CELLS / Math.max(1, cols)))
+    for (let r0 = rect.r0; r0 <= rect.r1; r0 += maxRows) {
+      const r1 = Math.min(rect.r1, r0 + maxRows - 1)
+      const slice: SourceRect = { r0, r1, c0: rect.c0, c1: rect.c1 }
+      const sliceArea = (r1 - r0 + 1) * cols
+      if (current.length >= CHUNK_RECTS || area + sliceArea > CHUNK_CELLS) flush()
+      current.push(slice)
+      area += sliceArea
+    }
   }
   flush()
   return chunks
@@ -249,45 +255,51 @@ export async function prepareCfTextScope(
     timeZone: sheet.semantics.timeZone,
     epochNowMs: Date.now(),
   } : undefined)
-  const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext })
-  try {
-    const gen = cfRulesVersion(rules)
-    const stamp: CfStamp = {
-      owner: request.store?.stamp.docId ?? 'cf-text',
-      sheetId: sheet.sheetId ?? sheet.name,
-      workbookValueGen: request.store?.stamp.valueGen ?? request.workbookValueGen ?? 0,
-      cfGen: gen,
-      viewGen: 0,
-      structureGen: request.store?.structureGen ?? 0,
-      clockGen: 0,
-    }
-    const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
-    const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
-    const locale = request.locale ?? 'en-US'
-    for (const chunk of modelChunks) {
-      if (request.signal.aborted) { service.dispose(); account.close(); return fail() }
-      const lease = await service.prepareCf(
-        { stamp, sourceRects: chunk, signal: request.signal, grantBytes: CF_LIMITS.scratchBytes },
-        source,
-        account,
-      )
-      try {
-        const prepared: CfPrepared = lease.value
-        for (const rect of chunk) {
-          for (let row = rect.firstRow; row <= rect.lastRow; row++) {
-            for (let col = rect.firstCol; col <= rect.lastCol; col++) {
-              const outcome = prepared.at(row, col)
-              if (outcome.kind === 'no-match') continue
-              if (outcome.kind === 'unresolved') {
-                if (outcome.reason === 'cf-outside-preparation') continue
-                // Admit the retained copy before constructing it, like wins.
-                const occupied = measureCfCellBytes({ properties: {}, unresolvedWrites: undefined, unresolvedReason: outcome.reason })
-                if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
-                admit(occupied)
-                bytes += occupied
-                states.set(row * 16384 + col, { properties: {}, writes: undefined, reason: outcome.reason })
-                continue
-              }
+    try {
+      const gen = cfRulesVersion(rules)
+      const stamp: CfStamp = {
+        owner: request.store?.stamp.docId ?? 'cf-text',
+        sheetId: sheet.sheetId ?? sheet.name,
+        workbookValueGen: request.store?.stamp.valueGen ?? request.workbookValueGen ?? 0,
+        cfGen: gen,
+        viewGen: 0,
+        structureGen: request.store?.structureGen ?? 0,
+        clockGen: 0,
+      }
+      const source = request.store ? storeCfSource(request.store, stamp, account) : residentSource(sheet, stamp, account, request.valuePolicy ?? 'engine')
+      const colors = request.colors ?? { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
+      const locale = request.locale ?? 'en-US'
+      for (const chunk of modelChunks) {
+        if (request.signal.aborted) { account.close(); return fail() }
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext })
+        let lease: CfLease<CfPrepared>
+        try {
+          lease = await service.prepareCf(
+            { stamp, sourceRects: chunk, signal: request.signal, grantBytes: CF_LIMITS.scratchBytes },
+            source,
+            account,
+          )
+        } catch (error) {
+          service.dispose()
+          throw error
+        }
+        try {
+          const prepared: CfPrepared = lease.value
+          for (const rect of chunk) {
+            for (let row = rect.firstRow; row <= rect.lastRow; row++) {
+              for (let col = rect.firstCol; col <= rect.lastCol; col++) {
+                const outcome = prepared.at(row, col)
+                if (outcome.kind === 'no-match') continue
+                if (outcome.kind === 'unresolved') {
+                  if (outcome.reason === 'cf-outside-preparation') continue
+                  // Admit the retained copy before constructing it, like wins.
+                  const occupied = measureCfCellBytes({ properties: {}, unresolvedWrites: undefined, unresolvedReason: outcome.reason })
+                  if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
+                  admit(occupied)
+                  bytes += occupied
+                  states.set(row * 16384 + col, { properties: {}, writes: undefined, reason: outcome.reason })
+                  continue
+                }
                 // Measure the source-owned winning state first, admit the retained
                 // copy before constructing it, then store: no retained byte
                 // ever exists uncharged (the spread below is transient scratch
@@ -300,14 +312,13 @@ export async function prepareCfTextScope(
                 const properties: Record<string, string | number | boolean | null> = {}
                 for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
                 states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale })
+              }
             }
           }
+        } finally {
+          try { lease.release() } finally { service.dispose() }
         }
-      } finally {
-        lease.release()
       }
-    }
-    service.dispose()
     account.close()
     let disposed = false
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
@@ -326,7 +337,7 @@ export async function prepareCfTextScope(
     // signal); admitted-budget refusal propagates so engines can classify it;
     // anything else fails closed to no scope. Held bytes are always released.
     states.clear()
-    try { service.dispose() } finally { account.close() }
+    account.close()
     try { request.budget.release(bytes) } catch { /* release-only path */ }
     if (request.signal.aborted) return undefined
     if (error instanceof PackageError && error.code === 'resource-limit') throw error
