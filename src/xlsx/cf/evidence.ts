@@ -1,7 +1,15 @@
 import type { CfOutcome } from './model'
-import { VERIFIED_CAPABILITIES } from './verifiedCapabilities'
+import {
+  VERIFIED_CAPABILITIES,
+  VERIFIED_STAGE1_CAPABILITIES,
+  VERIFIED_STAGE2_CAPABILITIES,
+} from './verifiedCapabilities'
 
-export { VERIFIED_CAPABILITIES }
+export {
+  VERIFIED_CAPABILITIES,
+  VERIFIED_STAGE1_CAPABILITIES,
+  VERIFIED_STAGE2_CAPABILITIES,
+}
 
 let testInjectedEvidence: ReadonlySet<string> | null = null
 

@@ -23,7 +23,7 @@ import { createCfService } from '../src/xlsx/cf/service'
 import { createCfMemory, CF_LIMITS } from '../src/xlsx/cf/limits'
 import { residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import type { XlsxSheet } from '../src/xlsx/types'
@@ -101,8 +101,9 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
     const auditVerified = new Set(
       report.perCapability.filter(c => c.disposition === 'verified').map(c => c.capabilityId),
     )
-    expect(VERIFIED_CAPABILITIES).toEqual(auditVerified)
-    expect(VERIFIED_CAPABILITIES.size).toBe(110)
+    const stage1Verified = VERIFIED_STAGE1_CAPABILITIES ?? VERIFIED_CAPABILITIES
+    expect(stage1Verified).toEqual(auditVerified)
+    expect(stage1Verified.size).toBe(110)
   })
 
   it('every evidence.allows literal under src/ resolves to a catalog ID (C1)', () => {
