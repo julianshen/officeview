@@ -1883,6 +1883,49 @@ export function evaluateBarSettingsProbe(rows: unknown): { ok: true } | { ok: fa
   return { ok: true }
 }
 
+const BAR_AXIS_READBACK: Readonly<Record<string, string>> = {
+  automatic: 'databar axis automatic',
+  middle: 'databar axis midpoint',
+  none: 'databar axis none',
+}
+
+/**
+ * The attributes Excel should report for one rule: the base attributes overlaid by the x14 companion's (the paired
+ * precedence hypothesis of Ruling S3-Q is exactly what the readback then confirms or refutes). `ruleMarkers` are the
+ * markers of one rule: its legacy marker and, for a paired bar, its x14 companion.
+ */
+function effectiveBarAttrs(ruleMarkers: readonly CfPartMarker[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const m of ruleMarkers.filter(x => x.extension === 'legacy')) Object.assign(out, m.bar?.attrs)
+  for (const m of ruleMarkers.filter(x => x.extension === 'x14')) Object.assign(out, m.bar?.attrs)
+  return out
+}
+
+/**
+ * Compares one object-model readback row with what the pinned attributes (schema defaults applied) imply. `direction`
+ * is presence-only: its integer mapping is not known before capture. Returns the first disagreement.
+ */
+export function barSettingsMismatch(row: Record<string, unknown>, attrs: Readonly<Record<string, string>>): string | undefined {
+  const eff = (name: string): string => normBarAttr(name, attrs[name]) ?? ''
+  const expected: Array<[string, string]> = [
+    ['minPointPercent', eff('minLength')],
+    ['maxPointPercent', eff('maxLength')],
+    ['fillType', eff('gradient') === '1' ? 'databar fill gradient' : 'databar fill solid'],
+    ['borderType', eff('border') === '1' ? 'databar border solid' : 'databar border none'],
+    ['axis', BAR_AXIS_READBACK[eff('axisPosition')] ?? `unknown axisPosition ${eff('axisPosition')}`],
+    ['showValue', eff('showValue') === '1' ? 'true' : 'false'],
+    ['negativeColorType', eff('negativeBarColorSameAsPositive') === '1' ? 'databar color type same as positive' : 'databar color type color'],
+  ]
+  for (const [field, want] of expected) {
+    const have = row[field]
+    if (isMissingSetting(have)) return `readback ${field} is missing (authored ${want})`
+    const norm = (v: string): string => (field === 'minPointPercent' || field === 'maxPointPercent' ? String(Number(v)) : v.trim().toLowerCase())
+    if (norm(String(have)) !== norm(want)) return `readback ${field} "${String(have)}" disagrees with the authored "${want}"`
+  }
+  if (isMissingSetting(row.direction)) return 'readback direction is missing'
+  return undefined
+}
+
 type BarEvidenceClaim = NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>
 const noBarEvidence: BarEvidenceClaim = { settings: 'unverified', geometry: 'unverified' }
 
@@ -1938,6 +1981,18 @@ function verifyBarCapture(
       if (cap === 'bar:settings-precondition-probe') {
         const probe = evaluateBarSettingsProbe(settingsRows)
         if (!probe.ok) return fail('bar-settings-unobserved', `Precondition probe failed: ${probe.reason}`)
+      }
+      // The readback row of each rule must agree with what its markers pin (the pairing row's "readback must agree").
+      const rows = settingsRows as Array<Record<string, unknown>>
+      for (const m of c.markers.filter(x => x.capabilityId === cap && x.bar)) {
+        const sibling = m.priority !== undefined ? m : c.markers.find(x => x.extension === 'legacy' && x.bar && x.sqref === m.sqref && x.priority !== undefined)
+        const priority = sibling?.priority
+        if (priority === undefined) return fail('bar-settings-unobserved', `Settings capability ${cap}: no priority links marker ${m.sqref} to a readback row`)
+        const ruleMarkers = c.markers.filter(x => x.bar && x.sqref === m.sqref && (x.priority === priority || (x.extension === 'x14' && x.priority === undefined && x.bar.pairing === 'paired')))
+        const row = rows.find(r => Number(r?.priority) === priority)
+        if (!row) return fail('bar-settings-unobserved', `Settings capability ${cap}: the readback has no row for priority ${priority}`)
+        const mismatch = barSettingsMismatch(row, effectiveBarAttrs(ruleMarkers))
+        if (mismatch) return fail('bar-settings-unobserved', `Settings capability ${cap} on ${m.sqref}: ${mismatch}`)
       }
       outcome.verified.push(cap)
       continue

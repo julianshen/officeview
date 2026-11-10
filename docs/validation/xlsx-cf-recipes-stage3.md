@@ -47,7 +47,7 @@ bun -e "import('./scripts/cf-refs/capture.ts').then(m => console.log(['tell appl
 
 ## 2. The remaining cases, in this order
 
-Run each pair, then check the case result before moving on. Order: pairing, lengths, degenerate, axis-negative, rendering, geometry, showvalue, participation, scope, composition.
+Run each pair, then check the case result before moving on. Order: pairing (also holds the whole-column scope rule), lengths, degenerate, axis-negative, rendering, geometry, showvalue, participation, scope, composition.
 
 ```
 bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-pairing --refresh-clock-date

@@ -3819,6 +3819,8 @@ export interface S3Fixture {
   extraCells?: readonly { ref: string; v: S3Value }[]
   dxfsXml?: string
   dateStyle?: boolean
+  /** Positive ref -> control ref when the control cannot sit one control offset lower (a whole-column rule formats that cell too). */
+  controlCells?: Readonly<Record<string, string>>
   calibration?: CfOracleCase['barCalibration']
   status: 'recipe-pending' | 'unsupported'
   reason: string
@@ -3958,8 +3960,9 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         col('J', 'AllNegative', [-100, -80, -60, -40, -20]),
       ],
       rules: [
-        bar('bar:lengths-default-10-90', 'B2:B6', 1, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
-        bar('bar:lengths-explicit-0-100', 'C2:C6', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        // The cell at 50 cannot tell 10/90 from 0/100 (every hypothesis puts the edge at the midpoint), so it is not designated.
+        bar('bar:lengths-default-10-90', 'B2:B6', 1, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE }, cells: ['B2', 'B3', 'B5', 'B6'] }),
+        bar('bar:lengths-explicit-0-100', 'C2:C6', 2, { x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['C2', 'C3', 'C5', 'C6'] }),
         bar('bar:bounds-min-max', 'D2:D6', 3, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
         bar('bar:bounds-num', 'E2:E6', 4, { baseCfvo: [{ type: 'num', val: '20' }, { type: 'num', val: '80' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
         bar('bar:bounds-percent', 'F2:F6', 5, { baseCfvo: [{ type: 'percent', val: '25' }, { type: 'percent', val: '75' }], x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
@@ -4121,7 +4124,7 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
   // 9. stage3-bar-scope
   rect(
     'stage3-bar-scope',
-    'Disjoint B2:B4 D2:D4 over different values; duplicate blocks with different fills; a manually hidden row holding the extreme value; an autofilter-hidden extreme; a merged B8:C9 with non-equal values; whole-column scope with no value in a hidden row.',
+    'Disjoint B2:B4 D2:D4 over different values; duplicate blocks with different fills; a manually hidden row holding the extreme value; an autofilter-hidden extreme; a merged B8:C9 with non-equal values. The whole-column rule lives in stage3-bar-pairing: this sheet hides rows 5 and 6, and the hidden-row gate is rect-based, so a whole-column rule here could not be told from hidden-row gating (the Stage 2 F-2 lesson).',
     {
       n: 5,
       hiddenRows: [5, 6],
@@ -4134,7 +4137,6 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         col('E', 'DupeBlocks', [10, 20, 30]),
         col('F', 'HiddenRow', [10, 20, 30, 40, 100]),
         col('G', 'FilterHidden', [10, 20, 30, 100, 30]),
-        col('H', 'WholeCol', [10, 50, 90]),
       ],
       extraCells: [
         { ref: 'B8', v: 100 },
@@ -4149,7 +4151,6 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         bar('bar:scope-hidden-row', 'F2:F6', 4, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
         bar('bar:scope-autofilter-hidden-row', 'G2:G6', 5, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
         bar('bar:scope-merged-cell', 'B8:C9', 6, { x14Attrs: SOLID_0_100, colors: { fill: BLUE }, cells: ['B8'] }),
-        bar('bar:scope-whole-column', 'H1:H1048576', 7, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
       ],
     },
   ),
@@ -4199,13 +4200,18 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
   // 11. stage3-bar-pairing
   rect(
     'stage3-bar-pairing',
-    'The three x14 shapes: Excel 2010 paired form (base minLength 10 / maxLength 90 with x14 autoMin/autoMax at 0/100); standalone x14 with <x14:fillColor> and @priority; base-only. Settings readback must agree across the three shapes.',
+    'The three x14 shapes: Excel 2010 paired form (base minLength 10 / maxLength 90 with x14 autoMin/autoMax at 0/100); standalone x14 with <x14:fillColor> and @priority; base-only. Settings readback must agree across the three shapes. Also carries the whole-column scope rule (E:E, no hidden rows on this sheet).',
     {
       n: 5,
+      // The whole-column rule sits here because this sheet hides no rows (see stage3-bar-scope). A whole-column rule also
+      // formats its own control-block cells, so the unformatted control is the same-content neighbour column F.
+      controlCells: { E2: 'F2', E3: 'F3', E4: 'F4' },
       cols: [
         col('B', 'Paired', VALUES_5),
         col('C', 'Standalone', VALUES_5),
         col('D', 'BaseOnly', VALUES_5),
+        col('E', 'WholeCol', [10, 50, 90]),
+        col('F', 'WholeColCtrl', [10, 50, 90]),
       ],
       rules: [
         bar('bar:pairing-paired', 'B2:B6', 1, {
@@ -4217,6 +4223,7 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         }),
         bar('bar:pairing-standalone', 'C2:C6', 2, { pairing: 'standalone', x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
         bar('bar:pairing-base-only', 'D2:D6', 3, { pairing: 'base-only', colors: { fill: BLUE } }),
+        bar('bar:scope-whole-column', 'E1:E1048576', 4, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
       ],
     },
   ),
@@ -4355,11 +4362,12 @@ function s3Case(fx: S3Fixture): CfOracleCase {
     for (const ref of refs) designated.set(ref, true)
   }
   const positive = [...designated.keys()]
+  const controlOf = (ref: string): string => fx.controlCells?.[ref] ?? s3ControlRef(fx, ref)
   const cells: CfCellExpectation[] = []
   for (const ref of positive) {
     cells.push({
       ref,
-      controlRef: s3ControlRef(fx, ref),
+      controlRef: controlOf(ref),
       matched: true,
       barApplied: true,
       fillSource: 'unverified',
@@ -4367,7 +4375,7 @@ function s3Case(fx: S3Fixture): CfOracleCase {
     })
   }
   for (const ref of positive) {
-    cells.push({ ref: s3ControlRef(fx, ref), controlRef: ref, matched: false, barApplied: false, fillSource: 'unverified', note: 'same-content unformatted control' })
+    cells.push({ ref: controlOf(ref), controlRef: ref, matched: false, barApplied: false, fillSource: 'unverified', note: 'same-content unformatted control' })
   }
   const unsupported = fx.status === 'unsupported'
   return {
@@ -4386,9 +4394,9 @@ function s3Case(fx: S3Fixture): CfOracleCase {
       savedSha256: '',
       provenance: 'seed-hypothesis',
       positiveRefs: unsupported ? [] : positive,
-      negativeRefs: unsupported ? [] : positive.map(ref => s3ControlRef(fx, ref)),
+      negativeRefs: unsupported ? [] : positive.map(controlOf),
       cells: unsupported
-        ? positive.map(ref => ({ ref, controlRef: s3ControlRef(fx, ref), matched: false, barApplied: false, fillSource: 'unverified' as const, note: 'unresolved shape fails closed (no bar)' }))
+        ? positive.map(ref => ({ ref, controlRef: controlOf(ref), matched: false, barApplied: false, fillSource: 'unverified' as const, note: 'unresolved shape fails closed (no bar)' }))
         : cells,
     },
     captures: unsupported

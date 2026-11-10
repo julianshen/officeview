@@ -10147,12 +10147,10 @@
         "positiveRefs": [
           "B2",
           "B3",
-          "B4",
           "B5",
           "B6",
           "C2",
           "C3",
-          "C4",
           "C5",
           "C6",
           "D2",
@@ -10190,12 +10188,10 @@
         "negativeRefs": [
           "B8",
           "B9",
-          "B10",
           "B11",
           "B12",
           "C8",
           "C9",
-          "C10",
           "C11",
           "C12",
           "D8",
@@ -10254,17 +10250,6 @@
             }
           },
           {
-            "ref": "B4",
-            "controlRef": "B10",
-            "matched": true,
-            "barApplied": true,
-            "fillSource": "unverified",
-            "barEvidence": {
-              "settings": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
             "ref": "B5",
             "controlRef": "B11",
             "matched": true,
@@ -10300,17 +10285,6 @@
           {
             "ref": "C3",
             "controlRef": "C9",
-            "matched": true,
-            "barApplied": true,
-            "fillSource": "unverified",
-            "barEvidence": {
-              "settings": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "C4",
-            "controlRef": "C10",
             "matched": true,
             "barApplied": true,
             "fillSource": "unverified",
@@ -10699,14 +10673,6 @@
             "note": "same-content unformatted control"
           },
           {
-            "ref": "B10",
-            "controlRef": "B4",
-            "matched": false,
-            "barApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
             "ref": "B11",
             "controlRef": "B5",
             "matched": false,
@@ -10733,14 +10699,6 @@
           {
             "ref": "C9",
             "controlRef": "C3",
-            "matched": false,
-            "barApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "C10",
-            "controlRef": "C4",
             "matched": false,
             "barApplied": false,
             "fillSource": "unverified",
@@ -16748,11 +16706,11 @@
     {
       "id": "stage3-bar-scope",
       "stage": 3,
-      "question": "Disjoint B2:B4 D2:D4 over different values; duplicate blocks with different fills; a manually hidden row holding the extreme value; an autofilter-hidden extreme; a merged B8:C9 with non-equal values; whole-column scope with no value in a hidden row.",
+      "question": "Disjoint B2:B4 D2:D4 over different values; duplicate blocks with different fills; a manually hidden row holding the extreme value; an autofilter-hidden extreme; a merged B8:C9 with non-equal values. The whole-column rule lives in stage3-bar-pairing: this sheet hides rows 5 and 6, and the hidden-row gate is rect-based, so a whole-column rule here could not be told from hidden-row gating (the Stage 2 F-2 lesson).",
       "input": "tests/fixtures/xlsx-cf/inputs/stage3-bar-scope.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage3-bar-scope.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:H18",
+      "range": "A1:G18",
       "requiredAppearances": [
         "screen"
       ],
@@ -17050,60 +17008,11 @@
             },
             "colors": {}
           }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "legacy",
-          "capabilityId": "bar:scope-whole-column",
-          "sqref": "H1:H1048576",
-          "ruleType": "dataBar",
-          "priority": 7,
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "min"
-              },
-              {
-                "type": "max"
-              }
-            ],
-            "attrs": {},
-            "colors": {
-              "fill": "FF0000FF"
-            }
-          }
-        },
-        {
-          "part": "xl/worksheets/sheet1.xml",
-          "extension": "x14",
-          "capabilityId": "bar:scope-whole-column",
-          "sqref": "H1:H1048576",
-          "ruleType": "dataBar",
-          "formulas": [],
-          "bar": {
-            "pairing": "paired",
-            "cfvo": [
-              {
-                "type": "min"
-              },
-              {
-                "type": "max"
-              }
-            ],
-            "attrs": {
-              "minLength": "0",
-              "maxLength": "100",
-              "gradient": "0"
-            },
-            "colors": {}
-          }
         }
       ],
       "expected": {
-        "inputSha256": "97c2e2a0bded6f87369fb8456ae8a0f945d97d4eaaf90eb5d45bf8876c420617",
-        "savedSha256": "97c2e2a0bded6f87369fb8456ae8a0f945d97d4eaaf90eb5d45bf8876c420617",
+        "inputSha256": "b2ccb853a341583a4733d9dc74297b253346fdc01070e52d06409e139de1bd21",
+        "savedSha256": "b2ccb853a341583a4733d9dc74297b253346fdc01070e52d06409e139de1bd21",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -17121,10 +17030,7 @@
           "G2",
           "G3",
           "G4",
-          "B8",
-          "H2",
-          "H3",
-          "H4"
+          "B8"
         ],
         "negativeRefs": [
           "B11",
@@ -17142,10 +17048,7 @@
           "G11",
           "G12",
           "G13",
-          "B17",
-          "H11",
-          "H12",
-          "H13"
+          "B17"
         ],
         "cells": [
           {
@@ -17325,39 +17228,6 @@
             }
           },
           {
-            "ref": "H2",
-            "controlRef": "H11",
-            "matched": true,
-            "barApplied": true,
-            "fillSource": "unverified",
-            "barEvidence": {
-              "settings": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H3",
-            "controlRef": "H12",
-            "matched": true,
-            "barApplied": true,
-            "fillSource": "unverified",
-            "barEvidence": {
-              "settings": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
-            "ref": "H4",
-            "controlRef": "H13",
-            "matched": true,
-            "barApplied": true,
-            "fillSource": "unverified",
-            "barEvidence": {
-              "settings": "unverified",
-              "geometry": "unverified"
-            }
-          },
-          {
             "ref": "B11",
             "controlRef": "B2",
             "matched": false,
@@ -17480,30 +17350,6 @@
           {
             "ref": "B17",
             "controlRef": "B8",
-            "matched": false,
-            "barApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H11",
-            "controlRef": "H2",
-            "matched": false,
-            "barApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H12",
-            "controlRef": "H3",
-            "matched": false,
-            "barApplied": false,
-            "fillSource": "unverified",
-            "note": "same-content unformatted control"
-          },
-          {
-            "ref": "H13",
-            "controlRef": "H4",
             "matched": false,
             "barApplied": false,
             "fillSource": "unverified",
@@ -18793,11 +18639,11 @@
     {
       "id": "stage3-bar-pairing",
       "stage": 3,
-      "question": "The three x14 shapes: Excel 2010 paired form (base minLength 10 / maxLength 90 with x14 autoMin/autoMax at 0/100); standalone x14 with <x14:fillColor> and @priority; base-only. Settings readback must agree across the three shapes.",
+      "question": "The three x14 shapes: Excel 2010 paired form (base minLength 10 / maxLength 90 with x14 autoMin/autoMax at 0/100); standalone x14 with <x14:fillColor> and @priority; base-only. Settings readback must agree across the three shapes. Also carries the whole-column scope rule (E:E, no hidden rows on this sheet).",
       "input": "tests/fixtures/xlsx-cf/inputs/stage3-bar-pairing.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage3-bar-pairing.xlsx",
       "sheet": "Sheet1",
-      "range": "A1:D12",
+      "range": "A1:F12",
       "requiredAppearances": [
         "screen"
       ],
@@ -18905,11 +18751,60 @@
               "fill": "FF0000FF"
             }
           }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:scope-whole-column",
+          "sqref": "E1:E1048576",
+          "ruleType": "dataBar",
+          "priority": 4,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:scope-whole-column",
+          "sqref": "E1:E1048576",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {}
+          }
         }
       ],
       "expected": {
-        "inputSha256": "7adbebfd1feb2aa9551ecd3fabba942ac33aca66be03df7c30444d92ce2ba4ee",
-        "savedSha256": "7adbebfd1feb2aa9551ecd3fabba942ac33aca66be03df7c30444d92ce2ba4ee",
+        "inputSha256": "c7547cf22912a87358153127208a2fa8ee6a15194f630b0b1a7cb799be24e871",
+        "savedSha256": "c7547cf22912a87358153127208a2fa8ee6a15194f630b0b1a7cb799be24e871",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -18926,7 +18821,10 @@
           "D3",
           "D4",
           "D5",
-          "D6"
+          "D6",
+          "E2",
+          "E3",
+          "E4"
         ],
         "negativeRefs": [
           "B8",
@@ -18943,7 +18841,10 @@
           "D9",
           "D10",
           "D11",
-          "D12"
+          "D12",
+          "F2",
+          "F3",
+          "F4"
         ],
         "cells": [
           {
@@ -19112,6 +19013,39 @@
             }
           },
           {
+            "ref": "E2",
+            "controlRef": "F2",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E3",
+            "controlRef": "F3",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E4",
+            "controlRef": "F4",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
             "ref": "B8",
             "controlRef": "B2",
             "matched": false,
@@ -19226,6 +19160,30 @@
           {
             "ref": "D12",
             "controlRef": "D6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F2",
+            "controlRef": "E2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F3",
+            "controlRef": "E3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F4",
+            "controlRef": "E4",
             "matched": false,
             "barApplied": false,
             "fillSource": "unverified",
