@@ -484,6 +484,7 @@ export function measureCfCellBytes(cell: Pick<CfCellStateWire, 'properties'> & P
   if (cell.scale !== undefined) {
     // 16 prop slot + 24 scale object + 24 ruleId + 24 argb = 88 bytes
     bytes += 16 + 24 + (16 + 8) + (16 + 8)
+    if (cell.scale.fraction !== undefined) bytes += 16 + 8
   }
   return bytes
 }
