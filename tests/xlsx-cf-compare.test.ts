@@ -147,3 +147,29 @@ describe('print Paintable carries CF fill', () => {
     expect(pink).toBeGreaterThan(500)
   }, 60000)
 })
+
+describe('Stage 2 scale cases verify exact Excel-observed fills on interactive and paged adapters', () => {
+  for (const mode of ['interactive', 'paged'] as const) {
+    it(`${mode}: every measured scale case passes against observed fills`, async () => {
+      const manifest = loadManifest()
+      for (const c of manifest.cases.filter(entry => entry.stage === 2 && entry.status === 'measured')) {
+        const res = await compareCfCase(c, mode, { rootDir: REPO_ROOT })
+        expect(res.outcome, `${c.id}: ${res.reason}`).toBe('pass')
+        expect(res.outputHash).toMatch(/^[0-9a-f]{64}$/)
+      }
+    }, 120000)
+  }
+
+  it('a wrong painted fill fails against the observed sidecar (mutant)', async () => {
+    const { verifyCaseCells } = await import('../scripts/cf-compare')
+    const c = loadManifest().cases.find(entry => entry.id === 'stage2-scale-interpolation')!
+    const sidecar = JSON.parse(readFileSync(resolve(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb?: string }> }
+    const target = sidecar.observedCells.find(cell => cell.fillRgb && cell.fillRgb !== 'FFFFFFFF')!
+    const { parseA1 } = await import('../scripts/cf-refs/verify')
+    const pos = parseA1(target.ref)!
+    const mismatch = verifyCaseCells(c, REPO_ROOT, (row, col) => row === pos.row && col === pos.col
+      ? { applied: true, style: { fillColor: 'FF000000' } }
+      : { applied: false, unresolved: true })
+    expect(mismatch).toContain(`Cell ${target.ref} observed Excel fill`)
+  })
+})
