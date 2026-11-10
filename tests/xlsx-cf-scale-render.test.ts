@@ -187,7 +187,7 @@ describe('Task 16 — All-view painting and gridlines', () => {
           const fullCtx = fullCanvas.getContext('2d')
           fullCtx.scale(zoom * dpr, zoom * dpr)
 
-          type FillCall = { fillStyle: string; x: number; y: number; w: number; h: number }
+          type FillCall = { fillStyle: string; x: number; y: number; w: number; h: number; tileX?: number; tileY?: number }
           const fullFills: FillCall[] = []
           const origFullFillRect = fullCtx.fillRect.bind(fullCtx)
           fullCtx.fillRect = (x, y, w, h) => {
@@ -212,7 +212,15 @@ describe('Task 16 — All-view painting and gridlines', () => {
                 const t = tileCtx.getTransform()
                 const sourceX = tx + (t.e / (zoom * dpr)) + x
                 const sourceY = ty + (t.f / (zoom * dpr)) + y
-                tiledFills.push({ fillStyle: String(tileCtx.fillStyle), x: Math.round(sourceX), y: Math.round(sourceY), w: Math.round(w), h: Math.round(h) })
+                tiledFills.push({
+                  fillStyle: String(tileCtx.fillStyle),
+                  x: Math.round(sourceX),
+                  y: Math.round(sourceY),
+                  w: Math.round(w),
+                  h: Math.round(h),
+                  tileX: tx,
+                  tileY: ty,
+                })
                 origTileFillRect(x, y, w, h)
               }
 
@@ -227,23 +235,79 @@ describe('Task 16 — All-view painting and gridlines', () => {
             }
           }
 
-          // Verify that for cell B2 (row 1, col 1), both full and tiled renders carry the exact same scale fill
+          // Verify that for cell B2 (row 1, col 1), both full and tiled renders carry the exact same scale fill.
+          // Cell B2 crosses the 256px tile seam: both the first tile (tx=0) and the seam tile (tx=256) must carry the fill.
           const b2FillColor = batch!.layer.styleAt(1, 1, undefined)?.fillColor
           expect(b2FillColor).toBeDefined()
           const expectedFillHex = `#${b2FillColor!.slice(2).toLowerCase()}`
 
           const fullB2 = fullFills.find(f => f.fillStyle.toLowerCase() === expectedFillHex)
-          const tiledB2 = tiledFills.find(f => f.fillStyle.toLowerCase() === expectedFillHex)
+          const firstTileB2 = tiledFills.find(f => f.tileX === 0 && f.fillStyle.toLowerCase() === expectedFillHex)
+          const seamTileB2 = tiledFills.find(f => f.tileX === tileSize && f.fillStyle.toLowerCase() === expectedFillHex)
 
           expect(fullB2, `full render at zoom=${zoom} dpr=${dpr} must have B2 fill`).toBeDefined()
-          expect(tiledB2, `tiled render at zoom=${zoom} dpr=${dpr} must have B2 fill`).toBeDefined()
-          expect(tiledB2!.fillStyle).toBe(fullB2!.fillStyle)
-          expect(tiledB2!.x).toBe(fullB2!.x)
-          expect(tiledB2!.y).toBe(fullB2!.y)
-          expect(tiledB2!.w).toBe(fullB2!.w)
-          expect(tiledB2!.h).toBe(fullB2!.h)
+          expect(firstTileB2, `first tile (tx=0) render at zoom=${zoom} dpr=${dpr} must have B2 fill`).toBeDefined()
+          expect(seamTileB2, `seam (second) tile (tx=${tileSize}) render at zoom=${zoom} dpr=${dpr} must have B2 fill`).toBeDefined()
+          expect(firstTileB2!.fillStyle).toBe(fullB2!.fillStyle)
+          expect(seamTileB2!.fillStyle).toBe(fullB2!.fillStyle)
+          expect(firstTileB2!.x).toBe(fullB2!.x)
+          expect(firstTileB2!.y).toBe(fullB2!.y)
+          expect(firstTileB2!.w).toBe(fullB2!.w)
+          expect(firstTileB2!.h).toBe(fullB2!.h)
         }
       }
+
+      batch?.dispose()
+    })
+  })
+
+  it('RED mutant proof: omitting CF fill on non-first tiles fails the seam tile check', async () => {
+    // Proves that if CF fill is skipped on non-first tiles (tx > 0), the seam tile assertion fails.
+    await withInjectedCfEvidence(SCALE_EVIDENCE, async () => {
+      const sheet = makeScaleSheet(1, 3, 1, 2)
+      sheet.cols = [
+        { min: 0, max: 0, widthChars: 30 },
+        { min: 1, max: 1, widthChars: 35 },
+      ]
+      const metrics = computeMetrics(sheet)
+      const geometry = buildSheetGeometry(sheet)
+      const batch = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      const tileSize = 256
+      const b2FillColor = batch!.layer.styleAt(1, 1, undefined)?.fillColor!
+      const expectedFillHex = `#${b2FillColor.slice(2).toLowerCase()}`
+
+      const mutantTiledFills: Array<{ tileX: number; fillStyle: string }> = []
+      const cache = new LayoutCache()
+
+      for (let tx = 0; tx < metrics.widthPx; tx += tileSize) {
+        for (let ty = 0; ty < metrics.heightPx; ty += tileSize) {
+          const tileCanvas = createCanvas(tileSize, tileSize)
+          const tileCtx = tileCanvas.getContext('2d')
+          const origTileFillRect = tileCtx.fillRect.bind(tileCtx)
+          tileCtx.fillRect = (x, y, w, h) => {
+            mutantTiledFills.push({ tileX: tx, fillStyle: String(tileCtx.fillStyle) })
+            origTileFillRect(x, y, w, h)
+          }
+
+          // The mutant: skips CF fill on non-first tiles (tx > 0)
+          const mutantPrepared = tx === 0 ? { conditionalFormatting: batch } : undefined
+          renderSheetViewport(
+            sheet,
+            tileCtx as never,
+            geometry,
+            { box: { x: tx, y: ty, width: tileSize, height: tileSize }, zoom: 1, deviceScale: 1 },
+            mutantPrepared,
+            { cache },
+          )
+        }
+      }
+
+      const firstTile = mutantTiledFills.find(f => f.tileX === 0 && f.fillStyle.toLowerCase() === expectedFillHex)
+      const seamTile = mutantTiledFills.find(f => f.tileX === tileSize && f.fillStyle.toLowerCase() === expectedFillHex)
+
+      // First tile carries fill, but seam tile fails to carry it under the mutant
+      expect(firstTile, 'mutant: first tile still has fill').toBeDefined()
+      expect(seamTile, 'mutant: seam tile must NOT have fill under non-first tile omission').toBeUndefined()
 
       batch?.dispose()
     })
