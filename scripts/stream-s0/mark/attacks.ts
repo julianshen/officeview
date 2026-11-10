@@ -53,3 +53,28 @@ export function difference(a: Bitmap, b: Bitmap): Bitmap {
   for (let i = 3; i < result.data.length; i += 4) result.data[i] = 255
   return result
 }
+/** Bilinear inverse warp onto a same-size canvas; source points outside the
+ * bitmap read opaque white (a screenshot of a page on a white desk). */
+function warp(b: Bitmap, source: (x: number, y: number) => [number, number]): Bitmap {
+  checkBitmap(b)
+  const { width, height } = b, data = new Uint8ClampedArray(width * height * 4)
+  const at = (x: number, y: number, c: number) => x < 0 || y < 0 || x >= width || y >= height ? 255 : b.data[(y * width + x) * 4 + c]!
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const [sx, sy] = source(x + 0.5, y + 0.5), u = sx - 0.5, v = sy - 0.5, x0 = Math.floor(u), y0 = Math.floor(v), tx = u - x0, ty = v - y0
+    for (let c = 0; c < 4; c++) data[(y * width + x) * 4 + c] = (1 - ty) * ((1 - tx) * at(x0, y0, c) + tx * at(x0 + 1, y0, c)) + ty * ((1 - tx) * at(x0, y0 + 1, c) + tx * at(x0 + 1, y0 + 1, c))
+  }
+  return { width, height, data }
+}
+/** Rotate by `degrees` (counter-clockwise) about the centre, same size. */
+export function rotate(b: Bitmap, degrees: number): Bitmap {
+  if (!Number.isFinite(degrees)) throw new Error('Invalid rotation')
+  const t = degrees * Math.PI / 180, cos = Math.cos(t), sin = Math.sin(t), cx = b.width / 2, cy = b.height / 2
+  return warp(b, (x, y) => [cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos])
+}
+/** Keystone (trapezoid) perspective: the top edge shrinks by `frac` of the
+ * width about the vertical centre line, the bottom edge is unchanged. */
+export function keystone(b: Bitmap, frac: number): Bitmap {
+  if (!Number.isFinite(frac) || frac < 0 || frac >= 1) throw new Error('Invalid keystone')
+  const cx = b.width / 2
+  return warp(b, (x, y) => { const s = 1 - frac * (1 - y / b.height); return [cx + (x - cx) / s, y] })
+}

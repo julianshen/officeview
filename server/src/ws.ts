@@ -4,6 +4,7 @@
  * token + capability checks, §14 rate gates, and the §6.2 rule-8 close-code
  * registry. No HTTP document route exists: every non-upgrade request is 404.
  */
+import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import type { Server, ServerWebSocket } from 'bun'
 import { encodeMessage } from '../../src/stream/frame'
@@ -60,7 +61,7 @@ export interface StreamServerOptions {
   path?: string
   /** §14 document-cache ceiling (tests shrink it). */
   documentCacheBytes?: number
-  /** Audit table (tests preset token exhaustion). */
+  /** Audit table over its durable store (default: in-memory). */
   audit?: AuditTable
   /** TEST-ONLY: wedge each Layer-1 encode (forwarded only by a testHooks pool). */
   encodeHangMs?: number
@@ -202,10 +203,14 @@ export function createStreamServer(o: StreamServerOptions) {
       const token = await issueToken(o.keys.kToken, { docRef, sid, ttlSec: ttl, now: nowSec() })
       if (gone(ws)) return
       // Commit synchronously: nothing below awaits, so no close can interleave.
-      const s = table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt: nowSec() })
+      // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
+      const startedAt = nowSec()
+      try {
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+      } catch { return close(ws, 'policy-refused') }
+      table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
       sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
-      audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt: s.startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null })
       ws.data.sid = sid
       committed = true
       sendManifest(ws, reqId, sid, token.token)
@@ -339,10 +344,11 @@ export function createStreamServer(o: StreamServerOptions) {
       if (typeof raster === 'string') return refuse(ws, reqId, raster)
       unit = raster
     }
-    let unmarked: string | undefined
+    let unmarked: string | undefined, canonical: Uint8Array | undefined
     if (unit.kind === 'raster') {
       // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
       if (sd.forensic) {
+        canonical = unit.png
         const m = await markUnit(s.sid, sd, unitIndex as number, scale as number, unit)
         if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
         if (typeof m === 'string') return refuse(ws, reqId, m)
@@ -351,11 +357,13 @@ export function createStreamServer(o: StreamServerOptions) {
       messages = prepareUnit(reqId, unitIndex as number, unit)
     }
     if (!messages) return refuse(ws, reqId, 'policy-refused')
+    // Durable before anything about this unit goes out (never a delivered mark without a record); a failed write refuses it.
+    if (canonical) {
+      try { audit.recordDelivery({ sid: s.sid, unitIndex: unitIndex as number, scale: scale as number, status: unmarked ? 'unmarked' : 'l1', ...(unmarked ? { reason: unmarked } : {}), refSha256: createHash('sha256').update(canonical).digest('hex') }) } catch { return refuse(ws, reqId, 'policy-refused') }
+    }
     if (unit.kind === 'raster' && unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
     if (unmarked) send(ws, { reqId, type: 'diag', code: 'forensic-unmarked', unitIndex, reason: unmarked })
     sendFrames(ws, messages)
-    // Recorded only after the frames went to this sid's live socket (never on issuance or a dropped result).
-    if (unit.kind === 'raster' && sd.forensic) audit.noteDelivered(s.sid, unmarked ? 'unmarked' : 'l1')
   }
 
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */

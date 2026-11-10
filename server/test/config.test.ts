@@ -14,15 +14,20 @@ describe('config', () => {
   })
   it('demo without a key generates an ephemeral 32-byte key', () => {
     const c = loadConfig({}, ['--demo', '--origin', 'http://a,http://b', '--doc-dir', 'corpus'])
-    expect(c.masterKey.length).toBe(32)
+    expect(c.keyring.keys.get(1)!.length).toBe(32)
     expect(c.ephemeral).toBe(true)
     expect(c.originAllowlist).toEqual(['http://a', 'http://b'])
     expect(c.docDir).toBe('corpus')
   })
+  it('refuses to start outside --demo without OV_AUDIT_DB; demo keeps an in-memory store', () => {
+    try { loadConfig({ OV_STREAM_KEY: key(32) }, []); throw new Error('no throw') } catch (e) { expect((e as ConfigError).code).toBe('missing-audit') }
+    expect(loadConfig({ OV_STREAM_KEY: key(32), OV_AUDIT_DB: '/var/ov/audit.db' }, []).auditDb).toBe('/var/ov/audit.db')
+    expect(loadConfig({ OV_AUDIT_DB: '/var/ov/audit.db' }, ['--demo']).auditDb).toBe(':memory:')
+  })
   it('a supplied key is used and not ephemeral', () => {
-    const c = loadConfig({ OV_STREAM_KEY: key(32) }, [])
+    const c = loadConfig({ OV_STREAM_KEY: key(32), OV_AUDIT_DB: ':memory:' }, [])
     expect(c.ephemeral).toBe(false)
-    expect(c.masterKey[0]).toBe(7)
+    expect(c.keyring.keys.get(1)![0]).toBe(7)
   })
 })
 

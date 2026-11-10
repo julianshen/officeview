@@ -13,7 +13,29 @@ bun run test:server                 # bun test (napi preload via bunfig)
 ```
 
 Outside `--demo` the server refuses to start without `OV_STREAM_KEY` (32 bytes,
-base64) and an allowed origin (`--origin` / `OV_STREAM_ORIGINS`).
+base64) or `OV_STREAM_KEYRING`, and an allowed origin (`--origin` /
+`OV_STREAM_ORIGINS`). Setting both key variables is an error.
+
+**Key rotation.** `OV_STREAM_KEYRING=<path>` names a JSON file
+`{"current": 2, "keys": {"1": "<base64 32 B>", "2": "<base64 32 B>"}}`
+(generations are integers 1..255). New sessions are issued under `current`;
+each audit row records its `keyGeneration`. To rotate: add a new generation,
+switch `current` to it, and keep every older generation until the audit rows
+issued under it have expired, so leaked captures from that era stay traceable.
+`OV_STREAM_KEY` alone is a keyring with generation 1.
+
+**Audit store.** `OV_AUDIT_DB=<path>` (required outside `--demo`; `--demo`
+keeps an in-memory store) names a SQLite file (`bun:sqlite`, WAL,
+`synchronous=FULL`, created mode 0600; keep it on local disk and back it up
+with its `-wal`/`-shm` files). It holds the write-once audit rows, one
+delivery record per `(sid, unit, scale)` served to a forensic session (status
+`l1` or `unmarked` with its reason, plus the SHA-256 of the canonical PNG the
+mark was applied to), the per-generation token counters, and the trace tool's
+detection log. Ordering: a session's row is durable before its manifest is
+sent, and a delivery record before its frames; a failed write refuses (HELLO
+closes 4009 `policy-refused`; a unit is refused `policy-refused`), never sends
+unrecorded. Rows and their deliveries are deleted after 90 days (at startup
+and hourly); token counters are never reset.
 
 - **One endpoint.** `GET /stream` WebSocket upgrade from an allowlisted
   `Origin`; every other HTTP request is 404. There is no file route.
@@ -43,7 +65,51 @@ at most 2 in flight per session. Units too small to carry 512 cells ship with
 the visible mark only and a `diag forensic-unmarked`. Integration proof on
 served bytes (ΔE00, §13.5 survival at the Stage-0 τ, unmarked captures never
 attributing): `docs/validation/streaming-s2.md`. Detection tooling, τ
-recalibration and audit persistence are Stage 2b.
+recalibration and audit persistence are Stage 2b; the τ table the trace tool
+ships (`server/src/detect/tau.ts`) and the Stage-2 gate (survival, null false
+attribution, collusion and capture-geometry batteries through `trace()` on
+served bytes) are in `docs/validation/streaming-s2b.md`.
+
+## Investigator tool: `detect` (Stage 2b)
+
+An authorized investigator gives the tool a leaked screenshot (PNG or JPEG),
+the document and the page, and gets one plain line per image. Run it from the
+repo root with the napi preload (the same backend the server uses):
+
+```bash
+OV_STREAM_KEY=<base64 master> bun --preload ./scripts/stream-s0/napi-preload.ts server/scripts/detect.ts \
+  --image leak1.png [--image leak2.jpg …] --doc deck.pptx --page 3 \
+  --audit-db /var/lib/officeview/audit.db [--keyring keyring.json] [--investigator "J. Doe"] [--json]
+```
+
+`--page` is 1-based. Keys come from `--keyring <file>` (same JSON as
+`OV_STREAM_KEYRING`), else `OV_STREAM_KEYRING` / `OV_STREAM_KEY`; every
+generation in the ring is tried. The audit store is opened in trace mode: rows
+and deliveries are never modified, and the store must already exist.
+
+One line per image, one of:
+
+```
+<image>: TRACED — session <sid>, viewer <id|unknown>, ip <ip>, started <UTC>, key generation <g>, page <N> (z 22.52, margin 21.49)
+<image>: POSSIBLE COLLUSION — candidates <sid> (z …), …; no single viewer named
+<image>: NO MATCH — mark below threshold (best z 5.68); nothing attributed
+<image>: NO USABLE SIGNAL — <reason>
+<image>: REFUSED — <count> candidates exceed the detector limit (4194303)
+```
+
+Reasons: no mark signal; geometry not supported (rotated, skewed,
+photographed); page never delivered marked; no audit record of the page being
+viewed; re-rendered page differs from what was served (renderer or font
+drift). A margin that cannot be computed (a single scored candidate) prints as
+`n/a`. `--json` prints `{ "image", "answer" }` per line, where `answer` is the
+tool's structured answer.
+
+Every image appends a detection log row (time, OS user, `--investigator`,
+image SHA-256, the document's per-generation refs, page, answer text, session)
+before its answer is shown. Key material is never printed or logged. Exit
+codes: 0 every image answered; 2 usage or configuration error; 1 internal
+error. The decision thresholds are the Stage-0 provisional values until the
+Stage-2b calibration.
 
 ## The browser side (Stage 1d)
 

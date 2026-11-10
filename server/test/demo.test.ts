@@ -1,5 +1,9 @@
 import { afterAll, describe, expect, it } from 'bun:test'
-import { resolve } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { AUDIT_RETENTION_SEC } from '../src/audit'
+import { AuditStore } from '../src/audit-store'
 import { demoHooks, safeDocPath } from '../src/demo-hooks'
 import { startServer } from '../src/main'
 import { Client } from './harness'
@@ -40,7 +44,19 @@ describe('demo hooks', () => {
 describe('demo server end to end', () => {
   it('refuses to start without a key outside --demo, and without an origin', async () => {
     await expect(startServer(['--doc-dir', corpusDir], {})).rejects.toThrow(/OV_STREAM_KEY/)
-    await expect(startServer(['--doc-dir', corpusDir], { OV_STREAM_KEY: btoa('k'.repeat(32)) })).rejects.toThrow(/origin/)
+    await expect(startServer(['--doc-dir', corpusDir], { OV_STREAM_KEY: btoa('k'.repeat(32)), OV_AUDIT_DB: ':memory:' })).rejects.toThrow(/origin/)
+  })
+  it('opens the OV_AUDIT_DB store outside --demo and expires old rows at startup', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-audit-')), path = join(dir, 'audit.db')
+    try {
+      const pre = AuditStore.open(path)
+      const row = { ip: '1.2.3.4', keyGeneration: 1, policyId: 'p', markSettings: { visible: 'off' as const, forensicRequested: false }, relaxed: false, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const } }
+      pre.putRow('old', { ...row, startedAt: 0 }); pre.putRow('fresh', { ...row, startedAt: Math.floor(Date.now() / 1000) - AUDIT_RETENTION_SEC + 3600 }); pre.close()
+      const s = await startServer(['--port', '0', '--doc-dir', corpusDir, '--origin', 'http://a'], { OV_STREAM_KEY: btoa('k'.repeat(32)), OV_AUDIT_DB: path })
+      expect(s.stream.audit.get('old')).toBeUndefined()
+      expect(s.stream.audit.get('fresh')).toBeDefined()
+      s.stop()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
   it('streams every unit of one file per format at scale 1, protected and relaxed', async () => {
     const s = await startServer(['--demo', '--port', '0', '--doc-dir', corpusDir], {}); servers.push(s)
