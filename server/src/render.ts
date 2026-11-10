@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-backend'
 import { OfficePackage } from '../../src/core/zip'
-import { paintWatermark, type WatermarkOptions } from '../../src/core/watermark'
+import { paintWatermark, setWatermarkMeasurer, type WatermarkOptions } from '../../src/core/watermark'
 import { detectAndParse } from '../../src/components/loadOfficeSource'
 import { getPaintables, type PaintableArray } from '../../src/render/paint'
 import { createRecorder, type ImageSnapshot } from '../../src/stream/record/recorder'
@@ -99,6 +99,22 @@ export function criticalChunksOnly(png: Uint8Array): Uint8Array {
   return out
 }
 
+/** Paints the visible mark from a clean watermark module state.
+ *
+ * `src/core/watermark.ts` keeps a process-global text-width cache keyed on the
+ * ROUNDED point size, but (with no measurer registered, as here) stores a
+ * width computed from the UNROUNDED pixel size. Two pages whose sizes round to
+ * the same pt (a 960-px deck and a 955-px sheet are both 50 pt) then share one
+ * entry, and whichever painted first sets the tile step of the other: the
+ * canonical a long-lived worker serves would depend on what it rendered
+ * before, and a fresh trace process would refuse the reference (F1, Stage 2b).
+ * `setWatermarkMeasurer(null)` is the module's only reset (measurer stays
+ * null, cache cleared), so every mark is laid out from its own page alone. */
+function paintMark(ctx: CanvasRenderingContext2D, page: { widthPx: number; heightPx: number }, mark: WatermarkOptions): void {
+  setWatermarkMeasurer(null)
+  paintWatermark(ctx, page, mark)
+}
+
 export class DocumentHost {
   readonly backend: CanvasBackend
   private docs = new Map<string, OpenDoc>()
@@ -161,7 +177,7 @@ export class DocumentHost {
     for (const o of observers) o.beforeUnit(painted, index)
     paintable.paint(painted)
     for (const o of observers) o.afterUnit(painted, index)
-    if (mark) paintWatermark(ctx, page, mark)
+    if (mark) paintMark(ctx, page, mark)
     const png = criticalChunksOnly(new Uint8Array((canvas as unknown as { toBuffer(m: 'image/png'): Buffer }).toBuffer('image/png')))
     return { kind: 'raster', w, h, png, evidence: evidence() }
   }
@@ -176,7 +192,7 @@ export class DocumentHost {
     for (const o of observers) o.beforeUnit(painted, index)
     paintable.paint(painted)
     for (const o of observers) o.afterUnit(painted, index)
-    if (mark) paintWatermark(ctx, page, mark)
+    if (mark) paintMark(ctx, page, mark)
     const out = rec.finish()
     if (out.discriminator === 3) return { ok: false as const, reason: out.reason }
     return { ok: true as const, ops: out.ops, opCount: out.opCount, assets: out.assets, evidence: evidence() }

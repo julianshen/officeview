@@ -180,7 +180,7 @@ Residuals are registration residual / GEOMETRY_ERROR_MAX = 0.0923 (unchanged), o
 
 Whole run: 97 min wall, 6.4 CPU-hours.
 
-## Reference determinism (finding; why the run is one process per document)
+## Reference determinism (finding, fixed; why the run is one process per document)
 
 A first full run used 4 long-lived processes, each handling many documents. It failed with `reference-mismatch` on several xlsx units: `lo-calc-pivotcompact`, `poi-ExcelTables` and `lo-calc-shared-dategroup`.
 
@@ -193,7 +193,23 @@ Consequences:
 - The trace tool fails closed ("reference differs from what was served"), so it never mis-decodes.
 - A long-lived server's pool workers render many documents. The served canonical can therefore depend on what the worker rendered before. A fresh trace tool would then refuse a genuine leak.
 
-The calibration therefore runs one process per document, which matches a fresh server and a fresh tool. In that mode the run had 0 reference mismatches. Not fixed here: owner decision.
+The calibration therefore runs one process per document, which matches a fresh server and a fresh tool. In that mode the run had 0 reference mismatches.
+
+**Fixed (Stage 2b final fix F1).** The global state was not font registration. It is the visible mark's text-width cache in `src/core/watermark.ts`:
+- `markTextWidth` caches on `${pt}|family|text`, with `pt` the *rounded* point size.
+- No measurer is ever registered on the server, so the cached value is the fallback `text.length × fontPx × 0.6`, from the *unrounded* pixel size.
+- The mark's font size is 7 % of the page width: 67.2 px for the 960-px deck, 66.85 px for the 955-px sheet. Both round to 50 pt, so they share one entry. Whichever page painted first set the tile step (`stepX`) of the other, and every stamp moved (the diff was confined to the mark; with the mark off the two renders were identical).
+- `clearAllCache()` (Skia) does not change it; `setWatermarkMeasurer(null)`, which clears the JS map, restores 2ebbeb86….
+
+Fix, server-only: `DocumentHost` paints every mark through `paintMark`, which resets the watermark module (`setWatermarkMeasurer(null)`: measurer stays null, cache cleared) before `paintWatermark`. Each mark is then laid out from its own page alone. The serve path (pool workers) and the trace tool share `DocumentHost.render`, so both get it. Canonicals rendered alone are unchanged (2ebbeb86… stays the served hash), so the calibration evidence above stands.
+
+Check: unit 0–2 of every corpus document (bucket 1, pptx also bucket 2, fixed mark), rendered in one long-lived process in sorted order vs one process per document:
+- before the fix: 9 documents differed (lo-calc-pivotcompact, lo-calc-pivottable_outline_mode, lo-calc-pivottable_rowcolpage_field_filter, lo-calc-shared-dategroup, lo-calc-tableStyleInnerBorders, lo-calc-two-data-fields, poi-56295, poi-66365, poi-ExcelTables);
+- after: 0 of 64 opened documents (6 refused at admission, as above).
+
+Regression test: `server/test/render-determinism.test.ts` renders lo-bnc591147.pptx then lo-calc-pivotcompact.xlsx#0@1 in one host and compares with a fresh child process, for the fixed and a viewer mark, both orders.
+
+Library follow-up (outside server/, not done): the cache key and value should use the same size (key on `fontPx`, or compute the fallback from the rounded pt). Then the server reset becomes redundant.
 
 ## Native check
 
