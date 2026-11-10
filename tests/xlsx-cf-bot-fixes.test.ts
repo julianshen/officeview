@@ -136,3 +136,20 @@ describe('7acd514e: the paint budget resumes before the scale-scope checks', () 
     lease.release(); service.dispose()
   })
 })
+
+describe('bot P2 (round 7): arbitration stops at an unresolved stopIfTrue rule like execution does', () => {
+  const base = { ranges: [rect(0, 3)], dialect: 'base', formulas: [] }
+  const dxfRule = (): CfRule => ({ id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [rect(0, 3)], writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FFFFC7CE' },
+    definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 0 }], dialect: 'base', formulas: [] } })
+  const stopper = (): CfRule => ({ id: 2, priority: 2, documentOrder: 1, stopIfTrue: true, ranges: [rect(0, 3)], writes: new Set(['font.bold']), dxf: { 'font.bold': true },
+    definition: { kind: 'cellIs', operator: 'greaterThan', operands: [{ kind: 'number', value: 0 }], ...base } as never })
+  const scale = (id: number, priority: number): CfRule => ({ id, priority, documentOrder: id, stopIfTrue: false, ranges: [rect(0, 3)], writes: new Set(['colorScale', 'fill']),
+    definition: { kind: 'colorScale', points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] as [CfScalePoint, CfScalePoint], dialect: 'base', formulas: [] } })
+  it('two unreachable lower scales do not suppress the winning DXF fill', () => {
+    const ready = { kind: 'ready', value: { argb: 0xff63be7b } } as const
+    const state = composeCell([dxfRule(), stopper(), scale(3, 3), scale(4, 4)],
+      [{ kind: 'ready', value: true }, { kind: 'unresolved', reason: 'cf-unsupported-rule' }, ready, ready], { hasEvidence: () => true })
+    expect(state.properties['fill.bg']).toBe('FFFFC7CE')
+  })
+})
+

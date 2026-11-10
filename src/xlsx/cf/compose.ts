@@ -58,10 +58,17 @@ function* steps(
     yield
     const rule = orderedRules[i]!
     const outcome = outcomes[i]
-    if (!outcome || outcome.kind === 'unresolved') continue
+    const isScale = rule.definition.kind === 'colorScale' || rule.writes.has('colorScale')
+    // Mirror the execution pass: a scale carrying an unevidenced stopIfTrue, or an unresolved stopping rule, halts
+    // composition, so nothing below it may take part in fill arbitration (it could suppress an earlier winner).
+    const stopsHere = rule.stopIfTrue && (!isScale || !checkEvidence('scale:composition-scale-stopIfTrue'))
+    if (isScale && rule.stopIfTrue && !checkEvidence('scale:composition-scale-stopIfTrue')) break
+    if (!outcome || outcome.kind === 'unresolved') {
+      if (stopsHere) break
+      continue
+    }
     if (outcome.kind === 'no-match' || !outcome.value) continue
 
-    const isScale = rule.definition.kind === 'colorScale' || rule.writes.has('colorScale')
     const hasDxfFill = rule.dxf && ('fill.bg' in rule.dxf || 'fill.pattern' in rule.dxf)
 
     if (isScale) {
