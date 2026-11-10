@@ -520,3 +520,45 @@ it('clock-driven CF invalidation follows the DISPLAYED rows of a sorted view (I1
     ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers()
   }
 })
+
+it('clock-driven CF invalidation also covers tiles that text overflowing from the rule reaches (bot P2)', async () => {
+  const { TileCache } = await import('../src/xlsx/view/tileCache')
+  const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+  const { TEXT_OVERFLOW_REACH_CSS } = await import('../src/xlsx/view/viewport')
+  const rows = Array.from({ length: 5 }, (_, r) => ({ index: r, cells: [{ row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0, value: 'a long text that overflows to the right' }] }))
+  const fontSheet: XlsxSheet = {
+    name: 'Overflow', sheetId: 's', cols: [{ min: 0, max: 0, widthChars: 12 }], merges: [], mergeRanges: [], rows,
+    conditionalFormatting: { diagnostics: [], rules: [{
+      id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 0 }],
+      writes: new Set(['font.bold']), dxf: { 'font.bold': true },
+      definition: { kind: 'predicate', type: 'timePeriod', timePeriod: 'today', dialect: 'base', formulas: [] },
+    }] },
+  } as unknown as XlsxSheet
+  const doc = { sheets: [fontSheet] }
+  const source = createObjectWorkbookSource(doc, 'overflow-clock')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: new Date(2026, 5, 10, 23, 59, 50) })
+  const calls: Array<(key: import('../src/xlsx/view/tileCache').TileKey) => boolean> = []
+  const orig = TileCache.prototype.invalidate
+  const spy = vi.spyOn(TileCache.prototype, 'invalidate').mockImplementation(function (this: InstanceType<typeof TileCache>, predicate) {
+    calls.push(predicate)
+    return orig.call(this, predicate)
+  })
+  const presented = vi.spyOn(SheetTileRenderer.prototype, 'present')
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+  try {
+    await vi.waitFor(() => expect(presented).toHaveBeenCalled())
+    const before = calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(before))
+    const identity = { docId: 'overflow-clock', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const tile = (col: number) => ({ paletteKey: 'classic', identity, backend: 'canvas2d', zoom: 1, dpr: 1, col, row: 0 })
+    const cfPredicate = calls[before]!
+    expect(cfPredicate(tile(0) as never), 'the rule tile').toBe(true)
+    expect(cfPredicate(tile(1) as never), 'the next tile holds overflowing text of the rule cells').toBe(true)
+    // Tiles are 512 logical px wide: a tile far beyond the overflow reach stays cached.
+    expect(cfPredicate(tile(Math.ceil((TEXT_OVERFLOW_REACH_CSS + 512) / 512) + 4) as never), 'beyond the reach').toBe(false)
+  } finally {
+    ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers()
+  }
+})
+

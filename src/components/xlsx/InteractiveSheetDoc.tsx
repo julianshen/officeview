@@ -40,7 +40,7 @@ import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate, coverCells
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
-import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
+import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilityFromHidden } from '../../xlsx/view/visibility'
@@ -1643,9 +1643,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         let wholeSheet = false
         for (const rule of cfRules) {
           for (const r of rule.ranges) {
-            const x0 = metrics.cols.start(r.firstCol)
+            // Text of a formatted cell overflows horizontally into neighbours (up to TEXT_OVERFLOW_REACH_CSS, the reach the
+            // viewport fetches dependencies over), so tiles that merely show its overflow depend on the rule too.
+            const x0 = Math.max(0, metrics.cols.start(r.firstCol) - TEXT_OVERFLOW_REACH_CSS)
             const lastCol = Math.min(r.lastCol, metrics.cols.logicalCount - 1)
-            const x1 = metrics.cols.start(lastCol) + metrics.cols.size(lastCol)
+            const x1 = metrics.cols.start(lastCol) + metrics.cols.size(lastCol) + TEXT_OVERFLOW_REACH_CSS
             const lastRow = Math.min(r.lastRow, metrics.rows.logicalCount - 1)
             const pushRun = (a: number, b: number) => {
               const y0 = metrics.rows.start(a)
