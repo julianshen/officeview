@@ -195,22 +195,22 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
               }
               // The pure compositor implements the candidate ordering contract; enabling
               // multi-positive precedence in production still requires its oracle.
-              let positives = 0
-              let hasScalePositive = false
+              // Stage 1 multi-positive guards apply to every NON-scale positive, independent of whether a scale
+              // also matched or where it sorts (final review M6). Scale-vs-DXF precedence is composeCell's job
+              // (scale:composition-* evidence); only DXF-vs-DXF ties and stacking are guarded here.
+              let dxfPositives = 0
               const priorities = new Set<number>()
               for (let i = 0; i < outcomes.length; i++) {
                 await work()
                 const outcome = outcomes[i]!
                 if (outcome.kind !== 'ready' || !outcome.value) continue
-                if (matching[i]!.definition.kind === 'colorScale') {
-                  hasScalePositive = true
-                }
+                if (matching[i]!.definition.kind === 'colorScale') continue
                 const priority = matching[i]!.priority
-                if (!hasScalePositive && priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) {
+                if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) {
                   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
                 }
                 priorities.add(priority)
-                if (++positives > 1 && !hasScalePositive && (!evidence.allows('priority:fill-winner')
+                if (++dxfPositives > 1 && (!evidence.allows('priority:fill-winner')
                   || !evidence.allows('priority:orthogonal-font-bold'))) {
                   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
                 }

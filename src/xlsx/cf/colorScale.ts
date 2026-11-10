@@ -312,6 +312,16 @@ export function resolveScaleThresholds(
     return { kind: 'unresolved', reason: 'cf-unsupported-rule' }
   }
 
+  // Ruling F-2 (final review I3-B): the only measured out-of-range shape (percent -10 / percentile 150) paints
+  // NOTHING in Excel, and no colour was observed for a lone out-of-range percent or percentile. The scale is
+  // withheld outright; a computed extrapolated colour is never painted for an unmeasured shape.
+  for (const p of points) {
+    const b = p.bound
+    if ((b.type === 'percent' || b.type === 'percentile') && (b.value < 0 || b.value > 100)) {
+      return { kind: 'unresolved', reason: 'cf-invalid-bound' }
+    }
+  }
+
   // Degenerate scope checks (Ruling S2-E)
   if (stats.numericCount === 0) {
     return { kind: 'unresolved', reason: 'cf-no-numeric-values' }
@@ -376,34 +386,28 @@ export function resolveScaleThresholds(
         return { kind: 'unresolved', reason: 'cf-inverted-thresholds' }
       }
     } else if (t0 === t1) {
+      // Ruling F-2 (I3-A): equal thresholds were measured only over all-equal data (and one numeric cell).
+      // Equal thresholds over distinct data are a different, unmeasured shape.
+      const allEqual = stats.numericCount > 0 && stats.min === stats.max
       if (stats.numericCount === 1) {
         if (!checkEvidence('scale:degenerate-single-cell')) {
           return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
         }
-      } else if (!checkEvidence('scale:degenerate-equal-values')) {
+      } else if (!allEqual || !checkEvidence('scale:degenerate-equal-values')) {
         return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
       }
     }
   } else if (points.length === 3) {
     const [t0, t1, t2] = thresholds as [number, number, number]
-    if (t1 > t2) {
-      if (!checkEvidence('scale:degenerate-midpoint-above-max')) {
-        return { kind: 'unresolved', reason: 'cf-midpoint-above-max' }
-      }
+    // Ruling F-2 (I3-A): only two 3-point orderings were measured: strictly ascending (t0 < t1 < t2) and the
+    // midpoint above the maximum (t0 < t2 < t1). Every inversion or tie is a different shape: withheld.
+    const ascending = t0 < t1 && t1 < t2
+    const midpointAboveMax = t0 < t2 && t2 < t1
+    if (!ascending && !midpointAboveMax) {
+      return { kind: 'unresolved', reason: t0 > t1 || t0 > t2 ? 'cf-inverted-thresholds' : 'cf-degenerate-scope' }
     }
-    if (t0 > t1 || t0 > t2) {
-      if (!checkEvidence('scale:degenerate-inverted-thresholds')) {
-        return { kind: 'unresolved', reason: 'cf-inverted-thresholds' }
-      }
-    }
-    if (t0 === t2 || (t0 === t1 && t1 === t2)) {
-      if (stats.numericCount === 1) {
-        if (!checkEvidence('scale:degenerate-single-cell')) {
-          return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
-        }
-      } else if (!checkEvidence('scale:degenerate-equal-values')) {
-        return { kind: 'unresolved', reason: 'cf-degenerate-scope' }
-      }
+    if (midpointAboveMax && !checkEvidence('scale:degenerate-midpoint-above-max')) {
+      return { kind: 'unresolved', reason: 'cf-midpoint-above-max' }
     }
   }
 
@@ -499,6 +503,11 @@ export function scaleColorAt(
     let c0 = points[0]!.argb
     let c1 = points[1]!.argb
     let c2 = points[2]!.argb
+
+    // Ruling F-2 (I3-A): defence in depth, mirrors resolveScaleThresholds: only the measured orderings evaluate.
+    if (!((t0 < t1 && t1 < t2) || (t0 < t2 && t2 < t1))) {
+      return { kind: 'unresolved', reason: 'cf-inverted-thresholds' }
+    }
 
     if (t1 > t2) {
       // Midpoint above max (e.g. 10, 200, 100):

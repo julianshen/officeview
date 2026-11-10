@@ -53,6 +53,7 @@ function* steps(
 
   // Pre-scan resolved matching fills to arbitrate fill slot under Ruling S2-I & S2-J
   const matchingFills: MatchingFill[] = []
+  let fillsWithheld = false
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
@@ -71,8 +72,13 @@ function* steps(
       } else if (typeof outcome.value === 'object' && outcome.value !== null && 'argb' in outcome.value) {
         argb = (outcome.value as { argb: number }).argb
         fraction = (outcome.value as { fraction?: number }).fraction
-      } else if (rule.definition.kind === 'colorScale' && rule.definition.points?.length) {
-        argb = rule.definition.points[0]!.argb
+      }
+      if (argb === undefined) {
+        // M2: a scale outcome that carries no evaluated colour (a bare `true`) is unresolved, never endpoint 0.
+        fillsWithheld = true
+        tainted.add('fill')
+        tainted.add('colorScale')
+        continue
       }
       matchingFills.push({ rule, index: i, isScale: true, argb, fraction })
     } else if (hasDxfFill) {
@@ -82,7 +88,6 @@ function* steps(
 
   // Determine fill slot winner
   let fillWinnerIndex: number | undefined = undefined
-  let fillsWithheld = false
 
   if (matchingFills.length === 1) {
     fillWinnerIndex = matchingFills[0]!.index
@@ -118,8 +123,9 @@ function* steps(
           tainted.add('colorScale')
         }
       } else {
-        // Equal priority
-        if (checkEvidence('scale:composition-equal-priority')) {
+        // Equal priority. Only the DXF-first document order was measured (stage2-scale-composition D2:D5);
+        // with the scale first the winner is unobserved, so that order withholds (final review I3-C).
+        if (checkEvidence('scale:composition-equal-priority') && dxfFill.rule.documentOrder < scaleFill.rule.documentOrder) {
           // In Excel measured stage2-scale-composition Col D, scale won
           fillWinnerIndex = scaleFill.index
         } else {
