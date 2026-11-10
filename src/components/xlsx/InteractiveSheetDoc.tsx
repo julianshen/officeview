@@ -1636,27 +1636,52 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const metrics = entry?.metrics
       if (cfRules?.length && metrics) {
         const cfBoxes: LogicalCellBox[] = []
+        // Rule ranges are SOURCE rows; the tile grid is indexed by DISPLAY slot (sorted views permute them).
+        // Map every source row through the committed order and merge contiguous display runs; an oversized
+        // range under a non-identity order falls back to the whole sheet (conservative, never stale).
+        const order = metrics.order
+        let wholeSheet = false
         for (const rule of cfRules) {
           for (const r of rule.ranges) {
             const x0 = metrics.cols.start(r.firstCol)
             const lastCol = Math.min(r.lastCol, metrics.cols.logicalCount - 1)
             const x1 = metrics.cols.start(lastCol) + metrics.cols.size(lastCol)
-            const y0 = metrics.rows.start(r.firstRow)
             const lastRow = Math.min(r.lastRow, metrics.rows.logicalCount - 1)
-            const y1 = metrics.rows.start(lastRow) + metrics.rows.size(lastRow)
-            cfBoxes.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+            const pushRun = (a: number, b: number) => {
+              const y0 = metrics.rows.start(a)
+              const y1 = metrics.rows.start(b) + metrics.rows.size(b)
+              cfBoxes.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+            }
+            if (order.kind === 'identity') { pushRun(r.firstRow, lastRow); continue }
+            if (lastRow - r.firstRow + 1 > 10_000) { wholeSheet = true; break }
+            const slots: number[] = []
+            for (let sourceRow = r.firstRow; sourceRow <= lastRow; sourceRow++) slots.push(order.sourceToDisplay(sourceRow))
+            slots.sort((a, b) => a - b)
+            let runStart = -1, runEnd = -1
+            for (const slot of slots) {
+              if (slot >= metrics.rows.logicalCount) continue
+              if (runStart < 0) { runStart = runEnd = slot; continue }
+              if (slot === runEnd + 1) { runEnd = slot; continue }
+              pushRun(runStart, runEnd); runStart = runEnd = slot
+            }
+            if (runStart >= 0) pushRun(runStart, runEnd)
           }
+          if (wholeSheet) break
         }
-        renderer.cache.invalidate(key => {
-          if (key.identity.sheetId !== activeSheetId) return false
-          const tBox = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
-          return cfBoxes.some(box =>
-            tBox.x < box.x + box.width &&
-            tBox.x + tBox.width > box.x &&
-            tBox.y < box.y + box.height &&
-            tBox.y + tBox.height > box.y,
-          )
-        })
+        if (wholeSheet) {
+          renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+        } else {
+          renderer.cache.invalidate(key => {
+            if (key.identity.sheetId !== activeSheetId) return false
+            const tBox = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
+            return cfBoxes.some(box =>
+              tBox.x < box.x + box.width &&
+              tBox.x + tBox.width > box.x &&
+              tBox.y < box.y + box.height &&
+              tBox.y + tBox.height > box.y,
+            )
+          })
+        }
       } else {
         renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
       }

@@ -450,6 +450,15 @@ it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)'
     expect(cfPredicate(tileOutOfScope), 'Tile out of scope (col 5) must NOT be invalidated').toBe(false)
     expect(cfPredicate(tileOtherSheet), 'Tile on another sheet must NOT be invalidated').toBe(false)
 
+    // 1b. A value edit bumps valueGen, which is part of the tile identity: what an edit actually relies on is
+    // the identity sweep in present() (every old-identity tile of this renderer is dropped, scope or not).
+    // The CF-scope predicate above is the fallback for identity-PRESERVING changes (clock, text generation), which
+    // the sorted-view clock test exercises. Assert the sweep so this test stops proving only the fallback.
+    await waitFor(() => {
+      expect(activeRenderer!.cache.get(tileInScope1), 'old-identity in-scope tile swept').toBeUndefined()
+      expect(activeRenderer!.cache.get(tileOutOfScope), 'old-identity out-of-scope tile swept by identity, not by CF scope').toBeUndefined()
+    })
+
     // 2. Cache retention verification: invalidates ONLY the tiles of the scale scope
     const testCache = new TileCache(activeRenderer!.cache.pool)
     testCache.put(tileInScope1, dummySurface())
@@ -468,4 +477,46 @@ it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)'
   }
 })
 
-
+it('clock-driven CF invalidation follows the DISPLAYED rows of a sorted view (I1)', async () => {
+  const { TileCache } = await import('../src/xlsx/view/tileCache')
+  const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+  const { createRowOrder } = await import('../src/xlsx/view/order')
+  const N = 60
+  const rows = Array.from({ length: N }, (_, r) => ({ index: r, cells: [{ row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0, value: r }] }))
+  const todaySheet: XlsxSheet = {
+    name: 'SortedClock', sheetId: 's', cols: [{ min: 0, max: 0, widthChars: 12 }], merges: [], mergeRanges: [], rows,
+    conditionalFormatting: { diagnostics: [], rules: [{
+      id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 0 }],
+      writes: new Set(['fill']), dxf: { 'fill.bg': 'FF00FF00' },
+      definition: { kind: 'predicate', type: 'timePeriod', timePeriod: 'today', dialect: 'base', formulas: [] },
+    }] },
+  } as unknown as XlsxSheet
+  // Reversed order: source rows 0..2 are DISPLAYED at slots 59..57 (tile row 2), not tile row 0.
+  const order = createRowOrder([{ r0: 0, r1: N - 1, sourceAtOffset: Uint32Array.from({ length: N }, (_, i) => N - 1 - i) }])
+  const doc = { sheets: [todaySheet] }
+  const source = createObjectWorkbookSource(doc, 'sorted-clock')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: new Date(2026, 5, 10, 23, 59, 50) })
+  const invalidateCalls: Array<(key: import('../src/xlsx/view/tileCache').TileKey) => boolean> = []
+  const origInvalidate = TileCache.prototype.invalidate
+  const spy = vi.spyOn(TileCache.prototype, 'invalidate').mockImplementation(function (this: InstanceType<typeof TileCache>, predicate) {
+    invalidateCalls.push(predicate)
+    return origInvalidate.call(this, predicate)
+  })
+  const presented = vi.spyOn(SheetTileRenderer.prototype, 'present')
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} views={{ s: { revision: 1, order } }} />)
+  try {
+    await vi.waitFor(() => expect(presented).toHaveBeenCalled())
+    const before = invalidateCalls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+    await vi.waitFor(() => expect(invalidateCalls.length).toBeGreaterThan(before))
+    const identity = { docId: 'sorted-clock', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const tile = (row: number) => ({ paletteKey: 'classic', identity, backend: 'canvas2d', zoom: 1, dpr: 1, col: 0, row })
+    // The first invalidation after the clock tick is the CF scope predicate (later ones are identity sweeps).
+    const cfPredicate = invalidateCalls[before]!
+    // The identity-preserving clock change must drop the tile that DISPLAYS the scope (row 2) and no other.
+    expect(cfPredicate(tile(2) as never), 'tile row 2 displays source rows 0..2').toBe(true)
+    expect(cfPredicate(tile(0) as never), 'tile row 0 shows nothing of the scope').toBe(false)
+  } finally {
+    ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers()
+  }
+})
