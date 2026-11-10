@@ -36,7 +36,7 @@ export interface TraceObservation {
   support: number
   flat: boolean
   geometry?: 'unsupported'
-  poses: Array<{ contentPolicy: string; scale: number; keyGeneration: number; residual: number | null; inScope: boolean }>
+  poses: Array<{ contentPolicy: string; scale: number; keyGeneration: number; residual: number | null; inScope: boolean; band?: Registration['band'] }>
 }
 export interface TraceInput { capture: Bitmap; doc: Uint8Array; unitIndex: number; keys: ReadonlyMap<number, Keys>; store: AuditStore; host?: DocumentHost; observe?: (o: TraceObservation) => void }
 
@@ -115,7 +115,7 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     if (pose === undefined) {
       const r = register(capture, reference, chips)
       poses.set(poseKey, pose = r && r.residual <= GEOMETRY_ERROR_MAX ? r : null)
-      if (input.observe) observedPoses.push({ contentPolicy: first.row.contentPolicy, scale: first.delivery.scale, keyGeneration: first.gen, residual: r ? r.residual : null, inScope: pose !== null })
+      if (input.observe) observedPoses.push({ contentPolicy: first.row.contentPolicy, scale: first.delivery.scale, keyGeneration: first.gen, residual: r ? r.residual : null, inScope: pose !== null, ...(r ? { band: r.band } : {}) })
     }
     if (!pose) { unscored(group); continue }
     registered = true

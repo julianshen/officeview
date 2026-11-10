@@ -110,6 +110,16 @@ describe('scale-2 sparse page (lo-airplane-transition)', () => {
       expect(decideScores(scoreCapture(capture, loReference, loChips, matrix, DEFAULT_PARAMS), tau)).toMatchObject({ kind: 'attributed', index: TOKEN })
     }, 120_000)
   }
+  it('reports the cross-hypothesis ambiguity band (diagnostic)', async () => {
+    // zoom 0.75 and a factor-1 25 % crop have the same extents and both fit this flat page.
+    const zoomed = register(scale(loMarked, 0.75), loReference, loChips)!
+    expect(zoomed.band.size).toBeGreaterThanOrEqual(2)
+    expect(zoomed.band.bySupport).toBe(true)
+    expect(typeof zoomed.band.overrodeMse).toBe('boolean')
+    // Unattacked: one hypothesis (factor 1), nothing to decide.
+    const plain = register(loMarked, loReference, loChips)!
+    expect(plain.band).toEqual({ size: 1, bySupport: false, overrodeMse: false })
+  }, 120_000)
   // No uncropped zoom has these extents, so factor 1 is certified exhaustively;
   // the block lower bounds keep that to seconds on a flat page (was ~83 s).
   it('an anisotropic crop (2000x1080 at 280,180) certifies at factor 1 in <= 15 s', () => {

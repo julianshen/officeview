@@ -146,6 +146,7 @@ describe('trace', () => {
     expect(o.sids[o.scores.indexOf(Math.max(...o.scores))]).toBe(A.sid)
     expect(o.poses.map((p) => p.scale).sort()).toEqual([1, 2])
     for (const p of o.poses) expect(typeof p.residual).toBe('number')
+    for (const p of o.poses) expect(p.band?.size).toBeGreaterThanOrEqual(1)
     expect(o.poses.find((p) => p.scale === 1)!.inScope).toBe(true)
     expect(o.unscored).toBe(o.poses.find((p) => p.scale === 2)!.inScope ? 0 : 1)
     if (a.kind !== 'traced') throw new Error('not traced')

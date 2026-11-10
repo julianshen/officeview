@@ -157,6 +157,9 @@ export interface Registration extends Pose {
   /** `error` over (luminance variance of `reference` + RESIDUAL_FLOOR); above
    * GEOMETRY_ERROR_MAX the capture's geometry is out of scope. */
   residual: number
+  /** Diagnostic: the hypotheses (factors/poses) inside the ambiguity band of the best fit, whether
+   * keyed support decided among them, and whether that overrode the lowest-MSE hypothesis. */
+  band: { size: number; bySupport: boolean; overrodeMse: boolean }
 }
 function rectangle(b: Bitmap, x: number, y: number, width: number, height: number): Bitmap {
   const data = new Uint8ClampedArray(width * height * 4)
@@ -297,7 +300,7 @@ function supportEnergy(capture: Bitmap, pose: Pose, aligned: Bitmap, chips: Chip
 const ambiguous = (error: number, best: number): boolean => error - best <= Math.max(.1, best * .05)
 export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = []): Registration | undefined {
   checkBitmap(capture); checkBitmap(reference)
-  type Hypothesis = Omit<Registration, 'residual'> & { exact: boolean }
+  type Hypothesis = Omit<Registration, 'residual' | 'band'> & { exact: boolean }
   const hypotheses: Hypothesis[] = []
   const step = 1
   const errorOf = (read: (x: number, y: number) => number, stride = step): number => {
@@ -316,7 +319,7 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
     // by keyed support, not by its exact MSE minimum, and certifying it is
     // the hours (a nearly flat page's SSD surface is flat to JPEG noise).
     const before = Math.min(...hypotheses.map(h => h.error))
-    let best: Omit<Registration, 'residual'> | undefined
+    let best: Omit<Registration, 'residual' | 'band'> | undefined
     const w = Math.round(reference.width * factor), h = Math.round(reference.height * factor), slack = Math.ceil(factor)
     if (capture.width > w || capture.height > h || capture.width < Math.floor(w * 0.75) - slack || capture.height < Math.floor(h * 0.75) - slack) return
     const ref = factor === 1 ? reference : resize(reference, factor)
@@ -397,7 +400,8 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
     let at = 0
     for (let i = 1; i < band.length; i++) if (rank[i]! < rank[at]! || (rank[i] === rank[at] && band[i]!.exact && !band[at]!.exact)) at = i
     const { exact: _, ...best } = band[at]!
-    return { ...best, residual: residual(best.reference, best.error) }
+    const bySupport = band.length > 1 && chips.length > 0, lowest = band.reduce((m, h, i) => (h.error < band[m]!.error ? i : m), 0)
+    return { ...best, residual: residual(best.reference, best.error), band: { size: band.length, bySupport, overrodeMse: bySupport && band[at]!.error !== band[lowest]!.error } }
   }
   const inScope = (): Registration | undefined => { const r = result(); return r && r.residual <= GEOMETRY_ERROR_MAX ? r : undefined }
   // Every admissible hypothesis competes; none stops the search early. An
