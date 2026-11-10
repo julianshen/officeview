@@ -117,9 +117,11 @@ export function applyTint(rgb: string, tint: number): string {
 
   const [h, l, s] = rgbToHls(r, g, b)
   let newL: number
-  // The +0.01 epsilon guards against IEEE 754 binary floating-point representation
-  // inaccuracies (e.g. 1 - 0.6 = 0.3999999999999999) before Math.floor, preventing
-  // an off-by-one truncation when the exact mathematical value is an integer.
+  // The +0.01 epsilon absorbs Excel's STORED tint quantisation, not IEEE rounding (which is ~1e-16): files carry
+  // 0.39997558519241921, 0.59999389629810485, 0.79998168889431442 for the nominal 0.4 / 0.6 / 0.8, i.e. about 0.006
+  // of a luminance step short on the 240-point scale. With the epsilon the result reproduces Excel's published
+  // 2013+ palette swatches (ED7D31 -> FCE4D6 / F8CBAD / F4B084, 4472C4 -> D9E1F2 / B4C6E7 / 8EA9DB, ...); with a
+  // 1e-9 epsilon sixteen of them are off by 1-2 per channel. Pinned by tests/xlsx-cf-theme-tint.test.ts.
   if (tint < 0) {
     newL = Math.floor(l * (1 + tint) + 0.01)
   } else {

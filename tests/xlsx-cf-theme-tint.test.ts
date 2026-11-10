@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveSheetColor, type SheetColorContext } from '../src/xlsx/sheetColors'
+import { applyTint, resolveSheetColor, type SheetColorContext } from '../src/xlsx/sheetColors'
 import { scaleColorAt } from '../src/xlsx/cf/colorScale'
 import type { CfScalePoint } from '../src/xlsx/cf/model'
 
@@ -88,3 +88,23 @@ describe('CF theme tint resolution and scale interpolation (T16-A Step 1)', () =
     expect(resB6.kind === 'ready' && toHex(resB6.value)).toBe(expectedB6)
   })
 })
+
+describe('applyTint reproduces the canonical Excel palette from its STORED tint strings (M3)', () => {
+  // Excel stores 0.4 / 0.6 / 0.8 / -0.25 / -0.5 with quantisation error, so the +0.01 luminance epsilon in applyTint
+  // is load-bearing: a "cleanup" to a 1e-9 epsilon moves sixteen of these swatches by 1-2 per channel.
+  const STORED = ['0.79998168889431442', '0.59999389629810485', '0.39997558519241921', '-0.249977111117893', '-0.499984740745262'].map(Number)
+  const SWATCHES: Record<string, string[]> = {
+    ED7D31: ['FCE4D6', 'F8CBAD', 'F4B084', 'C65911', '833C0C'],
+    FFC000: ['FFF2CC', 'FFE699', 'FFD966', 'BF8F00', '806000'],
+    A5A5A5: ['EDEDED', 'DBDBDB', 'C9C9C9', '7B7B7B', '525252'],
+    '70AD47': ['E2EFDA', 'C6E0B4', 'A9D08E', '548235', '375623'],
+    '4472C4': ['D9E1F2', 'B4C6E7', '8EA9DB', '305496', '203764'],
+    '5B9BD5': ['DDEBF7', 'BDD7EE', '9BC2E6', '2F75B5', '1F4E78'],
+  }
+  for (const [base, expected] of Object.entries(SWATCHES)) {
+    it(`${base} with Excel's stored tints`, () => {
+      expect(STORED.map(tint => applyTint(base, tint))).toEqual(expected)
+    })
+  }
+})
+
