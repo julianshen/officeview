@@ -1,7 +1,7 @@
 /** Stage 2b Task 4: the durable audit store (§9.3/§13.2), delivery records before send. */
 import { afterAll, afterEach, describe, expect, it } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -114,6 +114,41 @@ describe('AuditStore', () => {
     AuditStore.open(path).close()
     expect(statSync(path).mode & 0o777).toBe(0o600)
   })
+
+  // F2: session rows (IPs, viewer ids) live in the -wal until checkpoint; SQLite
+  // must not leave the sidecars to the umask. Every file present is 0600.
+  const modes = (path: string) => Object.fromEntries(['', '-wal', '-shm'].filter((x) => existsSync(path + x)).map((x) => [x || 'db', statSync(path + x).mode & 0o777]))
+  const withUmask = <T>(mask: number, f: () => T): T => { const prev = process.umask(mask); try { return f() } finally { process.umask(prev) } }
+  const write = (s: AuditStore, sid: string) => { s.putRow(sid, row()); s.putDelivery({ sid, unitIndex: 0, scale: 1, status: 'l1', refSha256: 'aa', at: 1 }); s.takeToken(1) }
+
+  it('with umask 022, after writes, the db, -wal and -shm are all 0600 (server and trace opens)', () => withUmask(0o022, () => {
+    const path = dbPath()
+    const s = AuditStore.open(path)
+    write(s, 's0')
+    expect(modes(path)).toEqual({ db: 0o600, '-wal': 0o600, '-shm': 0o600 })
+    // A trace open alongside the live server keeps them 0600.
+    const t = AuditStore.openReadOnlyForTrace(path)
+    t.putDetection({ at: 1, osUser: 'u', imageSha256: 'x', docRefs: ['doc-a'], unitIndex: 0, answer: 'no-match' })
+    expect(modes(path)).toEqual({ db: 0o600, '-wal': 0o600, '-shm': 0o600 })
+    t.close(); s.close()
+    // A trace open after the server stopped (sidecars recreated) keeps them 0600.
+    const t2 = AuditStore.openReadOnlyForTrace(path)
+    t2.putDetection({ at: 2, osUser: 'u', imageSha256: 'y', docRefs: ['doc-a'], unitIndex: 0, answer: 'no-match' })
+    expect(modes(path)).toEqual({ db: 0o600, '-wal': 0o600, '-shm': 0o600 })
+    t2.close()
+  }))
+
+  it('an existing store with looser modes is tightened to 0600 on open (trace open too)', () => withUmask(0o022, () => {
+    const path = dbPath()
+    const s = AuditStore.open(path); write(s, 's0')
+    for (const x of ['', '-wal', '-shm']) chmodSync(path + x, 0o644)
+    s.close()
+    for (const x of ['-wal', '-shm']) if (!existsSync(path + x)) closeSync(openSync(path + x, 'a', 0o644))
+    chmodSync(path, 0o644)
+    const t = AuditStore.openReadOnlyForTrace(path)
+    expect(modes(path)).toEqual({ db: 0o600, '-wal': 0o600, '-shm': 0o600 })
+    t.close()
+  }))
 })
 
 describe('serving order', () => {

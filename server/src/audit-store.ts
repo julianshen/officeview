@@ -3,7 +3,7 @@
  * Rows are write-once; per-unit delivery records are written before send;
  * token counters are per key generation and never rewind. */
 import { Database } from 'bun:sqlite'
-import { closeSync, existsSync, openSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, openSync, statSync } from 'node:fs'
 import type { AuditRowInput } from './audit'
 import type { MarkSpec } from './render'
 
@@ -33,21 +33,36 @@ CREATE TABLE IF NOT EXISTS detections (id INTEGER PRIMARY KEY AUTOINCREMENT, at 
 type DeliveryCols = { sid: string; unit_index: number; scale: number; status: 'l1' | 'unmarked'; reason: string | null; ref_sha256: string; at: number }
 const delivery = (d: DeliveryCols): DeliveryRecord => ({ sid: d.sid, unitIndex: d.unit_index, scale: d.scale, status: d.status, ...(d.reason !== null ? { reason: d.reason } : {}), refSha256: d.ref_sha256, at: d.at })
 
+/** Clears group/other permission bits (umask-independent); never adds a bit. */
+function tighten(file: string): void {
+  if (!existsSync(file)) return
+  const mode = statSync(file).mode & 0o777
+  if (mode & 0o077) chmodSync(file, mode & 0o700)
+}
+
 export class AuditStore {
   private constructor(private readonly db: Database, private readonly readOnly: boolean) {}
 
-  /** Opens (creating mode 0600) the store at `path`; `':memory:'` for demo and tests. */
+  /** Opens the store at `path` (created 0600; db, -wal and -shm tightened to 0600 on every open); `':memory:'` for demo and tests. */
   static open(path: string): AuditStore { return new AuditStore(AuditStore.connect(path), false) }
   /** For the trace tool: rows, deliveries and counters are read-only; only `putDetection` writes. */
   static openReadOnlyForTrace(path: string): AuditStore { return new AuditStore(AuditStore.connect(path), true) }
 
   private static connect(path: string): Database {
-    if (path !== ':memory:' && !existsSync(path)) closeSync(openSync(path, 'a', 0o600)) // WAL/SHM files inherit this mode
+    const disk = path !== ':memory:'
+    if (disk) {
+      if (!existsSync(path)) closeSync(openSync(path, 'a', 0o600))
+      tighten(path) // before open: SQLite's unix VFS creates -wal/-shm with the db file's mode
+    }
     const db = new Database(path, { create: true, strict: true })
     db.exec('PRAGMA journal_mode = WAL')
     db.exec('PRAGMA synchronous = FULL')
     db.exec('PRAGMA foreign_keys = ON')
     db.exec(SCHEMA)
+    // The sidecars now exist (WAL mode, schema written). Do not rely on the VFS
+    // copying the db's mode, nor on the umask: pre-existing or recreated
+    // sidecars hold session rows (IPs, viewer ids) until checkpoint.
+    if (disk) for (const s of ['-wal', '-shm']) tighten(path + s)
     return db
   }
   private writable(): void { if (this.readOnly) throw new Error('audit store is read-only (trace)') }
