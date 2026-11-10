@@ -1,3 +1,5 @@
+import { CANDIDATE_MATRIX_MAX_BYTES } from '../mark/detect'
+
 /** §13.2 decision thresholds by declared candidate-table size M. A trace over
  * `count` candidates uses the next declared M at or above `count`. */
 export const TAU_TABLE: ReadonlyArray<{ m: number; abs: number; margin: number; source: string }> = Object.freeze([
@@ -8,8 +10,9 @@ export const TAU_TABLE: ReadonlyArray<{ m: number; abs: number; margin: number; 
   { m: 2 ** 24, abs: 8.6, margin: 3.45, source: 'stage-2b calibrate 6e2129af' },
 ].map((t) => Object.freeze(t)))
 
-/** The most candidates one decision scores (the detector's matrix bound); above it the tool refuses. */
-export const MAX_CANDIDATES = 2 ** 22
+/** The most candidates one decision scores, derived from the detector's matrix bound
+ * (⌊(2³¹ − 1) / 512⌋ = 4,194,303, so a single matrix at the maximum still fits); above it the tool refuses. */
+export const MAX_CANDIDATES = Math.floor(CANDIDATE_MATRIX_MAX_BYTES / 512)
 
 export function tauFor(count: number): { abs: number; margin: number; m: number } {
   if (!Number.isSafeInteger(count) || count < 0) throw new RangeError('Invalid candidate count')

@@ -6,9 +6,16 @@ export type Decision = { kind: 'collusion-suspected'; indices: number[]; zs: num
 /** Immutable handle; privately owned contiguous M×512 signs. */
 export interface CandidateMatrix { readonly count: number; readonly bytes: number }
 const matrices = new WeakMap<CandidateMatrix, Int8Array>()
+/** The largest candidate matrix one detector call holds (M×512 sign bytes). */
+export const CANDIDATE_MATRIX_MAX_BYTES = 0x7fffffff
+/** Bytes of an M-candidate matrix; throws above CANDIDATE_MATRIX_MAX_BYTES. */
+export function candidateMatrixBytes(count: number): number {
+  const bytes = count * 512
+  if (!Number.isSafeInteger(bytes) || bytes > CANDIDATE_MATRIX_MAX_BYTES) throw new Error('Candidate matrix too large')
+  return bytes
+}
 export function prepareCandidates(codes: readonly Int8Array[]): CandidateMatrix {
-  const bytes = codes.length * 512
-  if (!Number.isSafeInteger(bytes) || bytes > 0x7fffffff) throw new Error('Candidate matrix too large')
+  const bytes = candidateMatrixBytes(codes.length)
   const data = new Int8Array(bytes)
   for (let m = 0; m < codes.length; m++) {
     const code = codes[m]!

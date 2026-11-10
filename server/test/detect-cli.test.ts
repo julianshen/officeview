@@ -178,6 +178,6 @@ describe('formatAnswer', () => {
     expect(f({ kind: 'no-signal', reason: 'never-marked' })).toBe('x.png: NO USABLE SIGNAL — this page was never delivered marked')
     expect(f({ kind: 'no-signal', reason: 'no-candidates' })).toBe('x.png: NO USABLE SIGNAL — no audit record of this page being viewed')
     expect(f({ kind: 'no-signal', reason: 'reference-mismatch' })).toBe('x.png: NO USABLE SIGNAL — re-rendered page differs from what was served (renderer or font drift)')
-    expect(f({ kind: 'refused', reason: 'too-many-candidates', count: 5_000_000 })).toBe('x.png: REFUSED — 5000000 candidates exceed the detector limit (4194304)')
+    expect(f({ kind: 'refused', reason: 'too-many-candidates', count: 5_000_000 })).toBe('x.png: REFUSED — 5000000 candidates exceed the detector limit (4194303)')
   })
 })

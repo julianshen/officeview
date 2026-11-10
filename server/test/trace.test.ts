@@ -14,6 +14,7 @@ import { decodeImage } from '../src/detect/image'
 import { MAX_CANDIDATES, TAU_TABLE, tauFor } from '../src/detect/tau'
 import { trace, type TraceAnswer, type TraceInput, type TraceObservation } from '../src/detect/trace'
 import { deriveKeys, type Keys } from '../src/keys'
+import { CANDIDATE_MATRIX_MAX_BYTES, candidateMatrixBytes, prepareCandidates } from '../src/mark/detect'
 import { decodePng } from '../src/mark/png'
 import type { Bitmap } from '../src/mark/types'
 import { DocumentHost } from '../src/render'
@@ -74,8 +75,16 @@ describe('tau', () => {
     for (let i = 1; i < 3; i++) expect(TAU_TABLE[i]!.abs).toBeCloseTo(Math.sqrt(7.93 ** 2 + 2 * Math.log(TAU_TABLE[i]!.m / 2 ** 16)), 1)
     expect(tauFor(1).m).toBe(2 ** 16); expect(tauFor(2 ** 16).m).toBe(2 ** 16)
     expect(tauFor(2 ** 16 + 1).m).toBe(2 ** 20); expect(tauFor(MAX_CANDIDATES).m).toBe(2 ** 24)
-    expect(MAX_CANDIDATES).toBe(2 ** 22)
     expect(() => tauFor(2 ** 24 + 1)).toThrow()
+  })
+  it('the advertised maximum fits the detector matrix; one more is refused', () => {
+    expect(MAX_CANDIDATES).toBe(Math.floor(CANDIDATE_MATRIX_MAX_BYTES / 512))
+    expect(MAX_CANDIDATES).toBe(4_194_303)
+    expect(candidateMatrixBytes(MAX_CANDIDATES)).toBe(MAX_CANDIDATES * 512)
+    expect(candidateMatrixBytes(MAX_CANDIDATES)).toBeLessThanOrEqual(CANDIDATE_MATRIX_MAX_BYTES)
+    expect(() => candidateMatrixBytes(MAX_CANDIDATES + 1)).toThrow('Candidate matrix too large')
+    // The bound is checked before any element is read or the matrix allocated (sparse: no 2 GiB).
+    expect(() => prepareCandidates(new Array<Int8Array>(MAX_CANDIDATES + 1))).toThrow('Candidate matrix too large')
   })
 })
 

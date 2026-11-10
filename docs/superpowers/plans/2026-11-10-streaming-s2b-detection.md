@@ -37,7 +37,8 @@ survival, zoom, collusion and geometry batteries.
   durable before its frame is sent.
 - One decision per capture over every candidate; multi-hit ⇒ possible
   collusion, never a single name. Below threshold ⇒ no guess.
-- Refuse above 2²² candidates (4,194,304). τ from the next declared
+- Refuse above ⌊(2³¹ − 1) / 512⌋ = 4,194,303 candidates (the detector's
+  matrix bound; PR #68 review — 2²² overflowed it by one). τ from the next declared
   M ∈ {2¹⁶, 2²⁰, 2²⁴} at or above the candidate count.
 - Token counter and `msg40` uniqueness are per key generation.
 - Key material never printed or logged.
@@ -188,7 +189,7 @@ survival, zoom, collusion and geometry batteries.
 **Interfaces:**
 - Consumes: Tasks 1–4.
 - Produces:
-  - `tau.ts`: `export const TAU_TABLE: ReadonlyArray<{ m: number; abs: number; margin: number; source: string }>` for m ∈ {2¹⁶, 2²⁰, 2²⁴}; provisional values from Stage 0 — 2¹⁶: 7.99/3.85; 2²⁰: √(7.99² + 2 ln 16)/3.85; 2²⁴: 8.66/3.85 — `source: 'stage-0 provisional'` until Task 7 rewrites them. `tauFor(count: number): { abs; margin; m }`; `MAX_CANDIDATES = 2 ** 22`.
+  - `tau.ts`: `export const TAU_TABLE: ReadonlyArray<{ m: number; abs: number; margin: number; source: string }>` for m ∈ {2¹⁶, 2²⁰, 2²⁴}; provisional values from Stage 0 — 2¹⁶: 7.99/3.85; 2²⁰: √(7.99² + 2 ln 16)/3.85; 2²⁴: 8.66/3.85 — `source: 'stage-0 provisional'` until Task 7 rewrites them. `tauFor(count: number): { abs; margin; m }`; `MAX_CANDIDATES = Math.floor(CANDIDATE_MATRIX_MAX_BYTES / 512)` (4,194,303; was 2 ** 22, which overflowed `prepareCandidates`' bound — PR #68 review).
   - `image.ts`: `decodeImage(bytes: Uint8Array): Promise<Bitmap>` (PNG and JPEG via `@napi-rs/canvas` `loadImage`).
   - `trace.ts`:
     ```ts
@@ -234,7 +235,7 @@ survival, zoom, collusion and geometry batteries.
     `<image>: POSSIBLE COLLUSION — candidates <sid> (z …), …; no single viewer named`
     `<image>: NO MATCH — mark below threshold (best z <z.2f>); nothing attributed`
     `<image>: NO USABLE SIGNAL — <reason>` with reasons: flat `image carries no usable mark signal`, geometry `image geometry not supported (rotated, skewed or photographed)`, never-marked `this page was never delivered marked`, no-candidates `no audit record of this page being viewed`, reference-mismatch `re-rendered page differs from what was served (renderer or font drift)`
-    `<image>: REFUSED — <count> candidates exceed the detector limit (4194304)`
+    `<image>: REFUSED — <count> candidates exceed the detector limit (4194303)`
   - `--json`: one JSON object per line `{ image, answer: TraceAnswer }`.
   - Exit codes: 0 every image answered; 2 usage/config error (message, no key bytes); 1 internal error.
   - Each image appends a `DetectionLog` (`osUser` = `os.userInfo().username`).

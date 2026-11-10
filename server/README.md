@@ -94,7 +94,7 @@ One line per image, one of:
 <image>: POSSIBLE COLLUSION — candidates <sid> (z …), …; no single viewer named
 <image>: NO MATCH — mark below threshold (best z 5.68); nothing attributed
 <image>: NO USABLE SIGNAL — <reason>
-<image>: REFUSED — <count> candidates exceed the detector limit (4194304)
+<image>: REFUSED — <count> candidates exceed the detector limit (4194303)
 ```
 
 Reasons: no mark signal; geometry not supported (rotated, skewed,
