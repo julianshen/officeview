@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { decodeRasterBody } from '../../src/stream/raster'
-import { average, rotate, scale } from '../../scripts/stream-s0/mark/attacks'
+import { average, crop, rotate, scale } from '../../scripts/stream-s0/mark/attacks'
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { decodeImage } from '../src/detect/image'
@@ -28,15 +28,8 @@ const host = new DocumentHost() // shared: per-trace times below exclude the one
 const keys1 = await deriveKeys(new Uint8Array(32).fill(9), 1)
 const keys2 = await deriveKeys(new Uint8Array(32).fill(2), 2)
 const ring1: ReadonlyMap<number, Keys> = new Map([[1, keys1]])
-const timings: Array<[string, number]> = []
-afterAll(() => { for (const [name, ms] of timings) console.log(`trace ${name}: ${ms.toFixed(0)} ms`) })
-
-async function timed(name: string, input: Omit<TraceInput, 'host'>): Promise<TraceAnswer> {
-  const t0 = performance.now()
-  const a = await trace({ ...input, host })
-  timings.push([name, performance.now() - t0])
-  console.log(`trace ${name}: ${JSON.stringify(a)}`)
-  return a
+async function timed(_name: string, input: Omit<TraceInput, 'host'>): Promise<TraceAnswer> {
+  return trace({ ...input, host })
 }
 
 /** Opens a session (viewer `who`) and fetches the given (unitIndex, scale) units; returns sid and received PNGs. */
@@ -111,6 +104,11 @@ describe('trace', () => {
   it('bucket-2 capture at half zoom traces', async () => {
     const a = await timed('bucket-2 at 0.5', await input(scale(await decodeImage(B.pngs[1]!), 0.5)))
     expect(a).toMatchObject({ kind: 'traced', sid: B.sid, scale: 2 })
+    // The scale-1 registration is out of scope for this capture: its 4 candidates stay in the
+    // decision at the null expectation 0, so the margin is z - max(other scores, 0) = z, never Infinity.
+    if (a.kind !== 'traced') throw new Error('not traced')
+    expect(Number.isFinite(a.margin)).toBe(true)
+    expect(a.margin).toBe(a.z)
   }, 60_000)
 
   it('zoom 1.25 + jpeg q70 traces', async () => {
@@ -184,6 +182,28 @@ describe('trace fail-closed and durability', () => {
     expect(a1).toMatchObject({ kind: 'traced', sid: s1.sid, keyGeneration: 1 })
     const a2 = await timed('gen 2 capture', { capture: await decodeImage(s2.pngs[0]!), doc, unitIndex: 0, keys, store: reader })
     expect(a2).toMatchObject({ kind: 'traced', sid: s2.sid, keyGeneration: 2 })
+    reader.close()
+  }, 90_000)
+
+  it('a gen-2 capture registers with gen-2 chips (blank page, cropped)', async () => {
+    // A blank slide with no visible mark: registration can only synchronise on the carriers,
+    // so anchoring a gen-2 capture on gen-1 chips misplaces it.
+    const zip = await JSZip.loadAsync(doc)
+    const slide = await zip.file('ppt/slides/slide1.xml')!.async('string')
+    zip.file('ppt/slides/slide1.xml', slide.replace(/<p:sp>[\s\S]*<\/p:sp>/, ''))
+    const blank = new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+    const path = dbPath()
+    let store = AuditStore.open(path)
+    let h = await start({ keys: keys1, doc: blank, policy: { visibleMark: 'off' }, audit: new AuditTable({ store }) })
+    const s1 = await session(h, () => {}, 'alice')
+    s1.client.close(); h.stop(); store.close()
+    store = AuditStore.open(path)
+    h = await start({ keys: keys2, doc: blank, policy: { visibleMark: 'off' }, audit: new AuditTable({ store }) })
+    const s2 = await session(h, () => {}, 'alice')
+    s2.client.close(); h.stop(); store.close()
+    const reader = AuditStore.openReadOnlyForTrace(path), keys = new Map([[1, keys1], [2, keys2]])
+    const a = await timed('blank gen 2 cropped', { capture: crop(await decodeImage(s2.pngs[0]!), 0.1, 'bottom-right'), doc: blank, unitIndex: 0, keys, store: reader })
+    expect(a).toMatchObject({ kind: 'traced', sid: s2.sid, keyGeneration: 2 })
     reader.close()
   }, 90_000)
 

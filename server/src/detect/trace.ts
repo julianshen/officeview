@@ -84,26 +84,31 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     return basis(deriveBasisKey(keys.get(c.gen)!.kBasisRoot, c.docRef, `${unitIndex}@${c.delivery.scale}`), ref.width, ref.height, DEFAULT_PARAMS)
   }
 
-  // Register once per (contentPolicy, scale) against its first group's reference; reuse the pose for every group.
+  // Register once per (contentPolicy, scale, generation), with that generation's chips, against the
+  // reference of its first group; the visible-mark groups of the same triple reuse the pose.
+  // A group with no usable pose (registration failed, out of scope, or flat support) stays in the
+  // decision at the null expectation 0: unscored candidates are never named, but the margin is
+  // always taken against them. τ is for the total count either way.
   const poses = new Map<string, Registration | null>()
   const scores: number[] = [], owners: Candidate[] = []
   let registered = false, scored = false, support = 0
+  const unscored = (group: Candidate[]) => { for (const c of group) { scores.push(0); owners.push(c) } }
   for (const group of groups.values()) {
     const first = group[0]!, reference = references.get(refKeyOf(first))!, chips = chipsOf(first)
-    const poseKey = JSON.stringify([first.row.contentPolicy, first.delivery.scale])
+    const poseKey = JSON.stringify([first.row.contentPolicy, first.delivery.scale, first.gen])
     let pose = poses.get(poseKey)
     if (pose === undefined) {
       const r = register(capture, reference, chips)
       poses.set(poseKey, pose = r && r.residual <= GEOMETRY_ERROR_MAX ? r : null)
     }
-    if (!pose) continue
+    if (!pose) { unscored(group); continue }
     registered = true
     const codes = group.map((c) => {
       if (!c.row.forensic) throw new Error(`marked delivery for ${c.sid} without an issuance record`)
       return extendedCodeword(msgBits(c.row.forensic.msg40))
     })
     const s = scoreRegistered(capture, pose, reference, chips, prepareCandidates(codes), DEFAULT_PARAMS)
-    if (s.flat) continue
+    if (s.flat) { unscored(group); continue }
     scored = true; support += s.support
     for (let i = 0; i < group.length; i++) { scores.push(s.scores[i]!); owners.push(group[i]!) }
   }
