@@ -3786,7 +3786,7 @@
             "ref": "F2",
             "controlRef": "F8",
             "matched": true,
-            "fillRgb": "FF46B1E1",
+            "fillRgb": "FF44B3E1",
             "borderTop": true,
             "borderBottom": true,
             "note": "theme=4 tint=0.4 DXF fill + top/bottom borders"

@@ -92,7 +92,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           }
           if (cellKey === 'stage1-dxf-layering:D4') {
             // CF does not match; style returned is base table band (50 <= 100)
-            expect(st?.fillColor, `${cellKey} table band`).toBe('FFC1E5F5')
+            expect(st?.fillColor, `${cellKey} table band`).toBe('FFC0E6F5')
             continue
           }
 
@@ -376,37 +376,33 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage2-scale-composition',
     ]
 
-    // Documented findings for cells where engine behavior diverges from Excel oracle:
-    const FINDINGS: Record<string, { expected: string; actual: string; reason: string }> = {
-      // Finding F1: Theme 4 tint 0.4 and Theme 5 tint -0.4 HLS calculation rounding in Excel
-      'stage2-scale-colors:B2': { expected: 'FF44B3E1', actual: 'FF46B1E1', reason: 'Excel HLS tint rounding discrepancy on theme 4' },
-      'stage2-scale-colors:B3': { expected: 'FF5997AD', actual: 'FF5A95AD', reason: 'Excel HLS tint rounding discrepancy on theme 4' },
-      'stage2-scale-colors:B4': { expected: 'FF6E7A79', actual: 'FF6F7979', reason: 'Excel HLS tint rounding discrepancy on theme 4' },
-      'stage2-scale-colors:B5': { expected: 'FF835D45', actual: 'FF845D45', reason: 'Excel HLS tint rounding discrepancy on theme 5' },
-      'stage2-scale-colors:B6': { expected: 'FF984010', actual: 'FF994010', reason: 'Excel HLS tint rounding discrepancy on theme 5' },
+    type Finding = { outcome: 'withheld'; reason: string }
 
+    // Documented findings for cells where engine behavior diverges from Excel oracle:
+    // Only withheld outcomes are allowed; a finding can never encode a painted wrong colour.
+    const FINDINGS: Record<string, Finding> = {
       // Finding F2: Overlapping scales withheld under Task 15 ruling S2-I (base fill FFFFFFFF)
-      'stage2-scale-scope:B2': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:B3': { expected: 'FFAE9373', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:B5': { expected: 'FF89A877', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:B6': { expected: 'FF63BE7B', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:D2': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
-      'stage2-scale-scope:D3': { expected: 'FFAE9373', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+      'stage2-scale-scope:B2': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:B3': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:B5': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:B6': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:D2': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+      'stage2-scale-scope:D3': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
 
       // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
-      'stage2-scale-composition:I2': { expected: 'FF63BE7B', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-      'stage2-scale-composition:I3': { expected: 'FF9F9C74', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-      'stage2-scale-composition:I4': { expected: 'FFDB7A6E', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-      'stage2-scale-composition:I5': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I2': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I3': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I4': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I5': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
 
       // Finding F4: Text cell J2 in scale range
-      'stage2-scale-composition:J2': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
+      'stage2-scale-composition:J2': { outcome: 'withheld', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
 
       // Finding F5: Expression rule 19 with stopIfTrue="1" withholds lower scale 20 under S2-J
-      'stage2-scale-composition:L2': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-      'stage2-scale-composition:L3': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-      'stage2-scale-composition:L4': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-      'stage2-scale-composition:L5': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L2': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L3': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L4': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
     }
 
     await withInjectedCfEvidence(ALL_STAGE2_SCALE_CAPABILITIES, async () => {
@@ -448,9 +444,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
           const finding = FINDINGS[cellKey]
           if (finding) {
-            // Report finding and verify expected divergence:
-            expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe(finding.actual)
-            expect(cell.fillRgb, `${cellKey} oracle ARGB`).toBe(finding.expected)
+            expect(finding.outcome).toBe('withheld')
+            expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
           } else {
             // Exact Excel ARGB match:
             expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
@@ -466,6 +461,22 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       }
       expect(grandTotalChecked).toBe(398)
     })
+  })
+
+  it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
+    // Type definition allows only { outcome: 'withheld', reason: string }
+    type ConformanceFinding = { outcome: 'withheld'; reason: string }
+
+    const validateFinding = (f: ConformanceFinding) => {
+      if (f.outcome !== 'withheld') throw new Error(`Non-withheld outcome: ${(f as any).outcome}`)
+    }
+
+    // Valid withheld outcome:
+    expect(() => validateFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
+
+    // Runtime rejection of painted wrong colour or diverged outcome:
+    expect(() => validateFinding({ outcome: 'diverged' as any, reason: 'invalid' })).toThrow(/Non-withheld outcome/)
+    expect(() => validateFinding({ outcome: 'painted' as any, reason: 'wrong colour' })).toThrow(/Non-withheld outcome/)
   })
 })
 

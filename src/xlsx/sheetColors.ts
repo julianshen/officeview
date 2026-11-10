@@ -27,26 +27,104 @@ export interface SheetColorContext {
   theme?: Readonly<Record<string, string>>
 }
 
-/** Excel's tint: HLS luminance scaled toward black (tint < 0) or white (tint > 0). */
+const HLSMAX = 240
+const RGBMAX = 255
+const HLS_UNDEFINED = (HLSMAX * 2) / 3
+
+function rgbToHls(r: number, g: number, b: number): [number, number, number] {
+  const cMax = Math.max(r, g, b)
+  const cMin = Math.min(r, g, b)
+  const l = Math.floor((((cMax + cMin) * HLSMAX) + RGBMAX) / (2 * RGBMAX))
+
+  if (cMax === cMin) {
+    return [HLS_UNDEFINED, l, 0]
+  }
+
+  let s: number
+  if (l <= HLSMAX / 2) {
+    s = Math.floor((((cMax - cMin) * HLSMAX) + Math.floor((cMax + cMin) / 2)) / (cMax + cMin))
+  } else {
+    s = Math.floor((((cMax - cMin) * HLSMAX) + Math.floor((2 * RGBMAX - cMax - cMin) / 2)) / (2 * RGBMAX - cMax - cMin))
+  }
+
+  const rDelta = Math.floor((((cMax - r) * (HLSMAX / 6)) + Math.floor((cMax - cMin) / 2)) / (cMax - cMin))
+  const gDelta = Math.floor((((cMax - g) * (HLSMAX / 6)) + Math.floor((cMax - cMin) / 2)) / (cMax - cMin))
+  const bDelta = Math.floor((((cMax - b) * (HLSMAX / 6)) + Math.floor((cMax - cMin) / 2)) / (cMax - cMin))
+
+  let h: number
+  if (r === cMax) {
+    h = bDelta - gDelta
+  } else if (g === cMax) {
+    h = (HLSMAX / 3) + rDelta - bDelta
+  } else {
+    h = ((HLSMAX * 2) / 3) + gDelta - rDelta
+  }
+
+  if (h < 0) h += HLSMAX
+  if (h > HLSMAX) h -= HLSMAX
+
+  return [h, l, s]
+}
+
+function hueToRgb(n1: number, n2: number, hue: number): number {
+  let h = hue
+  if (h < 0) h += HLSMAX
+  if (h > HLSMAX) h -= HLSMAX
+
+  if (h < HLSMAX / 6) {
+    return n1 + Math.floor((((n2 - n1) * h + (HLSMAX / 12)) / (HLSMAX / 6)))
+  }
+  if (h < HLSMAX / 2) {
+    return n2
+  }
+  if (h < (HLSMAX * 2) / 3) {
+    return n1 + Math.floor((((n2 - n1) * (((HLSMAX * 2) / 3) - h) + (HLSMAX / 12)) / (HLSMAX / 6)))
+  }
+  return n1
+}
+
+function hlsToRgb(h: number, l: number, s: number): [number, number, number] {
+  if (s === 0) {
+    const val = Math.floor((l * RGBMAX + HLSMAX / 2) / HLSMAX)
+    return [val, val, val]
+  }
+
+  let magic2: number
+  if (l <= HLSMAX / 2) {
+    magic2 = Math.floor((l * (HLSMAX + s) + (HLSMAX / 2)) / HLSMAX)
+  } else {
+    magic2 = l + s - Math.floor(((l * s) + (HLSMAX / 2)) / HLSMAX)
+  }
+  const magic1 = 2 * l - magic2
+
+  const r = Math.floor((hueToRgb(magic1, magic2, h + HLSMAX / 3) * RGBMAX + HLSMAX / 2) / HLSMAX)
+  const g = Math.floor((hueToRgb(magic1, magic2, h) * RGBMAX + HLSMAX / 2) / HLSMAX)
+  const b = Math.floor((hueToRgb(magic1, magic2, h - HLSMAX / 3) * RGBMAX + HLSMAX / 2) / HLSMAX)
+
+  return [
+    Math.max(0, Math.min(255, r)),
+    Math.max(0, Math.min(255, g)),
+    Math.max(0, Math.min(255, b)),
+  ]
+}
+
+/** Excel's tint: HLS luminance on Windows 0-240 scale with integer rounding (ECMA-376 / Win32). */
 export function applyTint(rgb: string, tint: number): string {
   if (!Number.isFinite(tint) || tint === 0) return rgb
-  const [r, g, b] = [0, 2, 4].map(i => parseInt(rgb.slice(i, i + 2), 16) / 255)
-  const max = Math.max(r, g, b), min = Math.min(r, g, b)
-  let h = 0, s = 0, l = (max + min) / 2
-  if (max !== min) {
-    const d = max - min
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-    h = (max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4) / 6
+  const r = parseInt(rgb.slice(0, 2), 16)
+  const g = parseInt(rgb.slice(2, 4), 16)
+  const b = parseInt(rgb.slice(4, 6), 16)
+
+  const [h, l, s] = rgbToHls(r, g, b)
+  let newL: number
+  if (tint < 0) {
+    newL = Math.floor(l * (1 + tint) + 0.01)
+  } else {
+    newL = Math.floor(l * (1 - tint) + (HLSMAX - HLSMAX * (1 - tint)) + 0.01)
   }
-  l = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q
-  const channel = (t: number) => {
-    if (t < 0) t += 1
-    if (t > 1) t -= 1
-    return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p
-  }
-  return [channel(h + 1 / 3), channel(h), channel(h - 1 / 3)]
-    .map(v => Math.max(0, Math.min(255, Math.round(v * 255))).toString(16).padStart(2, '0')).join('').toUpperCase()
+  newL = Math.max(0, Math.min(HLSMAX, newL))
+  const [outR, outG, outB] = hlsToRgb(h, newL, s)
+  return [outR, outG, outB].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase()
 }
 
 /** Resolve one colour element's attributes to 'FFRRGGBB' (explicit rgb keeps its
