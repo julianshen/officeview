@@ -41,7 +41,7 @@ export function isSupportedExcelVersion(version: unknown): boolean {
 const asArray = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v])
 
 const asNode = (v: unknown): XmlNode | undefined =>
-  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as XmlNode) : undefined
+  v === '' ? {} : v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as XmlNode) : undefined
 
 const attr = (node: XmlNode | undefined, name: string): string | undefined => {
   if (!node) return undefined
@@ -227,6 +227,18 @@ function extractOrderedFormulas(rule: XmlNode, extension: 'legacy' | 'x14'): str
     extension === 'x14'
       ? asArray(rule.f).map(f => textOf(f) ?? String(f))
       : asArray(rule.formula).map(f => textOf(f) ?? String(f))
+  if (raw.length === 0) {
+    const cs = asNode(rule.colorScale) ?? asNode(rule['x14:colorScale'])
+    if (cs) {
+      const cfvos = asArray(cs.cfvo ?? cs['x14:cfvo']).map(asNode).filter((n): n is XmlNode => n !== undefined)
+      for (const cfvo of cfvos) {
+        if (attr(cfvo, 'type') === 'formula') {
+          const val = attr(cfvo, 'val') ?? textOf(cfvo.f) ?? textOf(cfvo['xm:f'])
+          if (val) raw.push(val)
+        }
+      }
+    }
+  }
   return raw.map(normalizeFormulaOperand)
 }
 
@@ -363,7 +375,7 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
     for (let i = 0; i < marker.scale.cfvo.length; i++) {
       const exp = marker.scale.cfvo[i]!
       const actual = cfvoNodes[i]!
-      const actualType = attr(actual, 'type')
+      const actualType = attr(actual, 'type') ?? ''
       if (actualType !== exp.type) return false
       const actualVal = attr(actual, 'val')
       if (exp.val !== undefined) {

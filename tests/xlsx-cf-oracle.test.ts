@@ -3077,4 +3077,19 @@ describe('CF oracle verifier', () => {
       rmSync(testDir, { recursive: true, force: true })
     }
   })
+
+  it('structurally verifies stage2-scale-unresolved-shapes as unsupported-capability refusal', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const unresolvedCase = manifest.cases.find(c => c.id === 'stage2-scale-unresolved-shapes')!
+    expect(unresolvedCase).toBeDefined()
+    expect(unresolvedCase.status).toBe('unsupported')
+
+    const res = verifyCfCase(unresolvedCase, { rootDir: REPO_ROOT })
+    expect(res.kind).toBe('refusal')
+    if (res.kind === 'refusal') {
+      expect(res.structuralValid).toBe(true)
+      expect(res.status).toBe('unsupported')
+      expect(res.code).toBe('unsupported-capability')
+    }
+  })
 })
