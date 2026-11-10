@@ -191,8 +191,13 @@ function assembleScope(
       if (!state) return base
       // Surviving winning properties apply even when other aspects are
       // blocked: only the descriptor reports the unavailable aspect.
-      if (Object.keys(state.properties).length === 0) return base
-      return resolveCfCellStyle(base, { properties: state.properties }, colors)
+      const scale = state.scale
+      const paintsScale = scale?.argb !== undefined
+      if (Object.keys(state.properties).length === 0 && !paintsScale) return base
+      return resolveCfCellStyle(base, {
+        properties: state.properties,
+        ...(paintsScale ? { visual: { colorScale: { ruleId: scale!.ruleId ?? 0, argb: scale!.argb!, ...(scale!.fraction !== undefined ? { fraction: scale!.fraction } : {}) } } } : {}),
+      }, colors)
     },
     describe: (row, col) => {
       if (disposed || !current()) return undefined
@@ -489,7 +494,7 @@ export async function prepareCfWireScope(
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
-          if (Object.keys(properties).length) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
+          if (Object.keys(properties).length || state.scale?.argb !== undefined) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
