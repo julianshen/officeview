@@ -339,3 +339,133 @@ it('max edit recolours the whole scale scope in one generation', async () => {
   expect(memory.currentBytes).toBe(0)
 })
 
+it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)', async () => {
+  const { TileCache } = await import('../src/xlsx/view/tileCache')
+  const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+
+  const rows = Array.from({ length: 60 }, (_, r) => ({
+    index: r,
+    cells: [{ row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0, value: r }],
+  }))
+
+  const scaleSheet: XlsxSheet = {
+    name: 'ScaleTileSheet',
+    sheetId: 's',
+    cols: [{ min: 0, max: 0, widthChars: 12 }],
+    merges: [],
+    mergeRanges: [],
+    rows,
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [
+        {
+          id: 1,
+          priority: 1,
+          documentOrder: 0,
+          stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 59, firstCol: 0, lastCol: 0 }], // A1:A60
+          writes: new Set(['colorScale', 'fill']),
+          definition: {
+            kind: 'colorScale',
+            points: [
+              { bound: { type: 'min' }, argb: 0xfff8696b },
+              { bound: { type: 'max' }, argb: 0xff63be7b },
+            ],
+            dialect: 'base',
+            formulas: [],
+          },
+        },
+      ],
+    },
+  } as XlsxSheet
+
+  const doc = { sheets: [scaleSheet] }
+  const source = createObjectWorkbookSource(doc, 'tile-live')
+  const store = source.store('s')
+
+  let activeRenderer: InstanceType<typeof SheetTileRenderer> | undefined
+  const origPresent = SheetTileRenderer.prototype.present
+  const presentSpy = vi.spyOn(SheetTileRenderer.prototype, 'present').mockImplementation(function (
+    this: InstanceType<typeof SheetTileRenderer>,
+    ctx,
+    frame,
+  ) {
+    activeRenderer = this
+    return origPresent.call(this, ctx, frame)
+  })
+
+  const invalidateCalls: Array<(key: import('../src/xlsx/view/tileCache').TileKey) => boolean> = []
+  const origInvalidate = TileCache.prototype.invalidate
+  const invalidateSpy = vi.spyOn(TileCache.prototype, 'invalidate').mockImplementation(function (
+    this: InstanceType<typeof TileCache>,
+    predicate,
+  ) {
+    invalidateCalls.push(predicate)
+    return origInvalidate.call(this, predicate)
+  })
+
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+  try {
+    await waitFor(() => expect(activeRenderer).toBeDefined())
+
+    const identity = { docId: 'tile-live', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const tileInScope1 = { paletteKey: 'classic', identity, backend: 'canvas2d', zoom: 1, dpr: 1, col: 0, row: 0 }
+    const tileInScope2 = { paletteKey: 'classic', identity, backend: 'canvas2d', zoom: 1, dpr: 1, col: 0, row: 1 }
+    const tileOutOfScope = { paletteKey: 'classic', identity, backend: 'canvas2d', zoom: 1, dpr: 1, col: 5, row: 0 }
+    const tileOtherSheet = {
+      paletteKey: 'classic',
+      identity: { ...identity, sheetId: 'other' },
+      backend: 'canvas2d',
+      zoom: 1,
+      dpr: 1,
+      col: 0,
+      row: 0,
+    }
+
+    const dummySurface = (w = 512, h = 512) => ({ width: w, height: h, close: vi.fn() })
+    activeRenderer!.cache.put(tileInScope1, dummySurface())
+    activeRenderer!.cache.put(tileInScope2, dummySurface())
+    activeRenderer!.cache.put(tileOutOfScope, dummySurface())
+
+    expect(activeRenderer!.cache.get(tileInScope1)).toBeDefined()
+    expect(activeRenderer!.cache.get(tileInScope2)).toBeDefined()
+    expect(activeRenderer!.cache.get(tileOutOfScope)).toBeDefined()
+
+    const beforeCallsCount = invalidateCalls.length
+
+    // Perform max edit on cell A50 (row 49, col 0)
+    act(() => {
+      scaleSheet.rows[49]!.cells[0]!.value = 1000
+      store.noteValuesChanged?.()
+      ui.rerender(<InteractiveSheetDoc doc={doc} source={source} />)
+    })
+
+    await waitFor(() => expect(invalidateCalls.length).toBeGreaterThan(beforeCallsCount))
+    const cfPredicate = invalidateCalls[beforeCallsCount]!
+
+    // (T15-A) Assertions:
+    // 1. Max edit invalidates ONLY the tiles of the scale scope (tile-level)
+    expect(cfPredicate(tileInScope1), 'Tile in scope (rows 0..25) must be invalidated').toBe(true)
+    expect(cfPredicate(tileInScope2), 'Tile in scope (rows 26..51) must be invalidated').toBe(true)
+    expect(cfPredicate(tileOutOfScope), 'Tile out of scope (col 5) must NOT be invalidated').toBe(false)
+    expect(cfPredicate(tileOtherSheet), 'Tile on another sheet must NOT be invalidated').toBe(false)
+
+    // 2. Cache retention verification: invalidates ONLY the tiles of the scale scope
+    const testCache = new TileCache(activeRenderer!.cache.pool)
+    testCache.put(tileInScope1, dummySurface())
+    testCache.put(tileInScope2, dummySurface())
+    testCache.put(tileOutOfScope, dummySurface())
+
+    testCache.invalidate(cfPredicate)
+
+    expect(testCache.get(tileInScope1), 'tileInScope1 dropped').toBeUndefined()
+    expect(testCache.get(tileInScope2), 'tileInScope2 dropped').toBeUndefined()
+    expect(testCache.get(tileOutOfScope), 'tileOutOfScope retained').toBeDefined()
+  } finally {
+    ui.unmount()
+    presentSpy.mockRestore()
+    invalidateSpy.mockRestore()
+  }
+})
+
+

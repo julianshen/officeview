@@ -174,7 +174,20 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     continue
                   }
                   const colorOut = scaleColorAt(value, rule.definition.points, thresh.value, { hasEvidence: cap => evidence.allows(cap) })
-                  outcomes.push(colorOut)
+                  if (colorOut.kind === 'ready') {
+                    let numVal: number | undefined
+                    if (typeof value === 'number') numVal = value
+                    else if (value.kind === 'number') numVal = value.value
+                    let fraction: number | undefined
+                    if (numVal !== undefined && thresh.value.length >= 2) {
+                      const tMin = Math.min(...thresh.value)
+                      const tMax = Math.max(...thresh.value)
+                      fraction = tMax === tMin ? 1 : Math.max(0, Math.min(1, (numVal - tMin) / (tMax - tMin)))
+                    }
+                    outcomes.push({ kind: 'ready', value: { argb: colorOut.value, fraction } })
+                  } else {
+                    outcomes.push(colorOut)
+                  }
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))

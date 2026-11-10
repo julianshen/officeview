@@ -30,6 +30,7 @@ interface MatchingFill {
   readonly index: number
   readonly isScale: boolean
   readonly argb?: number
+  readonly fraction?: number
 }
 
 /** Inputs are already ordered by (priority, documentOrder) and scoped to one cell.
@@ -64,14 +65,16 @@ function* steps(
 
     if (isScale) {
       let argb: number | undefined
+      let fraction: number | undefined
       if (typeof outcome.value === 'number') {
         argb = outcome.value
       } else if (typeof outcome.value === 'object' && outcome.value !== null && 'argb' in outcome.value) {
         argb = (outcome.value as { argb: number }).argb
+        fraction = (outcome.value as { fraction?: number }).fraction
       } else if (rule.definition.kind === 'colorScale' && rule.definition.points?.length) {
         argb = rule.definition.points[0]!.argb
       }
-      matchingFills.push({ rule, index: i, isScale: true, argb })
+      matchingFills.push({ rule, index: i, isScale: true, argb, fraction })
     } else if (hasDxfFill) {
       matchingFills.push({ rule, index: i, isScale: false })
     }
@@ -173,7 +176,7 @@ function* steps(
       if (!blocked && fillWinnerIndex === i) {
         const fillInfo = matchingFills.find(f => f.index === i)
         if (fillInfo && fillInfo.argb !== undefined) {
-          visualColorScale = { ruleId: rule.id, argb: fillInfo.argb }
+          visualColorScale = { ruleId: rule.id, argb: fillInfo.argb, ...(fillInfo.fraction !== undefined ? { fraction: fillInfo.fraction } : {}) }
           won.add('fill')
           won.add('colorScale')
         }

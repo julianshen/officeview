@@ -102,13 +102,20 @@ interface CopiedState {
   readonly properties: Record<string, string | number | boolean | null>
   readonly writes: readonly string[] | undefined
   readonly reason: string | undefined
+  readonly scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }>
 }
 
 /** Structural key for one cell's descriptor inputs: shared aspects share one charge. */
-const winKey = (properties: Readonly<Record<string, string | number | boolean | null>>, unresolvedWrites: readonly string[] | undefined): string => {
+const winKey = (
+  properties: Readonly<Record<string, string | number | boolean | null>>,
+  unresolvedWrites: readonly string[] | undefined,
+  scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
+): string => {
   const paths = Object.keys(properties).sort().join(',')
   const writes = unresolvedWrites ? [...unresolvedWrites].sort().join(',') : ''
-  return `${paths}|${writes}`
+  const fraction = typeof scale === 'number' ? scale : scale?.fraction
+  const scaleKey = fraction !== undefined ? `|scale:${Math.round(fraction * 100)}` : ''
+  return `${paths}|${writes}${scaleKey}`
 }
 
 const winDescriptor = (
@@ -117,13 +124,14 @@ const winDescriptor = (
   unresolvedReason: string | undefined,
   locale: string,
   cache: Map<string, CfDescriptor>,
+  scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
 ): CfDescriptor | undefined => {
-  const key = winKey(properties, unresolvedWrites)
+  const key = winKey(properties, unresolvedWrites, scale)
   const cached = cache.get(key)
   if (cached) return cached
   const descriptor = unresolvedReason !== undefined
     ? describeCfUnavailable(locale)
-    : describeCfWin(properties, unresolvedWrites, undefined, locale)
+    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale)
   if (descriptor && cache.size < DESCRIPTOR_CACHE_KEYS) cache.set(key, descriptor)
   return descriptor ?? undefined
 }
@@ -184,8 +192,8 @@ function assembleScope(
       if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
       if (!state) return undefined
-      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined) return undefined
-      return winDescriptor(state.properties, state.writes, state.reason, locale, cache)
+      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale) return undefined
+      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale)
     },
     dispose: () => {
       if (disposed) return
@@ -285,13 +293,13 @@ export async function prepareCfTextScope(
                 // ever exists uncharged (the spread below is transient scratch
                 // for measurement; the stored copy is built after admission).
                 const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
-                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes })
+                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale })
                 if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); account.close(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 const properties: Record<string, string | number | boolean | null> = {}
                 for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
-                states.set(row * 16384 + col, { properties, writes, reason: undefined })
+                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale })
             }
           }
         }

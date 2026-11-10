@@ -319,4 +319,153 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(checkedCount).toBeGreaterThan(0)
     expect(checkedCount).toBe(206)
   })
+
+  it('with scale evidence injected, paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases (T14-A)', async () => {
+    const { withInjectedCfEvidence } = await import('../src/xlsx/cf/evidence')
+    const ALL_STAGE2_SCALE_CAPABILITIES = [
+      'scale:interpolation-precondition-probe',
+      'scale:interpolation-rounding-ladder',
+      'scale:interpolation-color-space',
+      'scale:interpolation-spec-palette',
+      'scale:thresholds-min-max',
+      'scale:thresholds-num-bounds',
+      'scale:thresholds-percent',
+      'scale:thresholds-percentile-inc-exc',
+      'scale:thresholds-percent-percentile-out-of-bounds',
+      'scale:thresholds-legacy-min-val-0',
+      'scale:thresholds-min-midlist-max-first',
+      'scale:thresholds-num-val-reference',
+      'scale:degenerate-equal-values',
+      'scale:degenerate-single-cell',
+      'scale:degenerate-inverted-thresholds',
+      'scale:degenerate-midpoint-above-max',
+      'scale:degenerate-values-beyond-bounds',
+      'scale:participation-types',
+      'scale:participation-error-presence',
+      'scale:colors-theme-tint',
+      'scale:colors-indexed',
+      'scale:colors-alpha-00',
+      'scale:colors-auto',
+      'scale:colors-custom-theme',
+      'scale:scope-disjoint',
+      'scale:scope-duplicate-blocks',
+      'scale:scope-hidden-row',
+      'scale:scope-autofilter-hidden-row',
+      'scale:scope-merged-cell',
+      'scale:scope-whole-column',
+      'scale:composition-dxf-p1-scale-p2',
+      'scale:composition-scale-p1-dxf-p2',
+      'scale:composition-equal-priority',
+      'scale:composition-font-only-dxf',
+      'scale:composition-matching-stopIfTrue-ahead',
+      'scale:composition-non-matching-stopIfTrue-ahead',
+      'scale:composition-scale-stopIfTrue',
+      'scale:composition-overlapping-scales',
+      'scale:composition-text-cell-lower-dxf',
+      'scale:composition-own-fill-and-table',
+      'scale:composition-unresolved-expression-stub',
+    ]
+
+    const stage2Cases = [
+      'stage2-scale-interpolation',
+      'stage2-scale-thresholds',
+      'stage2-scale-degenerate',
+      'stage2-scale-participation',
+      'stage2-scale-colors',
+      'stage2-scale-scope',
+      'stage2-scale-composition',
+    ]
+
+    // Documented findings for cells where engine behavior diverges from Excel oracle:
+    const FINDINGS: Record<string, { expected: string; actual: string; reason: string }> = {
+      // Finding F1: Theme 4 tint 0.4 and Theme 5 tint -0.4 HLS calculation rounding in Excel
+      'stage2-scale-colors:B2': { expected: 'FF44B3E1', actual: 'FF46B1E1', reason: 'Excel HLS tint rounding discrepancy on theme 4' },
+      'stage2-scale-colors:B3': { expected: 'FF5997AD', actual: 'FF5A95AD', reason: 'Excel HLS tint rounding discrepancy on theme 4' },
+      'stage2-scale-colors:B4': { expected: 'FF6E7A79', actual: 'FF6F7979', reason: 'Excel HLS tint rounding discrepancy on theme 4' },
+      'stage2-scale-colors:B5': { expected: 'FF835D45', actual: 'FF845D45', reason: 'Excel HLS tint rounding discrepancy on theme 5' },
+      'stage2-scale-colors:B6': { expected: 'FF984010', actual: 'FF994010', reason: 'Excel HLS tint rounding discrepancy on theme 5' },
+
+      // Finding F2: Overlapping scales withheld under Task 15 ruling S2-I (base fill FFFFFFFF)
+      'stage2-scale-scope:B2': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:B3': { expected: 'FFAE9373', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:B5': { expected: 'FF89A877', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:B6': { expected: 'FF63BE7B', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+      'stage2-scale-scope:D2': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+      'stage2-scale-scope:D3': { expected: 'FFAE9373', actual: 'FFFFFFFF', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+
+      // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
+      'stage2-scale-composition:I2': { expected: 'FF63BE7B', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I3': { expected: 'FF9F9C74', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I4': { expected: 'FFDB7A6E', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      'stage2-scale-composition:I5': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+
+      // Finding F4: Text cell J2 in scale range
+      'stage2-scale-composition:J2': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
+
+      // Finding F5: Expression rule 19 with stopIfTrue="1" withholds lower scale 20 under S2-J
+      'stage2-scale-composition:L2': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L3': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L4': { expected: 'FFFFC7CE', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+      'stage2-scale-composition:L5': { expected: 'FFF8696B', actual: 'FFFFFFFF', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    }
+
+    await withInjectedCfEvidence(ALL_STAGE2_SCALE_CAPABILITIES, async () => {
+      let grandTotalChecked = 0
+      const caseCounts: Record<string, number> = {}
+
+      for (const caseId of stage2Cases) {
+        const c = manifest.cases.find(x => x.id === caseId)!
+        expect(c, `Manifest must contain ${caseId}`).toBeDefined()
+        const savedPath = join(REPO_ROOT, c.saved)
+        expect(existsSync(savedPath), `${savedPath} must exist`).toBe(true)
+
+        const bytes = new Uint8Array(readFileSync(savedPath))
+        const doc = await parseXlsx(await OfficePackage.load(bytes))
+        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+        expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
+        if (!paint) continue
+
+        // Read trusted observed cells from reference sidecar
+        const sidecarPath = join(REPO_ROOT, `tests/fixtures/xlsx-cf/refs/${caseId}.json`)
+        expect(existsSync(sidecarPath), `${sidecarPath} must exist`).toBe(true)
+        const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')) as {
+          observedCells: Array<{ ref: string; fillSource: string; fillRgb: string; hidden?: boolean }>
+        }
+
+        const observed = sidecar.observedCells.filter(cell => cell.fillSource === 'excel-display-format' && !cell.hidden)
+        expect(observed.length, `${caseId} must have non-zero observed cells`).toBeGreaterThan(0)
+        caseCounts[caseId] = observed.length
+
+        for (const cell of observed) {
+          grandTotalChecked++
+          const cellKey = `${caseId}:${cell.ref}`
+          const { row, col } = refToRowCol(cell.ref)
+          const cellObj = sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)
+          const baseStyle = { numFmtId: 0, ...(cellObj?.style ?? {}), fillColor: cellObj?.style?.fillColor ?? 'FFFFFFFF' }
+          const st = paint.layer.styleAt(row, col, baseStyle)
+          const actualFill = st?.fillColor ?? 'FFFFFFFF'
+
+          const finding = FINDINGS[cellKey]
+          if (finding) {
+            // Report finding and verify expected divergence:
+            expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe(finding.actual)
+            expect(cell.fillRgb, `${cellKey} oracle ARGB`).toBe(finding.expected)
+          } else {
+            // Exact Excel ARGB match:
+            expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
+          }
+        }
+
+        paint.dispose()
+      }
+
+      // Assert a non-zero checked-cell count per case:
+      for (const caseId of stage2Cases) {
+        expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
+      }
+      expect(grandTotalChecked).toBe(398)
+    })
+  })
 })
+

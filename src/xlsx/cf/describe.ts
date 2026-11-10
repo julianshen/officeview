@@ -67,6 +67,7 @@ export function describeCfWin(
   unresolvedWrites: readonly string[] | ReadonlySet<string> | undefined,
   unresolvedReason: string | undefined,
   locale: string | undefined,
+  scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
 ): CfDescriptor | undefined {
   if (unresolvedReason !== undefined) return describeCfUnavailable(locale)
   if (unresolvedWrites !== undefined) {
@@ -74,6 +75,15 @@ export function describeCfWin(
       ? (unresolvedWrites as ReadonlySet<string>).size
       : (unresolvedWrites as readonly string[]).length
     if (count > 0) return describeCfUnavailable(locale)
+  }
+  const fraction = typeof scale === 'number' ? scale : scale?.fraction
+  if (fraction !== undefined && Number.isFinite(fraction)) {
+    const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)))
+    const isZh = locale === 'zh-TW' || (locale !== undefined && locale.startsWith('zh'))
+    const text = isZh ? `色階 ${pct}%` : `Colour scale, ${pct}% of range`
+    if (text.length <= CF_LIMITS.descriptorUnits) {
+      return { key: 'cf:colorScale', text }
+    }
   }
   const aspects = new Set<string>()
   for (const path of Object.keys(properties)) {

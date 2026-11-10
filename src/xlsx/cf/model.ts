@@ -32,7 +32,7 @@ export interface CfCellState {
   readonly descriptorKey?: string
   readonly unresolvedWrites?: CfWriteMask
   readonly visual?: Readonly<{
-    colorScale?: Readonly<{ ruleId: number; argb: number }>
+    colorScale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
     dataBar?: Readonly<{ fraction: number; color: string }>
     iconSet?: Readonly<{ name: string; index: number }>
   }>

@@ -1631,8 +1631,37 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
-    if(paintedCf.current!==cfLiveKey)renderer.cache.invalidate(key=>key.identity.sheetId===activeSheetId)
-    paintedCf.current=cfLiveKey
+    if (paintedCf.current !== cfLiveKey) {
+      const cfRules = entry?.sheet.conditionalFormatting?.rules
+      const metrics = entry?.metrics
+      if (cfRules?.length && metrics) {
+        const cfBoxes: LogicalCellBox[] = []
+        for (const rule of cfRules) {
+          for (const r of rule.ranges) {
+            const x0 = metrics.cols.start(r.firstCol)
+            const lastCol = Math.min(r.lastCol, metrics.cols.logicalCount - 1)
+            const x1 = metrics.cols.start(lastCol) + metrics.cols.size(lastCol)
+            const y0 = metrics.rows.start(r.firstRow)
+            const lastRow = Math.min(r.lastRow, metrics.rows.logicalCount - 1)
+            const y1 = metrics.rows.start(lastRow) + metrics.rows.size(lastRow)
+            cfBoxes.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+          }
+        }
+        renderer.cache.invalidate(key => {
+          if (key.identity.sheetId !== activeSheetId) return false
+          const tBox = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
+          return cfBoxes.some(box =>
+            tBox.x < box.x + box.width &&
+            tBox.x + tBox.width > box.x &&
+            tBox.y < box.y + box.height &&
+            tBox.y + tBox.height > box.y,
+          )
+        })
+      } else {
+        renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+      }
+    }
+    paintedCf.current = cfLiveKey
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
