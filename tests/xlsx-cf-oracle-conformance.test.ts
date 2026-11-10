@@ -15,7 +15,6 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { prepareCfPaint } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { hasEvidence } from '../src/xlsx/cf/evidence'
 import { isCellInSqref } from '../scripts/cf-refs/verify'
 import type { CfManifest } from '../scripts/cf-refs/cases'
 
@@ -44,16 +43,54 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage1-blanks-errors:G6', // divergent NOT(ISBLANK(G2)) formula (Stage 5)
     'stage1-blanks-errors:J8', // divergent ISNA(J2) formula (Stage 5)
     'stage1-blanks-errors:M6', // divergent NOT(ISNA(M2)) formula (Stage 5)
-    'stage1-priority-composition:F5', // Stage 3 colorScale fill (Stage 1 withholds)
     'stage1-priority-composition:G2', // MOD(25,2)=1 expression rule (Stage 5)
     'stage1-priority-composition:G3', // MOD(14,2)=0 expression rule (Stage 5)
   ])
+
+  type Finding = { outcome: 'withheld'; reason: string }
+
+  // Documented findings for cells where engine behavior diverges from Excel oracle:
+  // Only withheld outcomes are allowed; a finding can never encode a painted wrong colour.
+  const FINDINGS: Record<string, Finding> = {
+    // Finding F2: Overlapping scales withheld under Task 15 ruling S2-I (base fill FFFFFFFF)
+    'stage2-scale-scope:B2': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:B3': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:B5': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:B6': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
+    'stage2-scale-scope:D2': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+    'stage2-scale-scope:D3': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+
+    // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
+    'stage2-scale-composition:I2': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+    'stage2-scale-composition:I3': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+    'stage2-scale-composition:I4': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+    'stage2-scale-composition:I5': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+
+    // Finding F4: Text cell J2 in scale range
+    'stage2-scale-composition:J2': { outcome: 'withheld', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
+
+    // Finding F5: Expression rule 19 with stopIfTrue="1" withholds lower scale 20 under S2-J
+    'stage2-scale-composition:L2': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    'stage2-scale-composition:L3': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    'stage2-scale-composition:L4': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+    'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+  }
+
+  const STAGE2_MEASURED_CASES = [
+    'stage2-scale-interpolation',
+    'stage2-scale-thresholds',
+    'stage2-scale-degenerate',
+    'stage2-scale-participation',
+    'stage2-scale-colors',
+    'stage2-scale-scope',
+    'stage2-scale-composition',
+  ]
 
   it('runs production pipeline on all measured cases with zero unexpected mismatches', async () => {
     let checkedCells = 0
 
     for (const c of manifest.cases) {
-      if (c.status !== 'measured') continue
+      if (c.status !== 'measured' || c.stage === 2) continue
       if (c.clockRequirement) {
         vi.useFakeTimers({ toFake: ['Date'] })
         vi.setSystemTime(new Date(`${c.clockRequirement.anchorLocalDate}T04:00:00+08:00`))
@@ -94,30 +131,6 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
             // CF does not match; style returned is base table band (50 <= 100)
             expect(st?.fillColor, `${cellKey} table band`).toBe('FFC0E6F5')
             continue
-          }
-
-          // Stage 2 colour scales: scale fills remain withheld until their capability is in verifiedCapabilities
-          if (c.stage === 2) {
-            const scaleMarker = c.markers.find(m => m.ruleType === 'colorScale' && isCellInSqref(exp.ref, m.sqref))
-            const scaleImplemented = scaleMarker ? hasEvidence(scaleMarker.capabilityId) : false
-
-            if (scaleMarker && !scaleImplemented) {
-              if (c.id === 'stage2-scale-composition') {
-                if (exp.ref === 'B2' || exp.ref === 'B3') {
-                  expect(st?.fillColor, `${cellKey} cellIs dxf fill`).toBe('FFFFC7CE')
-                  continue
-                }
-                if (exp.ref === 'E2' || exp.ref === 'E3' || exp.ref === 'E4') {
-                  expect(st?.bold, `${cellKey} cellIs font bold`).toBe(true)
-                  expect(st?.color, `${cellKey} cellIs font color`).toBe('FF006100')
-                  expect(st?.fillColor, `${cellKey} scale fill withheld`).toBeUndefined()
-                  continue
-                }
-              }
-              expect(st?.fillColor, `${cellKey} scale fill must be withheld while unverified`).toBeUndefined()
-              expect(gotMatched, `${cellKey} must be withheld while unverified`).toBe(false)
-              continue
-            }
           }
 
           if (exp.matched) {
@@ -279,8 +292,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
   })
 
-  it('asserts Stage 2 colour-scale cells remain withheld until evidence is verified (Lesson 1)', async () => {
+  it('asserts Stage 2 colour-scale cells remain withheld when scale evidence is unverified (Lesson 1)', async () => {
     let checkedCount = 0
+    const unverifiedScaleEvidence = {
+      allows: (id: string, variant?: string) => !id.startsWith('scale:') && cfRuntimeEvidence.allows(id, variant),
+    }
     const stage2Cases = manifest.cases.filter(c => c.stage === 2)
     for (const c of stage2Cases) {
       const savedPath = join(REPO_ROOT, c.saved)
@@ -288,7 +304,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       const bytes = new Uint8Array(readFileSync(savedPath))
       const doc = await parseXlsx(await OfficePackage.load(bytes))
       const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      const paint = await prepareCfPaint(sheet, { evidence: unverifiedScaleEvidence })
       expect(paint, `prepareCfPaint should succeed for ${c.id}`).toBeDefined()
       if (!paint) continue
 
@@ -320,147 +336,61 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(checkedCount).toBe(206)
   })
 
-  it('with scale evidence injected, paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases (T14-A)', async () => {
-    const { withInjectedCfEvidence } = await import('../src/xlsx/cf/evidence')
-    const ALL_STAGE2_SCALE_CAPABILITIES = [
-      'scale:interpolation-precondition-probe',
-      'scale:interpolation-rounding-ladder',
-      'scale:interpolation-color-space',
-      'scale:interpolation-spec-palette',
-      'scale:thresholds-min-max',
-      'scale:thresholds-num-bounds',
-      'scale:thresholds-percent',
-      'scale:thresholds-percentile-inc-exc',
-      'scale:thresholds-percent-percentile-out-of-bounds',
-      'scale:thresholds-legacy-min-val-0',
-      'scale:thresholds-min-midlist-max-first',
-      'scale:thresholds-num-val-reference',
-      'scale:degenerate-equal-values',
-      'scale:degenerate-single-cell',
-      'scale:degenerate-inverted-thresholds',
-      'scale:degenerate-midpoint-above-max',
-      'scale:degenerate-values-beyond-bounds',
-      'scale:participation-types',
-      'scale:participation-error-presence',
-      'scale:colors-theme-tint',
-      'scale:colors-indexed',
-      'scale:colors-alpha-00',
-      'scale:colors-auto',
-      'scale:colors-custom-theme',
-      'scale:scope-disjoint',
-      'scale:scope-duplicate-blocks',
-      'scale:scope-hidden-row',
-      'scale:scope-autofilter-hidden-row',
-      'scale:scope-merged-cell',
-      'scale:scope-whole-column',
-      'scale:composition-dxf-p1-scale-p2',
-      'scale:composition-scale-p1-dxf-p2',
-      'scale:composition-equal-priority',
-      'scale:composition-font-only-dxf',
-      'scale:composition-matching-stopIfTrue-ahead',
-      'scale:composition-non-matching-stopIfTrue-ahead',
-      'scale:composition-scale-stopIfTrue',
-      'scale:composition-overlapping-scales',
-      'scale:composition-text-cell-lower-dxf',
-      'scale:composition-own-fill-and-table',
-      'scale:composition-unresolved-expression-stub',
-    ]
+  it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
+    let grandTotalChecked = 0
+    const caseCounts: Record<string, number> = {}
 
-    const stage2Cases = [
-      'stage2-scale-interpolation',
-      'stage2-scale-thresholds',
-      'stage2-scale-degenerate',
-      'stage2-scale-participation',
-      'stage2-scale-colors',
-      'stage2-scale-scope',
-      'stage2-scale-composition',
-    ]
+    for (const caseId of STAGE2_MEASURED_CASES) {
+      const c = manifest.cases.find(x => x.id === caseId)!
+      expect(c, `Manifest must contain ${caseId}`).toBeDefined()
+      const savedPath = join(REPO_ROOT, c.saved)
+      expect(existsSync(savedPath), `${savedPath} must exist`).toBe(true)
 
-    type Finding = { outcome: 'withheld'; reason: string }
+      const bytes = new Uint8Array(readFileSync(savedPath))
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
+      if (!paint) continue
 
-    // Documented findings for cells where engine behavior diverges from Excel oracle:
-    // Only withheld outcomes are allowed; a finding can never encode a painted wrong colour.
-    const FINDINGS: Record<string, Finding> = {
-      // Finding F2: Overlapping scales withheld under Task 15 ruling S2-I (base fill FFFFFFFF)
-      'stage2-scale-scope:B2': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:B3': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B4 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:B5': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:B6': { outcome: 'withheld', reason: 'Overlapping scale ranges B2:B6 and B2:B6 withhold fill under S2-I' },
-      'stage2-scale-scope:D2': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
-      'stage2-scale-scope:D3': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
+      // Read trusted observed cells from reference sidecar
+      const sidecarPath = join(REPO_ROOT, `tests/fixtures/xlsx-cf/refs/${caseId}.json`)
+      expect(existsSync(sidecarPath), `${sidecarPath} must exist`).toBe(true)
+      const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')) as {
+        observedCells: Array<{ ref: string; fillSource: string; fillRgb: string; hidden?: boolean }>
+      }
 
-      // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
-      'stage2-scale-composition:I2': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-      'stage2-scale-composition:I3': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-      'stage2-scale-composition:I4': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
-      'stage2-scale-composition:I5': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
+      const observed = sidecar.observedCells.filter(cell => cell.fillSource === 'excel-display-format' && !cell.hidden)
+      expect(observed.length, `${caseId} must have non-zero observed cells`).toBeGreaterThan(0)
+      caseCounts[caseId] = observed.length
 
-      // Finding F4: Text cell J2 in scale range
-      'stage2-scale-composition:J2': { outcome: 'withheld', reason: 'Text cell J2 lower dxf fill unmeasured in Stage 2' },
+      for (const cell of observed) {
+        grandTotalChecked++
+        const cellKey = `${caseId}:${cell.ref}`
+        const { row, col } = refToRowCol(cell.ref)
+        const cellObj = sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)
+        const baseStyle = { numFmtId: 0, ...(cellObj?.style ?? {}), fillColor: cellObj?.style?.fillColor ?? 'FFFFFFFF' }
+        const st = paint.layer.styleAt(row, col, baseStyle)
+        const actualFill = st?.fillColor ?? 'FFFFFFFF'
 
-      // Finding F5: Expression rule 19 with stopIfTrue="1" withholds lower scale 20 under S2-J
-      'stage2-scale-composition:L2': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-      'stage2-scale-composition:L3': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-      'stage2-scale-composition:L4': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
-      'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
+        const finding = FINDINGS[cellKey]
+        if (finding) {
+          expect(finding.outcome).toBe('withheld')
+          expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
+        } else {
+          // Exact Excel ARGB match:
+          expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
+        }
+      }
+
+      paint.dispose()
     }
 
-    await withInjectedCfEvidence(ALL_STAGE2_SCALE_CAPABILITIES, async () => {
-      let grandTotalChecked = 0
-      const caseCounts: Record<string, number> = {}
-
-      for (const caseId of stage2Cases) {
-        const c = manifest.cases.find(x => x.id === caseId)!
-        expect(c, `Manifest must contain ${caseId}`).toBeDefined()
-        const savedPath = join(REPO_ROOT, c.saved)
-        expect(existsSync(savedPath), `${savedPath} must exist`).toBe(true)
-
-        const bytes = new Uint8Array(readFileSync(savedPath))
-        const doc = await parseXlsx(await OfficePackage.load(bytes))
-        const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
-        const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
-        expect(paint, `prepareCfPaint should succeed for ${caseId}`).toBeDefined()
-        if (!paint) continue
-
-        // Read trusted observed cells from reference sidecar
-        const sidecarPath = join(REPO_ROOT, `tests/fixtures/xlsx-cf/refs/${caseId}.json`)
-        expect(existsSync(sidecarPath), `${sidecarPath} must exist`).toBe(true)
-        const sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')) as {
-          observedCells: Array<{ ref: string; fillSource: string; fillRgb: string; hidden?: boolean }>
-        }
-
-        const observed = sidecar.observedCells.filter(cell => cell.fillSource === 'excel-display-format' && !cell.hidden)
-        expect(observed.length, `${caseId} must have non-zero observed cells`).toBeGreaterThan(0)
-        caseCounts[caseId] = observed.length
-
-        for (const cell of observed) {
-          grandTotalChecked++
-          const cellKey = `${caseId}:${cell.ref}`
-          const { row, col } = refToRowCol(cell.ref)
-          const cellObj = sheet.rows.find(r => r.index === row)?.cells.find(cl => cl.col === col)
-          const baseStyle = { numFmtId: 0, ...(cellObj?.style ?? {}), fillColor: cellObj?.style?.fillColor ?? 'FFFFFFFF' }
-          const st = paint.layer.styleAt(row, col, baseStyle)
-          const actualFill = st?.fillColor ?? 'FFFFFFFF'
-
-          const finding = FINDINGS[cellKey]
-          if (finding) {
-            expect(finding.outcome).toBe('withheld')
-            expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
-          } else {
-            // Exact Excel ARGB match:
-            expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
-          }
-        }
-
-        paint.dispose()
-      }
-
-      // Assert a non-zero checked-cell count per case:
-      for (const caseId of stage2Cases) {
-        expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
-      }
-      expect(grandTotalChecked).toBe(398)
-    })
+    // Assert a non-zero checked-cell count per case:
+    for (const caseId of STAGE2_MEASURED_CASES) {
+      expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
+    }
+    expect(grandTotalChecked).toBe(398)
   })
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
