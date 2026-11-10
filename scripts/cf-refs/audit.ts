@@ -29,6 +29,7 @@ import {
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
   CF_STAGE2_CAPABILITIES,
+  CF_STAGE2_NONDISCRIMINATING,
   CF_STAGE2_CASES,
   type CfManifest,
   type CfOracleCase,
@@ -59,7 +60,7 @@ export interface Stage1CaseAudit {
 export interface Stage1CapabilityAudit {
   capabilityId: string
   caseId: string
-  disposition: 'verified' | 'supported-structural' | 'refused-unsupported' | 'unaccounted'
+  disposition: 'verified' | 'supported-structural' | 'refused-unsupported' | 'unverified-nondiscriminating' | 'unaccounted'
 }
 
 export interface Stage1AuditReport {
@@ -82,6 +83,8 @@ export interface Stage1AuditReport {
     capabilities: number
     covered: number
     verifiedCapabilities: number
+    /** Measured but non-discriminating (Ruling F-2): withheld in production until re-measured. */
+    unverifiedCapabilities?: number
   }
 }
 
@@ -221,15 +224,19 @@ export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: s
     if (owning?.structuralValid) {
       disposition = owning.status === 'unsupported' ? 'refused-unsupported' : owning.code === undefined || owning.status === 'measured' ? 'verified' : 'supported-structural'
       if (owning.status === 'measured' && owning.code !== undefined) disposition = 'supported-structural'
+      // A measured but non-discriminating capability is never reported verified (Ruling F-2).
+      if (disposition === 'verified' && CF_STAGE2_NONDISCRIMINATING[entry.capabilityId] !== undefined) disposition = 'unverified-nondiscriminating'
     }
     return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
   })
+  const stage2Ids = new Set(CF_STAGE2_CAPABILITIES.map(entry => entry.capabilityId))
+  const unknownNonDiscriminating = Object.keys(CF_STAGE2_NONDISCRIMINATING).filter(id => !stage2Ids.has(id) || !CF_STAGE2_NONDISCRIMINATING[id]!.trim())
   const caseOk = (p: Stage2CaseAudit): boolean => {
     if (p.status === 'measured') return p.structuralValid && p.code === undefined
     return p.structuralValid
   }
   const structuralValid = perCase.filter(p => p.structuralValid).length
-  const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted')
+  const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownNonDiscriminating.length === 0
   const gate = stageGateStatus(perCapability)
   return {
     ok,
@@ -248,6 +255,7 @@ export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: s
       capabilities: perCapability.length,
       covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
       verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+      unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
     },
   }
 }
@@ -584,7 +592,9 @@ export async function pressureStatisticsVisits(): Promise<PressureSample> {
   }
 }
 
-/** 1M-row synthetic A:A scope with 100 scales sharing statistics (one scan, Lesson 3). */
+/** A 1M-row DECLARED A:A scope holding only 100 stored cells, requested by 100 scales that share one statistics scan
+ * (Lesson 3). This proves the sparse scan (reads = stored cells, not 1M) and the shared scan; it is NOT a populated
+ * 1M-row scope (final review M5). */
 export async function pressureScale1MRowSharedStatistics(): Promise<PressureSample> {
   const started = Date.now()
   const sheet = numericSheet(100, scaleRule(0, { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }))
@@ -612,7 +622,7 @@ export async function pressureScale1MRowSharedStatistics(): Promise<PressureSamp
   }
   session.dispose()
   return {
-    name: 'scale-1M-row-shared-statistics',
+    name: 'scale-sparse-1M-declared-shared-statistics',
     outcome: 'admitted',
     peakBytes: peak,
     netBytes: memory.currentBytes,
@@ -622,7 +632,9 @@ export async function pressureScale1MRowSharedStatistics(): Promise<PressureSamp
   }
 }
 
-/** Refused percentile copy with min/max still rendering. */
+/** An invalid (out-of-range) percentile bound withholds its own scale (cf-invalid-bound) while a min/max scale over
+ * another column still renders. It is NOT a sorted-copy reservation refusal: the cf-resource-limit refusal path is
+ * covered in tests/xlsx-cf-statistics.test.ts (final review M5). */
 export async function pressureRefusedPercentileWithMinMax(): Promise<PressureSample> {
   const started = Date.now()
   const cells: XlsxCell[] = []
@@ -686,7 +698,7 @@ export async function pressureRefusedPercentileWithMinMax(): Promise<PressureSam
   const peakBytes = peak()
   scope.dispose()
   return {
-    name: 'refused-percentile-with-min-max',
+    name: 'invalid-percentile-bound-withheld-with-min-max-rendered',
     outcome: 'admitted',
     peakBytes,
     netBytes: net(),
@@ -1038,7 +1050,7 @@ ${allVerified.map(id => `  '${id}',`).join('\n')}
   const unexpected = report.perCase.filter(c => !c.structuralValid)
   const ok = report.ok && unexpected.length === 0
   // eslint-disable-next-line no-console
-  console.log(`summary: ok=${ok} structural=${report.summary.structuralValid}/${report.summary.cases} unsupported=${report.summary.unsupported} pending=${report.summary.pending} stageComplete=${report.stageComplete} blockedCapabilities=${report.blockedCapabilities.length}`)
+  console.log(`summary: ok=${ok} structural=${report.summary.structuralValid}/${report.summary.cases} unsupported=${report.summary.unsupported} pending=${report.summary.pending} unverifiedNonDiscriminating=${report.summary.unverifiedCapabilities ?? 0} stageComplete=${report.stageComplete} blockedCapabilities=${report.blockedCapabilities.length}`)
 
   if (outDir) {
     mkdirSync(outDir, { recursive: true })

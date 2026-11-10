@@ -4,6 +4,7 @@ import { tokenizeBytes } from '../src/core/xml-stream'
 import { createCfDiagnostics, createCfMemory } from '../src/xlsx/cf/limits'
 import {
   parseCfSheet,
+  MEASURED_CF_OFFICE_THEME,
   scaleRequiredCapabilities,
   type CfScaleBoundInput,
   type CfScaleColorInput,
@@ -344,10 +345,8 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
 
   it('endpoint colours resolve once on both paths', async () => {
     const fixtureTheme = {
-      theme: {
-        accent1: '4F81BD',
-        accent2: 'C0504D',
-      },
+      // The palette the scale colours were measured against; any other palette withholds (colors-custom-theme).
+      theme: MEASURED_CF_OFFICE_THEME,
     }
     const styles = { colors: fixtureTheme, dxfNodes: [] }
 

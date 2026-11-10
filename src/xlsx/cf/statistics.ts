@@ -75,6 +75,8 @@ export interface CfRangeStatistics {
   readonly storedCells: number
   /** Whether the scope rectangle intersects any hidden row. */
   readonly hasHiddenRows?: boolean
+  /** Whether the scanned scope holds at least one error value (never counted in numeric stats). */
+  readonly hasErrors?: boolean
 }
 
 export interface CfStatisticsOptions {
@@ -749,6 +751,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         spanCells,
         storedCells: stored,
         hasHiddenRows,
+        hasErrors,
       }
       // Atomically transfer the workspace peak into the adopted candidate:
       // no refund-then-rereserve window where the result sits uncharged.

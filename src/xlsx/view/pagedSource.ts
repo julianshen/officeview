@@ -996,6 +996,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const remoteOptions: CfRemotePrepareOptions = {
         ...options,
         dateContext,
+        hiddenRows: (this.sheet.metadata?.hiddenRows ?? []).map(run => ({ firstRow: run.r0, lastRow: run.r1, firstCol: 0, lastCol: 16383 })),
+        merges: (this.sheet.mergeRects ?? []).map(m => ({ firstRow: m.r0, lastRow: m.r1, firstCol: m.c0, lastCol: m.c1 })),
         ...(admitted ? { admittedRules: { rules: liveRules, normalized: admitted.normalized, version: admitted.version } } : {}),
       }
       return await prepareCfRemote(request, this.sheet.sheetId, source, liveRules, account, remoteOptions)
@@ -1728,6 +1730,9 @@ export interface CfRemotePrepareOptions {
    * — and skips its own sizing and serialization when they verify. */
   readonly admittedRules?: { rules: CfSheetRules | undefined; normalized: string; version: number }
   readonly dateContext?: import('../cf/predicates').CfDateContext
+  /** Sheet layout facts the scale scope gates need (hidden rows, merged regions), in CF rect naming. */
+  readonly hiddenRows?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
+  readonly merges?: readonly { firstRow: number; lastRow: number; firstCol: number; lastCol: number }[]
 }
 export async function prepareCfRemote(
   request: CfReadRequest,
@@ -2014,7 +2019,7 @@ async function prepareCfRemoteOnce(
   // Service and its lease live inside the working hold: everything built
   // below is covered by the pre-admitted bound, and a single finally unwinds
   // in reverse order (lease, service, working hold) exactly once.
-  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext })
+  const service = serviceModule.createCfService(rules, memory, { budget: options?.budget, dateContext: options?.dateContext, merges: options?.merges, ...(options?.hiddenRows?.length ? { statisticsOptions: { hiddenRows: options.hiddenRows } } : {}) })
   let prepared: CfLease<CfPrepared> | undefined
   try {
     if (signal?.aborted) throw cancelled()

@@ -276,6 +276,10 @@ export async function prepareCfTextScope(
     }
     account.close()
   }
+  const hiddenRows: ModelRect[] = []
+  for (const r of sheet.rows) if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
+  const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
+  const sheetMerges: ModelRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
   const dateContext = request.dateContext ?? (sheet.semantics ? {
     dateSystem: sheet.semantics.dateSystem,
     timeZone: sheet.semantics.timeZone,
@@ -298,7 +302,7 @@ export async function prepareCfTextScope(
       const locale = request.locale ?? 'en-US'
       for (const chunk of modelChunks) {
         if (request.signal.aborted) { closeAccount(); return fail() }
-        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics })
+        const service = createCfService(rules, account, { evidence: cfRuntimeEvidence, dateContext, statistics, statisticsOptions, merges: sheetMerges })
         let lease: CfLease<CfPrepared>
         try {
           lease = await service.prepareCf(

@@ -3662,6 +3662,25 @@ const S2_RULINGS: Record<string, string> = {
     'Always cf-unsupported-rule per Ruling S2-K and OD-3 (standalone x14 colorScale out of scope for Stage 2, lifts no capability)',
 }
 
+/**
+ * Final review I5 / Ruling F-2: measured Stage 2 capabilities whose committed fixture CANNOT discriminate the
+ * question the capability asks. They stay in the catalog (the case, its markers and its measurement are real) but
+ * the audit reports them `unverified-nondiscriminating`, `verifiedCapabilities.ts` never lists them, and the src
+ * gate for each therefore withholds the shape until a discriminating fixture is re-measured in Excel.
+ */
+export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
+  'scale:colors-custom-theme':
+    'stage2-scale-colors has no custom theme: its saved workbook carries the stock Office theme and the rule uses plain rgb, so no non-Office theme colour is ever resolved. Re-measure with a non-Office theme1.xml and theme-index endpoints.',
+  'scale:scope-disjoint':
+    'The B2:B4 D2:D4 rule overlaps the B2:B6 and D2:D6 rules and its only non-hidden cells are withheld (S2-I overlapping scales); both rectangles also hold identical values, so union and per-rectangle statistics give the same colours. Re-measure with a non-overlapping disjoint rule over different values.',
+  'scale:scope-hidden-row':
+    'The hidden row holds 30, neither the minimum (10) nor the maximum (50) of the column, so including or excluding it paints identical colours. Re-measure with the hidden row holding the extremum.',
+  'scale:scope-autofilter-hidden-row':
+    'The saved stage2-scale-scope workbook has no autoFilter element; D2:D6 is a plain scale over the same manually hidden non-extremal row. Re-measure with a real autofilter hiding the extremal row.',
+  'scale:scope-merged-cell':
+    'B8:C9 holds 100 in every cell, so the degenerate equal-values colour results whatever the merge participation. Re-measure with non-equal values inside a merged scope.',
+}
+
 /** Complete capability-to-evidence registry for all Stage 2 markers. */
 export const CF_STAGE2_CAPABILITIES: readonly CfCapabilityEntry[] = CF_STAGE2_CASES.flatMap(c =>
   c.markers.map((m): CfCapabilityEntry => ({

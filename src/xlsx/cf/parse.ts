@@ -633,6 +633,22 @@ export type CfScaleColorInput =
       readonly customTheme?: boolean
     }
 
+/** The theme palette Excel actually rendered in stage2-scale-colors (clrScheme "Office", 2023+). Theme-coloured scale
+ * endpoints were measured against this palette only: any other palette (a custom theme, or the theme-less fallback)
+ * needs `scale:colors-custom-theme`, which no committed fixture can discriminate (Ruling F-2), so it withholds. */
+export const MEASURED_CF_OFFICE_THEME: Readonly<Record<string, string>> = Object.freeze({
+  dk1: '000000', lt1: 'FFFFFF', dk2: '0E2841', lt2: 'E8E8E8', accent1: '156082', accent2: 'E97132',
+  accent3: '196B24', accent4: '0F9ED5', accent5: 'A02B93', accent6: '4EA72E', hlink: '467886', folHlink: '96607D',
+})
+
+function isMeasuredOfficeTheme(theme: Readonly<Record<string, string>> | undefined): boolean {
+  if (!theme) return false
+  for (const [slot, hex] of Object.entries(MEASURED_CF_OFFICE_THEME)) {
+    if ((theme[slot] ?? '').replace(/^#/, '').toUpperCase() !== hex) return false
+  }
+  return true
+}
+
 /**
  * Computes the set of scale:* capability IDs required to authorize a colour-scale rule.
  * Fail-closed: the rule resolves iff every required capability has evidence.
@@ -699,7 +715,8 @@ export function scaleRequiredCapabilities(
         req.add('scale:colors-auto')
       }
       if (c.theme !== undefined) {
-        req.add(c.customTheme ? 'scale:colors-custom-theme' : 'scale:colors-theme-tint')
+        req.add('scale:colors-theme-tint')
+        if (c.customTheme) req.add('scale:colors-custom-theme')
       }
       if (c.indexed !== undefined) {
         req.add('scale:colors-indexed')
@@ -813,8 +830,10 @@ function parseColorScaleRule(
   }
 
   const colorInputs: CfScaleColorInput[] = []
+  const officeTheme = isMeasuredOfficeTheme(fin.styles.colors.theme)
   for (let i = 0; i < colors.length; i++) {
-    colorInputs.push(attrs(colors[i]!))
+    const colorAttrs = attrs(colors[i]!)
+    colorInputs.push(colorAttrs['theme'] !== undefined && !officeTheme ? { ...colorAttrs, customTheme: true } : colorAttrs)
   }
 
   // Fail-closed authorization across every feature used by the rule

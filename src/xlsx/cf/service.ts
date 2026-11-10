@@ -59,7 +59,9 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 /** Lazy per-sheet engine. Parser-owned rules must remain leased by the caller for
  * this engine's lifetime; published snapshots retain only copied winning deltas. */
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
-  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext } = {}) {
+  options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext;
+    /** Merged regions of the sheet (final review I5): a scale scope that intersects one is an unmeasured shape. */
+    merges?: readonly SourceRect[] } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -132,6 +134,21 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           if (sheet.unresolvedSheet) return snapshot(sheet.unresolvedSheet.reason)
           const boundsBudget = createCfWorkBudget({ signal, noTimeLimit: true })
           if (await source.bounds(stamp.sheetId, boundsBudget, signal) === undefined) return snapshot('cf-pending-data')
+          // Scope shapes whose committed Excel fixture cannot discriminate them (Ruling F-2, final review I5): each is
+          // gated on its capability, which is unverified in production, so these scales are withheld.
+          const scopeBlock = new Map<CfRule, CfOutcome<never>>()
+          const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined): Promise<void> => {
+            const unmeasured = (): void => { scopeBlock.set(rule, { kind: 'unresolved', reason: 'cf-unmeasured-capability' }) }
+            if (rule.ranges.length > 1 && !evidence.allows('scale:scope-disjoint')) return unmeasured()
+            if (options.merges?.length) {
+              await work(Math.min(rule.ranges.length * options.merges.length, 1 << 20))
+              const merged = options.merges.some(m => rule.ranges.some(r => m.firstRow <= r.lastRow && m.lastRow >= r.firstRow && m.firstCol <= r.lastCol && m.lastCol >= r.firstCol))
+              if (merged && !evidence.allows('scale:scope-merged-cell')) return unmeasured()
+            }
+            // An autofilter writes ordinary hidden-row records, so the two cases are indistinguishable here.
+            if (prepared?.hasHiddenRows && (!evidence.allows('scale:scope-hidden-row') || !evidence.allows('scale:scope-autofilter-hidden-row'))) return unmeasured()
+            if (prepared?.hasErrors && !evidence.allows('scale:participation-error-presence')) return unmeasured()
+          }
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
             const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
             const d = rule.definition
@@ -140,6 +157,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...statOpts })
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
+          }
+          for (const rule of ordered) if (rule.definition.kind === 'colorScale') {
+            const prepared = stats.get(rule)
+            await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined)
           }
           budget.resume()
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
@@ -160,6 +181,11 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 const preparedStats = stats.get(rule)
                 if (rule.definition.kind === 'colorScale') {
                   if (value.kind === 'string') isTextInScale = true
+                  const blocked = scopeBlock.get(rule)
+                  if (blocked) {
+                    outcomes.push(blocked)
+                    continue
+                  }
                   if (preparedStats?.kind === 'unresolved') {
                     outcomes.push(preparedStats)
                     continue

@@ -169,6 +169,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     if (r.hidden) hiddenRows.push({ firstRow: r.index, lastRow: r.index, firstCol: 0, lastCol: 16383 })
   }
   const statisticsOptions = hiddenRows.length > 0 ? { hiddenRows } : undefined
+  const sheetMerges: SourceRect[] = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
   // Ruling I5: Cache range statistics per (sheet, rule range, data version) across preparations.
   const currentStatsKey = `${stamp.owner}|${stamp.sheetId}|${stamp.workbookValueGen}|${stamp.structureGen}`
   let retainedStats = sheetStatsSessions.get(sheet)
@@ -305,7 +306,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
         // the 1M whole-sheet limit. If a batch exceeds the budget, refusal is per-range.
         const batchBudget = createCfWorkBudget({ signal })
         const statsBudgetFactory = options.statisticsBudget ?? (() => createCfWorkBudget({ signal, noTimeLimit: true, maxUnits: options.statisticsMaxUnits ?? 10_000_000 }))
-        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext })
+        const service = createCfService(rules, memory, { evidence, budget: () => batchBudget, statisticsBudget: statsBudgetFactory, statistics, statisticsOptions, dateContext, merges: sheetMerges })
         try {
           const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal, grantBytes: options.request?.grantBytes ?? CF_LIMITS.scratchBytes }, source)
           try {

@@ -17,7 +17,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { auditStage1Manifest, stageGateStatus, type Stage1AuditReport } from '../scripts/cf-refs/audit'
-import { CF_STAGE1_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
+import { CF_STAGE1_CAPABILITIES, CF_STAGE2_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
 import { prepareCfTextScope, prepareCfWireScope } from '../src/xlsx/cf/text'
 import { createCfService } from '../src/xlsx/cf/service'
 import { createCfMemory, CF_LIMITS } from '../src/xlsx/cf/limits'
@@ -107,7 +107,8 @@ describe('every supported Stage 1 semantic capability has verified oracle eviden
   })
 
   it('every evidence.allows literal under src/ resolves to a catalog ID (C1)', () => {
-    const catalogIds = new Set(CF_STAGE1_CAPABILITIES.map(c => c.capabilityId))
+    // Stage 2 scale gates (final review I5) also read evidence.allows literals under src/xlsx/cf.
+    const catalogIds = new Set([...CF_STAGE1_CAPABILITIES, ...CF_STAGE2_CAPABILITIES].map(c => c.capabilityId))
     const cfDir = join(REPO_ROOT, 'src/xlsx/cf')
     const files = readdirSync(cfDir).filter(f => f.endsWith('.ts'))
     const literalPattern = /evidence\.allows\(\s*['"]([^'"]+)['"]/g

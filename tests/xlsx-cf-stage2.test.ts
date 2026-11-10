@@ -26,7 +26,7 @@ import {
   checkPressureSample,
   type Stage2AuditReport,
 } from '../scripts/cf-refs/audit'
-import { CF_STAGE2_CAPABILITIES, type CfManifest } from '../scripts/cf-refs/cases'
+import { CF_STAGE2_CAPABILITIES, CF_STAGE2_NONDISCRIMINATING, type CfManifest } from '../scripts/cf-refs/cases'
 import { prepareCfTextScope, prepareCfWireScope } from '../src/xlsx/cf/text'
 import { createCfService } from '../src/xlsx/cf/service'
 import { createCfMemory, CF_LIMITS } from '../src/xlsx/cf/limits'
@@ -96,7 +96,9 @@ describe('every enabled scale capability has verified evidence', () => {
     const report: Stage2AuditReport = auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(true)
-    expect(report.summary.verifiedCapabilities).toBe(41)
+    // 41 measured scale capabilities; 5 are measured but NON-DISCRIMINATING (Ruling F-2) and are reported unverified.
+    expect(report.summary.verifiedCapabilities).toBe(36)
+    expect(report.summary.unverifiedCapabilities).toBe(5)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 
@@ -106,9 +108,16 @@ describe('every enabled scale capability has verified evidence', () => {
     const auditVerified = new Set(
       report.perCapability.filter(c => c.disposition === 'verified').map(c => c.capabilityId),
     )
-    expect(auditVerified.size).toBe(41)
+    expect(auditVerified.size).toBe(36)
     for (const cap of auditVerified) {
       expect(VERIFIED_CAPABILITIES.has(cap), `VERIFIED_CAPABILITIES must contain ${cap}`).toBe(true)
+    }
+    // The non-discriminating five are accounted for, carry a reason, and are never in the production set.
+    const unverified = report.perCapability.filter(c => c.disposition === 'unverified-nondiscriminating').map(c => c.capabilityId).sort()
+    expect(unverified).toEqual(Object.keys(CF_STAGE2_NONDISCRIMINATING).sort())
+    for (const cap of unverified) {
+      expect(CF_STAGE2_NONDISCRIMINATING[cap]!.length, `${cap} needs a reason`).toBeGreaterThan(40)
+      expect(VERIFIED_CAPABILITIES.has(cap), `${cap} must not be production-verified`).toBe(false)
     }
   })
 
@@ -350,14 +359,14 @@ describe('manifest mutations fail the Stage 2 audit', () => {
 })
 
 describe('Stage 2 pressure scenarios and resource bounds', () => {
-  it('1M-row synthetic A:A scope with 100 scales shares statistics (one scan, Lesson 3)', async () => {
+  it('a 1M-row DECLARED A:A scope with 100 stored cells and 100 scales shares one sparse scan (Lesson 3, M5)', async () => {
     const sample = await pressureScale1MRowSharedStatistics()
     checkPressureSample(sample, { expectOutcome: 'admitted' })
     expect(sample.sourceReads).toBe(100) // 1 scan of 100 stored cells
     expect(sample.netBytes).toBe(0)
   })
 
-  it('refused percentile copy with min/max still rendering', async () => {
+  it('an invalid percentile bound withholds its scale while min/max still renders (M5; resource refusal lives in the statistics tests)', async () => {
     const sample = await pressureRefusedPercentileWithMinMax()
     checkPressureSample(sample, { expectOutcome: 'admitted' })
     expect(sample.netBytes).toBe(0)

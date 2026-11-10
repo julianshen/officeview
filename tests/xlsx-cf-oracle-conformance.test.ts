@@ -60,6 +60,29 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-scope:D2': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
     'stage2-scale-scope:D3': { outcome: 'withheld', reason: 'Overlapping scale ranges D2:D4 and D2:D6 withhold fill under S2-I' },
 
+    // Finding F6 (final review I5 / Ruling F-2): the scope fixture cannot discriminate hidden-row, autofilter,
+    // merged-cell or disjoint participation, so scale:scope-hidden-row, scale:scope-autofilter-hidden-row,
+    // scale:scope-merged-cell and scale:scope-disjoint are unverified and these scales are WITHHELD until re-measured.
+    'stage2-scale-scope:C2': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating (hidden value 30 is not extremal) and unverified' },
+    'stage2-scale-scope:C3': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:C5': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:C6': { outcome: 'withheld', reason: 'Hidden row 4 inside C2:C6: scale:scope-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:D5': { outcome: 'withheld', reason: 'Hidden row 4 inside D2:D6 (the saved file has no autoFilter): scale:scope-autofilter-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:D6': { outcome: 'withheld', reason: 'Hidden row 4 inside D2:D6: scale:scope-autofilter-hidden-row is non-discriminating and unverified' },
+    'stage2-scale-scope:F2': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4 (F4 populated): hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F3': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F5': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F6': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F13': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F14': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F15': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F16': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:F17': { outcome: 'withheld', reason: 'Whole-column F:F scope contains hidden row 4: hidden-row scope shapes are unverified' },
+    'stage2-scale-scope:B8': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating (every merged value is 100) and unverified' },
+    'stage2-scale-scope:C8': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
+    'stage2-scale-scope:B9': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
+    'stage2-scale-scope:C9': { outcome: 'withheld', reason: 'Merged B8:C9 inside the scope: scale:scope-merged-cell is non-discriminating and unverified' },
+
     // Finding F3: Overlapping scales on I2:I5 withheld under Task 15 ruling S2-I
     'stage2-scale-composition:I2': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
     'stage2-scale-composition:I3': { outcome: 'withheld', reason: 'Two overlapping scales on I2:I5 withhold fill under S2-I' },
@@ -338,6 +361,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
   it('paints exact Excel ARGB for every non-hidden excel-display-format cell of all 7 measured Stage 2 cases under production evidence (Lesson 1 dual gate, T14-A)', async () => {
     let grandTotalChecked = 0
+    let exactCount = 0
+    let withheldCount = 0
     const caseCounts: Record<string, number> = {}
 
     for (const caseId of STAGE2_MEASURED_CASES) {
@@ -377,9 +402,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         if (finding) {
           expect(finding.outcome).toBe('withheld')
           expect(actualFill, `${cellKey} finding: ${finding.reason}`).toBe('FFFFFFFF')
+          withheldCount++
         } else {
           // Exact Excel ARGB match:
           expect(actualFill, `${cellKey} must match exact Excel ARGB`).toBe(cell.fillRgb)
+          exactCount++
         }
       }
 
@@ -391,6 +418,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(caseCounts[caseId], `Case ${caseId} checked cell count`).toBeGreaterThan(0)
     }
     expect(grandTotalChecked).toBe(398)
+    // Ruling F-2: cells that lost paint moved into typed withheld-only FINDINGS; none is an allowlisted wrong colour.
+    expect(exactCount).toBe(364)
+    expect(withheldCount).toBe(34)
+    expect(exactCount + withheldCount).toBe(grandTotalChecked)
   })
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
