@@ -339,7 +339,7 @@ it('max edit recolours the whole scale scope in one generation', async () => {
   expect(memory.currentBytes).toBe(0)
 })
 
-it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)', async () => {
+it('a CF generation change with the lease kept invalidates every tile of THIS sheet only (T15-A, family ruling)', async () => {
   const { TileCache } = await import('../src/xlsx/view/tileCache')
   const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
 
@@ -447,7 +447,9 @@ it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)'
     // 1. Max edit invalidates ONLY the tiles of the scale scope (tile-level)
     expect(cfPredicate(tileInScope1), 'Tile in scope (rows 0..25) must be invalidated').toBe(true)
     expect(cfPredicate(tileInScope2), 'Tile in scope (rows 26..51) must be invalidated').toBe(true)
-    expect(cfPredicate(tileOutOfScope), 'Tile out of scope (col 5) must NOT be invalidated').toBe(false)
+    // Family ruling (bot P2s): CF paint reaches beyond a rule's own cells (merged surfaces, overflowing text, sorted rows),
+    // so a lease-retained CF change repaints the whole sheet; the previous 'far tile stays cached' expectation is reversed.
+    expect(cfPredicate(tileOutOfScope), 'Tile out of scope (col 5) is invalidated too').toBe(true)
     expect(cfPredicate(tileOtherSheet), 'Tile on another sheet must NOT be invalidated').toBe(false)
 
     // 1b. A value edit bumps valueGen, which is part of the tile identity: what an edit actually relies on is
@@ -469,7 +471,7 @@ it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)'
 
     expect(testCache.get(tileInScope1), 'tileInScope1 dropped').toBeUndefined()
     expect(testCache.get(tileInScope2), 'tileInScope2 dropped').toBeUndefined()
-    expect(testCache.get(tileOutOfScope), 'tileOutOfScope retained').toBeDefined()
+    expect(testCache.get(tileOutOfScope), 'tileOutOfScope dropped (whole sheet)').toBeUndefined()
   } finally {
     ui.unmount()
     presentSpy.mockRestore()
@@ -477,7 +479,7 @@ it('max edit invalidates ONLY the tiles of the scale scope (tile-level) (T15-A)'
   }
 })
 
-it('clock-driven CF invalidation follows the DISPLAYED rows of a sorted view (I1)', async () => {
+it('clock-driven CF invalidation reaches the DISPLAYED rows of a sorted view (I1)', async () => {
   const { TileCache } = await import('../src/xlsx/view/tileCache')
   const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
   const { createRowOrder } = await import('../src/xlsx/view/order')
@@ -515,7 +517,8 @@ it('clock-driven CF invalidation follows the DISPLAYED rows of a sorted view (I1
     const cfPredicate = invalidateCalls[before]!
     // The identity-preserving clock change must drop the tile that DISPLAYS the scope (row 2) and no other.
     expect(cfPredicate(tile(2) as never), 'tile row 2 displays source rows 0..2').toBe(true)
-    expect(cfPredicate(tile(0) as never), 'tile row 0 shows nothing of the scope').toBe(false)
+    // Whole-sheet invalidation (family ruling) also drops tile row 0; the I1 requirement is that row 2 is never missed.
+    expect(cfPredicate(tile(0) as never)).toBe(true)
   } finally {
     ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers()
   }
@@ -556,7 +559,48 @@ it('clock-driven CF invalidation also covers tiles that text overflowing from th
     expect(cfPredicate(tile(0) as never), 'the rule tile').toBe(true)
     expect(cfPredicate(tile(1) as never), 'the next tile holds overflowing text of the rule cells').toBe(true)
     // Tiles are 512 logical px wide: a tile far beyond the overflow reach stays cached.
-    expect(cfPredicate(tile(Math.ceil((TEXT_OVERFLOW_REACH_CSS + 512) / 512) + 4) as never), 'beyond the reach').toBe(false)
+    expect(cfPredicate(tile(Math.ceil((TEXT_OVERFLOW_REACH_CSS + 512) / 512) + 4) as never), 'whole sheet, also beyond the reach').toBe(true)
+  } finally {
+    ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers()
+  }
+})
+
+it('a clock tick with the lease kept invalidates the covered tiles of a tall merged anchor (bot P2)', async () => {
+  const { TileCache } = await import('../src/xlsx/view/tileCache')
+  const { SheetTileRenderer } = await import('../src/components/xlsx/sheetTiles')
+  const rows = Array.from({ length: 120 }, (_, r) => ({ index: r, cells: [{ row: r, col: 0, ref: `A${r + 1}`, styleIndex: 0, value: r }] }))
+  const mergedSheet: XlsxSheet = {
+    name: 'Merged', sheetId: 's', cols: [{ min: 0, max: 0, widthChars: 12 }], merges: ['A1:A100'],
+    mergeRanges: [{ minRow: 0, maxRow: 99, minCol: 0, maxCol: 0 }], rows,
+    conditionalFormatting: { diagnostics: [], rules: [{
+      id: 1, priority: 1, documentOrder: 0, stopIfTrue: false, ranges: [{ firstRow: 0, lastRow: 0, firstCol: 0, lastCol: 0 }],
+      writes: new Set(['fill']), dxf: { 'fill.pattern': 'solid', 'fill.bg': 'FF00FF00' },
+      definition: { kind: 'predicate', type: 'timePeriod', timePeriod: 'today', dialect: 'base', formulas: [] },
+    }] },
+  } as unknown as XlsxSheet
+  const doc = { sheets: [mergedSheet] }
+  const source = createObjectWorkbookSource(doc, 'merged-clock')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: new Date(2026, 5, 10, 23, 59, 50) })
+  const calls: Array<(key: import('../src/xlsx/view/tileCache').TileKey) => boolean> = []
+  const orig = TileCache.prototype.invalidate
+  const spy = vi.spyOn(TileCache.prototype, 'invalidate').mockImplementation(function (this: InstanceType<typeof TileCache>, predicate) {
+    calls.push(predicate)
+    return orig.call(this, predicate)
+  })
+  const presented = vi.spyOn(SheetTileRenderer.prototype, 'present')
+  const ui = render(<InteractiveSheetDoc doc={doc} source={source} />)
+  try {
+    await vi.waitFor(() => expect(presented).toHaveBeenCalled())
+    const before = calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(before))
+    const identity = { docId: 'merged-clock', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
+    const tile = (col: number, row: number) => ({ paletteKey: 'classic', identity, backend: 'canvas2d', zoom: 1, dpr: 1, col, row })
+    const cfPredicate = calls[before]!
+    // Rows 80..99 of the merge sit in tile row 3; the anchor's own row is in tile row 0.
+    expect(cfPredicate(tile(0, 3) as never), 'lower rows of the merged surface').toBe(true)
+    expect(cfPredicate(tile(0, 0) as never)).toBe(true)
+    expect(cfPredicate({ ...tile(0, 3), identity: { ...identity, sheetId: 'other' } } as never), 'another sheet').toBe(false)
   } finally {
     ui.unmount(); spy.mockRestore(); presented.mockRestore(); vi.useRealTimers()
   }

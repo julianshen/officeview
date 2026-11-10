@@ -40,7 +40,7 @@ import { columnToLetters, MAX_COLS, parseA1Range, validateCoordinate, coverCells
 import { createDocumentOverflowCache } from '../../xlsx/view/documentOverflow'
 import { bindOverflowCache, OverflowResourceError, type OverflowCache } from '../../xlsx/view/overflowCache'
 import { MainMemoryLedger, axisBytes, estimatePayloadBytes, projectionBytes, type MainPool } from '../../xlsx/view/mainLedger'
-import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/viewport'
+import { buildSheetGeometry, cellTextOverflow, MergeQueryCache, sheetBaseHidden, type SheetGeometry } from '../../xlsx/view/viewport'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { createIdentityOrder } from '../../xlsx/view/order'
 import { CompactRowVisibility, createIntervalSet, createRowVisibility, visibilityFromHidden } from '../../xlsx/view/visibility'
@@ -1631,63 +1631,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
-    if (paintedCf.current !== cfLiveKey) {
-      const cfRules = entry?.sheet.conditionalFormatting?.rules
-      const metrics = entry?.metrics
-      if (cfRules?.length && metrics) {
-        const cfBoxes: LogicalCellBox[] = []
-        // Rule ranges are SOURCE rows; the tile grid is indexed by DISPLAY slot (sorted views permute them).
-        // Map every source row through the committed order and merge contiguous display runs; an oversized
-        // range under a non-identity order falls back to the whole sheet (conservative, never stale).
-        const order = metrics.order
-        let wholeSheet = false
-        for (const rule of cfRules) {
-          for (const r of rule.ranges) {
-            // Text of a formatted cell overflows horizontally into neighbours (up to TEXT_OVERFLOW_REACH_CSS, the reach the
-            // viewport fetches dependencies over), so tiles that merely show its overflow depend on the rule too.
-            const x0 = Math.max(0, metrics.cols.start(r.firstCol) - TEXT_OVERFLOW_REACH_CSS)
-            const lastCol = Math.min(r.lastCol, metrics.cols.logicalCount - 1)
-            const x1 = metrics.cols.start(lastCol) + metrics.cols.size(lastCol) + TEXT_OVERFLOW_REACH_CSS
-            const lastRow = Math.min(r.lastRow, metrics.rows.logicalCount - 1)
-            const pushRun = (a: number, b: number) => {
-              const y0 = metrics.rows.start(a)
-              const y1 = metrics.rows.start(b) + metrics.rows.size(b)
-              cfBoxes.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
-            }
-            if (order.kind === 'identity') { pushRun(r.firstRow, lastRow); continue }
-            if (lastRow - r.firstRow + 1 > 10_000) { wholeSheet = true; break }
-            const slots: number[] = []
-            for (let sourceRow = r.firstRow; sourceRow <= lastRow; sourceRow++) slots.push(order.sourceToDisplay(sourceRow))
-            slots.sort((a, b) => a - b)
-            let runStart = -1, runEnd = -1
-            for (const slot of slots) {
-              if (slot >= metrics.rows.logicalCount) continue
-              if (runStart < 0) { runStart = runEnd = slot; continue }
-              if (slot === runEnd + 1) { runEnd = slot; continue }
-              pushRun(runStart, runEnd); runStart = runEnd = slot
-            }
-            if (runStart >= 0) pushRun(runStart, runEnd)
-          }
-          if (wholeSheet) break
-        }
-        if (wholeSheet) {
-          renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
-        } else {
-          renderer.cache.invalidate(key => {
-            if (key.identity.sheetId !== activeSheetId) return false
-            const tBox = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
-            return cfBoxes.some(box =>
-              tBox.x < box.x + box.width &&
-              tBox.x + tBox.width > box.x &&
-              tBox.y < box.y + box.height &&
-              tBox.y + tBox.height > box.y,
-            )
-          })
-        }
-      } else {
-        renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
-      }
-    }
+    // A CF generation change that keeps the asset lease (clock rollover, text generation) keeps the tile identity too,
+    // and CF paint reaches beyond a rule's own cells (merged surfaces, overflowing text, sorted display rows), so the
+    // whole sheet's tiles repaint. Lease-replacing paths already invalidate the sheet above.
+    if (paintedCf.current !== cfLiveKey) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     paintedCf.current = cfLiveKey
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
