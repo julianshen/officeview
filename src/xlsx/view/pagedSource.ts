@@ -2080,7 +2080,11 @@ async function prepareCfRemoteOnce(
             continue
           }
           const won = at.value.unresolvedWrites !== undefined ? [...at.value.unresolvedWrites] as string[] : undefined
-          const scale = at.value.visual?.colorScale ? { ruleId: at.value.visual.colorScale.ruleId, argb: at.value.visual.colorScale.argb } : undefined
+          const scale = at.value.visual?.colorScale ? {
+            ruleId: at.value.visual.colorScale.ruleId,
+            argb: at.value.visual.colorScale.argb,
+            ...(at.value.visual.colorScale.fraction !== undefined ? { fraction: at.value.visual.colorScale.fraction } : {}),
+          } : undefined
           states.push({
             row, col,
             properties: { ...at.value.properties },

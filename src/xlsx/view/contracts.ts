@@ -399,7 +399,7 @@ export interface CfCellStateWire {
   readonly properties: Record<string, string | number | boolean | null>
   readonly unresolvedWrites?: readonly string[]
   readonly unresolvedReason?: string
-  readonly scale?: Readonly<{ ruleId: number; argb: number }>
+  readonly scale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
 }
 export interface CfSharedDefinition {
   readonly id: string

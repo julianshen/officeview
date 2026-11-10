@@ -487,6 +487,7 @@ export async function prepareCfWireScope(
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
             reason: state.unresolvedReason,
+            scale: state.scale,
           })
         }
       } finally {
