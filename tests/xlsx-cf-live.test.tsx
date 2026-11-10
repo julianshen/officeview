@@ -271,3 +271,71 @@ it('a refused resident scroll scope never lends its new coverage to the old batc
   expect(f.cfPending || !f.cfCoverage?.({x:0,y:1024,width:512,height:512})).toBe(true)
  }finally{ui.unmount();prep.mockRestore();spy.mockRestore()}
 })
+
+it('max edit recolours the whole scale scope in one generation', async () => {
+  const scaleSheet: XlsxSheet = {
+    name: 'ScaleLive',
+    sheetId: 's',
+    cols: [],
+    merges: [],
+    mergeRanges: [],
+    rows: [
+      { index: 0, cells: [{ row: 0, col: 0, ref: 'A1', styleIndex: 0, value: 0 }] },
+      { index: 1, cells: [{ row: 1, col: 0, ref: 'A2', styleIndex: 0, value: 10 }] },
+      { index: 2, cells: [{ row: 2, col: 0, ref: 'A3', styleIndex: 0, value: 0 }] },
+    ],
+    conditionalFormatting: {
+      diagnostics: [],
+      rules: [
+        {
+          id: 0,
+          priority: 1,
+          documentOrder: 0,
+          stopIfTrue: false,
+          ranges: [{ firstRow: 0, lastRow: 2, firstCol: 0, lastCol: 0 }],
+          writes: new Set(['colorScale', 'fill']),
+          definition: {
+            kind: 'colorScale',
+            points: [
+              { bound: { type: 'min' }, argb: 0xfff8696b },
+              { bound: { type: 'max' }, argb: 0xff63be7b },
+            ],
+            dialect: 'base',
+            formulas: [],
+          },
+        },
+      ],
+    },
+  } as XlsxSheet
+
+  const doc = { sheets: [scaleSheet] }
+  const source = createObjectWorkbookSource(doc, 'scale-live')
+  const store = source.store('s')
+  const memory = createCfMemory()
+  const allowGate = { allows: () => true }
+
+  const g1 = await prepareCfPaint(scaleSheet, { memory, store, evidence: allowGate })
+  // In g1, max is 10, so A2 (10) gets max color FF63BE7B
+  expect(g1?.layer.styleAt(1, 0, undefined)?.fillColor).toBe('FF63BE7B')
+
+  // Commit value 20 at A3 (so max becomes 20)
+  scaleSheet.rows[2]!.cells[0]!.value = 20
+  store.noteValuesChanged?.()
+
+  // At g2 while preparation is pending: no cell paints its g1 colour at g2!
+  expect(g1?.layer.styleAt(1, 0, undefined)?.fillColor).toBeUndefined()
+
+  // Prepare next generation g2
+  const g2 = await prepareCfPaint(scaleSheet, { memory, store, evidence: allowGate })
+  // In g2, max is 20, so A2 (10) is 50% midpoint (recoloured!), A3 (20) gets max color FF63BE7B
+  expect(g2?.layer.styleAt(2, 0, undefined)?.fillColor).toBe('FF63BE7B')
+  expect(g2?.layer.styleAt(1, 0, undefined)?.fillColor).not.toBe('FF63BE7B')
+
+  // Pivot commit, sort/filter, sheet switch and close all release cleanly
+  store.setValueOverlay?.({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], cell: () => ({ value: 10 }) })
+  const g3 = await prepareCfPaint(scaleSheet, { memory, store, evidence: allowGate })
+  g1?.dispose(); g2?.dispose(); g3?.dispose()
+  disposeSheetCfStatistics(scaleSheet)
+  expect(memory.currentBytes).toBe(0)
+})
+

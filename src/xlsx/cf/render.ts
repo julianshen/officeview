@@ -311,7 +311,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
           try {
             for (let c = rect.firstCol; c <= rect.lastCol; c++) {
               const result = lease.value.at(row, c)
-              if (result.kind !== 'ready' || !Object.keys(result.value.properties).length) continue
+              if (result.kind !== 'ready' || (!Object.keys(result.value.properties).length && !result.value.visual?.colorScale)) continue
               const measured = measureCfPayload(result.value, memory)
               if (measured.kind !== 'ready' || !hold.grow(heldBytes + measured.value + 160)) throw new Error('CF retained paint admission')
               heldBytes += measured.value + 160

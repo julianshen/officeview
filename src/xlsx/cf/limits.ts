@@ -3,6 +3,8 @@ import type { AllocationContext, AllocationReservation } from '../view/allocatio
 import { measurePayloadBytes } from '../view/payloadBytes'
 import type { CfDiagnostic, CfLease, CfOutcome } from './model'
 
+export const CF_SCALE_CELL_BYTES = 88
+
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,

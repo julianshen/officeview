@@ -773,7 +773,6 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         return { kind: 'unresolved', reason: 'cf-pending-data', pendingSheetIds: [stamp.sheetId] }
       }
       throw error
-      throw error
     } finally {
       if (adoptedLease === undefined) {
         workspaces.delete(hold)

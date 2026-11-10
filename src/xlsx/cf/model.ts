@@ -31,7 +31,11 @@ export interface CfCellState {
   readonly properties: Readonly<Record<string, string | number | boolean | null>>
   readonly descriptorKey?: string
   readonly unresolvedWrites?: CfWriteMask
-  readonly visual?: Readonly<{ colorScale?: string; dataBar?: Readonly<{ fraction: number; color: string }>; iconSet?: Readonly<{ name: string; index: number }> }>
+  readonly visual?: Readonly<{
+    colorScale?: Readonly<{ ruleId: number; argb: number }>
+    dataBar?: Readonly<{ fraction: number; color: string }>
+    iconSet?: Readonly<{ name: string; index: number }>
+  }>
 }
 export interface CfRule { readonly id: number; readonly priority: number; readonly documentOrder: number; readonly ranges: readonly SourceRect[]; readonly stopIfTrue: boolean; readonly writes: CfWriteMask; readonly definition: CfDefinition; readonly dxf?: CfCellState['properties'] }
 export interface CfSheetRules { readonly rules: readonly CfRule[]; readonly unresolvedSheet?: Readonly<{ reason: string; writes: 'ALL' }>; readonly diagnostics: readonly CfDiagnostic[] }

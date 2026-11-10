@@ -2,6 +2,7 @@ import { PackageError } from '../../core/package-error'
 import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
+import { resolveScaleThresholds, scaleColorAt } from './colorScale'
 import { resolveCfCellStyle } from './dxf'
 import { CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
@@ -13,7 +14,7 @@ const blank: CfLiteral = Object.freeze({ kind: 'blank' })
 const inside = (r: SourceRect, row: number, col: number) => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
 function statistical(rule: CfRule) {
   const d = rule.definition
-  return d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
+  return d.kind === 'colorScale' || d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
 }
 
 /** A caller-owned, single-generation statistics lease set. The caller admits
@@ -46,6 +47,9 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
     if (rule.dxf) for (const key of Object.keys(rule.dxf)) {
       const v = (rule.dxf as Record<string, unknown>)[key]
       propertyBytes += 192 + key.length * 4 + (typeof v === 'string' ? v.length * 2 : 16)
+    }
+    if (rule.definition.kind === 'colorScale') {
+      propertyBytes += 88
     }
     for (const key of rule.writes) propertyBytes += 128 + String(key).length * 4
   }
@@ -130,7 +134,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           if (await source.bounds(stamp.sheetId, boundsBudget, signal) === undefined) return snapshot('cf-pending-data')
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
             const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
-            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...options.statisticsOptions })
+            const d = rule.definition
+            const needsSorted = d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile') : undefined
+            const statOpts = needsSorted !== undefined ? { ...options.statisticsOptions, sorted: needsSorted } : options.statisticsOptions
+            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...statOpts })
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
           }
@@ -141,7 +148,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             const textHold = memory.reserve(textBytes)
             if (textHold.kind !== 'reserved') return { kind: 'unresolved', reason: 'cf-resource-limit' }
             try {
-              const matching: CfRule[] = [], outcomes: CfOutcome<boolean>[] = []
+              const matching: CfRule[] = [], outcomes: CfOutcome<unknown>[] = []
+              let isTextInScale = false
               for (const rule of ordered) {
                 await work()
                 let covered = false
@@ -150,24 +158,51 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 matching.push(rule)
                 if (value.kind === 'string') await work(value.value.length + 1)
                 const preparedStats = stats.get(rule)
-                outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
-                  : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
+                if (rule.definition.kind === 'colorScale') {
+                  if (value.kind === 'string') isTextInScale = true
+                  if (preparedStats?.kind === 'unresolved') {
+                    outcomes.push(preparedStats)
+                    continue
+                  }
+                  if (preparedStats?.kind !== 'ready') {
+                    outcomes.push({ kind: 'unresolved', reason: 'cf-no-statistics' })
+                    continue
+                  }
+                  const thresh = resolveScaleThresholds(rule.definition.points, preparedStats.value.value, { hasEvidence: cap => evidence.allows(cap) })
+                  if (thresh.kind !== 'ready') {
+                    outcomes.push(thresh)
+                    continue
+                  }
+                  const colorOut = scaleColorAt(value, rule.definition.points, thresh.value, { hasEvidence: cap => evidence.allows(cap) })
+                  outcomes.push(colorOut)
+                } else {
+                  outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
+                    : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
+                }
               }
               // The pure compositor implements the candidate ordering contract; enabling
               // multi-positive precedence in production still requires its oracle.
               let positives = 0
+              let hasScalePositive = false
               const priorities = new Set<number>()
               for (let i = 0; i < outcomes.length; i++) {
                 await work()
                 const outcome = outcomes[i]!
                 if (outcome.kind !== 'ready' || !outcome.value) continue
+                if (matching[i]!.definition.kind === 'colorScale') {
+                  hasScalePositive = true
+                }
                 const priority = matching[i]!.priority
-                if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                if (!hasScalePositive && priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) {
+                  return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                }
                 priorities.add(priority)
-                if (++positives > 1 && (!evidence.allows('priority:fill-winner')
-                  || !evidence.allows('priority:orthogonal-font-bold'))) return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                if (++positives > 1 && !hasScalePositive && (!evidence.allows('priority:fill-winner')
+                  || !evidence.allows('priority:orthogonal-font-bold'))) {
+                  return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }
+                }
               }
-              return Object.freeze({ kind: 'ready', value: await composeCellAsync(matching, outcomes, work) })
+              return Object.freeze({ kind: 'ready', value: await composeCellAsync(matching, outcomes, work, { hasEvidence: cap => evidence.allows(cap), isTextCellInScale: isTextInScale }) })
             } finally { textHold.release() }
           }
           for await (const page of source.pages(stamp.sheetId, rects, budget, signal)) {
