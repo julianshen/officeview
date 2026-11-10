@@ -3,7 +3,7 @@ import type { CfRule, CfOutcome, CfScalePoint } from '../src/xlsx/cf/model'
 import type { XlsxCellStyle } from '../src/xlsx/types'
 import * as dxf from '../src/xlsx/cf/dxf'
 import * as composition from '../src/xlsx/cf/compose'
-import { withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import stage2CompositionFixture from './fixtures/xlsx-cf/refs/stage2-scale-composition.json'
 
 const compose = composition.composeCell
@@ -82,7 +82,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const scaleOutcome: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_C2, 16) }
 
       // 1. DXF p1, scale p2 — with NO evidence: neither fill paints, font still applies
-      await withInjectedCfEvidence([], async () => {
+      await withExactCfEvidence([], async () => {
         const state = await compose([redDxf, scale], [yes, scaleOutcome])
         expect(state.properties['font.bold']).toBe(true)
         expect(state.properties['fill.bg']).toBeUndefined()
@@ -99,7 +99,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       // 2. Scale p1, DXF p2 — with NO evidence: neither fill paints, font still applies
       const scaleP1 = scaleRule(1, 1, 0)
       const redDxfP2 = dxfRule(2, 2, 1, { 'fill.pattern': 'solid', 'fill.bg': 'FFFFC7CE', 'font.bold': true }, ['fill', 'font.bold'])
-      await withInjectedCfEvidence([], async () => {
+      await withExactCfEvidence([], async () => {
         const state = await compose([scaleP1, redDxfP2], [scaleOutcome, yes])
         expect(state.properties['font.bold']).toBe(true)
         expect(state.properties['fill.bg']).toBeUndefined()
@@ -114,7 +114,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       // 3. Equal priority (priority 5, docOrder 0 and 1) — with NO evidence: neither fill paints
       const dxfEqual = dxfRule(1, 5, 0, { 'fill.pattern': 'solid', 'fill.bg': 'FFFFC7CE', 'font.bold': true }, ['fill', 'font.bold'])
       const scaleEqual = scaleRule(2, 5, 1)
-      await withInjectedCfEvidence([], async () => {
+      await withExactCfEvidence([], async () => {
         const state = await compose([dxfEqual, scaleEqual], [yes, scaleOutcome])
         expect(state.properties['font.bold']).toBe(true)
         expect(state.properties['fill.bg']).toBeUndefined()
@@ -130,7 +130,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const scaleOutcomeB4: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_B4, 16) }
 
       // Case 1: scale:composition-dxf-p1-scale-p2
-      await withInjectedCfEvidence(['scale:composition-dxf-p1-scale-p2'], async () => {
+      await withExactCfEvidence(['scale:composition-dxf-p1-scale-p2'], async () => {
         // When DXF matches: DXF wins (observed cell B2)
         const stateMatch = await compose([redDxf, scale], [yes, scaleOutcomeB2])
         expect(stateMatch.properties['fill.bg']).toBe(ARGB_B2)
@@ -150,7 +150,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const scaleP1 = scaleRule(1, 3, 0)
       const greenDxfP2 = dxfRule(2, 4, 1, { 'fill.pattern': 'solid', 'fill.bg': 'FFC6EFCE' }, ['fill'])
       const scaleOutcomeC2: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_C2, 16) }
-      await withInjectedCfEvidence(['scale:composition-scale-p1-dxf-p2'], async () => {
+      await withExactCfEvidence(['scale:composition-scale-p1-dxf-p2'], async () => {
         // When both match: scale at p1 wins over DXF at p2 (observed cell C2)
         const state = await compose([scaleP1, greenDxfP2], [scaleOutcomeC2, yes])
         expect(state.properties['fill.bg']).toBeUndefined()
@@ -163,7 +163,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const dxfEqual = dxfRule(1, 5, 0, { 'fill.pattern': 'solid', 'fill.bg': 'FFFFC7CE' }, ['fill'])
       const scaleEqual = scaleRule(2, 5, 1)
       const scaleOutcomeD2: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_D2, 16) }
-      await withInjectedCfEvidence(['scale:composition-equal-priority'], async () => {
+      await withExactCfEvidence(['scale:composition-equal-priority'], async () => {
         // When both match: in Excel display format (observed cell D2), scale won!
         const state = await compose([dxfEqual, scaleEqual], [yes, scaleOutcomeD2])
         expect(state.properties['fill.bg']).toBeUndefined()
@@ -183,7 +183,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const outcome2: CfOutcome<number> = { kind: 'ready', value: 0xffffff00 }
 
       // With or without evidence: two resolved scales on one cell withhold fill (observed cell I2 FFFFFFFF)
-      await withInjectedCfEvidence(['scale:composition-overlapping-scales'], async () => {
+      await withExactCfEvidence(['scale:composition-overlapping-scales'], async () => {
         const state = await compose([scale1, scale2], [outcome1, outcome2])
         expect(state.visual?.colorScale).toBeUndefined()
         expect(state.properties['fill.bg']).toBeUndefined()
@@ -199,7 +199,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const scale = scaleRule(2, 7, 1)
       const scaleOutcomeE2: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_C2, 16) }
 
-      await withInjectedCfEvidence(['scale:composition-font-only-dxf'], async () => {
+      await withExactCfEvidence(['scale:composition-font-only-dxf'], async () => {
         const state = await compose([fontDxf, scale], [yes, scaleOutcomeE2])
         expect(state.properties['font.bold']).toBe(true)
         expect(state.properties['font.color']).toBe('FF006100')
@@ -232,14 +232,14 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const scaleOutcomeF4: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_F4, 16) }
 
       // Without evidence: matching stopIfTrue halts unverified -> fill withheld/unresolved
-      await withInjectedCfEvidence([], async () => {
+      await withExactCfEvidence([], async () => {
         const state = await compose([stopDxf, scale], [yes, scaleOutcomeF2])
         expect(state.visual?.colorScale).toBeUndefined()
         expect(state.unresolvedWrites?.has('fill')).toBe(true)
       })
 
       // Under evidence scale:composition-matching-stopIfTrue-ahead:
-      await withInjectedCfEvidence(['scale:composition-matching-stopIfTrue-ahead'], async () => {
+      await withExactCfEvidence(['scale:composition-matching-stopIfTrue-ahead'], async () => {
         // Matching p1 stopIfTrue halts the scale: scale does NOT paint (observed cell F2 FFFFFFFF)
         const stateHalted = await compose([stopDxf, scale], [yes, scaleOutcomeF2])
         expect(stateHalted.visual?.colorScale).toBeUndefined()
@@ -261,7 +261,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const scaleOutcome: CfOutcome<number> = { kind: 'ready', value: parseInt(ARGB_H2, 16) }
 
       // 1. BEFORE evidence: scale with stopIfTrue="1" is unresolved, withholds p2 DXF fill AND font (S2-J)
-      await withInjectedCfEvidence([], async () => {
+      await withExactCfEvidence([], async () => {
         const state = await compose([scaleWithStop, lowerDxf], [scaleOutcome, yes])
         expect(state.visual?.colorScale).toBeUndefined()
         expect(state.properties['font.bold']).toBeUndefined()
@@ -271,7 +271,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
 
       // 2. AFTER evidence scale:composition-scale-stopIfTrue (per OD-1):
       // stopIfTrue flag is ignored on scale; scale resolves; S2-I governs fill slot; lower font applies
-      await withInjectedCfEvidence(['scale:composition-scale-stopIfTrue', 'scale:composition-scale-p1-dxf-p2'], async () => {
+      await withExactCfEvidence(['scale:composition-scale-stopIfTrue', 'scale:composition-scale-p1-dxf-p2'], async () => {
         const state = await compose([scaleWithStop, lowerDxf], [scaleOutcome, yes])
         // Scale resolves and wins fill slot
         expect(state.visual?.colorScale).toEqual({ ruleId: 1, argb: parseInt(ARGB_H2, 16) })
@@ -292,7 +292,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       const textScaleOutcome: CfOutcome<number> = { kind: 'no-match' }
 
       // Without evidence scale:composition-text-cell-lower-dxf: text cell taints fill for lower DXF
-      await withInjectedCfEvidence([], async () => {
+      await withExactCfEvidence([], async () => {
         const state = await compose([scale, lowerDxf], [textScaleOutcome, yes], {
           isTextCellInScale: true,
         } as any)
@@ -302,7 +302,7 @@ describe('CF Stage 2 Task 15 — Scale fill-slot composition (S2-I, S2-J)', () =
       })
 
       // With evidence scale:composition-text-cell-lower-dxf: lower DXF fill paints (observed cell J2 FFFFC7CE)
-      await withInjectedCfEvidence(['scale:composition-text-cell-lower-dxf'], async () => {
+      await withExactCfEvidence(['scale:composition-text-cell-lower-dxf'], async () => {
         const state = await compose([scale, lowerDxf], [textScaleOutcome, yes], {
           isTextCellInScale: true,
         } as any)

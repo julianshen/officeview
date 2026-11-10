@@ -12,6 +12,38 @@ export {
 }
 
 let testInjectedEvidence: ReadonlySet<string> | null = null
+// When true the injected set is the ONLY evidence (production set ignored), so tests can assert
+// fail-closed behaviour with none/partial evidence regardless of what has been verified.
+let testInjectedExact = false
+
+/** Exact injection: the given set replaces the production evidence entirely. Pass null to clear. */
+export function injectExactCfEvidence(capabilities: Iterable<string> | null | undefined): void {
+  testInjectedEvidence = capabilities ? new Set(capabilities) : null
+  testInjectedExact = capabilities != null
+}
+
+/** Scoped exact injection: inside fn, only `capabilities` count as evidence. */
+export function withExactCfEvidence<T>(capabilities: Iterable<string>, fn: () => T): T {
+  const previous = testInjectedEvidence
+  const previousExact = testInjectedExact
+  const restore = (): void => {
+    testInjectedEvidence = previous
+    testInjectedExact = previousExact
+  }
+  testInjectedEvidence = new Set(capabilities)
+  testInjectedExact = true
+  try {
+    const result = fn()
+    if (result && typeof (result as unknown as Promise<unknown>).then === 'function') {
+      return (result as unknown as Promise<unknown>).finally(restore) as T
+    }
+    restore()
+    return result
+  } catch (error) {
+    restore()
+    throw error
+  }
+}
 
 /**
  * Injects evidence for testing without mutating VERIFIED_CAPABILITIES.
@@ -19,6 +51,7 @@ let testInjectedEvidence: ReadonlySet<string> | null = null
  */
 export function injectCfEvidence(capabilities: Iterable<string> | null | undefined): void {
   testInjectedEvidence = capabilities ? new Set(capabilities) : null
+  testInjectedExact = false
 }
 
 /**
@@ -26,18 +59,22 @@ export function injectCfEvidence(capabilities: Iterable<string> | null | undefin
  */
 export function withInjectedCfEvidence<T>(capabilities: Iterable<string>, fn: () => T): T {
   const previous = testInjectedEvidence
+  const previousExact = testInjectedExact
+  const restore = (): void => {
+    testInjectedEvidence = previous
+    testInjectedExact = previousExact
+  }
   testInjectedEvidence = new Set(capabilities)
+  testInjectedExact = false
   try {
     const result = fn()
     if (result && typeof (result as unknown as Promise<unknown>).then === 'function') {
-      return (result as unknown as Promise<unknown>).finally(() => {
-        testInjectedEvidence = previous
-      }) as T
+      return (result as unknown as Promise<unknown>).finally(restore) as T
     }
-    testInjectedEvidence = previous
+    restore()
     return result
   } catch (error) {
-    testInjectedEvidence = previous
+    restore()
     throw error
   }
 }
@@ -59,6 +96,7 @@ export function hasEvidence(idOrCapability: string, variant?: string): boolean {
     } else if (testInjectedEvidence.has(idOrCapability)) {
       return true
     }
+    if (testInjectedExact) return false
   }
   if (variant !== undefined) {
     return VERIFIED_CAPABILITIES.has(`${idOrCapability}:${variant}`)

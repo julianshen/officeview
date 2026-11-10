@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { parseXml } from '../src/core/xml'
 import { tokenizeBytes } from '../src/core/xml-stream'
 import { createCfDiagnostics, createCfMemory } from '../src/xlsx/cf/limits'
@@ -11,7 +11,7 @@ import {
 } from '../src/xlsx/cf/parse'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
 import { resolveSheetColor } from '../src/xlsx/sheetColors'
-import { injectCfEvidence, withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { injectExactCfEvidence, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { COLOR_SCALE_WRITES, type CfRule } from '../src/xlsx/cf/model'
 
 const defaultStyles: CfStylesSource = {
@@ -50,10 +50,12 @@ function ruleByPriority(rules: readonly CfRule[], priority: number): CfRule {
   return found[0]!
 }
 
+afterEach(() => injectExactCfEvidence(null))
+
 describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
   it('canonical colour-scale write mask is [\'colorScale\', \'fill\'] for both resolved and unresolved scales', () => {
     // 1. Unresolved scale (without evidence)
-    injectCfEvidence(null)
+    injectExactCfEvidence([])
     const unevidenced = parse(
       `<conditionalFormatting sqref="A1:A10">` +
         `<cfRule type="colorScale" priority="1">` +
@@ -70,7 +72,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
     expect(COLOR_SCALE_WRITES).toEqual(new Set(['colorScale', 'fill']))
 
     // 2. Resolved scale (with evidence injected)
-    withInjectedCfEvidence(['scale:thresholds-min-max'], () => {
+    withExactCfEvidence(['scale:thresholds-min-max'], () => {
       const evidenced = parse(
         `<conditionalFormatting sqref="A1:A10">` +
           `<cfRule type="colorScale" priority="1">` +
@@ -133,7 +135,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       `</conditionalFormatting>`
 
     // Without evidence: yields cf-unsupported-rule and scale's fill is tainted
-    injectCfEvidence(null)
+    injectExactCfEvidence([])
     const withoutEvidence = parse(xml)
     expect(withoutEvidence.value.rules).toHaveLength(3)
     const scaleUnresolved = ruleByPriority(withoutEvidence.value.rules, 3)
@@ -147,7 +149,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
 
     // With evidence injected: §3 example yields min / percentile 50 / max with points
     // FFF8696B, FFFFEB84, FF63BE7B.
-    withInjectedCfEvidence(
+    withExactCfEvidence(
       [
         'scale:thresholds-min-max',
         'scale:thresholds-percentile-inc-exc',
@@ -180,7 +182,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
   })
 
   it('scale structure refusals', () => {
-    injectCfEvidence(null)
+    injectExactCfEvidence([])
 
     // 1. 2 cfvo + 3 colors -> cf-invalid-rule
     const mismatch = parse(
@@ -260,7 +262,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
     // Under evidence it resolves:
-    withInjectedCfEvidence(
+    withExactCfEvidence(
       ['scale:thresholds-min-max', 'scale:thresholds-legacy-min-val-0'],
       () => {
         const resolvedLegacy = parse(
@@ -285,7 +287,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
     // Under evidence it resolves:
-    withInjectedCfEvidence(
+    withExactCfEvidence(
       ['scale:thresholds-min-max', 'scale:thresholds-min-midlist-max-first'],
       () => {
         const resolvedPos = parse(
@@ -364,7 +366,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       `</cfRule>` +
       `</conditionalFormatting>`
 
-    await withInjectedCfEvidence(
+    await withExactCfEvidence(
       ['scale:thresholds-min-max', 'scale:colors-theme-tint'],
       async () => {
       // 1. Resident path
@@ -399,7 +401,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
     })
 
     // auto and alpha other than FF resolve to unresolved, and no #000000 fallback appears
-    injectCfEvidence(null)
+    injectExactCfEvidence([])
     const autoScale = parse(
       `<conditionalFormatting sqref="C1"><cfRule type="colorScale" priority="1"><colorScale>` +
         `<cfvo type="min"/><cfvo type="max"/>` +
@@ -441,7 +443,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
         `</colorScale>` +
         `</cfRule>` +
         `</conditionalFormatting>`
-      withInjectedCfEvidence(['scale:colors-theme-tint'], () => {
+      withExactCfEvidence(['scale:colors-theme-tint'], () => {
         const res = parse(xml)
         expect(res.value.rules[0]!.definition).toMatchObject({
           kind: 'unresolved',
@@ -461,7 +463,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
         `</colorScale>` +
         `</cfRule>` +
         `</conditionalFormatting>`
-      withInjectedCfEvidence(['scale:thresholds-percentile-inc-exc'], () => {
+      withExactCfEvidence(['scale:thresholds-percentile-inc-exc'], () => {
         const res = parse(xml)
         expect(res.value.rules[0]!.definition).toMatchObject({
           kind: 'unresolved',
@@ -482,7 +484,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
         `</cfRule>` +
         `</conditionalFormatting>`
       // With only percentile evidence: unresolved
-      withInjectedCfEvidence(['scale:thresholds-percentile-inc-exc'], () => {
+      withExactCfEvidence(['scale:thresholds-percentile-inc-exc'], () => {
         const res = parse(diffColoursXml)
         expect(res.value.rules[0]!.definition).toMatchObject({
           kind: 'unresolved',
@@ -496,7 +498,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
         'scale:thresholds-percentile-inc-exc',
         'scale:interpolation-spec-palette',
       ]
-      withInjectedCfEvidence(fullEvidence, () => {
+      withExactCfEvidence(fullEvidence, () => {
         const res = parse(diffColoursXml)
         expect(res.value.rules[0]!.definition.kind).toBe('colorScale')
       })
@@ -517,7 +519,7 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
         'scale:thresholds-percentile-inc-exc',
         'scale:interpolation-spec-palette',
       ]
-      withInjectedCfEvidence(fullEvidence, () => {
+      withExactCfEvidence(fullEvidence, () => {
         const res = parse(specXml)
         expect(res.value.rules[0]!.definition.kind).toBe('colorScale')
         if (res.value.rules[0]!.definition.kind === 'colorScale') {

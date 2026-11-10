@@ -8,7 +8,7 @@ import {
   interpolateScaleColor,
   interpolateChannel,
 } from '../src/xlsx/cf/colorScale'
-import { withInjectedCfEvidence } from '../src/xlsx/cf/evidence'
+import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfRangeStatistics } from '../src/xlsx/cf/statistics'
 import type { CfScalePoint, CfLiteral } from '../src/xlsx/cf/model'
 
@@ -54,7 +54,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
     const stats = makeStats([10, 20, 30, 40, 50, 60, 70])
 
     // With only scale:thresholds-min-max injected
-    withInjectedCfEvidence(['scale:thresholds-min-max'], () => {
+    withExactCfEvidence(['scale:thresholds-min-max'], () => {
       const thresholds = resolveScaleThresholds(points, stats)
       expect(thresholds.kind).toBe('ready')
       if (thresholds.kind === 'ready') {
@@ -71,7 +71,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       'scale:interpolation-color-space',
       'scale:interpolation-rounding-ladder',
     ]
-    withInjectedCfEvidence(fullRequired, () => {
+    withExactCfEvidence(fullRequired, () => {
       const outcome = scaleColorAt(10, points, [10, 70])
       expect(outcome.kind).toBe('ready')
       if (outcome.kind === 'ready') {
@@ -108,7 +108,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
     const stats = makeStats([1, 2, 3, 4, 10])
 
     // Without evidence the result is unresolved
-    withInjectedCfEvidence(['scale:thresholds-min-max', 'scale:interpolation-spec-palette', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder'], () => {
+    withExactCfEvidence(['scale:thresholds-min-max', 'scale:interpolation-spec-palette', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder'], () => {
       const thresholds = resolveScaleThresholds(points, stats)
       expect(thresholds.kind).toBe('unresolved')
     })
@@ -121,7 +121,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       'scale:interpolation-color-space',
       'scale:interpolation-rounding-ladder',
     ]
-    withInjectedCfEvidence(fullEvidence, () => {
+    withExactCfEvidence(fullEvidence, () => {
       const thresholds = resolveScaleThresholds(points, stats)
       expect(thresholds.kind).toBe('ready')
       if (thresholds.kind === 'ready') {
@@ -181,13 +181,13 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
 
     // 1. v_min = v_max (all values equal, e.g. [5, 5, 5, 5, 5])
     const equalStats = makeStats([5, 5, 5, 5, 5])
-    withInjectedCfEvidence(['scale:thresholds-min-max', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder'], () => {
+    withExactCfEvidence(['scale:thresholds-min-max', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder'], () => {
       // Without scale:degenerate-equal-values evidence: unresolved
       const res = resolveScaleThresholds(points, equalStats)
       expect(res.kind).toBe('unresolved')
     })
 
-    withInjectedCfEvidence([
+    withExactCfEvidence([
       'scale:thresholds-min-max',
       'scale:degenerate-equal-values',
       'scale:interpolation-color-space',
@@ -208,12 +208,12 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
 
     // 2. Single numeric cell (e.g. [42])
     const singleStats = makeStats([42])
-    withInjectedCfEvidence(['scale:thresholds-min-max', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder'], () => {
+    withExactCfEvidence(['scale:thresholds-min-max', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder'], () => {
       const res = resolveScaleThresholds(points, singleStats)
       expect(res.kind).toBe('unresolved')
     })
 
-    withInjectedCfEvidence([
+    withExactCfEvidence([
       'scale:thresholds-min-max',
       'scale:degenerate-single-cell',
       'scale:interpolation-color-space',
@@ -237,7 +237,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       { bound: { type: 'num', value: 50 }, argb: 0xfff8696b },
       { bound: { type: 'num', value: 50 }, argb: 0xff63be7b },
     ]
-    withInjectedCfEvidence([
+    withExactCfEvidence([
       'scale:thresholds-num-bounds',
       'scale:degenerate-equal-values',
       'scale:interpolation-color-space',
@@ -275,7 +275,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       'scale:thresholds-percentile-inc-exc',
     ]
 
-    withInjectedCfEvidence(interpEvidence, () => {
+    withExactCfEvidence(interpEvidence, () => {
       // Column B: 2-colour min/max over 10..70
       const bPoints: readonly [CfScalePoint, CfScalePoint] = [
         { bound: { type: 'min' }, argb: 0xffff0000 },
@@ -378,7 +378,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       'scale:interpolation-rounding-ladder',
     ]
 
-    withInjectedCfEvidence(threshEvidence, () => {
+    withExactCfEvidence(threshEvidence, () => {
       // Column B: min/max over 1, 2, 3, 4, 10
       const bPoints: readonly [CfScalePoint, CfScalePoint] = [
         { bound: { type: 'min' }, argb: 0xfff8696b },
@@ -460,7 +460,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       'scale:interpolation-rounding-ladder',
     ]
 
-    withInjectedCfEvidence(degenEvidence, () => {
+    withExactCfEvidence(degenEvidence, () => {
       // Column B: all values equal (5)
       const bPoints: readonly [CfScalePoint, CfScalePoint] = [
         { bound: { type: 'min' }, argb: 0xfff8696b },
@@ -575,7 +575,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
       'scale:interpolation-rounding-ladder',
     ]
 
-    withInjectedCfEvidence(partEvidence, () => {
+    withExactCfEvidence(partEvidence, () => {
       // Column B: mixed types (numbers, date serial, TRUE, FALSE, text "5", #N/A, #DIV/0!, "")
       const bPoints: readonly [CfScalePoint, CfScalePoint] = [
         { bound: { type: 'min' }, argb: 0xfff8696b },
@@ -642,7 +642,7 @@ describe('CF Stage 2 Task 14 — Scale evaluation, percentile and interpolation'
     })
 
     // Without evidence: assert unresolved
-    withInjectedCfEvidence([], () => {
+    withExactCfEvidence([], () => {
       const bPoints: readonly [CfScalePoint, CfScalePoint] = [
         { bound: { type: 'min' }, argb: 0xffff0000 },
         { bound: { type: 'max' }, argb: 0xff00ff00 },
