@@ -166,4 +166,3 @@ it('print uses verified measured printer-appearance variant (stage2-scale-interp
     batch?.dispose()
   })
 })
-

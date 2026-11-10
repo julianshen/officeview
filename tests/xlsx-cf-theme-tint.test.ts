@@ -107,4 +107,3 @@ describe('applyTint reproduces the canonical Excel palette from its STORED tint 
     })
   }
 })
-

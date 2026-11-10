@@ -70,4 +70,3 @@ it('PNG encoder retains the prepared CF scale fill', async () => {
     }
   })
 })
-

@@ -227,4 +227,3 @@ describe('Stage 2 cf-compare refuses to pass having compared nothing (I4)', () =
     }
   }, 60000)
 })
-

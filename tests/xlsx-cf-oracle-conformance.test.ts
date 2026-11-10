@@ -440,4 +440,3 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(() => validateFinding({ outcome: 'painted' as any, reason: 'wrong colour' })).toThrow(/Non-withheld outcome/)
   })
 })
-
