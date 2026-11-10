@@ -24,7 +24,21 @@ export type TraceAnswer =
   | { kind: 'no-signal'; reason: 'flat' | 'geometry' | 'never-marked' | 'no-candidates' | 'reference-mismatch' }
   | { kind: 'refused'; reason: 'too-many-candidates'; count: number }
 
-export interface TraceInput { capture: Bitmap; doc: Uint8Array; unitIndex: number; keys: ReadonlyMap<number, Keys>; store: AuditStore; host?: DocumentHost }
+/** Diagnostic view of one decision (calibration only; never logged): the score list
+ * `decideScores` runs over, with its owners and each registration's residual. */
+export interface TraceObservation {
+  tau: { abs: number; margin: number; m: number }
+  scores: Float64Array
+  /** Owner sid per score. */
+  sids: string[]
+  /** Candidates held at the null expectation 0 (no usable pose, or flat). */
+  unscored: number
+  support: number
+  flat: boolean
+  geometry?: 'unsupported'
+  poses: Array<{ contentPolicy: string; scale: number; keyGeneration: number; residual: number | null; inScope: boolean }>
+}
+export interface TraceInput { capture: Bitmap; doc: Uint8Array; unitIndex: number; keys: ReadonlyMap<number, Keys>; store: AuditStore; host?: DocumentHost; observe?: (o: TraceObservation) => void }
 
 interface Candidate { sid: string; row: StoredRow; delivery: DeliveryRecord; gen: number; docRef: string }
 
@@ -90,9 +104,10 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
   // decision at the null expectation 0: unscored candidates are never named, but the margin is
   // always taken against them. τ is for the total count either way.
   const poses = new Map<string, Registration | null>()
+  const observedPoses: TraceObservation['poses'] = []
   const scores: number[] = [], owners: Candidate[] = []
-  let registered = false, scored = false, support = 0
-  const unscored = (group: Candidate[]) => { for (const c of group) { scores.push(0); owners.push(c) } }
+  let registered = false, scored = false, support = 0, held = 0
+  const unscored = (group: Candidate[]) => { for (const c of group) { scores.push(0); owners.push(c) }; held += group.length }
   for (const group of groups.values()) {
     const first = group[0]!, reference = references.get(refKeyOf(first))!, chips = chipsOf(first)
     const poseKey = JSON.stringify([first.row.contentPolicy, first.delivery.scale, first.gen])
@@ -100,6 +115,7 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     if (pose === undefined) {
       const r = register(capture, reference, chips)
       poses.set(poseKey, pose = r && r.residual <= GEOMETRY_ERROR_MAX ? r : null)
+      if (input.observe) observedPoses.push({ contentPolicy: first.row.contentPolicy, scale: first.delivery.scale, keyGeneration: first.gen, residual: r ? r.residual : null, inScope: pose !== null })
     }
     if (!pose) { unscored(group); continue }
     registered = true
@@ -113,7 +129,9 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     for (let i = 0; i < group.length; i++) { scores.push(s.scores[i]!); owners.push(group[i]!) }
   }
 
-  const decision = decideScores({ scores: Float64Array.from(scores), support, flat: !scored, ...(registered ? {} : { geometry: 'unsupported' as const }) }, tau)
+  const list = { scores: Float64Array.from(scores), support, flat: !scored, ...(registered ? {} : { geometry: 'unsupported' as const }) }
+  input.observe?.({ ...list, scores: list.scores.slice(), tau, sids: owners.map((c) => c.sid), unscored: held, poses: observedPoses })
+  const decision = decideScores(list, tau)
   const viewer = (c: Candidate) => (c.row.viewerId !== undefined ? { viewerId: c.row.viewerId } : {})
   switch (decision.kind) {
     case 'abstain': return { kind: 'no-signal', reason: decision.reason }

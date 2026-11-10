@@ -12,7 +12,7 @@ import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import { decodeImage } from '../src/detect/image'
 import { MAX_CANDIDATES, TAU_TABLE, tauFor } from '../src/detect/tau'
-import { trace, type TraceAnswer, type TraceInput } from '../src/detect/trace'
+import { trace, type TraceAnswer, type TraceInput, type TraceObservation } from '../src/detect/trace'
 import { deriveKeys, type Keys } from '../src/keys'
 import { decodePng } from '../src/mark/png'
 import type { Bitmap } from '../src/mark/types'
@@ -133,6 +133,26 @@ describe('trace', () => {
   it('rotated capture', async () => {
     const a = await timed('rotate 5', await input(rotate(await decodeImage(A.pngs[0]!), 5)))
     expect(a).toEqual({ kind: 'no-signal', reason: 'geometry' })
+  }, 60_000)
+
+  it('observe reports the decision inputs (diagnostic, no behaviour change)', async () => {
+    const seen: TraceObservation[] = []
+    const a = await trace({ ...(await input(await decodeImage(A.pngs[0]!))), host, observe: (o) => seen.push(o) })
+    expect(a).toMatchObject({ kind: 'traced', sid: A.sid })
+    expect(seen).toHaveLength(1)
+    const o = seen[0]!
+    // A, B (two scales), C, A2: five l1 deliveries in one list, τ for 2^16.
+    expect(o.scores.length).toBe(5); expect(o.sids).toHaveLength(5); expect(o.tau.m).toBe(2 ** 16)
+    expect(o.sids[o.scores.indexOf(Math.max(...o.scores))]).toBe(A.sid)
+    expect(o.poses.map((p) => p.scale).sort()).toEqual([1, 2])
+    for (const p of o.poses) expect(typeof p.residual).toBe('number')
+    expect(o.poses.find((p) => p.scale === 1)!.inScope).toBe(true)
+    expect(o.unscored).toBe(o.poses.find((p) => p.scale === 2)!.inScope ? 0 : 1)
+    if (a.kind !== 'traced') throw new Error('not traced')
+    expect(o.scores[o.sids.indexOf(A.sid)]).toBe(a.z)
+    const r: TraceObservation[] = []
+    expect(await trace({ ...(await input(rotate(await decodeImage(A.pngs[0]!), 5))), host, observe: (x) => r.push(x) })).toEqual({ kind: 'no-signal', reason: 'geometry' })
+    expect(r[0]!.geometry).toBe('unsupported'); expect(r[0]!.poses.every((p) => !p.inScope)).toBe(true); expect(r[0]!.unscored).toBe(5)
   }, 60_000)
 
   it('unrequested page', async () => {
