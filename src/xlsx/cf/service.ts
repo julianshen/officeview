@@ -163,6 +163,7 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
           }
+          budget.resume()
           for (const rule of ordered) if (rule.definition.kind === 'colorScale') {
             const prepared = stats.get(rule)
             await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined)
