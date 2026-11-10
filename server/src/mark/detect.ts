@@ -1,8 +1,8 @@
 import { checkBitmap, type Bitmap, type Chip, type MarkParams } from './types'
 import { checkParams } from './params'
 import { pedestalFor, referenceCell } from './embed'
-import { alignReference, lum, register, type Pose, type Registration } from './register'
-export type Decision = { kind: 'collusion-suspected'; indices: number[]; zs: number[] } | { kind: 'attributed'; index: number; z: number; margin: number } | { kind: 'none'; zBest: number } | { kind: 'abstain'; reason: 'flat' }
+import { alignReference, GEOMETRY_ERROR_MAX, lum, register, type Pose, type Registration } from './register'
+export type Decision = { kind: 'collusion-suspected'; indices: number[]; zs: number[] } | { kind: 'attributed'; index: number; z: number; margin: number } | { kind: 'none'; zBest: number } | { kind: 'abstain'; reason: 'flat' | 'geometry' }
 /** Immutable handle; privately owned contiguous M×512 signs. */
 export interface CandidateMatrix { readonly count: number; readonly bytes: number }
 const matrices = new WeakMap<CandidateMatrix, Int8Array>()
@@ -24,7 +24,9 @@ export function prepareCandidates(codes: readonly Int8Array[]): CandidateMatrix 
   return handle
 }
 type CandidateInput = Int8Array[] | CandidateMatrix
-export interface Scores { scores: Float64Array; support: number; registration?: Registration; flat: boolean }
+/** `geometry: 'unsupported'`: no registration, or a residual above
+ * GEOMETRY_ERROR_MAX (rotation, perspective, photograph); never scored. */
+export interface Scores { scores: Float64Array; support: number; registration?: Registration; flat: boolean; geometry?: 'unsupported' }
 /** Reference subtraction, shared pedestal subtraction, then support-centred
  * residual and RMS sigma. No unmatched spatial band-pass. The template is
  * also centred implicitly because sum(r-mean(r))=0. Original chip indices
@@ -35,12 +37,15 @@ export interface Scores { scores: Float64Array; support: number; registration?: 
 export function scoreCapture(capture: Bitmap, reference: Bitmap, chips: Chip[], candidates: CandidateInput, params: MarkParams): Scores {
   checkBitmap(capture); checkBitmap(reference); checkParams(params)
   const registration = register(capture, reference, chips)
-  if (!registration) return { scores: new Float64Array(), support: 0, flat: false }
+  if (!registration) return { scores: new Float64Array(), support: 0, flat: false, geometry: 'unsupported' }
+  if (!(registration.residual <= GEOMETRY_ERROR_MAX)) return { scores: new Float64Array(), support: 0, flat: false, registration, geometry: 'unsupported' }
   return { ...scoreAligned(capture, registration, registration.reference, reference, chips, candidates, params), registration }
 }
 /** Score at a known pose: `scoreCapture` without the pose search, so one
  * registration serves many references (e.g. visible-mark variants) or many
- * poses. The reference is aligned exactly as `register` aligns it. */
+ * poses. The reference is aligned exactly as `register` aligns it. The
+ * geometry gate is the caller's: check `registration.residual` against
+ * GEOMETRY_ERROR_MAX once, as `scoreCapture` does. */
 export function scoreRegistered(capture: Bitmap, pose: Pose, reference: Bitmap, chips: Chip[], candidates: CandidateInput, params: MarkParams): Scores {
   checkBitmap(capture); checkBitmap(reference); checkParams(params)
   return scoreAligned(capture, pose, alignReference(reference, pose, capture.width, capture.height), reference, chips, candidates, params)
@@ -87,6 +92,7 @@ export function detect(capture: Bitmap, reference: Bitmap, chips: Chip[], candid
 /** Same full-decision rule used for calibration and detection. */
 export function decideScores(result: Scores, tau: { abs: number; margin: number }): Decision {
   if (!Number.isFinite(tau.abs) || !Number.isFinite(tau.margin) || tau.abs < 0 || tau.margin < 0) throw new Error('Invalid decision thresholds')
+  if (result.geometry === 'unsupported') return { kind: 'abstain', reason: 'geometry' }
   if (result.flat) return { kind: 'abstain', reason: 'flat' }
   const indices: number[] = [], zs: number[] = []
   for (let i=0;i<result.scores.length;i++) if(result.scores[i]! >= tau.abs) { indices.push(i); zs.push(result.scores[i]!) }

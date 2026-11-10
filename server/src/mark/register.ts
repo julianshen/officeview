@@ -122,10 +122,15 @@ function supportSeeds(ref:Bitmap,cap:Bitmap,poses:Offset[],chips:Chip[],sx:numbe
 /** Where a capture sits on its reference: resample by `factor`, crop at
  * (x, y) in ORIGINAL reference pixels (scaled-first crops may be fractional),
  * `scaleX/Y` being capture pixels per original reference pixel. */
-export type Pose = { factor: number; x: number; y: number; scaleX: number; scaleY: number }
+export type Pose = { factor: number; x: number; y: number; scaleX: number; scaleY: number; order: 'scale-crop' | 'crop-scale' }
 export interface Registration extends Pose {
   /** Already aligned/resampled to capture dimensions, never sampled out of bounds. */
-  reference: Bitmap; error: number
+  reference: Bitmap
+  /** Luminance MSE of the capture against `reference`. */
+  error: number
+  /** `error` over (luminance variance of `reference` + RESIDUAL_FLOOR); above
+   * GEOMETRY_ERROR_MAX the capture's geometry is out of scope. */
+  residual: number
 }
 function rectangle(b: Bitmap, x: number, y: number, width: number, height: number): Bitmap {
   const data = new Uint8ClampedArray(width * height * 4)
@@ -138,18 +143,19 @@ function sample(b: Bitmap, x: number, y: number): number {
   return (1 - ty) * ((1 - tx) * lum(b, x0, y0) + tx * lum(b, Math.min(x0 + 1, b.width - 1), y0)) + ty * ((1 - tx) * lum(b, x0, Math.min(y0 + 1, b.height - 1)) + tx * lum(b, Math.min(x0 + 1, b.width - 1), Math.min(y0 + 1, b.height - 1)))
 }
 /** The reference as `register` aligns it to a width x height capture at
- * `pose`. Two constructions exist and are told apart by the pose itself:
- * scale-then-crop (scale is exactly round(extent*factor)/extent and the crop
- * origin is a whole scaled pixel) or crop-then-scale (integer origin, scale
- * is capture/extent). Poses satisfying both read as scale-then-crop. */
+ * `pose`, by the construction `pose.order` names: scale-crop (resample the
+ * whole reference by `factor`, then crop at the whole scaled pixel x*scaleX,
+ * y*scaleY) or crop-scale (crop at the integer original origin, extent
+ * capture/scale, then resample by `factor`). */
 export function alignReference(reference: Bitmap, pose: Pose, width: number, height: number): Bitmap {
   checkBitmap(reference)
   const { factor, x, y, scaleX, scaleY } = pose
   if (![factor, x, y, scaleX, scaleY].every(Number.isFinite) || factor <= 0 || scaleX <= 0 || scaleY <= 0 || !Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError('Invalid pose')
   const w = Math.round(reference.width * factor), h = Math.round(reference.height * factor)
-  const sx = x * scaleX, sy = y * scaleY
-  const scaledFirst = scaleX === w / reference.width && scaleY === h / reference.height && Math.abs(sx - Math.round(sx)) < 1e-6 && Math.abs(sy - Math.round(sy)) < 1e-6
-  if (scaledFirst) {
+  if (pose.order !== 'scale-crop' && pose.order !== 'crop-scale') throw new RangeError('Invalid pose')
+  if (pose.order === 'scale-crop') {
+    const sx = x * scaleX, sy = y * scaleY
+    if (scaleX !== w / reference.width || scaleY !== h / reference.height || Math.abs(sx - Math.round(sx)) >= 1e-6 || Math.abs(sy - Math.round(sy)) >= 1e-6) throw new RangeError('Invalid scale-crop pose')
     const ox = Math.round(sx), oy = Math.round(sy)
     if (ox < 0 || oy < 0 || ox + width > w || oy + height > h) throw new RangeError('Pose outside the reference')
     return rectangle(factor === 1 ? reference : resize(reference, factor), ox, oy, width, height)
@@ -158,17 +164,111 @@ export function alignReference(reference: Bitmap, pose: Pose, width: number, hei
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || cw < 1 || ch < 1 || x + cw > reference.width || y + ch > reference.height) throw new RangeError('Pose outside the reference')
   return resize(rectangle(reference, x, y, cw, ch), factor)
 }
+/** Browser zoom range the factor search covers (capture px per reference px). */
+export const ZOOM_MIN = 0.45, ZOOM_MAX = 2.2
+/** Normalised residual (see `residual`) above which a capture's geometry is
+ * out of scope: rotation, perspective, a photograph. 1.5 x the largest
+ * in-scope residual of server/test/mark-geometry.test.ts, measured
+ * 2026-11-10: 0.06152, a marked blank 256x256 page (its own mark energy;
+ * pypptx-test.pptx unit 0 peaks at 0.004, q70; the Stage-0 synthetic text
+ * page at q70 is 0.0224). Out of scope on pypptx-test unit 0: rotate 2 deg
+ * 0.843, rotate 5 deg 1.146, keystone 0.05 0.842. Recalibrate with the
+ * detector calibration task. */
+export const GEOMETRY_ERROR_MAX = 0.0923
+/** Registration MSE over the aligned reference's luminance variance plus a
+ * floor, so a sparse page is not judged on its mark energy alone. */
+function residual(aligned: Bitmap, error: number): number {
+  let sum = 0, sq = 0
+  const n = aligned.width * aligned.height
+  for (let y = 0; y < aligned.height; y++) for (let x = 0; x < aligned.width; x++) { const v = lum(aligned, x, y); sum += v; sq += v * v }
+  const variance = Math.max(0, sq / n - (sum / n) ** 2)
+  return error / (variance + RESIDUAL_FLOOR)
+}
+/** (amplitude + pedestal)^2 at DEFAULT_PARAMS: the largest squared luminance
+ * change the mark itself makes, so a blank page's mark energy stays in scope. */
+const RESIDUAL_FLOOR = 16
+/** Seeds above this residual skip the exhaustive translation certificate. */
+const CERTIFY_MAX = 4 * GEOMETRY_ERROR_MAX
+/** The factor an uncropped resample implies: round(extent*f) reproduces both
+ * capture extents. Midpoint of the admissible interval, if any. */
+function impliedFactor(capture: Bitmap, reference: Bitmap): number | undefined {
+  const lo = Math.max((capture.width - 0.5) / reference.width, (capture.height - 0.5) / reference.height)
+  const hi = Math.min((capture.width + 0.5) / reference.width, (capture.height + 0.5) / reference.height)
+  if (!(lo < hi)) return undefined
+  const f = (lo + hi) / 2
+  return f >= ZOOM_MIN && f <= ZOOM_MAX && Math.round(reference.width * f) === capture.width && Math.round(reference.height * f) === capture.height ? f : undefined
+}
+/** Coarse-to-fine scale search for a cropped zoom. Level 0 is an exhaustive
+ * multiplicative factor grid x exhaustive translation on ~160 px thumbnails
+ * (both sides through the same resampler); each finer level doubles the
+ * resolution, halves the factor step and searches +-4 steps / +-4 px around
+ * the best three distinct hypotheses. Deterministic; returns the
+ * full-resolution best factor, which `register` then evaluates in both orders. */
+function zoomSearch(capture: Bitmap, reference: Bitmap): number | undefined {
+  const W = reference.width, H = reference.height, cw = capture.width, ch = capture.height
+  const lo = Math.max(ZOOM_MIN, cw / W, ch / H), hi = Math.min(ZOOM_MAX, (cw + 1) / (0.75 * W), (ch + 1) / (0.75 * H))
+  if (!(lo <= hi)) return undefined
+  type Cand = { f: number; x: number; y: number; error: number }
+  const score = (cap: { w: number; h: number; data: Float64Array }, f: number, c: number, xs: [number, number], ys: [number, number]): Cand | undefined => {
+    const r = plane(resize(reference, f * c), 1)
+    const maxX = r.w - cap.w, maxY = r.h - cap.h
+    if (maxX < -1 || maxY < -1) return undefined
+    const jump = Math.max(1, Math.floor(Math.sqrt(cap.w * cap.h / 4096)))
+    let best: Cand | undefined
+    for (let y = Math.max(0, ys[0]); y <= Math.min(Math.max(0, maxY), ys[1]); y++) for (let x = Math.max(0, xs[0]); x <= Math.min(Math.max(0, maxX), xs[1]); x++) {
+      let error = 0, n = 0
+      for (let cy = 0; cy < cap.h; cy += jump) for (let cx = 0; cx < cap.w; cx += jump) {
+        error += (cap.data[cy * cap.w + cx]! - r.data[Math.min(r.h - 1, y + cy) * r.w + Math.min(r.w - 1, x + cx)]!) ** 2; n++
+      }
+      error /= n
+      if (!best || error < best.error) best = { f, x, y, error }
+    }
+    return best
+  }
+  let c = Math.min(1, 160 / Math.max(cw, ch))
+  const thumb = (k: number) => plane(k === 1 ? capture : resize(capture, k), 1)
+  let cap = thumb(c), step = 0.5 / Math.max(cap.w, cap.h), level: Cand[] = []
+  for (let f = lo; f <= hi * (1 + step); f *= 1 + step) { const s = score(cap, Math.min(f, hi), c, [0, Infinity], [0, Infinity]); if (s) level.push(s) }
+  // Distinct (resampled extent, offset) candidates only: neighbouring factors
+  // that round to the same thumbnail are one hypothesis, not three.
+  const best3 = (found: Cand[], c: number): Cand[] => {
+    const seen = new Set<string>(), out: Cand[] = []
+    for (const s of [...found].sort((a, b) => a.error - b.error)) {
+      const id = `${Math.round(W * s.f * c)}x${Math.round(H * s.f * c)}@${s.x},${s.y}`
+      if (!seen.has(id)) { seen.add(id); out.push(s) }
+      if (out.length === 3) break
+    }
+    return out
+  }
+  // Seed with the best local minima of the coarse factor profile.
+  let top = best3(level.filter((s, i) => (i === 0 || s.error <= level[i - 1]!.error) && (i === level.length - 1 || s.error <= level[i + 1]!.error)), c)
+  while (c < 1 && top.length) {
+    const next = Math.min(1, c * 2), ratio = next / c
+    c = next; cap = thumb(c); step = 0.5 / Math.max(cap.w, cap.h)
+    const found: Cand[] = []
+    for (const t of top) for (let j = -4; j <= 4; j++) {
+      const f = Math.min(hi, Math.max(lo, t.f * (1 + step) ** j)), x = Math.round(t.x * ratio * f / t.f), y = Math.round(t.y * ratio * f / t.f)
+      const s = score(cap, f, c, [x - 4, x + 4], [y - 4, y + 4]); if (s) found.push(s)
+    }
+    top = best3(found, c)
+  }
+  return top[0]?.f
+}
 export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = []): Registration | undefined {
-  let best: Registration | undefined
+  checkBitmap(capture); checkBitmap(reference)
+  let best: Omit<Registration, 'residual'> | undefined
   const step = 1
   const errorOf = (read: (x: number, y: number) => number, stride = step): number => {
     let sum = 0, count = 0
     for (let y = 0; y < capture.height; y += stride) for (let x = 0; x < capture.width; x += stride) { sum += (lum(capture, x, y) - read(x, y)) ** 2; count++ }
     return sum / count
   }
-  for (const factor of [1, 0.5, 2]) {
+  const tried = new Set<number>()
+  const atFactor = (factor: number): void => {
+    if (tried.has(factor)) return
+    tried.add(factor)
     const w = Math.round(reference.width * factor), h = Math.round(reference.height * factor), slack = Math.ceil(factor)
-    if (capture.width > w || capture.height > h || capture.width < Math.floor(w * 0.75) - slack || capture.height < Math.floor(h * 0.75) - slack) continue
+    if (capture.width > w || capture.height > h || capture.width < Math.floor(w * 0.75) - slack || capture.height < Math.floor(h * 0.75) - slack) return
     const ref = factor === 1 ? reference : resize(reference, factor)
     const seeds = w === capture.width && h === capture.height ? [{ x: 0, y: 0, stride: 1 }] : [...peaks(ref, capture), {x:Math.floor((w-capture.width)/2),y:Math.floor((h-capture.height)/2),stride:1}]
     // Preserve scale-then-crop support, where origins are scaled pixel integers.
@@ -186,7 +286,9 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
         const centre={x:Math.floor((w-capture.width)/2),y:Math.floor((h-capture.height)/2),error:0}
         centre.error=errorOf((cx,cy)=>lum(ref,cx+centre.x,cy+centre.y))
         if(centre.error<scaledBest.error)scaledBest=centre
-        scaledBest=exactMinimum(ref,capture,scaledBest)
+        // Certify only a plausible factor: an exhaustive minimum under a
+        // far-out-of-scope bound barely prunes (minutes on a wrong zoom).
+        if(residual(rectangle(ref,scaledBest.x,scaledBest.y,capture.width,capture.height),scaledBest.error)<=CERTIFY_MAX)scaledBest=exactMinimum(ref,capture,scaledBest)
       }
     }
     if(chips.length && seeds.length>1){
@@ -202,9 +304,9 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
     }
     if (scaledBest && (!best || scaledBest.error < best.error)) {
       const { x, y, error } = scaledBest
-      best = { factor, x: x * reference.width / w, y: y * reference.height / h, scaleX: w / reference.width, scaleY: h / reference.height, reference: rectangle(ref, x, y, capture.width, capture.height), error }
+      best = { factor, x: x * reference.width / w, y: y * reference.height / h, scaleX: w / reference.width, scaleY: h / reference.height, order: 'scale-crop', reference: rectangle(ref, x, y, capture.width, capture.height), error }
     }
-    if (factor === 1) continue // both orders coincide
+    if (factor === 1) return // both orders coincide
     // Invert round(sourceExtent*factor): half-scale has two possible integer
     // extents. Search integer ORIGINAL offsets, including half-pixel phases
     // after scaling. Coarse interpolation ranks candidates; actual napi
@@ -228,9 +330,22 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
       for (const { x, y } of shortlist) {
         const aligned = resize(rectangle(reference, x, y, cw, ch), factor)
         const error = errorOf((cx, cy) => lum(aligned, cx, cy))
-        if (!best || error < best.error) best = { factor, x, y, scaleX: sx, scaleY: sy, reference: aligned, error }
+        if (!best || error < best.error) best = { factor, x, y, scaleX: sx, scaleY: sy, order: 'crop-scale', reference: aligned, error }
       }
     }
   }
-  return best
+  const result = (): Registration | undefined => best && { ...best, residual: residual(best.reference, best.error) }
+  const inScope = (): Registration | undefined => { const r = result(); return r && r.residual <= GEOMETRY_ERROR_MAX ? r : undefined }
+  // Exact Stage-0 factors first (ties keep them; a blank page's centred crop
+  // and a zoom of the same extents fit equally), then the uncropped resample
+  // the extents imply, then the full search. An in-scope fit stops early.
+  for (const factor of [1, 0.5, 2]) atFactor(factor)
+  let found = inScope()
+  if (found) return found
+  const implied = impliedFactor(capture, reference)
+  if (implied !== undefined) atFactor(implied)
+  if ((found = inScope())) return found
+  const zoom = zoomSearch(capture, reference)
+  if (zoom !== undefined) atFactor(zoom)
+  return result()
 }

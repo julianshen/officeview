@@ -44,6 +44,24 @@ describe('alignReference', () => {
   }
 })
 
+describe('Pose.order', () => {
+  it('names the construction when a pose is valid both ways', () => {
+    // Crop then exactly 2x: an integer origin at scale 2 fits both orders, but
+    // the two resamples differ at the crop edges.
+    const cap = scale(crop(A.marked, 0.25), 2), reg = register(cap, A.reference, A.chips)
+    if (!reg) throw new Error('registration failed')
+    expect([reg.scaleX, reg.scaleY, reg.order]).toEqual([2, 2, 'crop-scale'])
+    expect(Number.isInteger(reg.x) && Number.isInteger(reg.y)).toBe(true)
+    const same = alignReference(A.reference, reg, cap.width, cap.height)
+    const other = alignReference(A.reference, { ...reg, order: reg.order === 'scale-crop' ? 'crop-scale' : 'scale-crop' }, cap.width, cap.height)
+    expect(Buffer.from(same.data).equals(Buffer.from(reg.reference.data))).toBe(true)
+    expect(Buffer.from(other.data).equals(Buffer.from(reg.reference.data))).toBe(false)
+  })
+  it('rejects a scale-crop pose whose scale is not the resampled extent', () => {
+    expect(() => alignReference(A.reference, { factor: 0.5, x: 0, y: 0, scaleX: 0.4, scaleY: 0.5, order: 'scale-crop' }, 100, 100)).toThrow(RangeError)
+  })
+})
+
 describe('scoreRegistered', () => {
   for (const [name, attack] of [['crop25', (b: Bitmap) => crop(b, 0.25)], ['down0.5', (b: Bitmap) => scale(b, 0.5)]] as const) {
     it(`equals scoreCapture (${name})`, () => {
