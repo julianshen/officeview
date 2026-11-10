@@ -30,6 +30,13 @@ export type CfColorSpaceVariant = 'sRGB' | 'linear-light' | 'hsl'
  * - 'inc' (PERCENTILE.INC): rank = 1 + (p/100) * (N - 1)
  * - 'exc' (PERCENTILE.EXC): rank = (p/100) * (N + 1)
  */
+/** `lo + f * (hi - lo)`, bit-identical to that formula whenever the span is finite; finite endpoints of opposite sign
+ * near the double limit overflow the span, so those use the convex form `lo * (1 - f) + hi * f`. */
+export function lerp(lo: number, hi: number, f: number): number {
+  const span = hi - lo
+  return Number.isFinite(span) ? lo + f * span : lo * (1 - f) + hi * f
+}
+
 export function percentileOrderStatistic(
   sortedAsc: Float64Array | readonly number[],
   percentile: number,
@@ -54,7 +61,7 @@ export function percentileOrderStatistic(
     if (index >= n - 1) return sortedAsc[n - 1]!
     const v0 = sortedAsc[index]!
     const v1 = sortedAsc[index + 1]!
-    return v0 + frac * (v1 - v0)
+    return lerp(v0, v1, frac)
   } else {
     // variant === 'exc'
     if (p <= 0 || p >= 1) return undefined
@@ -68,7 +75,7 @@ export function percentileOrderStatistic(
     if (index >= n - 1) return sortedAsc[n - 1]!
     const v0 = sortedAsc[index]!
     const v1 = sortedAsc[index + 1]!
-    return v0 + frac * (v1 - v0)
+    return lerp(v0, v1, frac)
   }
 }
 
@@ -360,7 +367,7 @@ export function resolveScaleThresholds(
       if (stats.min === undefined || stats.max === undefined || !Number.isFinite(stats.min) || !Number.isFinite(stats.max)) {
         return { kind: 'unresolved', reason: 'cf-no-numeric-values' }
       }
-      const val = stats.min + (bound.value / 100) * (stats.max - stats.min)
+      const val = lerp(stats.min, stats.max, bound.value / 100)
       if (!Number.isFinite(val)) {
         return { kind: 'unresolved', reason: 'cf-invalid-bound' }
       }

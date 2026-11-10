@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { composeCell } from '../src/xlsx/cf/compose'
-import { resolveScaleThresholds, scaleColorAt } from '../src/xlsx/cf/colorScale'
+import { percentileOrderStatistic, resolveScaleThresholds, scaleColorAt } from '../src/xlsx/cf/colorScale'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import type { CfRangeStatistics } from '../src/xlsx/cf/statistics'
@@ -156,5 +156,39 @@ describe('bot P2: finite thresholds whose span overflows interpolate correctly, 
   })
   it('ordinary spans still interpolate', () => {
     expect(withExactCfEvidence(ev, () => scaleColorAt(5, two(num(0), num(10)), [0, 10])).kind).toBe('ready')
+  })
+})
+
+describe('bot P2 (round 8): percent and percentile thresholds resolve without overflow', () => {
+  const data = stats([-1e308, 1e308])
+  it('percent 0 / 50 / 100 over [-1e308, 1e308] are finite -1e308 / 0 / 1e308', () => {
+    for (const [pct, want] of [[0, -1e308], [50, 0]] as const) {
+      const out = resolveScaleThresholds(two({ type: 'percent', value: pct }, { type: 'max' }), data, { hasEvidence: production })
+      expect(out.kind, `percent ${pct}`).toBe('ready')
+      if (out.kind === 'ready') expect(out.value[0]).toBe(want)
+    }
+    const top = resolveScaleThresholds(two({ type: 'min' }, { type: 'percent', value: 100 }), data, { hasEvidence: production })
+    expect(top.kind === 'ready' && top.value[1]).toBe(1e308)
+  })
+  it('percentileOrderStatistic over [-1e308, 1e308] is 0 at the median and exact at the ends', () => {
+    expect(percentileOrderStatistic([-1e308, 1e308], 50, 'inc')).toBe(0)
+    expect(percentileOrderStatistic([-1e308, 1e308], 0, 'inc')).toBe(-1e308)
+    expect(percentileOrderStatistic([-1e308, 1e308], 100, 'inc')).toBe(1e308)
+    expect(percentileOrderStatistic([-1e308, 1e308], 50, 'exc')).toBe(0)
+  })
+  it('a 3-colour min / percent 50 / max scale over that range paints the exact colours end to end', () => {
+    const t = resolveScaleThresholds(three({ type: 'min' }, { type: 'percent', value: 50 }, { type: 'max' }), data, { hasEvidence: production })
+    expect(t.kind).toBe('ready')
+    if (t.kind !== 'ready') return
+    expect(t.value).toEqual([-1e308, 0, 1e308])
+    const at = (v: number) => scaleColorAt(v, three({ type: 'min' }, { type: 'percent', value: 50 }, { type: 'max' }), t.value, { hasEvidence: production })
+    expect(at(-1e308)).toEqual({ kind: 'ready', value: C[0] })
+    expect(at(0)).toEqual({ kind: 'ready', value: C[1] })
+    expect(at(1e308)).toEqual({ kind: 'ready', value: C[2] })
+  })
+  it('ordinary inputs are unchanged', () => {
+    expect(percentileOrderStatistic([1, 2, 3, 4, 10], 30, 'inc')).toBe(2.2)
+    const out = resolveScaleThresholds(two({ type: 'percent', value: 25 }, { type: 'max' }), stats([0, 100]), { hasEvidence: production })
+    expect(out.kind === 'ready' && out.value[0]).toBe(25)
   })
 })
