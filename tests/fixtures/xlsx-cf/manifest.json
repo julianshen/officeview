@@ -9662,7 +9662,7 @@
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s3/tests/fixtures/xlsx-cf/stage3-bar-settings-probe.rejected.xlsx: bar bar:settings-precondition-probe on B2:B6: the base rule has no <x14:id> link to its companion",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
