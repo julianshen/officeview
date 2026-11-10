@@ -58,6 +58,40 @@ describe('3fc8ba38 / 380dc376: sorted statistics reuse and refusals', () => {
     expect(memory.currentBytes).toBe(0)
   })
 
+  for (const retain of [true, false]) {
+    it(`reusing a sorted entry for an unsorted request releases it exactly once at the owning key (retainEntries=${retain})`, async () => {
+      const memory = createCfMemory({})
+      const source = createResidentCfSource(numCells(50), 's', stamp, memory)
+      const session = createCfStatistics(memory, retain ? { retainEntries: true } : {})
+      const run = (sorted: boolean) => session.prepareStatistics([[rect(0, 49)]], stamp, source, createCfWorkBudget({ noTimeLimit: true }), { sorted })
+      const [sortedOut] = await run(true)
+      const [reused] = await run(false)
+      expect(sortedOut!.kind).toBe('ready')
+      expect(reused!.kind).toBe('ready')
+      const held = memory.currentBytes
+      expect(held).toBeGreaterThan(0)
+      if (sortedOut!.kind === 'ready') sortedOut!.value.release()
+      expect(memory.currentBytes, 'the reused outcome still holds the entry').toBe(held)
+      if (reused!.kind === 'ready') reused!.value.release()
+      if (retain) {
+        expect(memory.currentBytes, 'retained entry stays charged and cached after every outcome is released').toBe(held)
+        expect(session.size).toBe(1)
+        const [again] = await run(true)
+        expect(again!.kind).toBe('ready')
+        if (again!.kind === 'ready') {
+          expect(again.value.value.numericCount, 'a later hit shares a live lease').toBe(50)
+          again.value.release()
+        }
+        expect(memory.currentBytes).toBe(held)
+      } else {
+        expect(memory.currentBytes, 'non-retaining mode frees the entry once nothing holds it').toBe(0)
+        expect(session.size).toBe(0)
+      }
+      session.dispose()
+      expect(memory.currentBytes, 'everything released exactly once').toBe(0)
+    })
+  }
+
   it('a sorted-statistics resource refusal is not served to a later streaming request', async () => {
     const memory = createCfMemory({})
     const source = createResidentCfSource(numCells(1000), 's', stamp, memory)

@@ -935,7 +935,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
         }
         cache.delete(ownerKey)
         cache.set(ownerKey, hit)
-        out.push(makeOutcome(key, hit))
+        out.push(makeOutcome(ownerKey, hit))
         continue
       }
       if (!checkLive(stamp)) {
