@@ -66,67 +66,65 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
   if (marked.length > MAX_CANDIDATES) return { kind: 'refused', reason: 'too-many-candidates', count: marked.length }
   const tau = tauFor(marked.length)
 
-  // References, once per (contentPolicy, visibleMark, scale); each must hash to what was served.
+  // One pass per reference key (contentPolicy, visibleMark, scale), keys and generations in
+  // first-delivery order: render once, check every delivery's hash, decode, score each generation's
+  // group, then drop the bitmap before the next key is rendered. Only one decoded reference is ever
+  // live (one per viewer under `visibleMark: 'viewer'` would not fit in memory); what persists is
+  // the scores and the poses. A mismatch on any key, even after others were scored, fails closed.
   const host = input.host ?? new DocumentHost()
   const docKeys = new Map<string, string>()
-  const references = new Map<string, Bitmap>()
-  const refKeyOf = (c: Candidate) => JSON.stringify([c.row.contentPolicy, markKey(c.row.visibleMark), c.delivery.scale])
+  const byRef = new Map<string, Map<number, Candidate[]>>()
   for (const c of marked) {
-    const key = refKeyOf(c)
-    if (!references.has(key)) {
-      let docKey = docKeys.get(c.row.contentPolicy)
-      if (!docKey) docKeys.set(c.row.contentPolicy, docKey = (await host.open(marked[0]!.docRef, doc, c.row.contentPolicy)).docKey)
-      const unit = host.render(docKey, { unitIndex, scale: c.delivery.scale, projection: 'final-raster', mark: c.row.visibleMark })
-      if (unit.kind !== 'raster') throw new Error('final-raster render returned commands')
-      // Every delivery in this group must have been marked from these same bytes.
-      const hash = sha256(unit.png)
-      if (marked.some((x) => refKeyOf(x) === key && x.delivery.refSha256 !== hash)) return { kind: 'no-signal', reason: 'reference-mismatch' }
-      const d = decodePng(unit.png)
-      references.set(key, { width: d.w, height: d.h, data: d.rgba })
-    }
-  }
-
-  // Scoring groups: chips depend on (generation, scale), the reference on (contentPolicy, visibleMark, scale).
-  const groups = new Map<string, Candidate[]>()
-  for (const c of marked) {
-    const key = JSON.stringify([c.gen, refKeyOf(c)])
-    const g = groups.get(key)
-    if (g) g.push(c); else groups.set(key, [c])
-  }
-  const chipsOf = (c: Candidate) => {
-    const ref = references.get(refKeyOf(c))!
-    return basis(deriveBasisKey(keys.get(c.gen)!.kBasisRoot, c.docRef, `${unitIndex}@${c.delivery.scale}`), ref.width, ref.height, DEFAULT_PARAMS)
+    const key = JSON.stringify([c.row.contentPolicy, markKey(c.row.visibleMark), c.delivery.scale])
+    let gens = byRef.get(key)
+    if (!gens) byRef.set(key, gens = new Map())
+    const g = gens.get(c.gen)
+    if (g) g.push(c); else gens.set(c.gen, [c])
   }
 
   // Register once per (contentPolicy, scale, generation), with that generation's chips, against the
-  // reference of its first group; the visible-mark groups of the same triple reuse the pose.
-  // A group with no usable pose (registration failed, out of scope, or flat support) stays in the
-  // decision at the null expectation 0: unscored candidates are never named, but the margin is
-  // always taken against them. τ is for the total count either way.
+  // reference of its first group in the order above; that triple's later (visible-mark) groups reuse
+  // the pose. A group with no usable pose (registration failed, out of scope, or flat support) stays
+  // in the decision at the null expectation 0: unscored candidates are never named, but the margin
+  // is always taken against them. τ is for the total count either way.
   const poses = new Map<string, Registration | null>()
   const observedPoses: TraceObservation['poses'] = []
   const scores: number[] = [], owners: Candidate[] = []
   let registered = false, scored = false, support = 0, held = 0
   const unscored = (group: Candidate[]) => { for (const c of group) { scores.push(0); owners.push(c) }; held += group.length }
-  for (const group of groups.values()) {
-    const first = group[0]!, reference = references.get(refKeyOf(first))!, chips = chipsOf(first)
-    const poseKey = JSON.stringify([first.row.contentPolicy, first.delivery.scale, first.gen])
-    let pose = poses.get(poseKey)
-    if (pose === undefined) {
-      const r = register(capture, reference, chips)
-      poses.set(poseKey, pose = r && r.residual <= GEOMETRY_ERROR_MAX ? r : null)
-      if (input.observe) observedPoses.push({ contentPolicy: first.row.contentPolicy, scale: first.delivery.scale, keyGeneration: first.gen, residual: r ? r.residual : null, inScope: pose !== null, ...(r ? { band: r.band } : {}) })
+  for (const gens of byRef.values()) {
+    const head = gens.values().next().value![0]!
+    let docKey = docKeys.get(head.row.contentPolicy)
+    if (!docKey) docKeys.set(head.row.contentPolicy, docKey = (await host.open(marked[0]!.docRef, doc, head.row.contentPolicy)).docKey)
+    const unit = host.render(docKey, { unitIndex, scale: head.delivery.scale, projection: 'final-raster', mark: head.row.visibleMark })
+    if (unit.kind !== 'raster') throw new Error('final-raster render returned commands')
+    // Every delivery under this key, of every generation, must have been marked from these same bytes.
+    const hash = sha256(unit.png)
+    for (const group of gens.values()) if (group.some((x) => x.delivery.refSha256 !== hash)) return { kind: 'no-signal', reason: 'reference-mismatch' }
+    const d = decodePng(unit.png)
+    const reference: Bitmap = { width: d.w, height: d.h, data: d.rgba }
+    for (const [gen, group] of gens) {
+      const first = group[0]!
+      // Chips depend on (generation, scale) and the reference size.
+      const chips = basis(deriveBasisKey(keys.get(gen)!.kBasisRoot, first.docRef, `${unitIndex}@${first.delivery.scale}`), reference.width, reference.height, DEFAULT_PARAMS)
+      const poseKey = JSON.stringify([first.row.contentPolicy, first.delivery.scale, gen])
+      let pose = poses.get(poseKey)
+      if (pose === undefined) {
+        const r = register(capture, reference, chips)
+        poses.set(poseKey, pose = r && r.residual <= GEOMETRY_ERROR_MAX ? r : null)
+        if (input.observe) observedPoses.push({ contentPolicy: first.row.contentPolicy, scale: first.delivery.scale, keyGeneration: gen, residual: r ? r.residual : null, inScope: pose !== null, ...(r ? { band: r.band } : {}) })
+      }
+      if (!pose) { unscored(group); continue }
+      registered = true
+      const codes = group.map((c) => {
+        if (!c.row.forensic) throw new Error(`marked delivery for ${c.sid} without an issuance record`)
+        return extendedCodeword(msgBits(c.row.forensic.msg40))
+      })
+      const s = scoreRegistered(capture, pose, reference, chips, prepareCandidates(codes), DEFAULT_PARAMS)
+      if (s.flat) { unscored(group); continue }
+      scored = true; support += s.support
+      for (let i = 0; i < group.length; i++) { scores.push(s.scores[i]!); owners.push(group[i]!) }
     }
-    if (!pose) { unscored(group); continue }
-    registered = true
-    const codes = group.map((c) => {
-      if (!c.row.forensic) throw new Error(`marked delivery for ${c.sid} without an issuance record`)
-      return extendedCodeword(msgBits(c.row.forensic.msg40))
-    })
-    const s = scoreRegistered(capture, pose, reference, chips, prepareCandidates(codes), DEFAULT_PARAMS)
-    if (s.flat) { unscored(group); continue }
-    scored = true; support += s.support
-    for (let i = 0; i < group.length; i++) { scores.push(s.scores[i]!); owners.push(group[i]!) }
   }
 
   const list = { scores: Float64Array.from(scores), support, flat: !scored, ...(registered ? {} : { geometry: 'unsupported' as const }) }

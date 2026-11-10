@@ -46,6 +46,18 @@ async function session(h: Harness, setViewer: (v: string) => void, who: string, 
   }
   return { sid: m.session.sid, pngs, client: c }
 }
+/** Event log shared by a render-spying host and a capture whose pixel reads are observed:
+ * shows, without production hooks, whether scoring against one reference finished before
+ * the next was rendered. */
+function spied(base: DocumentHost, capture: Bitmap) {
+  const log: Array<'render' | 'read'> = [], renders: string[] = []
+  const spyHost = Object.create(base) as DocumentHost
+  spyHost.open = (...a: Parameters<DocumentHost['open']>) => base.open(...a)
+  spyHost.render = (...a: Parameters<DocumentHost['render']>) => { log.push('render'); renders.push(JSON.stringify([a[1].scale, a[1].mark])); return base.render(...a) }
+  const data = capture.data
+  const seen: Bitmap = { width: capture.width, height: capture.height, get data() { if (log[log.length - 1] !== 'read') log.push('read'); return data } }
+  return { host: spyHost, capture: seen, log, renders }
+}
 function jpegBytes(b: Bitmap, q: number): Uint8Array {
   const c = createCanvas(b.width, b.height), ctx = c.getContext('2d'), img = ctx.createImageData(b.width, b.height)
   img.data.set(b.data); ctx.putImageData(img, 0, 0)
@@ -158,6 +170,18 @@ describe('trace', () => {
     expect(r[0]!.geometry).toBe('unsupported'); expect(r[0]!.poses.every((p) => !p.inScope)).toBe(true); expect(r[0]!.unscored).toBe(5)
   }, 60_000)
 
+  it('one reference live at a time: each is rendered once and scored before the next is rendered', async () => {
+    const spy = spied(host, await decodeImage(A.pngs[0]!))
+    const seen: TraceObservation[] = []
+    const a = await trace({ ...(await input(spy.capture)), host: spy.host, observe: (o) => seen.push(o) })
+    expect(a).toMatchObject({ kind: 'traced', sid: A.sid })
+    // alice@1 (A and A2 share it), bob@1, bob@2, carol@1: four reference keys, four renders.
+    expect(spy.renders).toHaveLength(4); expect(new Set(spy.renders).size).toBe(4)
+    // Registration/scoring reads the capture between consecutive renders: never two references at once.
+    expect(spy.log.slice(spy.log.indexOf('render'))).toEqual(['render', 'read', 'render', 'read', 'render', 'read', 'render', 'read'])
+    expect(seen[0]!.scores.length).toBe(5); expect(seen[0]!.poses).toHaveLength(2)
+  }, 60_000)
+
   it('unrequested page', async () => {
     const a = await timed('unrequested page', await input(await decodeImage(A.pngs[0]!), 1))
     expect(a).toEqual({ kind: 'no-signal', reason: 'no-candidates' })
@@ -187,6 +211,23 @@ describe('trace fail-closed and durability', () => {
     db.close()
     const a = await timed('reference mismatch', { capture: await decodeImage(s.pngs[0]!), doc, unitIndex: 0, keys: ring1, store })
     expect(a).toEqual({ kind: 'no-signal', reason: 'reference-mismatch' })
+    s.client.close(); t.client.close(); h.stop(); store.close()
+  }, 60_000)
+
+  it('a mismatch found after another reference was scored still fails closed', async () => {
+    const path = dbPath(), store = AuditStore.open(path)
+    let current = 'alice'
+    const h = await start({ keys: keys1, audit: new AuditTable({ store }), authorize: async () => ({ viewerId: current, policy: { visibleMark: 'viewer' } }) })
+    const s = await session(h, (v) => { current = v }, 'alice'), t = await session(h, (v) => { current = v }, 'bob')
+    const db = new Database(path)
+    db.query('UPDATE deliveries SET ref_sha256 = ? WHERE sid = ?').run('00'.repeat(32), t.sid)
+    db.close()
+    const spy = spied(host, await decodeImage(s.pngs[0]!)), seen: TraceObservation[] = []
+    const a = await trace({ capture: spy.capture, doc, unitIndex: 0, keys: ring1, store, host: spy.host, observe: (o) => seen.push(o) })
+    expect(a).toEqual({ kind: 'no-signal', reason: 'reference-mismatch' })
+    // alice's reference was rendered and scored first; bob's then failed the hash.
+    expect(spy.log.slice(spy.log.indexOf('render'))).toEqual(['render', 'read', 'render'])
+    expect(seen).toHaveLength(0)
     s.client.close(); t.client.close(); h.stop(); store.close()
   }, 60_000)
 
