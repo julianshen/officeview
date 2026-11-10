@@ -117,6 +117,9 @@ export function applyTint(rgb: string, tint: number): string {
 
   const [h, l, s] = rgbToHls(r, g, b)
   let newL: number
+  // The +0.01 epsilon guards against IEEE 754 binary floating-point representation
+  // inaccuracies (e.g. 1 - 0.6 = 0.3999999999999999) before Math.floor, preventing
+  // an off-by-one truncation when the exact mathematical value is an integer.
   if (tint < 0) {
     newL = Math.floor(l * (1 + tint) + 0.01)
   } else {
