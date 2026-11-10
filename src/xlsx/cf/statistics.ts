@@ -908,7 +908,7 @@ export function createCfStatistics(memory: CfMemory, options: { maxEntries?: num
       const sortSuffix = needSorted ? '' : '|nosort'
       const baseKey = `${stamp.sheetId}|${stamp.owner}|${stamp.structureGen}|${stamp.workbookValueGen}|${scopeKey(scope)}|${hiddenKey(hidden, hiddenRows)}`
       const key = `${baseKey}${sortSuffix}`
-      const refused = !needSorted ? (refusalCache.get(key) ?? refusalCache.get(baseKey)) : refusalCache.get(key)
+      const refused = !needSorted ? refusalCache.get(key) : refusalCache.get(key)
       if (refused !== undefined) {
         if (!checkLive(stamp)) {
           out.push({ kind: 'unresolved', reason: 'cf-stale-generation', pendingSheetIds: [stamp.sheetId] })

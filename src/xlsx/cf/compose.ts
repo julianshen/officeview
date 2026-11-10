@@ -84,6 +84,10 @@ function* steps(
     } else if (hasDxfFill) {
       matchingFills.push({ rule, index: i, isScale: false })
     }
+
+    // A matching stopIfTrue DXF halts composition: scales after it are
+    // unreachable and must not participate in fill arbitration (bot P2).
+    if (rule.stopIfTrue && !isScale) break
   }
 
   // Determine fill slot winner
