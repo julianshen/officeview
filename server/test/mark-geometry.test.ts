@@ -12,6 +12,7 @@ import { DEFAULT_PARAMS } from '../src/mark/params'
 import { decodePng } from '../src/mark/png'
 import { embed } from '../src/mark/embed'
 import { GEOMETRY_ERROR_MAX, register } from '../src/mark/register'
+import { tauFor } from '../src/detect/tau'
 import type { Bitmap } from '../src/mark/types'
 import { DocumentHost } from '../src/render'
 import { crop, jpeg, keystone, rotate, scale } from '../../scripts/stream-s0/mark/attacks'
@@ -62,6 +63,63 @@ describe('continuous zoom', () => {
     console.log(`zoom-1.25 registration ${ms.toFixed(0)} ms`)
     expect(ms).toBeLessThanOrEqual(15_000)
   }, 30_000)
+})
+
+// A served scale-2 page (2560x1440) that is nearly flat: a uniform fill under
+// the tiled, almost isoluminant visible mark. An uncropped zoom of 0.75 (1.5)
+// has the extents of a 25 % crop at factor 1 (2), and on this page that wrong
+// crop is in scope too; registration must pick the better fit, not the first
+// in-scope one, and must not spend minutes certifying the losing hypothesis.
+const lo = await host.open('lo-airplane', new Uint8Array(readFileSync(resolve(root, 'corpus/lo-airplane-transition.pptx'))), 'visible-only')
+const page = host.render(lo.docKey, { unitIndex: 0, scale: 2, projection: 'final-raster', mark: { kind: 'viewer', text: 'viewer' } }) as { png: Uint8Array; w: number; h: number }
+const loBasis = deriveBasisKey(key, 'docref-lo-airplane', '0@2')
+const loMarked0 = markRaster({ png: page.png, w: page.w, h: page.h, kBasis: loBasis, code: codes[TOKEN]! })
+if ('unmarked' in loMarked0) throw new Error(`unexpected unmarked: ${loMarked0.unmarked}`)
+const loReference = bmp(decodePng(page.png)), loMarked = bmp(decodePng(loMarked0.png))
+const loChips = basis(loBasis, page.w, page.h, DEFAULT_PARAMS)
+const tau = tauFor(2 ** 16)
+describe('scale-2 sparse page (lo-airplane-transition)', () => {
+  it('is a scale-2 page', () => expect([page.w, page.h]).toEqual([2560, 1440]))
+  const zooms: [string, number, (b: Bitmap) => Bitmap | Promise<Bitmap>][] = [
+    ['zoom 0.75', 0.75, b => scale(b, 0.75)], ['zoom 0.75 + q70', 0.75, b => jpeg(scale(b, 0.75), 70)],
+    ['zoom 1.5', 1.5, b => scale(b, 1.5)], ['zoom 1.5 + q70', 1.5, b => jpeg(scale(b, 1.5), 70)],
+  ]
+  for (const [name, f, attack] of zooms) {
+    it(`uncropped ${name} registers to the true factor and attributes`, async () => {
+      const capture = await attack(loMarked), reg = register(capture, loReference, loChips)
+      if (!reg) throw new Error('registration failed')
+      expect(Math.abs(reg.factor - f)).toBeLessThanOrEqual(0.005)
+      expect(reg.residual).toBeLessThanOrEqual(GEOMETRY_ERROR_MAX)
+      expect(decideScores(scoreCapture(capture, loReference, loChips, matrix, DEFAULT_PARAMS), tau)).toMatchObject({ kind: 'attributed', index: TOKEN })
+    }, 60_000)
+    it(`registration time: uncropped ${name} registers in <= 15 s`, async () => {
+      const capture = await attack(loMarked), start = performance.now()
+      expect(register(capture, loReference, loChips)).toBeDefined()
+      const ms = performance.now() - start
+      console.log(`scale-2 ${name} registration ${ms.toFixed(0)} ms`)
+      expect(ms).toBeLessThanOrEqual(15_000)
+    }, 60_000)
+  }
+  // Same extents as zoom 0.75: a true 25 % crop must still register as the crop.
+  for (const [name, attack] of [['crop25', (b: Bitmap) => crop(b, 0.25)], ['crop25 + q70', (b: Bitmap) => jpeg(crop(b, 0.25), 70)]] as const) {
+    it(`a true ${name} registers as a factor-1 crop and attributes`, async () => {
+      const capture = await attack(loMarked), reg = register(capture, loReference, loChips)
+      if (!reg) throw new Error('registration failed')
+      expect(reg.factor).toBe(1)
+      expect([reg.x, reg.y]).toEqual([320, 180])
+      expect(decideScores(scoreCapture(capture, loReference, loChips, matrix, DEFAULT_PARAMS), tau)).toMatchObject({ kind: 'attributed', index: TOKEN })
+    }, 120_000)
+  }
+  // No uncropped zoom has these extents, so factor 1 is certified exhaustively;
+  // the block lower bounds keep that to seconds on a flat page (was ~83 s).
+  it('an anisotropic crop (2000x1080 at 280,180) certifies at factor 1 in <= 15 s', () => {
+    const W = 2000, H = 1080, capture: Bitmap = { width: W, height: H, data: new Uint8ClampedArray(W * H * 4) }
+    for (let y = 0; y < H; y++) capture.data.set(loMarked.data.subarray(((y + 180) * page.w + 280) * 4, ((y + 180) * page.w + 280 + W) * 4), y * W * 4)
+    const start = performance.now(), reg = register(capture, loReference, loChips), ms = performance.now() - start
+    console.log(`scale-2 anisotropic crop registration ${ms.toFixed(0)} ms`)
+    expect(reg).toMatchObject({ factor: 1, x: 280, y: 180 })
+    expect(ms).toBeLessThanOrEqual(15_000)
+  }, 120_000)
 })
 
 // Stage-0 survival captures stay in scope; with the zoom cases above they are

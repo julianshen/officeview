@@ -80,11 +80,37 @@ function exactMinimum(ref:Bitmap,cap:Bitmap,seed:Offset):Offset {
  probes.sort((a,b)=>edge(b)-edge(a))
  const offsets=probes.map(i=>Math.floor(i/c.w)*r.w+i%c.w),marked=new Uint8Array(n)
  for(const i of probes)marked[i]=1
+ // Block lower bounds, coarse to fine: over any block, the squared-error sum
+ // is at least (capture sum - reference sum)^2 / area (Cauchy-Schwarz), so
+ // any set of blocks bounds a window's SSD from below. Reference block sums
+ // come from an integral image at every offset. A nearly flat page (uniform
+ // fill, faint tiled mark) leaves the energy bound and the edge probes
+ // nothing to reject by; the blocks still separate wrong offsets cheaply.
+ // Blocks deviating most from the capture mean go first.
+ const sums=new Float64Array(iw*(r.h+1))
+ for(let y=0;y<r.h;y++){let row=0;for(let x=0;x<r.w;x++){row+=r.data[y*r.w+x]!-128;sums[(y+1)*iw+x+1]=sums[y*iw+x+1]!+row}}
+ let captureMean=0;for(const v of c.data)captureMean+=v;captureMean/=n
+ const levels=[16,8,4].filter(s=>s*2<=Math.min(c.w,c.h)).map(s=>{
+  const bw=Math.floor(c.w/s),bh=Math.floor(c.h/s),order:number[]=[],total=new Float64Array(bw*bh)
+  for(let by=0;by<bh;by++)for(let bx=0;bx<bw;bx++){let t=0;for(let y=by*s;y<(by+1)*s;y++)for(let x=bx*s;x<(bx+1)*s;x++)t+=c.data[y*c.w+x]!-128;total[by*bw+bx]=t;order.push(by*bw+bx)}
+  order.sort((a,b)=>Math.abs(total[b]!-(captureMean-128)*s*s)-Math.abs(total[a]!-(captureMean-128)*s*s))
+  const at=new Int32Array(order.map(i=>Math.floor(i/bw)*s*iw+i%bw*s)),cs=new Float64Array(order.map(i=>total[i]!))
+  return {s,at,cs,corner:s*iw+s,down:s*iw}
+ })
+ const blocked=(x:number,y:number,limit:number):boolean=>{
+  const base=y*iw+x,stop=limit*(1+1e-9)+1e-6
+  for(const {s,at,cs,corner,down} of levels){
+   let sum=0;const area=s*s
+   for(let j=0;j<at.length;j++){const k=base+at[j]!,d=cs[j]!-(sums[k+corner]!-sums[k+s]!-sums[k+down]!+sums[k]!);sum+=d*d/area;if(sum>stop)return true}
+  }
+  return false
+ }
  let best=seed,limit=seed.error*n
  for(let y=0;y<=ref.height-cap.height;y++)for(let x=0;x<=ref.width-cap.width;x++){
   const referenceEnergy=Math.max(0,energy[(y+c.h)*iw+x+c.w]!-energy[y*iw+x+c.w]!-energy[(y+c.h)*iw+x]!+energy[y*iw+x]!)
   if((Math.sqrt(referenceEnergy)-Math.sqrt(captureEnergy))**2>limit+1e-7)continue
   if(referenceEnergy<1e-8){if(captureEnergy<limit-1e-7){limit=captureEnergy;best={x,y,error:limit/n}}continue}
+  if(blocked(x,y,limit))continue
   let sum=0;const base=y*r.w+x
   for(let j=0;j<probes.length;j++){sum+=(c.data[probes[j]!]!-r.data[base+offsets[j]!]!)**2;if(sum>limit)break}
   if(sum>limit)continue
@@ -254,9 +280,25 @@ function zoomSearch(capture: Bitmap, reference: Bitmap): number | undefined {
   }
   return top[0]?.f
 }
+/** Residual energy per keyed-support pixel through a pose: the measure
+ * `supportSeeds` ranks ambiguous poses by, mapped as `scoreAligned` maps chips. */
+function supportEnergy(capture: Bitmap, pose: Pose, aligned: Bitmap, chips: Chip[]): number {
+  let sum = 0, area = 0
+  for (const chip of chips) {
+    const x0 = Math.ceil((chip.x - pose.x) * pose.scaleX), y0 = Math.ceil((chip.y - pose.y) * pose.scaleY)
+    const x1 = Math.floor((chip.x + chip.cell - pose.x) * pose.scaleX), y1 = Math.floor((chip.y + chip.cell - pose.y) * pose.scaleY)
+    if (x0 < 0 || y0 < 0 || x1 > capture.width || y1 > capture.height || x1 <= x0 || y1 <= y0) continue
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) sum += (lum(capture, x, y) - lum(aligned, x, y)) ** 2
+    area += (x1 - x0) * (y1 - y0)
+  }
+  return area ? sum / area : 0
+}
+/** `supportSeeds`' ambiguity band: within max(.1, 5 % of the best) luminance MSE. */
+const ambiguous = (error: number, best: number): boolean => error - best <= Math.max(.1, best * .05)
 export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = []): Registration | undefined {
   checkBitmap(capture); checkBitmap(reference)
-  let best: Omit<Registration, 'residual'> | undefined
+  type Hypothesis = Omit<Registration, 'residual'> & { exact: boolean }
+  const hypotheses: Hypothesis[] = []
   const step = 1
   const errorOf = (read: (x: number, y: number) => number, stride = step): number => {
     let sum = 0, count = 0
@@ -264,9 +306,17 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
     return sum / count
   }
   const tried = new Set<number>()
-  const atFactor = (factor: number): void => {
+  /** One factor's best pose, as a hypothesis competing with the others.
+   * `exact`: a Stage-0 factor, which wins otherwise-equal ties. */
+  const atFactor = (factor: number, exact = false): void => {
     if (tried.has(factor)) return
     tried.add(factor)
+    // Certify only a seed that can win outright, by more than the ambiguity
+    // band, over every hypothesis so far: a rival inside the band is decided
+    // by keyed support, not by its exact MSE minimum, and certifying it is
+    // the hours (a nearly flat page's SSD surface is flat to JPEG noise).
+    const before = Math.min(...hypotheses.map(h => h.error))
+    let best: Omit<Registration, 'residual'> | undefined
     const w = Math.round(reference.width * factor), h = Math.round(reference.height * factor), slack = Math.ceil(factor)
     if (capture.width > w || capture.height > h || capture.width < Math.floor(w * 0.75) - slack || capture.height < Math.floor(h * 0.75) - slack) return
     const ref = factor === 1 ? reference : resize(reference, factor)
@@ -288,7 +338,7 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
         if(centre.error<scaledBest.error)scaledBest=centre
         // Certify only a plausible factor: an exhaustive minimum under a
         // far-out-of-scope bound barely prunes (minutes on a wrong zoom).
-        if(residual(rectangle(ref,scaledBest.x,scaledBest.y,capture.width,capture.height),scaledBest.error)<=CERTIFY_MAX)scaledBest=exactMinimum(ref,capture,scaledBest)
+        if(!ambiguous(before,scaledBest.error)&&residual(rectangle(ref,scaledBest.x,scaledBest.y,capture.width,capture.height),scaledBest.error)<=CERTIFY_MAX)scaledBest=exactMinimum(ref,capture,scaledBest)
       }
     }
     if(chips.length && seeds.length>1){
@@ -302,11 +352,12 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
         }
       }
     }
-    if (scaledBest && (!best || scaledBest.error < best.error)) {
+    if (scaledBest) {
       const { x, y, error } = scaledBest
       best = { factor, x: x * reference.width / w, y: y * reference.height / h, scaleX: w / reference.width, scaleY: h / reference.height, order: 'scale-crop', reference: rectangle(ref, x, y, capture.width, capture.height), error }
     }
-    if (factor === 1) return // both orders coincide
+    const done = () => { if (best) hypotheses.push({ ...best, exact }) }
+    if (factor === 1) return done() // both orders coincide
     // Invert round(sourceExtent*factor): half-scale has two possible integer
     // extents. Search integer ORIGINAL offsets, including half-pixel phases
     // after scaling. Coarse interpolation ranks candidates; actual napi
@@ -333,18 +384,34 @@ export function register(capture: Bitmap, reference: Bitmap, chips: Chip[] = [])
         if (!best || error < best.error) best = { factor, x, y, scaleX: sx, scaleY: sy, order: 'crop-scale', reference: aligned, error }
       }
     }
+    done()
   }
-  const result = (): Registration | undefined => best && { ...best, residual: residual(best.reference, best.error) }
+  // Hypotheses inside the ambiguity band of the best fit are decided by keyed
+  // support, exactly as `supportSeeds` decides poses within one factor; else
+  // the lowest MSE. Exact factors, then evaluation order, break equal ties.
+  const result = (): Registration | undefined => {
+    if (!hypotheses.length) return undefined
+    const least = Math.min(...hypotheses.map(h => h.error))
+    const band = hypotheses.filter(h => ambiguous(h.error, least))
+    const rank = band.length > 1 && chips.length ? band.map(h => -supportEnergy(capture, h, h.reference, chips)) : band.map(h => h.error)
+    let at = 0
+    for (let i = 1; i < band.length; i++) if (rank[i]! < rank[at]! || (rank[i] === rank[at] && band[i]!.exact && !band[at]!.exact)) at = i
+    const { exact: _, ...best } = band[at]!
+    return { ...best, residual: residual(best.reference, best.error) }
+  }
   const inScope = (): Registration | undefined => { const r = result(); return r && r.residual <= GEOMETRY_ERROR_MAX ? r : undefined }
-  // Exact Stage-0 factors first (ties keep them; a blank page's centred crop
-  // and a zoom of the same extents fit equally), then the uncropped resample
-  // the extents imply, then the full search. An in-scope fit stops early.
-  for (const factor of [1, 0.5, 2]) atFactor(factor)
-  let found = inScope()
+  // Every admissible hypothesis competes; none stops the search early. An
+  // uncropped zoom of 0.75 (1.5) has exactly the extents of a 25 % crop at
+  // factor 1 (2), and on a nearly flat page the wrong one is in scope too.
+  // The uncropped resample the extents imply goes first: it is a single pose,
+  // so it needs no translation search, and an exact factor whose seed sits in
+  // its ambiguity band is not certified. Only when nothing fits in scope does
+  // the continuous zoom search run.
+  const exactFactors = [1, 0.5, 2], implied = impliedFactor(capture, reference)
+  if (implied !== undefined && !exactFactors.some(f => Math.round(reference.width * f) === capture.width && Math.round(reference.height * f) === capture.height)) atFactor(implied)
+  for (const factor of exactFactors) atFactor(factor, true)
+  const found = inScope()
   if (found) return found
-  const implied = impliedFactor(capture, reference)
-  if (implied !== undefined) atFactor(implied)
-  if ((found = inScope())) return found
   const zoom = zoomSearch(capture, reference)
   if (zoom !== undefined) atFactor(zoom)
   return result()
