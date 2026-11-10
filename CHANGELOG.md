@@ -17,7 +17,7 @@ in git history.
   theme/indexed/rgb endpoint colours and fill-slot composition against other rules. Fills match Excel's display
   format exactly on 364 of 398 measured cells; the other 34 stay withheld and keep their base formatting
   (overlapping scales, expression rules with stop-if-true, text cells under a lower fill, and scales over hidden
-  rows, merged regions, disjoint ranges or non-Office theme palettes, whose Excel behaviour the saved fixtures
+  rows, merged regions, disjoint ranges, whole-column or duplicated scopes, or non-Office theme palettes, whose Excel behaviour the saved fixtures
   could not discriminate and which are re-measured later). Three-colour inversions and ties, lone out-of-range
   percent or percentile bounds, and equal-priority fills with the scale first also stay withheld. Accessible descriptions read the cell's
   position in the range. Formula thresholds, `activePresent`, and standalone x14 scales remain unresolved.

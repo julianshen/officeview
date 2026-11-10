@@ -17,6 +17,7 @@ afterEach(() => injectExactCfEvidence(null))
 
 const NON_DISCRIMINATING = [
   'scale:colors-custom-theme', 'scale:scope-disjoint', 'scale:scope-hidden-row', 'scale:scope-autofilter-hidden-row', 'scale:scope-merged-cell',
+  'scale:scope-whole-column', 'scale:scope-duplicate-blocks',
 ] as const
 
 const ALL = { allows: () => true }
@@ -56,7 +57,7 @@ describe('I5 the non-discriminating capabilities are unverified in production', 
     expect(VERIFIED_CAPABILITIES.has(id)).toBe(false)
   })
   it('capabilities that the fixtures DO discriminate stay verified', () => {
-    for (const id of ['scale:colors-theme-tint', 'scale:colors-indexed', 'scale:scope-duplicate-blocks', 'scale:scope-whole-column', 'scale:participation-error-presence', 'scale:interpolation-color-space']) {
+    for (const id of ['scale:colors-theme-tint', 'scale:colors-indexed', 'scale:participation-error-presence', 'scale:interpolation-color-space']) {
       expect(VERIFIED_CAPABILITIES.has(id), id).toBe(true)
     }
   })
@@ -82,6 +83,23 @@ describe('I5 src gates withhold the unmeasured scope shapes', () => {
     const sheet = () => sheetOf({ ranges: [[0, 3, 0, 1]], values: { A1: 1, A2: 2, A3: 3, B3: 4 }, merges: [[0, 1, 0, 1]] })
     expect(await fillAt(sheet(), ALL, [2, 0])).toBeDefined()
     expect(await fillAt(sheet(), PRODUCTION, [2, 0])).toBeUndefined()
+  })
+
+  it('scale:scope-whole-column: a rule covering a whole column', async () => {
+    const sheet = () => sheetOf({ ranges: [[0, 1048575, 0, 0]], values: { A1: 1, A2: 2, A3: 3 } })
+    expect(await fillAt(sheet(), ALL, [0, 0])).toBe('FFF8696B')
+    expect(await fillAt(sheet(), PRODUCTION, [0, 0])).toBeUndefined()
+  })
+
+  it('scale:scope-duplicate-blocks: two scale rules over identical ranges', async () => {
+    const sheet = () => {
+      const s = sheetOf({ ranges: [[0, 2, 0, 0]], values: { A1: 1, A2: 2, A3: 3 } }) as unknown as { conditionalFormatting: { rules: Array<Record<string, unknown>> } }
+      s.conditionalFormatting.rules.push({ ...s.conditionalFormatting.rules[0]!, id: 2, priority: 2, documentOrder: 1 })
+      return s as unknown as XlsxSheet
+    }
+    // With the capability allowed the duplicate is still the S2-I overlapping-scales withhold, so assert the GATE directly:
+    expect(await fillAt(sheet(), { allows: c => c !== 'scale:scope-duplicate-blocks' }, [0, 0])).toBeUndefined()
+    expect(await fillAt(sheet(), PRODUCTION, [0, 0])).toBeUndefined()
   })
 
   it('scale:participation-error-presence is enforced: an error in the scope needs its capability', async () => {

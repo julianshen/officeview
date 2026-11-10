@@ -97,8 +97,8 @@ describe('every enabled scale capability has verified evidence', () => {
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(true)
     // 41 measured scale capabilities; 5 are measured but NON-DISCRIMINATING (Ruling F-2) and are reported unverified.
-    expect(report.summary.verifiedCapabilities).toBe(36)
-    expect(report.summary.unverifiedCapabilities).toBe(5)
+    expect(report.summary.verifiedCapabilities).toBe(34)
+    expect(report.summary.unverifiedCapabilities).toBe(7)
     expect(report.blockedCapabilities.length).toBe(0)
   })
 
@@ -108,7 +108,7 @@ describe('every enabled scale capability has verified evidence', () => {
     const auditVerified = new Set(
       report.perCapability.filter(c => c.disposition === 'verified').map(c => c.capabilityId),
     )
-    expect(auditVerified.size).toBe(36)
+    expect(auditVerified.size).toBe(34)
     for (const cap of auditVerified) {
       expect(VERIFIED_CAPABILITIES.has(cap), `VERIFIED_CAPABILITIES must contain ${cap}`).toBe(true)
     }
@@ -125,7 +125,7 @@ describe('every enabled scale capability has verified evidence', () => {
     expect(cfRuntimeEvidence.allows('scale:interpolation-color-space')).toBe(true)
     expect(cfRuntimeEvidence.allows('scale:thresholds-min-max')).toBe(true)
     expect(cfRuntimeEvidence.allows('scale:colors-theme-tint')).toBe(true)
-    expect(cfRuntimeEvidence.allows('scale:scope-whole-column')).toBe(true)
+    expect(cfRuntimeEvidence.allows('scale:scope-whole-column')).toBe(false) // non-discriminating (Ruling F-2)
     expect(cfRuntimeEvidence.allows('scale:composition-dxf-p1-scale-p2')).toBe(true)
 
     expect(cfRuntimeEvidence.allows('scale:unresolved-2cfvo-3colors')).toBe(false)

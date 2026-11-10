@@ -140,6 +140,11 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined): Promise<void> => {
             const unmeasured = (): void => { scopeBlock.set(rule, { kind: 'unresolved', reason: 'cf-unmeasured-capability' }) }
             if (rule.ranges.length > 1 && !evidence.allows('scale:scope-disjoint')) return unmeasured()
+            // Whole-column scope: the fixture's column held a hidden row, so no painted cell backs it (Ruling F-2).
+            if (rule.ranges.some(r => r.firstRow === 0 && r.lastRow >= 1048575) && !evidence.allows('scale:scope-whole-column')) return unmeasured()
+            // Duplicate blocks: another scale rule over the identical ranges.
+            const key = (r: CfRule) => r.ranges.map(x => `${x.firstRow},${x.lastRow},${x.firstCol},${x.lastCol}`).join(';')
+            if (!evidence.allows('scale:scope-duplicate-blocks') && ordered.some(o => o !== rule && o.definition.kind === 'colorScale' && key(o) === key(rule))) return unmeasured()
             if (options.merges?.length) {
               await work(Math.min(rule.ranges.length * options.merges.length, 1 << 20))
               const merged = options.merges.some(m => rule.ranges.some(r => m.firstRow <= r.lastRow && m.lastRow >= r.firstRow && m.firstCol <= r.lastCol && m.lastCol >= r.firstCol))

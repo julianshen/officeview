@@ -3679,6 +3679,10 @@ export const CF_STAGE2_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'The saved stage2-scale-scope workbook has no autoFilter element; D2:D6 is a plain scale over the same manually hidden non-extremal row. Re-measure with a real autofilter hiding the extremal row.',
   'scale:scope-merged-cell':
     'B8:C9 holds 100 in every cell, so the degenerate equal-values colour results whatever the merge participation. Re-measure with non-equal values inside a merged scope.',
+  'scale:scope-whole-column':
+    'Every compared F:F cell sits in a scope containing hidden row 4, so it is withheld by the hidden-row gate: no painted conformance cell backs the whole-column shape. Re-measure with no hidden row in the column.',
+  'scale:scope-duplicate-blocks':
+    'Duplicate identical scales overlap, so every compared cell is withheld (S2-I overlapping scales) and identical rules give identical min/max statistics either way. Re-measure with a duplicate whose result differs from a single rule.',
 }
 
 /** Complete capability-to-evidence registry for all Stage 2 markers. */
