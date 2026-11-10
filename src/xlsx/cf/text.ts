@@ -225,6 +225,13 @@ export async function prepareCfTextScope(
   // Absence (nothing to prepare) resolves undefined; every other failure
   // throws, so engines can tell a refused preparation from an absent one.
   if (!rules || rules.rules.length === 0 || !rectsAreValid(request.rects) || request.rects.length === 0 || request.signal.aborted) return undefined
+  // A single requested rect over the per-call prepared-cell cap is refused BEFORE it is
+  // sliced (it always was: it used to stand alone and fail the estimator). Slicing only
+  // bounds transient scratch for admissible rects; it must never turn an over-cap request
+  // such as a whole column into an enumeration of many small slices.
+  for (const rect of request.rects) {
+    if ((rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1) > CF_LIMITS.preparedCells) throw refused('CF text preparation exceeds its admitted batch')
+  }
   const chunks = chunkRects(request.rects)
   const modelChunks = chunks.map(chunk => chunk.map(toModel))
   // Fail fast on caps before any allocation; the bounded account below admits

@@ -492,6 +492,21 @@ describe('format budget refusal releases descriptor workspace', () => {
     expect(styleB2?.fillColor).toBe('FFFFC7CE')
     scope?.dispose()
   })
+
+  it('refuses a single rect over the per-call prepared-cell cap instead of slicing it', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const bytes = new Uint8Array(fs.readFileSync(path.resolve(__dirname, 'fixtures/xlsx-cf/stage1-numfmt-accessibility.xlsx')))
+    const sheet = (await parseXlsx(await OfficePackage.load(bytes))).sheets[0]!
+    const { budget } = trackingBudget()
+    await expect(prepareCfTextScope(sheet, {
+      rects: [{ r0: 0, r1: 1048575, c0: 0, c1: 0 }],
+      signal: new AbortController().signal,
+      budget,
+    })).rejects.toMatchObject({ code: 'resource-limit' })
+  })
 })
 
 describe('regression bot P2: clockGen in cfTextKey', () => {
