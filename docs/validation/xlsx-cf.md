@@ -121,6 +121,13 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
     - Colour forms represented: 8-digit ARGB hex (`rgb="FFFF0000"`, `rgb="00F8696B"`), `theme` + `tint` (`theme="4" tint="0.4"`), `indexed="10"`, `auto="1"`, and plain `rgb`. A custom `theme1.xml` palette was authored as intent but NOT measured (the saved workbook keeps the stock Office theme); `scale:colors-custom-theme` is unverified.
     - x14 usage: standalone `<x14:colorScale>` inside `<extLst>` with `<x14:cfvo>` carrying `<xm:f>0</xm:f>` and `<xm:f>$A$1</xm:f>` (OD-3: recorded for writer-shape inventory, out of scope for Stage 2, lifts no capability).
 
+- **Data bar (`<dataBar>` / `<x14:dataBar>`) inventory (Task 18, Stage 3)**: scanned every `.xlsx` under `corpus/` (the 9 workbooks this host materializes; the 33-file set counted above is not present in this checkout) and `tests/fixtures/` (`626` outside `xlsx-cf/`, `38` oracle fixtures, `33` oracle inputs; `~$` lockfiles skipped, none present) by reading the ZIP entries (`xl/worksheets/sheet*.xml`):
+  - **No corpus workbook and no pre-existing fixture outside `tests/fixtures/xlsx-cf/` contains a `<dataBar>` or `<x14:dataBar>`.** Stage 3 therefore has no third-party writer shapes to be compatible with beyond Excel's own.
+  - **Writer shape seen in the wild (Excel-resaved)**: `stage1-priority-composition.xlsx` (Stage 1 cross-visual marker; writer `Microsoft Macintosh Excel`, Excel 16.114 resave) carries one base-only rule, `<cfRule type="dataBar" priority="10"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule>`: no attributes, `min`/`max` cfvo, one `rgb` colour (Excel's default blue `638EC6`), no `<extLst>` and no x14 companion. So Excel 16.114 preserved an Excel 2007 (base-only) bar on resave instead of rewriting it into the paired form; the `bar:pairing-base-only` case re-measures that with attributes. The saved workbook's `theme1.xml` is the new Office theme (accent1 `156082`), which is why theme-colour markers pin `theme`/`tint` attributes and never a palette lookup.
+  - **Pairing authored by the oracle** (not yet resaved by Excel): paired = base `<dataBar>` plus a cfRule-level `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>` and an `<x14:cfRule type="dataBar" id>` companion with no `@priority` under `{78C0D931-6437-407d-A8EE-F0AA7539E650}`; standalone = `<x14:cfRule priority id>` with `<x14:fillColor>`; base-only = the 2007 shape above.
+  - **cfvo types authored**: `min`, `max`, `num`, `percent`, `percentile`, x14 `autoMin`/`autoMax`, and (unresolved shapes only) `formula`, `num` with `<xm:f>$A$1</xm:f>`, a cfvo without `type`, and 1 and 3 cfvo; legacy `min val="0"`.
+  - **Colour forms authored**: 8-digit ARGB (`rgb="FF0000FF"`), `theme="4" tint="-0.25"`, `indexed="12"`, and (unresolved shapes only) `auto="1"` and alpha `00`.
+
 ---
 
 ## 5. Stage 1 Verification, Resource Audit & Browser Evidence (Task 11)
@@ -292,3 +299,129 @@ Every Stage 2 capability corresponds to a single variant in the oracle matrix an
 - **Compare gate.** `scripts/cf-compare.ts` Stage 2 refuses when the sidecar is missing, holds no trusted `excel-display-format` fills (hidden cells excluded, as in conformance) or when zero non-withheld cells were compared. The interactive/paged pass count therefore now proves painted cells, not only withheld ones.
 - **Re-measurement follow-ups (Excel needed).** Custom non-Office `theme1.xml` with theme-index endpoints; non-overlapping disjoint rule over different values per rectangle; hidden row holding the maximum; a real `<autoFilter>` hiding the extremal row; merged scope with non-equal values; 3-colour inversion and tie shapes; a lone out-of-range percent or percentile; equal priority with the scale first in document order; `<indexedColors>` overrides; alpha-00 observed before Excel resaves it.
 - **Residual (re-review adjudication a).** `scale:scope-whole-column` and `scale:scope-duplicate-blocks` were still verified with no painted conformance cell behind them (F:F is withheld by the hidden row; duplicate blocks by S2-I overlap). They are now unverified too (7 in total) and gated: a rule covering a whole column, or duplicated over identical ranges, withholds. Follow-ups needing Excel: whole-column with no hidden row in the column; a duplicate-block case whose result differs from a single rule.
+
+
+---
+
+## 11. Stage 3 Data Bar Oracle Cases (Task 18: harness, bar cases, conformance)
+
+Task 18 prepares the Stage 3 evidence machinery. **Nothing here is Excel evidence**: no Excel, `osascript` or `osacompile` was run, every case is `recipe-pending` (the unresolved-shapes case is `unsupported`), every `barEvidence` is `unverified`, no capture PNG or sidecar exists, and `src/xlsx/cf/verifiedCapabilities.ts` is untouched. Production therefore withholds every bar (Ruling S3-A / OD-7); `tests/xlsx-cf-oracle-conformance.test.ts` pins that for all 641 Stage 3 cells (positive and control) under production evidence. The exact steps to capture them are in `docs/validation/xlsx-cf-recipes-stage3.md`.
+
+### Harness additions
+
+| Piece | Where | What it settles |
+|---|---|---|
+| `CF_STAGE3_CASES` / `CF_STAGE3_CAPABILITIES` / `CF_STAGE3_NONDISCRIMINATING`, `CfPartMarker.bar`, `CfCellExpectation.barEvidence` / `barApplied`, `CfOracleCase.barCalibration` | `scripts/cf-refs/cases.ts` | 12 cases, 70 `bar:*` capabilities (58 supported, 12 `bar:unresolved-*` refused). Fixtures are one shared spec (`CF_STAGE3_FIXTURES`) that drives both the markers and the generated XML, so they cannot drift. |
+| Bar templates in Excel's canonical paired form | `scripts/cf-refs/generate.ts` | Base `<dataBar>` + cfRule-level `<x14:id>` + x14 companion without priority; standalone x14 with `<x14:fillColor>`; base-only. 30 pt rows, gridlines off (on for the probe), per-column widths, 12/40 pt rows, hidden/filtered rows, a merge, an `<autoFilter>`, a date style. Defaults reproduce Stage 1/2 bytes exactly (their input hashes did not move). |
+| Semantic bar marker verifier | `scripts/cf-refs/verify.ts` | cfvo order/type/val/`xm:f`, attributes with schema defaults applied (so attribute order, hex case and Excel dropping default attributes do not matter), colours (ARGB, theme+tint, indexed), pairing (`<x14:id>` link, duplicate GUID, `<x14:fillColor>` on a paired companion, standalone needs `<x14:fillColor>` and `@priority`). A mutation is a `stripped-rule` refusal with a distinct reason. |
+| `measureBarGeometry` | `scripts/cf-refs/verify.ts` | Three scanlines at 25/50/75 percent of the cell height against the same-content control, strong delta 64, left/right edges in absolute px, scanlines must agree within the tolerance (`bar-edge-unstable`), a fade below the delta is `bar: null`, axis column located by colour (control excluded so text ink is not an axis). |
+| `discriminateBar` | `scripts/cf-refs/verify.ts` | Lesson 3: every hypothesis pair must differ by at least 3 px somewhere AND the measurement must match exactly one (else `non-discriminating`; none matches is `bar-hypothesis-none`). |
+| `measureBarCalibration`, `evaluateBarSettingsProbe` | `scripts/cf-refs/verify.ts` | `bar:pixel-calibration` (gridline-to-gridline widths of three blank columns within 1 px, one solid DXF cell within 8 per channel; `bar-calibration-failed`) and the precondition probe (a probe value that is missing or equals the default control's is `bar-settings-unobserved`). |
+| Evidence-kind gating | `scripts/cf-refs/verify.ts` (`verifyCfCase`, `isCapabilityVerified`) | A settings capability verifies only with an `excel-object-model` claim backed by a sidecar readback; a geometry capability only with a `pixel-measured` claim that the verifier recomputes from the hash-bound PNG and that discriminates. Wrong-kind evidence, a relabelled claim, a label that disagrees with the recomputation, and a lock before/after the capture all refuse. Geometry capabilities additionally need `bar:pixel-calibration` verified and settings capabilities `bar:settings-precondition-probe` (cross-case, as `scale:` needs its probe). |
+| `buildDataBarSettingsProbeScript`, `parseDataBarSettingsReadback`, `captureUnderLockGuard`, `buildBarSidecarExtras`, `buildLengthHypotheses` | `scripts/cf-refs/capture.ts` | Object-model readback (every read in its own `try`), the before/after lock guard (a lock after a capture discards the PNG and sidecar), and the raw-px sidecar (`observedBars`, `barSettingsReadback`, `barHypotheses`, lock states, zoom 100, dpr 1). |
+| `parseScreenLockState`, fail-closed `isDisplayLocked` | `scripts/cf-refs/build.ts` | `ioreg` failure, empty or non-plist output and a malformed key all mean `locked`. `build.ts --case <unsupported-case>` now builds an unsupported case that is named explicitly (its stripped output is preserved as `.rejected.xlsx`). |
+| `auditStage3Manifest`, `renderVerifiedCapabilitiesSource`, `--stage 3` | `scripts/cf-refs/audit.ts` | Per-capability dispositions from `verifyCfCase`'s per-capability result (a verified case can still leave capabilities `supported-structural` or `unverified-nondiscriminating`); the `--write` text is a pure function (idempotent) with `VERIFIED_STAGE3_CAPABILITIES`. Stage 3 reuses Stage 2's pressure scenarios unchanged (bar pressure arrives with Task 23). |
+| `stage3ObservedBars` | `scripts/cf-compare.ts` | Reads the recorded raw px for Task 22's conformance; never fractions. |
+
+### Known limits of the prepared machinery (not evidence)
+
+- **Hypotheses exist only for the length family** (`bar:lengths-default-10-90`, `bar:lengths-explicit-0-100`, `bar:bounds-min-max`, `bar:bounds-num`, `bar:bounds-percent`; positive-only scopes). The predicted px come from the measured cell geometry and the marker's own `minLength`/`maxLength`, never from the viewer. Every other geometry capability records no hypotheses, so it cannot be labelled `pixel-measured` and stays `unverified` until Tasks 19/20 supply variant-parameterised predictors. Pending variants do not block Task 19 (their branches stay disabled).
+- **Copy text and the accessibility tree**: `bar:showvalue-copy-text` can be verified only through the settings readback (`format condition show value` is `false`); the clipboard text (`copy range` then `the clipboard as text`) is an orchestrator observation recorded by hand, and the accessibility tree is not observable from the sdef (S3-P).
+- **`context` direction on a `rightToLeft="1"` sheet** (recorded-only, S3-K) is not authored: it needs a second workbook and the viewer keeps it unresolved through Stage 3 anyway.
+- **Non-discriminating registry**: `bar:bounds-automax` is seeded (all-positive data cannot separate autoMax from max). The other expected candidates (the midpoint cell of 10/90 vs 0/100, `bar:axis-automatic` on all-positive data, `bar:negative-border-same-as-positive` when `border="0"`, `bar:geometry-snapping` if no edge lands at a fractional point) are decided per capture by `discriminateBar`, not seeded.
+- **Negative colour type** cannot differ from the control by design (the schema default `negativeBarColorSameAsPositive="0"` is already a colour type), so the probe requires it present, not different.
+- **Preparation only**: the settings probe AppleScript was written against `Excel.sdef` (`databar format condition` `:3185-3204`, `databar border` `:3181-3184`, `negative bar format` `:3488-3493`) but compiled nowhere by the implementer; `tests/xlsx-cf-oracle.test.ts` compiles it under `osacompile` wherever that exists.
+
+### Stage 3 Oracle Cases Matrix (every `[measure]` row, its ruling and status)
+
+| Case ID | Sheet & Range | Question settled | Rulings | Status |
+|---|---|---|---|---|
+| `stage3-bar-settings-probe` | `Sheet1!A1:G12` | S3-A precondition probe against defaults and a default control; calibration columns 10/30/60 and one solid DXF cell; schema defaults for a base-only bar | S3-A, S3-Q | recipe-pending |
+| `stage3-bar-lengths` | `Sheet1!A1:J12` | Solid bar lengths: default 10/90 vs explicit 0/100, min/max, num 20/80, percent 25/75, percentile 10/90, autoMin and autoMax (autoMin differs from min), all-negative | S3-B, S3-C, S3-L | recipe-pending |
+| `stage3-bar-degenerate` | `Sheet1!A1:H12` | Equal values, a single numeric cell, inverted num 80 to 20, values beyond bounds, percent -10/150, Excel 2007 `min val="0"`, `min` placed second | S3-D, S3-E | recipe-pending |
+| `stage3-bar-axis-negative` | `Sheet1!A1:I12` | Mixed {-50..100} under automatic/middle/none, negative fill and border colours vs same-as-positive, all-positive automatic control | S3-K, S3-L | recipe-pending |
+| `stage3-bar-rendering` | `Sheet1!A1:I12` | Solid vs gradient (stops at 10/50/90 percent), border, leftToRight/rightToLeft/context (LTR sheet), theme 4 tint -0.25, indexed | S3-F, S3-K, S3-M | recipe-pending |
+| `stage3-bar-geometry` | `Sheet1!A1:I12` | Insets on three widths, quarter-point edge snapping (31.36 and 32.51 characters), minimum visible width, 2-character narrow clip, 12 pt and 40 pt rows | S3-N | recipe-pending |
+| `stage3-bar-showvalue` | `Sheet1!A1:D12` | showValue 0/1 on canvas; copy text recorded by hand; accessibility tree unobservable | S3-O, S3-P | recipe-pending |
+| `stage3-bar-participation` | `Sheet1!A1:D20` | Number, date serial, TRUE, text "5", #N/A, "", unstored blank, cached formula; one-error variant | S3-G | recipe-pending |
+| `stage3-bar-scope` | `Sheet1!A1:H18` | Disjoint, duplicate blocks (different fills), manually hidden extreme, autofilter-hidden extreme, merged B8:C9 with non-equal values, whole column | S3-H | recipe-pending |
+| `stage3-bar-composition` | `Sheet1!A1:I10` | Bar over DXF fill in both orders, with a scale, overlapping bars, matching and non-matching DXF stopIfTrue ahead, bar stopIfTrue="1" ahead of a DXF, unresolved expression stub | S3-I, S3-J | recipe-pending |
+| `stage3-bar-pairing` | `Sheet1!A1:D12` | Paired (base 10/90 + x14 autoMin/autoMax 0/100), standalone x14 with fillColor and priority, base-only | S3-Q | recipe-pending |
+| `stage3-bar-unresolved-shapes` | `Sheet1!A1:N12` | Excel open/repair/strip outcome for an orphan x14, duplicate GUID, companion with fillColor, formula cfvo, `xm:f` `$A$1`, activePresent, 1 and 3 cfvo, cfvo without type, autoMin on a base cfvo, auto and alpha-00 colours; lifts no capability | S3-C, S3-F, S3-Q, S3-R | unsupported (named explicitly to build) |
+
+### Stage 3 Evidence-to-Capability Matrix
+
+Every row is `unverified` (or refused) until the orchestrator's captures land; "Ruling lifted" is the S3 ruling whose fail-closed default the capability lifts.
+
+| Capability ID | Oracle Case ID | Evidence kind (OD-7) | Ruling lifted | Status |
+|---|---|---|---|---|
+| `bar:settings-precondition-probe` | `stage3-bar-settings-probe` | excel-object-model | S3-A | recipe-pending (unverified) |
+| `bar:settings-schema-defaults` | `stage3-bar-settings-probe` | excel-object-model | S3-Q | recipe-pending (unverified) |
+| `bar:pixel-calibration` | `stage3-bar-settings-probe` | pixel calibration | S3-A | recipe-pending (unverified) |
+| `bar:lengths-default-10-90` | `stage3-bar-lengths` | pixel-measured | S3-B | recipe-pending (unverified) |
+| `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | pixel-measured | S3-B | recipe-pending (unverified) |
+| `bar:bounds-min-max` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
+| `bar:bounds-num` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
+| `bar:bounds-percent` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
+| `bar:bounds-percentile` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
+| `bar:bounds-automin` | `stage3-bar-lengths` | pixel-measured | S3-C | recipe-pending (unverified) |
+| `bar:bounds-automax` | `stage3-bar-lengths` | pixel-measured | S3-C | recipe-pending (unverified) |
+| `bar:lengths-all-negative` | `stage3-bar-lengths` | pixel-measured | S3-B and S3-L | recipe-pending (unverified) |
+| `bar:degenerate-equal-values` | `stage3-bar-degenerate` | pixel-measured | S3-E | recipe-pending (unverified) |
+| `bar:degenerate-single-cell` | `stage3-bar-degenerate` | pixel-measured | S3-E | recipe-pending (unverified) |
+| `bar:degenerate-inverted` | `stage3-bar-degenerate` | pixel-measured | S3-E | recipe-pending (unverified) |
+| `bar:degenerate-beyond-bounds` | `stage3-bar-degenerate` | pixel-measured | S3-E | recipe-pending (unverified) |
+| `bar:bounds-out-of-domain` | `stage3-bar-degenerate` | pixel-measured | S3-E | recipe-pending (unverified) |
+| `bar:bounds-positional` | `stage3-bar-degenerate` | pixel-measured | S3-D | recipe-pending (unverified) |
+| `bar:axis-automatic` | `stage3-bar-axis-negative` | pixel-measured | S3-K | recipe-pending (unverified) |
+| `bar:axis-middle` | `stage3-bar-axis-negative` | pixel-measured | S3-K | recipe-pending (unverified) |
+| `bar:axis-none` | `stage3-bar-axis-negative` | pixel-measured | S3-K | recipe-pending (unverified) |
+| `bar:negative-fill-color` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
+| `bar:negative-fill-same-as-positive` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
+| `bar:negative-border-color` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
+| `bar:negative-border-same-as-positive` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
+| `bar:render-solid` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
+| `bar:render-gradient-stops` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
+| `bar:render-border` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
+| `bar:direction-ltr` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
+| `bar:direction-rtl` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
+| `bar:direction-context-ltr-sheet` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
+| `bar:colors-theme-tint` | `stage3-bar-rendering` | pixel-measured | S3-F | recipe-pending (unverified) |
+| `bar:colors-indexed` | `stage3-bar-rendering` | pixel-measured | S3-F | recipe-pending (unverified) |
+| `bar:geometry-insets` | `stage3-bar-geometry` | pixel-measured | S3-N | recipe-pending (unverified) |
+| `bar:geometry-snapping` | `stage3-bar-geometry` | pixel-measured | S3-N | recipe-pending (unverified) |
+| `bar:geometry-min-visible-width` | `stage3-bar-geometry` | pixel-measured | S3-N | recipe-pending (unverified) |
+| `bar:geometry-narrow-clip` | `stage3-bar-geometry` | pixel-measured | S3-N | recipe-pending (unverified) |
+| `bar:showvalue-canvas-suppression` | `stage3-bar-showvalue` | pixel-measured | S3-O | recipe-pending (unverified) |
+| `bar:showvalue-copy-text` | `stage3-bar-showvalue` | excel-object-model | S3-P | recipe-pending (unverified) |
+| `bar:participation-types` | `stage3-bar-participation` | pixel-measured | S3-G | recipe-pending (unverified) |
+| `bar:participation-error-presence` | `stage3-bar-participation` | pixel-measured | S3-G | recipe-pending (unverified) |
+| `bar:participation-dateserial` | `stage3-bar-participation` | pixel-measured | S3-G | recipe-pending (unverified) |
+| `bar:scope-disjoint` | `stage3-bar-scope` | pixel-measured | S3-H | recipe-pending (unverified) |
+| `bar:scope-duplicate-blocks` | `stage3-bar-scope` | pixel-measured | S3-H | recipe-pending (unverified) |
+| `bar:scope-hidden-row` | `stage3-bar-scope` | pixel-measured | S3-H | recipe-pending (unverified) |
+| `bar:scope-autofilter-hidden-row` | `stage3-bar-scope` | pixel-measured | S3-H | recipe-pending (unverified) |
+| `bar:scope-merged-cell` | `stage3-bar-scope` | pixel-measured | S3-H | recipe-pending (unverified) |
+| `bar:scope-whole-column` | `stage3-bar-scope` | pixel-measured | S3-H | recipe-pending (unverified) |
+| `bar:composition-dxf-fill` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
+| `bar:composition-with-scale` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
+| `bar:composition-overlapping-bars` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
+| `bar:composition-matching-stopIfTrue-ahead` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
+| `bar:composition-bar-stopIfTrue` | `stage3-bar-composition` | pixel-measured | S3-J | recipe-pending (unverified) |
+| `bar:composition-unresolved-stub` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
+| `bar:pairing-paired` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
+| `bar:settings-paired-precedence` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
+| `bar:pairing-standalone` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
+| `bar:pairing-base-only` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
+| `bar:unresolved-orphan-x14` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-Q | unsupported (refused) |
+| `bar:unresolved-duplicate-guid` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-Q | unsupported (refused) |
+| `bar:unresolved-companion-fillcolor` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-Q | unsupported (refused) |
+| `bar:unresolved-formula-cfvo` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
+| `bar:unresolved-xmf-reference` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
+| `bar:unresolved-active-present` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-R | unsupported (refused) |
+| `bar:unresolved-one-cfvo` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
+| `bar:unresolved-three-cfvo` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
+| `bar:unresolved-cfvo-no-type` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
+| `bar:unresolved-automin-base` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
+| `bar:unresolved-auto-color` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-F | unsupported (refused) |
+| `bar:unresolved-alpha-00-color` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-F | unsupported (refused) |

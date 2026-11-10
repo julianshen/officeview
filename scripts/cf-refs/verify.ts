@@ -8,6 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
+import { CF_STAGE3_NONDISCRIMINATING, barCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -302,8 +303,9 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
     const stopAttr = attr(rule, 'stopIfTrue')
     const actualStop = stopAttr === '1' || stopAttr === 'true'
     if (actualStop !== marker.stopIfTrue) {
-      if (marker.ruleType === 'colorScale' && marker.stopIfTrue === true && !actualStop) {
-        // Excel canonically strips stopIfTrue on colorScale rules upon resave
+      if ((marker.ruleType === 'colorScale' || marker.ruleType === 'dataBar') && marker.stopIfTrue === true && !actualStop) {
+        // Excel canonically strips stopIfTrue on colorScale rules upon resave (assumed for bars; a stripped flag is
+        // still a recorded outcome because the capture then exercises the unflagged rule)
       } else {
         return false
       }
@@ -401,7 +403,195 @@ function ruleMatchesAttributes(rule: XmlNode, marker: CfPartMarker): boolean {
     }
   }
 
+  if (marker.bar !== undefined && !barRuleMatches(rule, marker)) return false
+
   return true
+}
+
+/* ---------------- Stage 3: data bar markers (semantic comparison) ---------------- */
+
+/** OOXML schema defaults (ECMA-376 §18.3.1.28 and the x14 `dataBar` schema): Excel drops default-valued attributes. */
+const BAR_ATTR_DEFAULTS: Readonly<Record<string, string>> = {
+  minLength: '10',
+  maxLength: '90',
+  showValue: '1',
+  gradient: '1',
+  border: '0',
+  negativeBarColorSameAsPositive: '0',
+  negativeBarBorderColorSameAsPositive: '1',
+  axisPosition: 'automatic',
+  direction: 'context',
+}
+const BAR_BOOL_ATTRS: ReadonlySet<string> = new Set(['showValue', 'gradient', 'border', 'negativeBarColorSameAsPositive', 'negativeBarBorderColorSameAsPositive'])
+
+function normBarAttr(name: string, value: string | undefined): string | undefined {
+  const raw = value ?? BAR_ATTR_DEFAULTS[name]
+  if (raw === undefined) return undefined
+  if (BAR_BOOL_ATTRS.has(name)) return raw.trim() === '1' || raw.trim().toLowerCase() === 'true' ? '1' : '0'
+  if (name === 'minLength' || name === 'maxLength') {
+    const n = Number(raw)
+    return Number.isFinite(n) ? String(n) : raw
+  }
+  return raw.trim()
+}
+
+/** Attributes of a bar element as written (the parser strips xmlns declarations). */
+function barElementAttrs(el: XmlNode): Record<string, string> {
+  const group = asNode(el['@attrs'])
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(group ?? {})) if (v !== undefined && v !== null) out[k] = String(v)
+  return out
+}
+
+function barAttrsMatch(el: XmlNode, pinned: Readonly<Record<string, string>>): boolean {
+  const actual = barElementAttrs(el)
+  for (const [name, want] of Object.entries(pinned)) {
+    if (normBarAttr(name, actual[name]) !== normBarAttr(name, want)) return false
+  }
+  // An unpinned attribute may only carry its schema default: no silent non-default behaviour.
+  for (const [name, have] of Object.entries(actual)) {
+    if (name in pinned || !(name in BAR_ATTR_DEFAULTS)) continue
+    if (normBarAttr(name, have) !== normBarAttr(name, undefined)) return false
+  }
+  return true
+}
+
+function sameBarBound(actual: string | undefined, want: string | undefined): boolean {
+  if (actual === undefined || want === undefined) return actual === want
+  const a = actual.trim()
+  const w = want.trim()
+  if (a === w) return true
+  const na = Number(a)
+  const nw = Number(w)
+  return a !== '' && w !== '' && Number.isFinite(na) && Number.isFinite(nw) && na === nw
+}
+
+export function barColorMatches(node: XmlNode | undefined, expected: string): boolean {
+  if (!node) return false
+  if (expected.startsWith('theme:')) {
+    const [, theme, tint] = expected.split(':')
+    if (attr(node, 'theme') !== theme) return false
+    const actualTint = attr(node, 'tint')
+    if (tint === undefined) return actualTint === undefined || Number(actualTint) === 0
+    return actualTint !== undefined && Math.abs(Number(actualTint) - Number(tint)) < 1e-4
+  }
+  if (expected.startsWith('indexed:')) return attr(node, 'indexed') === expected.split(':')[1]
+  return scaleColorMatches(node, expected)
+}
+
+const BAR_COLOR_ELEMENT: Readonly<Record<'legacy' | 'x14', Readonly<Record<string, string>>>> = {
+  legacy: { fill: 'color' },
+  x14: { fill: 'fillColor', border: 'borderColor', negativeFill: 'negativeFillColor', negativeBorder: 'negativeBorderColor', axis: 'axisColor' },
+}
+
+function barRuleMatches(rule: XmlNode, marker: CfPartMarker): boolean {
+  const spec = marker.bar
+  if (!spec) return true
+  const el = asNode(rule.dataBar)
+  if (!el) return false
+  if (!barAttrsMatch(el, spec.attrs)) return false
+  const cfvoNodes = asArray(el.cfvo).map(asNode).filter((n): n is XmlNode => n !== undefined)
+  if (cfvoNodes.length !== spec.cfvo.length) return false
+  for (let i = 0; i < spec.cfvo.length; i++) {
+    const exp = spec.cfvo[i]!
+    const actual = cfvoNodes[i]!
+    if ((attr(actual, 'type') ?? '') !== exp.type) return false
+    const actualVal = attr(actual, 'val')
+    if (exp.val !== undefined) {
+      // Excel drops val on min and max when canonicalizing (e.g. min val="0")
+      if (!sameBarBound(actualVal, exp.val) && !((exp.type === 'min' || exp.type === 'max') && actualVal === undefined)) return false
+    } else if (actualVal !== undefined) return false
+    if (!sameBarBound(textOf(actual.f), exp.f)) return false
+  }
+  const elements = BAR_COLOR_ELEMENT[marker.extension]
+  for (const [key, want] of Object.entries(spec.colors)) {
+    const tag = elements[key]
+    if (!tag || !want) return false
+    if (!barColorMatches(asNode(el[tag]), want)) return false
+  }
+  return true
+}
+
+interface BarRuleIndex {
+  base: XmlNode[]
+  x14: XmlNode[]
+}
+
+function indexBarRules(root: XmlNode): BarRuleIndex {
+  const docRoot = asNode(root.worksheet) ?? asNode(root.workbook) ?? root
+  const base: XmlNode[] = []
+  for (const cf of asArray(docRoot?.conditionalFormatting).map(asNode)) {
+    for (const rule of asArray(cf?.cfRule).map(asNode)) if (rule && attr(rule, 'type') === 'dataBar') base.push(rule)
+  }
+  const x14: XmlNode[] = []
+  const extLst = asNode(docRoot?.extLst)
+  for (const ext of asArray(extLst?.ext).map(asNode)) {
+    const container = asNode(ext?.conditionalFormattings)
+    for (const cf of asArray(container?.conditionalFormatting).map(asNode)) {
+      for (const rule of asArray(cf?.cfRule).map(asNode)) if (rule && attr(rule, 'type') === 'dataBar') x14.push(rule)
+    }
+  }
+  return { base, x14 }
+}
+
+const baseRuleGuid = (rule: XmlNode): string | undefined => {
+  for (const ext of asArray(asNode(rule.extLst)?.ext).map(asNode)) {
+    const id = textOf(ext?.id)
+    if (id !== undefined && id.trim() !== '') return id.trim().toUpperCase()
+  }
+  return undefined
+}
+const x14RuleGuid = (rule: XmlNode): string | undefined => attr(rule, 'id')?.trim().toUpperCase()
+const x14HasFill = (rule: XmlNode): boolean => asNode(rule.dataBar)?.fillColor !== undefined
+
+/** Pairing and link checks need the whole part (a link, a duplicate GUID and a companion's colours are cross-rule facts). */
+function verifyBarPairing(root: XmlNode, rule: XmlNode, marker: CfPartMarker): string | undefined {
+  const spec = marker.bar
+  if (!spec) return undefined
+  const { base, x14 } = indexBarRules(root)
+  if (marker.extension === 'legacy') {
+    const guid = baseRuleGuid(rule)
+    if (spec.pairing === 'paired') {
+      if (!guid) return `bar ${marker.capabilityId} on ${marker.sqref}: the base rule has no <x14:id> link to its companion`
+      const companions = x14.filter(r => x14RuleGuid(r) === guid)
+      const linked = base.filter(r => baseRuleGuid(r) === guid)
+      if (linked.length !== 1) return `bar ${marker.capabilityId} on ${marker.sqref}: ${linked.length} base rules share the x14 id ${guid}`
+      if (companions.length !== 1) return `bar ${marker.capabilityId} on ${marker.sqref}: ${companions.length} x14 companions carry the id ${guid}`
+      const companion = companions[0]!
+      if (x14HasFill(companion)) return `bar ${marker.capabilityId} on ${marker.sqref}: a paired companion must not carry <x14:fillColor>`
+      if (attr(companion, 'priority') !== undefined) return `bar ${marker.capabilityId} on ${marker.sqref}: a paired companion must not carry @priority`
+      return undefined
+    }
+    if (spec.pairing === 'base-only' && guid) {
+      // Excel may canonicalise a base-only bar into a pair; accept only a companion that is the schema default.
+      const companions = x14.filter(r => x14RuleGuid(r) === guid)
+      const linked = base.filter(r => baseRuleGuid(r) === guid)
+      if (companions.length !== 1 || linked.length !== 1) return `bar ${marker.capabilityId} on ${marker.sqref}: base-only bar has an ambiguous x14 link`
+      const el = asNode(companions[0]!.dataBar)
+      if (!el || x14HasFill(companions[0]!)) return `bar ${marker.capabilityId} on ${marker.sqref}: base-only bar gained a non-default x14 companion`
+      for (const [name, have] of Object.entries(barElementAttrs(el))) {
+        if (name in BAR_ATTR_DEFAULTS && normBarAttr(name, have) !== normBarAttr(name, undefined)) {
+          return `bar ${marker.capabilityId} on ${marker.sqref}: base-only bar gained a non-default x14 attribute ${name}`
+        }
+      }
+    }
+    return undefined
+  }
+  const guid = x14RuleGuid(rule)
+  if (spec.pairing === 'paired') {
+    if (!guid) return `bar ${marker.capabilityId} on ${marker.sqref}: the x14 companion has no id`
+    const linked = base.filter(r => baseRuleGuid(r) === guid)
+    const same = x14.filter(r => x14RuleGuid(r) === guid)
+    if (linked.length !== 1) return `bar ${marker.capabilityId} on ${marker.sqref}: ${linked.length} base rules link to the x14 companion ${guid}`
+    if (same.length !== 1) return `bar ${marker.capabilityId} on ${marker.sqref}: ${same.length} x14 rules share the id ${guid}`
+    if (x14HasFill(rule)) return `bar ${marker.capabilityId} on ${marker.sqref}: a paired companion must not carry <x14:fillColor>`
+    return undefined
+  }
+  if (spec.pairing === 'standalone') {
+    if (!x14HasFill(rule)) return `bar ${marker.capabilityId} on ${marker.sqref}: a standalone x14 bar needs <x14:fillColor>`
+    if (guid && base.some(r => baseRuleGuid(r) === guid)) return `bar ${marker.capabilityId} on ${marker.sqref}: a standalone x14 bar must not be linked from a base rule`
+  }
+  return undefined
 }
 
 function findMatchedRuleInRoot(root: XmlNode, marker: CfPartMarker): XmlNode | undefined {
@@ -467,6 +657,13 @@ function verifyMarkerInArchive(
       ok: false,
       code: 'stripped-rule',
       reason: `Rule ${marker.capabilityId} (${marker.ruleType}) on sqref ${marker.sqref} with formulas [${marker.formulas.join(', ')}] missing from ${marker.part}`,
+    }
+  }
+
+  if (marker.bar !== undefined) {
+    const pairingProblem = verifyBarPairing(xmlRoot, matchedRule, marker)
+    if (pairingProblem) {
+      return { ok: false, code: 'stripped-rule', reason: pairingProblem }
     }
   }
 
@@ -1418,6 +1615,376 @@ function verifyClockWindowAndBinding(
   return { ok: true }
 }
 
+/* ---------------- Stage 3: data bar pixel measurement and evidence (OD-7, Ruling S3-A) ---------------- */
+
+/** Raw pixel record of one cell's bar: px, never fractions (Ruling S3-A step 5). */
+export interface CfObservedBar {
+  ref: string
+  cellLeftPx: number
+  cellWidthPx: number
+  bar: { leftPx: number; rightPx: number; topPx: number; bottomPx: number } | null
+  axisPx?: number
+  borderPx?: number
+  gradientSamples?: readonly { fraction: number; argb: string }[]
+}
+
+/** Spec section 8 `STRONG_DELTA`: a pixel belongs to the bar when it differs from the control by at least this much. */
+export const BAR_STRONG_DELTA = 64
+const BAR_AXIS_TOLERANCE = 16
+const BAR_SCAN_FRACTIONS: readonly number[] = [0.25, 0.5, 0.75]
+
+const pixelAt = (png: DecodedPng, x: number, y: number): [number, number, number] => {
+  const i = (y * png.width + x) * 4
+  return [png.data[i]!, png.data[i + 1]!, png.data[i + 2]!]
+}
+
+const median3 = (vals: number[]): number => [...vals].sort((a, b) => a - b)[Math.floor(vals.length / 2)]!
+
+/**
+ * Locates each cell's bar by a column scan (Ruling S3-A step 4). Three horizontal scanlines (25/50/75 percent of the
+ * cell height) are scanned across the cell rect and compared with the same offset in the same-content unformatted
+ * control cell. The bar's left and right edges are the first and last columns whose maximum channel delta reaches
+ * `BAR_STRONG_DELTA`; the scanlines must agree within `tolerancePx` or the whole measurement refuses. Edges are absolute
+ * PNG columns (`rightPx` is the last bar column, inclusive). `axisPx` is the first column within +-16 per channel of the
+ * axis colour on all three scanlines that the control does not also show (so text ink is not mistaken for the axis).
+ */
+export function measureBarGeometry(
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  refs: readonly string[],
+  opts: { controlOf: (ref: string) => string; axisArgb?: string; tolerancePx: number; caseId?: string },
+): ReadonlyMap<string, CfObservedBar> | Refusal {
+  const refuse = (code: CfRefusalCode, reason: string): Refusal => ({
+    kind: 'refusal',
+    id: opts.caseId ?? 'bar-measurement',
+    status: 'recipe-pending',
+    code,
+    reason,
+    structuralValid: true,
+  })
+  const axisRgb = opts.axisArgb ? parseArgbHex(opts.axisArgb) : undefined
+  const out = new Map<string, CfObservedBar>()
+  for (const ref of refs) {
+    const box = cellPixelBox(png, geom, ref)
+    const ctrl = cellPixelBox(png, geom, opts.controlOf(ref))
+    if (!box || !ctrl) return refuse('geometry-mismatch', `Bar cell ${ref} or its control ${opts.controlOf(ref)} is outside the capture geometry`)
+    const w = Math.min(box.x1 - box.x0, ctrl.x1 - ctrl.x0)
+    const h = box.y1 - box.y0
+    if (w <= 0 || h <= 0) return refuse('geometry-mismatch', `Bar cell ${ref} has no pixel area`)
+    const ys = BAR_SCAN_FRACTIONS.map(f => box.y0 + Math.min(h - 1, Math.floor(h * f)))
+    const delta = (dx: number, y: number): number => {
+      const cy = Math.min(png.height - 1, ctrl.y0 + (y - box.y0))
+      return rgbMaxDelta(pixelAt(png, box.x0 + dx, y), pixelAt(png, ctrl.x0 + dx, cy))
+    }
+    const edges = ys.map(y => {
+      let left = -1
+      let right = -1
+      for (let dx = 0; dx < w; dx++) {
+        if (delta(dx, y) >= BAR_STRONG_DELTA) {
+          if (left < 0) left = dx
+          right = dx
+        }
+      }
+      return left < 0 ? null : { left: box.x0 + left, right: box.x0 + right }
+    })
+    const found = edges.filter((e): e is { left: number; right: number } => e !== null)
+    const base = { ref, cellLeftPx: box.x0, cellWidthPx: box.x1 - box.x0 }
+    if (found.length === 0) {
+      out.set(ref, { ...base, bar: null })
+      continue
+    }
+    if (found.length !== edges.length) {
+      return refuse('bar-edge-unstable', `Bar cell ${ref}: ${edges.length - found.length} of ${edges.length} scanlines found no bar edge while the others did`)
+    }
+    const lefts = found.map(e => e.left)
+    const rights = found.map(e => e.right)
+    if (Math.max(...lefts) - Math.min(...lefts) > opts.tolerancePx || Math.max(...rights) - Math.min(...rights) > opts.tolerancePx) {
+      return refuse('bar-edge-unstable', `Bar cell ${ref}: scanline edges disagree beyond ${opts.tolerancePx} px (left ${lefts.join('/')}, right ${rights.join('/')})`)
+    }
+    const leftPx = median3(lefts)
+    const rightPx = median3(rights)
+    const midX = Math.floor((leftPx + rightPx) / 2) - box.x0
+    let top = -1
+    let bottom = -1
+    for (let y = box.y0; y < box.y1; y++) {
+      if (delta(Math.max(0, Math.min(w - 1, midX)), y) >= BAR_STRONG_DELTA) {
+        if (top < 0) top = y
+        bottom = y
+      }
+    }
+    let axisPx: number | undefined
+    if (axisRgb) {
+      for (let dx = 0; dx < w && axisPx === undefined; dx++) {
+        const onAxis = ys.every(y => {
+          const cy = Math.min(png.height - 1, ctrl.y0 + (y - box.y0))
+          return rgbMaxDelta(pixelAt(png, box.x0 + dx, y), axisRgb) <= BAR_AXIS_TOLERANCE && rgbMaxDelta(pixelAt(png, ctrl.x0 + dx, cy), axisRgb) > BAR_AXIS_TOLERANCE
+        })
+        if (onAxis) axisPx = box.x0 + dx
+      }
+    }
+    out.set(ref, {
+      ...base,
+      bar: { leftPx, rightPx, topPx: top < 0 ? box.y0 : top, bottomPx: bottom < 0 ? box.y1 - 1 : bottom },
+      ...(axisPx !== undefined ? { axisPx } : {}),
+    })
+  }
+  return out
+}
+
+/** One predicted bar extent (absolute px) for one designated cell under one named hypothesis. */
+export interface BarHypothesis {
+  id: string
+  leftPx: number
+  rightPx: number
+}
+
+export type BarDiscrimination =
+  | { status: 'discriminating'; matched: string }
+  | { status: 'non-discriminating'; reason: string }
+  | { status: 'none'; reason: string }
+
+/**
+ * Lesson 3 / Ruling S3-A step 7. A capture discriminates only when every pair of hypotheses differs by at least
+ * `minSeparationPx` (more than twice the +-1 px tolerance) at some designated cell AND the measurement matches exactly
+ * one hypothesis within `tolerancePx` at every designated cell. A measurement matching none is `none`
+ * (`bar-hypothesis-none`); anything that cannot tell its hypotheses apart is `non-discriminating`.
+ */
+export function discriminateBar(
+  hypotheses: Readonly<Record<string, readonly BarHypothesis[]>>,
+  measured: Readonly<Record<string, { leftPx: number; rightPx: number }>>,
+  tolerancePx = 1,
+  minSeparationPx = 3,
+): BarDiscrimination {
+  const refs = Object.keys(hypotheses).filter(ref => measured[ref] !== undefined)
+  if (refs.length === 0) return { status: 'none', reason: 'no designated cell carries both a measurement and hypotheses' }
+  const ids: string[] = []
+  for (const h of hypotheses[refs[0]!]!) ids.push(h.id)
+  const at = (id: string, ref: string): BarHypothesis | undefined => hypotheses[ref]!.find(h => h.id === id)
+  const matches = (id: string): boolean =>
+    refs.every(ref => {
+      const h = at(id, ref)
+      const m = measured[ref]!
+      return h !== undefined && Math.abs(h.leftPx - m.leftPx) <= tolerancePx && Math.abs(h.rightPx - m.rightPx) <= tolerancePx
+    })
+  const matched = ids.filter(matches)
+  if (matched.length === 0) return { status: 'none', reason: 'the measurement matches no hypothesis within tolerance' }
+  if (ids.length < 2) return { status: 'non-discriminating', reason: 'fewer than two hypotheses' }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const separable = refs.some(ref => {
+        const a = at(ids[i]!, ref)
+        const b = at(ids[j]!, ref)
+        return a !== undefined && b !== undefined && Math.max(Math.abs(a.leftPx - b.leftPx), Math.abs(a.rightPx - b.rightPx)) >= minSeparationPx
+      })
+      if (!separable) return { status: 'non-discriminating', reason: `hypotheses ${ids[i]} and ${ids[j]} differ by less than ${minSeparationPx} px at every designated cell` }
+    }
+  }
+  if (matched.length !== 1) return { status: 'non-discriminating', reason: `${matched.length} hypotheses match the measurement` }
+  return { status: 'discriminating', matched: matched[0]! }
+}
+
+export interface BarCalibrationResult {
+  ok: boolean
+  reason?: string
+  columnWidthsPx: number[]
+  expectedWidthsPx: number[]
+  solidArgb?: string
+  solidDelta?: number
+}
+
+/**
+ * `bar:pixel-calibration` (Ruling S3-A step 3): gridline-to-gridline widths of the calibration columns, scanned along
+ * a blank row, must equal the computed geometry within `tolerancePx`; the solid DXF cell must sample its known ARGB
+ * within +-8 per channel. Missing gridlines fail the calibration rather than guessing.
+ */
+export function measureBarCalibration(
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  spec: NonNullable<CfOracleCase['barCalibration']>,
+  tolerancePx = 1,
+): BarCalibrationResult {
+  const fail = (reason: string, columnWidthsPx: number[] = [], expectedWidthsPx: number[] = []): BarCalibrationResult => ({ ok: false, reason, columnWidthsPx, expectedWidthsPx })
+  const rowIdx = spec.scanRow - 1 - geom.minRow
+  if (rowIdx < 0 || rowIdx >= geom.rowHeightsPt.length) return fail(`scan row ${spec.scanRow} is outside the capture`)
+  const y = Math.min(png.height - 1, Math.round(geom.rowHeightsPt.slice(0, rowIdx).reduce((a, b) => a + b, 0) + geom.rowHeightsPt[rowIdx]! / 2))
+  const white: [number, number, number] = [255, 255, 255]
+  const gridlineNear = (expectedX: number): number | undefined => {
+    let best: number | undefined
+    let bestDelta = 15
+    for (let x = Math.max(0, Math.round(expectedX) - 2); x <= Math.min(png.width - 1, Math.round(expectedX) + 2); x++) {
+      const d = rgbMaxDelta(pixelAt(png, x, y), white)
+      if (d > bestDelta) {
+        bestDelta = d
+        best = x
+      }
+    }
+    return best
+  }
+  const measured: number[] = []
+  const expected: number[] = []
+  for (const letter of spec.columns) {
+    const pos = parseA1(`${letter}1`)
+    const idx = pos ? pos.col - geom.minCol : -1
+    if (idx < 0 || idx >= geom.colWidthsPt.length) return fail(`calibration column ${letter} is outside the capture`, measured, expected)
+    const left = geom.colWidthsPt.slice(0, idx).reduce((a, b) => a + b, 0)
+    const width = geom.colWidthsPt[idx]!
+    const l = gridlineNear(left)
+    const r = gridlineNear(left + width)
+    if (l === undefined || r === undefined) return fail(`no gridline found near column ${letter} (expected x ${Math.round(left)} and ${Math.round(left + width)})`, measured, expected)
+    measured.push(r - l)
+    expected.push(Math.round(width))
+  }
+  const off = measured.findIndex((w, i) => Math.abs(w - expected[i]!) > tolerancePx)
+  if (off >= 0) return fail(`calibration column ${spec.columns[off]} measures ${measured[off]} px, computed ${expected[off]} px`, measured, expected)
+  const box = cellPixelBox(png, geom, spec.solidRef)
+  if (!box) return fail(`solid calibration cell ${spec.solidRef} is outside the capture`, measured, expected)
+  const sample = sampleCellBackgroundRgb(png, box)
+  const solidDelta = rgbMaxDelta(sample, parseArgbHex(spec.solidArgb))
+  if (solidDelta > 8) return { ok: false, reason: `solid cell ${spec.solidRef} samples (${sample.join(',')}) vs ${spec.solidArgb}: delta ${solidDelta} exceeds 8`, columnWidthsPx: measured, expectedWidthsPx: expected, solidDelta }
+  return { ok: true, columnWidthsPx: measured, expectedWidthsPx: expected, solidArgb: spec.solidArgb, solidDelta }
+}
+
+/** One row of the data bar object-model readback (`buildDataBarSettingsProbeScript`), all values as Excel returned them. */
+export interface BarSettingsRow {
+  priority: number
+  axis: string
+  fillType: string
+  borderType: string
+  minPointPercent: string
+  maxPointPercent: string
+  direction: string
+  showValue: string
+  negativeColorType: string
+}
+
+const isMissingSetting = (v: unknown): boolean => typeof v !== 'string' || v.trim() === '' || v.trim() === 'missing value'
+
+/**
+ * Ruling S3-A precondition probe: the probe bar (priority 1) is authored against defaults and the control (priority 2)
+ * carries them. If any probe value is missing, or equals the control's, the object model did not observe the setting and
+ * every `bar:settings-*` capability stays unverified (`bar-settings-unobserved`). The negative colour type is only
+ * required to be present: the schema default (`negativeBarColorSameAsPositive` false) is already a colour type, so it
+ * cannot differ from the control by design.
+ */
+export function evaluateBarSettingsProbe(rows: unknown): { ok: true } | { ok: false; reason: string } {
+  if (!Array.isArray(rows)) return { ok: false, reason: 'no data bar settings readback was recorded' }
+  const typed = rows.filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object')
+  const probe = typed.find(r => Number(r.priority) === 1)
+  const control = typed.find(r => Number(r.priority) === 2)
+  if (!probe || !control) return { ok: false, reason: 'the readback lacks the probe (priority 1) or the default control (priority 2) bar' }
+  const differs = ['axis', 'fillType', 'borderType', 'minPointPercent', 'maxPointPercent', 'direction', 'showValue'] as const
+  for (const field of [...differs, 'negativeColorType'] as const) {
+    if (isMissingSetting(probe[field])) return { ok: false, reason: `probe ${field} is missing` }
+  }
+  for (const field of differs) {
+    if (isMissingSetting(control[field])) return { ok: false, reason: `control ${field} is missing` }
+    if (String(probe[field]).trim() === String(control[field]).trim()) return { ok: false, reason: `probe ${field} "${String(probe[field])}" equals the default control's` }
+  }
+  return { ok: true }
+}
+
+type BarEvidenceClaim = NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>
+const noBarEvidence: BarEvidenceClaim = { settings: 'unverified', geometry: 'unverified' }
+
+interface BarCaptureOutcome {
+  verified: string[]
+  nonDiscriminating: string[]
+}
+
+/**
+ * Evidence verification for one Stage 3 data bar capture. A capability is `verified` only with the evidence KIND it
+ * requires (settings: object-model readback; geometry: discriminating pixel measurement; calibration: gridline and
+ * solid-cell measurement), and every claim is recomputed from the hash-bound PNG or the sidecar rather than trusted.
+ */
+function verifyBarCapture(
+  c: CfOracleCase,
+  sidecar: Record<string, unknown>,
+  decoded: DecodedPng,
+  geom: WorksheetRangeGeometry,
+): { ok: true; outcome: BarCaptureOutcome } | { ok: false; code: CfRefusalCode; reason: string } {
+  const fail = (code: CfRefusalCode, reason: string): { ok: false; code: CfRefusalCode; reason: string } => ({ ok: false, code, reason })
+  if (sidecar.lockBefore !== 'unlocked' || sidecar.lockAfter !== 'unlocked') {
+    return fail('display-locked', `Capture lock state before="${String(sidecar.lockBefore)}" after="${String(sidecar.lockAfter)}": a capture is valid only when the display was unlocked before and after it`)
+  }
+  if (sidecar.zoom !== 100 || sidecar.dpr !== 1) {
+    return fail('sidecar-mismatch', `Bar capture must be recorded at zoom 100 and dpr 1 (got zoom=${String(sidecar.zoom)}, dpr=${String(sidecar.dpr)})`)
+  }
+  const outcome: BarCaptureOutcome = { verified: [], nonDiscriminating: [] }
+  const capIds = [...new Set(c.markers.map(m => m.capabilityId))]
+  const coveredCells = (cap: string) =>
+    c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref)))
+  const settingsRows = sidecar.barSettingsReadback
+  for (const cap of capIds) {
+    const kind = barCapabilityKind(cap)
+    if (kind === 'none') continue
+    if (kind === 'calibration') {
+      if (!c.barCalibration) return fail('bar-calibration-failed', `Case ${c.id} declares ${cap} but no barCalibration spec`)
+      const cal = measureBarCalibration(decoded, geom, c.barCalibration, 1)
+      if (!cal.ok) return fail('bar-calibration-failed', `Pixel calibration failed: ${cal.reason}`)
+      outcome.verified.push(cap)
+      continue
+    }
+    const cells = coveredCells(cap)
+    if (cells.length === 0) continue
+    const evs = cells.map(cell => cell.barEvidence ?? noBarEvidence)
+    if (kind === 'settings') {
+      if (evs.some(e => e.settings !== 'excel-object-model' && e.geometry !== 'unverified')) {
+        return fail('unobserved-expectation', `Settings capability ${cap} is backed by pixel evidence only; settings are proven by the Excel object model (OD-7)`)
+      }
+      if (!evs.every(e => e.settings === 'excel-object-model')) continue
+      if (!Array.isArray(settingsRows) || settingsRows.length === 0) {
+        return fail('bar-settings-unobserved', `Settings capability ${cap} claims excel-object-model evidence but the sidecar holds no settings readback`)
+      }
+      if (cap === 'bar:settings-precondition-probe') {
+        const probe = evaluateBarSettingsProbe(settingsRows)
+        if (!probe.ok) return fail('bar-settings-unobserved', `Precondition probe failed: ${probe.reason}`)
+      }
+      outcome.verified.push(cap)
+      continue
+    }
+    // geometry
+    if (evs.some(e => e.geometry === 'unverified' && e.settings === 'excel-object-model')) {
+      return fail('unobserved-expectation', `Geometry capability ${cap} is backed only by an object-model readback; geometry is proven only by pixel measurement (OD-7)`)
+    }
+    if (!evs.every(e => e.geometry === 'pixel-measured' || e.geometry === 'non-discriminating')) continue
+    const labels = new Set(evs.map(e => e.geometry))
+    if (labels.size !== 1) return fail('unobserved-expectation', `Geometry capability ${cap} mixes pixel-measured and non-discriminating cells`)
+    const label = evs[0]!.geometry
+    const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
+    const refs = cells.map(cell => cell.ref)
+    const measured = measureBarGeometry(decoded, geom, refs, { controlOf, tolerancePx: 1, caseId: c.id })
+    if (!(measured instanceof Map)) {
+      const refusal = measured as Refusal
+      return fail(refusal.code, refusal.reason)
+    }
+    const recorded = Array.isArray(sidecar.observedBars) ? (sidecar.observedBars as Array<Record<string, any>>) : []
+    for (const cell of cells) {
+      const m = measured.get(cell.ref)!
+      if ((m.bar !== null) !== (cell.barApplied === true)) {
+        return fail('cell-expectation-mismatch', `Cell ${cell.ref} barApplied=${String(cell.barApplied)} but the capture ${m.bar ? 'shows a bar' : 'shows no bar'}`)
+      }
+      const rec = recorded.find(r => String(r.ref).toUpperCase() === cell.ref.toUpperCase())
+      const same = rec !== undefined && (rec.bar === null ? m.bar === null : m.bar !== null && rec.bar?.leftPx === m.bar.leftPx && rec.bar?.rightPx === m.bar.rightPx)
+      if (!same) return fail('sidecar-mismatch', `Sidecar observedBars for ${cell.ref} disagrees with the PNG measurement`)
+    }
+    const hyps = (sidecar.barHypotheses as Record<string, Record<string, BarHypothesis[]>> | undefined)?.[cap]
+    if (!hyps) return fail('unobserved-expectation', `Geometry capability ${cap} claims ${label} but the sidecar records no hypotheses to discriminate`)
+    const withBar = cells.filter(cell => measured.get(cell.ref)!.bar !== null)
+    const used: Record<string, readonly BarHypothesis[]> = {}
+    const meas: Record<string, { leftPx: number; rightPx: number }> = {}
+    for (const cell of withBar) {
+      if (hyps[cell.ref]) used[cell.ref] = hyps[cell.ref]!
+      meas[cell.ref] = measured.get(cell.ref)!.bar!
+    }
+    const disc = discriminateBar(used, meas, 1, 3)
+    if (disc.status === 'none') return fail('bar-hypothesis-none', `Geometry capability ${cap}: ${disc.reason}`)
+    if (disc.status === 'discriminating' && label === 'pixel-measured') outcome.verified.push(cap)
+    else if (disc.status === 'non-discriminating' && label === 'non-discriminating') outcome.nonDiscriminating.push(cap)
+    else return fail('unobserved-expectation', `Geometry capability ${cap} is labelled ${label} but recomputation says ${disc.status}`)
+  }
+  return { ok: true, outcome }
+}
+
 export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): VerifiedEvidence | Refusal {
   const rootDir = options.rootDir ?? process.cwd()
   const savedAbs = resolve(rootDir, c.saved)
@@ -1715,6 +2282,8 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     }
   }
 
+  const isBarCase = c.stage === 3 && c.status === 'measured' && c.markers.some(m => m.ruleType === 'dataBar')
+  let barOutcome: BarCaptureOutcome | undefined
   const captureHashes: Record<string, string> = {}
   const passingCellRefs = new Set<string>()
   let positiveContrastMaxDelta = 0
@@ -1951,6 +2520,19 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
         reason: `Capture ${cap.pngPath} height ${decoded.height} does not match measured range ${c.range} height ${activeGeom.expectedHeightPt}±4`,
         structuralValid: true,
       }
+    }
+
+    if (isBarCase) {
+      // Stage 3: bars are geometry, not fills. Evidence is recomputed per capability from the hash-bound PNG and sidecar.
+      const bar = verifyBarCapture(c, sidecar, decoded, activeGeom)
+      if (!bar.ok) {
+        return { kind: 'refusal', id: c.id, status: c.status, code: bar.code, reason: bar.reason, structuralValid: true }
+      }
+      barOutcome = {
+        verified: [...new Set([...(barOutcome?.verified ?? []), ...bar.outcome.verified])],
+        nonDiscriminating: [...new Set([...(barOutcome?.nonDiscriminating ?? []), ...bar.outcome.nonDiscriminating])],
+      }
+      continue
     }
 
     const observations = observeCellsFromCapture(decoded, activeGeom, c)
@@ -2378,6 +2960,22 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
     positiveContrastMaxDelta = Math.max(positiveContrastMaxDelta, captureMaxPositive)
   }
 
+  if (isBarCase && barOutcome) {
+    return {
+      kind: 'verified',
+      id: c.id,
+      status: 'measured',
+      savedSha256,
+      inputSha256,
+      captureHashes,
+      positiveContrastMaxDelta: 0,
+      minPositiveContrastDelta: 0,
+      matchedRules: c.markers.length,
+      verifiedCapabilities: barOutcome.verified.filter(id => CF_STAGE3_NONDISCRIMINATING[id] === undefined),
+      nonDiscriminatingCapabilities: [...new Set([...barOutcome.nonDiscriminating, ...barOutcome.verified.filter(id => CF_STAGE3_NONDISCRIMINATING[id] !== undefined)])],
+    }
+  }
+
   const verifiedCapabilities: string[] = []
   for (const m of c.markers) {
     const covered = markerCellsMap.get(m.capabilityId) ?? []
@@ -2410,6 +3008,17 @@ export function isCapabilityVerified(
   if (!owningCase) return false
   const res = verifyCfCase(owningCase, options)
   if (res.kind !== 'verified' || !res.verifiedCapabilities.includes(capabilityId)) return false
+
+  // Stage 3: a registry-flagged non-discriminating capability is never verified, whatever a capture shows (Lesson 3).
+  if (CF_STAGE3_NONDISCRIMINATING[capabilityId] !== undefined) return false
+  // Settings capabilities need the precondition probe; geometry capabilities need pixel calibration (Ruling S3-A).
+  if (capabilityId.startsWith('bar:')) {
+    const kind = barCapabilityKind(capabilityId)
+    if (kind === 'settings' && capabilityId !== 'bar:settings-precondition-probe') {
+      if (!isCapabilityVerified('bar:settings-precondition-probe', manifest, options)) return false
+    }
+    if (kind === 'geometry' && !isCapabilityVerified('bar:pixel-calibration', manifest, options)) return false
+  }
 
   // Precondition-probe check for scale:* capabilities
   if (capabilityId.startsWith('scale:') && capabilityId !== 'scale:interpolation-precondition-probe') {

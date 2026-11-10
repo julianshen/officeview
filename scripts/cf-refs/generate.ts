@@ -17,10 +17,19 @@ import { fileURLToPath } from 'node:url'
 import { deflateRawSync } from 'node:zlib'
 import {
   CF_CASES,
+  CF_STAGE3_FIXTURES,
   DEFAULT_CLOCK_ANCHOR_DATE,
   isoDateToExcelSerial,
+  s3ControlOffset,
+  s3ControlRef,
+  s3Range,
+  type CfBarColors,
+  type CfBarCfvo,
   type CfManifest,
   type CfOracleCase,
+  type S3BarRule,
+  type S3Fixture,
+  type S3Value,
 } from './cases'
 import { verifyCfCase } from './verify'
 
@@ -74,6 +83,15 @@ interface SheetPayload {
   legacyCfXml: string
   x14CfXml?: string
   dxfsXml: string
+  /** Stage 3: per-row heights in points (default: 18, the Stage 1/2 value). */
+  rowHeightsPt?: ReadonlyMap<number, number>
+  defaultRowHeightPt?: number
+  /** Stage 3: `false` writes `showGridLines="0"` (default on). */
+  showGridLines?: boolean
+  /** Stage 3: raw `<autoFilter>` element, written after `<sheetData>`. */
+  autoFilterXml?: string
+  /** Stage 3: add a date-formatted `cellXfs` entry (style 4). */
+  dateStyle?: boolean
 }
 
 const DEFAULT_DXFS_XML = [
@@ -1116,10 +1134,142 @@ function casePayload(id: string, anchorDateIso = DEFAULT_CLOCK_ANCHOR_DATE): She
       }
     }
 
-    default:
+    default: {
+      const fx = CF_STAGE3_FIXTURES.find(f => f.id === id)
+      if (fx) return stage3Payload(fx)
       throw new Error(`Unknown CF case id: ${id}`)
+    }
   }
 }
+
+// ---- Stage 3: data bar fixtures (the shared `S3Fixture` spec in cases.ts drives both markers and XML) ----
+
+const colorAttrs = (spec: string): string => {
+  if (spec.startsWith('theme:')) {
+    const [, theme, tint] = spec.split(':')
+    return `theme="${theme}"${tint !== undefined ? ` tint="${tint}"` : ''}`
+  }
+  if (spec.startsWith('indexed:')) return `indexed="${spec.split(':')[1]}"`
+  return `rgb="${spec}"`
+}
+
+const attrString = (attrs: Readonly<Record<string, string>> | undefined): string =>
+  Object.entries(attrs ?? {}).map(([k, v]) => ` ${k}="${esc(v)}"`).join('')
+
+const baseCfvoXml = (cfvo: readonly CfBarCfvo[]): string =>
+  cfvo.map(c => `<cfvo type="${esc(c.type)}"${c.val !== undefined ? ` val="${esc(c.val)}"` : ''}/>`).join('')
+
+const x14CfvoXml = (cfvo: readonly CfBarCfvo[]): string =>
+  cfvo.map(c => (c.f !== undefined ? `<x14:cfvo type="${esc(c.type)}"><xm:f>${esc(c.f)}</xm:f></x14:cfvo>` : `<x14:cfvo type="${esc(c.type)}"/>`)).join('')
+
+const x14ColorXml = (colors: CfBarColors, includeFill: boolean): string =>
+  [
+    includeFill && colors.fill ? `<x14:fillColor ${colorAttrs(colors.fill)}/>` : '',
+    colors.border ? `<x14:borderColor ${colorAttrs(colors.border)}/>` : '',
+    colors.negativeFill ? `<x14:negativeFillColor ${colorAttrs(colors.negativeFill)}/>` : '',
+    colors.negativeBorder ? `<x14:negativeBorderColor ${colorAttrs(colors.negativeBorder)}/>` : '',
+    colors.axis ? `<x14:axisColor ${colorAttrs(colors.axis)}/>` : '',
+  ].join('')
+
+const deriveX14 = (base: readonly CfBarCfvo[]): CfBarCfvo[] =>
+  base.map(c => (c.val !== undefined ? { type: c.type, f: c.val } : { type: c.type }))
+
+/** Excel's canonical rule shapes: paired = base `<dataBar>` + cfRule-level `<x14:id>` and an x14 companion without priority. */
+function barRuleXml(r: S3BarRule, guid: string): { legacy?: string; x14?: string } {
+  const base = r.baseCfvo ?? [{ type: 'min' }, { type: 'max' }]
+  const x14Cfvo = r.x14Cfvo ?? deriveX14(base)
+  const colors = r.colors ?? {}
+  const stop = r.stopIfTrue ? ' stopIfTrue="1"' : ''
+  if (r.pairing === 'standalone') {
+    return {
+      x14: `<x14:cfRule type="dataBar" priority="${r.priority}"${stop} id="${guid}"><x14:dataBar${attrString(r.x14Attrs)}>${x14CfvoXml(x14Cfvo)}${x14ColorXml(colors, true)}</x14:dataBar></x14:cfRule>`,
+    }
+  }
+  const fill = colors.fill ? `<color ${colorAttrs(colors.fill)}/>` : ''
+  const legacy = `<cfRule type="dataBar" priority="${r.priority}"${stop}><dataBar${attrString(r.baseAttrs)}>${baseCfvoXml(base)}${fill}</dataBar>${r.pairing === 'paired' ? idExtXml(guid) : ''}</cfRule>`
+  if (r.pairing === 'base-only') return { legacy }
+  return {
+    legacy,
+    x14: `<x14:cfRule type="dataBar" id="${guid}"><x14:dataBar${attrString(r.x14Attrs)}>${x14CfvoXml(x14Cfvo)}${x14ColorXml(colors, false)}</x14:dataBar></x14:cfRule>`,
+  }
+}
+
+const idExtXml = (guid: string): string =>
+  `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="${NS_X14}"><x14:id>${guid}</x14:id></ext></extLst>`
+
+function stage3Payload(fx: S3Fixture): SheetPayload {
+  const off = s3ControlOffset(fx)
+  const cells: CellSpec[] = []
+  const put = (ref: string, v: S3Value, ctrlRef: string, labelSuffix = ''): void => {
+    void labelSuffix
+    for (const target of [ref, ctrlRef]) {
+      if (v === null) continue
+      if (typeof v === 'object') {
+        if ('err' in v) cells.push({ ref: target, err: v.err })
+        else if ('f' in v) cells.push({ ref: target, f: v.f, v: v.v })
+        else cells.push({ ref: target, v: v.date, s: 4 })
+      } else {
+        cells.push({ ref: target, v })
+      }
+    }
+  }
+  cells.push({ ref: 'A1', v: 'Val' }, { ref: `A${1 + off}`, v: 'Val_Ctrl' })
+  for (const c of fx.cols) {
+    cells.push({ ref: `${c.col}1`, v: c.header }, { ref: `${c.col}${1 + off}`, v: `${c.header}_Ctrl` })
+  }
+  for (let r = 2; r <= fx.n + 1; r++) {
+    cells.push({ ref: `A${r}`, v: `r${r}` }, { ref: `A${r + off}`, v: `r${r}_ctrl` })
+  }
+  for (const c of fx.cols) {
+    c.values.forEach((v, i) => put(`${c.col}${i + 2}`, v, s3ControlRef(fx, `${c.col}${i + 2}`)))
+  }
+  for (const e of fx.extraCells ?? []) put(e.ref, e.v, s3ControlRef(fx, e.ref))
+
+  const heights = new Map<number, number>()
+  for (const [row, h] of Object.entries(fx.rowHeights ?? {})) {
+    heights.set(Number(row), h)
+    heights.set(Number(row) + off, h)
+  }
+
+  // Group legacy rules into <conditionalFormatting> blocks (consecutive rules sharing a sqref, unless separate).
+  const legacyBlocks: Array<{ sqref: string; rules: string[] }> = []
+  const x14Blocks: string[] = []
+  fx.rules.forEach((r, i) => {
+    const guid = `{3B3B00${(CF_STAGE3_FIXTURES.indexOf(fx) + 1).toString(16).toUpperCase().padStart(2, '0')}-0000-4000-8000-${(i + 1).toString(16).toUpperCase().padStart(12, '0')}}`
+    const out = r.kind === 'bar' ? barRuleXml(r, guid) : r.where === 'legacy' ? { legacy: r.xml } : { x14: r.xml }
+    if (out.legacy) {
+      const last = legacyBlocks[legacyBlocks.length - 1]
+      if (last && last.sqref === r.sqref && !r.separateBlock) last.rules.push(out.legacy)
+      else legacyBlocks.push({ sqref: r.sqref, rules: [out.legacy] })
+    }
+    if (out.x14) {
+      x14Blocks.push(`<x14:conditionalFormatting xmlns:xm="${NS_XM}">${out.x14}<xm:sqref>${esc(r.sqref)}</xm:sqref></x14:conditionalFormatting>`)
+    }
+  })
+
+  return {
+    dimension: s3Range(fx),
+    cells,
+    ...(fx.merges ? { merges: fx.merges } : {}),
+    ...(fx.hiddenRows ? { hiddenRows: fx.hiddenRows } : {}),
+    colWidths: fx.cols.map(c => ({ min: colIdxOf(c.col), max: colIdxOf(c.col), width: c.width ?? 30 })),
+    legacyCfXml: legacyBlocks.map(b => `<conditionalFormatting sqref="${esc(b.sqref)}">${b.rules.join('')}</conditionalFormatting>`).join(''),
+    ...(x14Blocks.length > 0 ? { x14CfXml: `<x14:conditionalFormattings>${x14Blocks.join('')}</x14:conditionalFormattings>` } : {}),
+    dxfsXml: fx.dxfsXml ?? '<dxfs count="0"/>',
+    rowHeightsPt: heights,
+    defaultRowHeightPt: 30,
+    showGridLines: fx.gridlines === true,
+    ...(fx.autoFilterXml ? { autoFilterXml: fx.autoFilterXml } : {}),
+    ...(fx.dateStyle ? { dateStyle: true } : {}),
+  }
+}
+
+const colIdxOf = (letters: string): number => {
+  let n = 0
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n
+}
+
 
 function buildWorksheetXml(p: SheetPayload): string {
   const byRow = new Map<number, CellSpec[]>()
@@ -1167,7 +1317,8 @@ function buildWorksheetXml(p: SheetPayload): string {
         .filter(Boolean)
         .join('')
       const hiddenAttr = hiddenRowSet.has(r) ? ' hidden="1"' : ''
-      return `<row r="${r}" ht="18" customHeight="1"${hiddenAttr}>${cellsXml}</row>`
+      const rowHt = p.rowHeightsPt?.get(r) ?? p.defaultRowHeightPt ?? 18
+      return `<row r="${r}" ht="${rowHt}" customHeight="1"${hiddenAttr}>${cellsXml}</row>`
     })
     .join('')
 
@@ -1201,10 +1352,11 @@ function buildWorksheetXml(p: SheetPayload): string {
     XML_DECL,
     `<worksheet xmlns="${NS_MAIN}" xmlns:r="${NS_R}" xmlns:mc="${NS_MC}" mc:Ignorable="x14ac" xmlns:x14ac="${NS_X14AC}" xmlns:x14="${NS_X14}" xmlns:xm="${NS_XM}">`,
     `<dimension ref="${p.dimension}"/>`,
-    '<sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews>',
-    '<sheetFormatPr defaultRowHeight="18" defaultColWidth="14"/>',
+    `<sheetViews><sheetView workbookViewId="0" showGridLines="${p.showGridLines === false ? 0 : 1}"/></sheetViews>`,
+    `<sheetFormatPr defaultRowHeight="${p.defaultRowHeightPt ?? 18}" defaultColWidth="14"/>`,
     colsXml,
     `<sheetData>${rowsXml}</sheetData>`,
+    p.autoFilterXml ?? '',
     mergesXml,
     p.legacyCfXml,
     tablePartsXml,
@@ -1213,7 +1365,7 @@ function buildWorksheetXml(p: SheetPayload): string {
   ].join('')
 }
 
-function buildStylesXml(dxfsXml: string): string {
+function buildStylesXml(dxfsXml: string, dateStyle = false): string {
   return [
     XML_DECL,
     `<styleSheet xmlns="${NS_MAIN}">`,
@@ -1234,11 +1386,12 @@ function buildStylesXml(dxfsXml: string): string {
     '<border><left/><right/><top/><bottom/><diagonal/></border>',
     '</borders>',
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>',
-    '<cellXfs count="4">',
+    `<cellXfs count="${dateStyle ? 5 : 4}">`,
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>',
     '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+    ...(dateStyle ? ['<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'] : []),
     '</cellXfs>',
     dxfsXml,
     '</styleSheet>',
@@ -1418,7 +1571,7 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
         : []),
       '</Relationships>',
     ].join(''),
-    'xl/styles.xml': buildStylesXml(p.dxfsXml),
+    'xl/styles.xml': buildStylesXml(p.dxfsXml, p.dateStyle === true),
     'xl/worksheets/sheet1.xml': buildWorksheetXml(p),
   }
   if (p.tablePartXml || p.pivotParts) {

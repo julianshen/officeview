@@ -57,13 +57,39 @@ export function closeOwnedWorkbook(name: string, preExistingOpenWorkbooks: Reado
   }, `close ${name}`, 15_000)
 }
 
-/** Detects whether macOS WindowServer currently has the console screen locked (`CGSSessionScreenIsLocked`). */
-export function isDisplayLocked(): boolean {
+const LOCK_KEY = '<key>CGSSessionScreenIsLocked</key>'
+
+/**
+ * Fail-closed parse of `ioreg -n Root -d1 -a` output (Ruling S3-A step 1, after `scripts/harness/webdriver.ts`'s
+ * `<true/>`/`<false/>` match). `locked` for `<true/>`, for anything that is not recognisably ioreg plist output and for a
+ * `CGSSessionScreenIsLocked` key whose value is neither `<true/>` nor `<false/>`. `unlocked` only for a recognisable
+ * plist whose every `CGSSessionScreenIsLocked` is `<false/>`, or that does not carry the key at all.
+ */
+export function parseScreenLockState(ioregXml: string): 'locked' | 'unlocked' {
+  if (typeof ioregXml !== 'string' || !/<plist[\s>]/.test(ioregXml) || !/<dict>/.test(ioregXml)) return 'locked'
+  let from = 0
+  for (;;) {
+    const at = ioregXml.indexOf(LOCK_KEY, from)
+    if (at < 0) return 'unlocked'
+    const after = ioregXml.slice(at + LOCK_KEY.length)
+    const value = /^\s*<(true|false)\s*\/>/.exec(after)
+    if (!value || value[1] === 'true') return 'locked'
+    from = at + LOCK_KEY.length
+  }
+}
+
+const readIoreg = (): string => execFileSync('ioreg', ['-n', 'Root', '-d1', '-a'], { encoding: 'utf8', timeout: 5_000 })
+
+/**
+ * Whether macOS WindowServer currently has the console screen locked. Fails closed: an `ioreg` failure, a timeout or an
+ * unparseable answer all count as locked, so a capture can never proceed on an unknown display. `run` is injectable
+ * for tests.
+ */
+export function isDisplayLocked(run: () => string = readIoreg): boolean {
   try {
-    const out = execFileSync('ioreg', ['-n', 'Root', '-d1', '-a'], { encoding: 'utf8', timeout: 5_000 })
-    return out.includes('<key>CGSSessionScreenIsLocked</key>')
+    return parseScreenLockState(run()) === 'locked'
   } catch {
-    return false
+    return true
   }
 }
 
@@ -226,7 +252,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
   for (let i = 0; i < manifest.cases.length; i++) {
     const c = manifest.cases[i]
-    if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
+    // An unsupported case is skipped unless it is named with `--case` (stage3-bar-unresolved-shapes records Excel's
+    // open/repair/strip outcome that way; a stripped result is preserved as `<id>.rejected.xlsx`, never as the saved file).
+    if (c.stage !== stage || (only && c.id !== only) || (c.status === 'unsupported' && only !== c.id)) continue
     const inputBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, c.input)))
     const currentInputSha256 = sha256Hex(inputBytes)
     if (resume && shouldSkipCaseOnResume(c, currentInputSha256, REPO_ROOT)) {

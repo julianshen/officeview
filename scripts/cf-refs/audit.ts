@@ -24,13 +24,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyCfCase } from './verify'
+import { isCapabilityVerified, verifyCfCase } from './verify'
 import {
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_NONDISCRIMINATING,
   CF_STAGE2_CASES,
+  CF_STAGE3_CAPABILITIES,
+  CF_STAGE3_CASES,
+  CF_STAGE3_NONDISCRIMINATING,
   type CfManifest,
   type CfOracleCase,
   type CfOracleStatus,
@@ -258,6 +261,142 @@ export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: s
       unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
     },
   }
+}
+
+export type Stage3CaseAudit = Stage1CaseAudit
+export type Stage3CapabilityAudit = Stage1CapabilityAudit
+export type Stage3AuditReport = Stage1AuditReport
+
+/**
+ * Stage 3 (data bars). Unlike Stages 1/2 a measured case can verify only some of its capabilities, so each capability's
+ * disposition comes from `verifyCfCase`'s per-capability result and the cross-case gates (pixel calibration, precondition
+ * probe), never from the case-level status: a case that verifies still reports every capability it did not
+ * discriminate as `supported-structural` (blocks the stage) or `unverified-nondiscriminating` (Lesson 3).
+ */
+export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: string } = {}): Stage3AuditReport {
+  const rootDir = options.rootDir ?? process.cwd()
+  const stage3ManifestCases = manifest.cases.filter(c => c.stage === 3 || c.id.startsWith('stage3'))
+  const catalogIds = CF_STAGE3_CASES.map(c => c.id)
+  const manifestIds = new Set(stage3ManifestCases.map(c => c.id))
+  const missingCases = catalogIds.filter(id => !manifestIds.has(id))
+  const catalogSet = new Set(catalogIds)
+  const extraCases = stage3ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
+  const perCase = stage3ManifestCases.map(c => auditCase(c, rootDir))
+  const evidence = new Map(stage3ManifestCases.map(c => [c.id, verifyCfCase(c, { rootDir })] as const))
+  const perCapability: Stage3CapabilityAudit[] = CF_STAGE3_CAPABILITIES.map(entry => {
+    const owning = perCase.find(p => p.id === entry.caseId)
+    let disposition: Stage3CapabilityAudit['disposition'] = 'unaccounted'
+    if (owning?.structuralValid) {
+      if (owning.status === 'unsupported') disposition = 'refused-unsupported'
+      else {
+        disposition = 'supported-structural'
+        const res = evidence.get(entry.caseId)
+        if (res?.kind === 'verified') {
+          if (CF_STAGE3_NONDISCRIMINATING[entry.capabilityId] !== undefined || res.nonDiscriminatingCapabilities?.includes(entry.capabilityId)) {
+            disposition = 'unverified-nondiscriminating'
+          } else if (res.verifiedCapabilities.includes(entry.capabilityId) && isCapabilityVerified(entry.capabilityId, manifest, { rootDir })) {
+            disposition = 'verified'
+          }
+        }
+      }
+    }
+    return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
+  })
+  const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
+  const unknownNonDiscriminating = Object.keys(CF_STAGE3_NONDISCRIMINATING).filter(id => !stage3Ids.has(id) || !CF_STAGE3_NONDISCRIMINATING[id]!.trim())
+  const caseOk = (p: Stage3CaseAudit): boolean => {
+    if (p.status === 'measured') return p.structuralValid && p.code === undefined
+    return p.structuralValid
+  }
+  const structuralValid = perCase.filter(p => p.structuralValid).length
+  const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownNonDiscriminating.length === 0
+  const gate = stageGateStatus(perCapability)
+  return {
+    ok,
+    perCase,
+    perCapability,
+    missingCases,
+    extraCases,
+    stageComplete: ok && gate.complete,
+    blockedCapabilities: gate.blocked,
+    summary: {
+      cases: perCase.length,
+      structuralValid,
+      verified: perCase.filter(p => p.status === 'measured' && p.code === undefined).length,
+      unsupported: perCase.filter(p => p.status === 'unsupported').length,
+      pending: perCase.filter(p => p.status === 'recipe-pending' || p.status === 'geometry-unverified').length,
+      capabilities: perCapability.length,
+      covered: perCapability.filter(p => p.disposition !== 'unaccounted').length,
+      verifiedCapabilities: perCapability.filter(p => p.disposition === 'verified').length,
+      unverifiedCapabilities: perCapability.filter(p => p.disposition === 'unverified-nondiscriminating').length,
+    },
+  }
+}
+
+/**
+ * The exact text `--stage N --write` puts in `src/xlsx/cf/verifiedCapabilities.ts`, as a pure function of the manifest
+ * so the write is testable and idempotent (Lesson 4): the same manifest always renders the same bytes, and the Stage 1/2
+ * sets never change when Stage 3 is rendered.
+ */
+export function renderVerifiedCapabilitiesSource(manifest: CfManifest, stage: 1 | 2 | 3, rootDir: string = REPO_ROOT): string {
+  const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+  const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
+  const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
+  if (stage === 1) {
+    return `/**
+ * Verified conditional formatting capabilities for Stage 1.
+ * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
+ * Checked by tests/xlsx-cf-stage1.test.ts.
+ */
+export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(stage1Verified)}
+])
+`
+  }
+  const stage2Verified = verifiedOf(auditStage2Manifest(manifest, { rootDir }))
+  if (stage === 2) {
+    const allVerified = [...new Set([...stage1Verified, ...stage2Verified])].sort()
+    return `/**
+ * Verified conditional formatting capabilities for Stage 1 and Stage 2.
+ * Generated via bun scripts/cf-refs/audit.ts --stage 2 --write.
+ * Checked by tests/xlsx-cf-stage1.test.ts and tests/xlsx-cf-stage2.test.ts.
+ */
+export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(stage1Verified)}
+])
+
+export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(stage2Verified)}
+])
+
+export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(allVerified)}
+])
+`
+  }
+  const stage3Verified = verifiedOf(auditStage3Manifest(manifest, { rootDir }))
+  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...stage3Verified])].sort()
+  return `/**
+ * Verified conditional formatting capabilities for Stage 1, Stage 2 and Stage 3.
+ * Generated via bun scripts/cf-refs/audit.ts --stage 3 --write.
+ * Checked by tests/xlsx-cf-stage1.test.ts, tests/xlsx-cf-stage2.test.ts and tests/xlsx-cf-oracle.test.ts.
+ */
+export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(stage1Verified)}
+])
+
+export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(stage2Verified)}
+])
+
+export const VERIFIED_STAGE3_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(stage3Verified)}
+])
+
+export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
+${list(allVerified)}
+])
+`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -925,9 +1064,9 @@ function printCase(entry: { id: string; status: string; structuralValid: boolean
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const stage = Number(args.includes('--stage') ? args[args.indexOf('--stage') + 1] : 1)
-  if (stage !== 1 && stage !== 2) {
+  if (stage !== 1 && stage !== 2 && stage !== 3) {
     // eslint-disable-next-line no-console
-    console.error('Only --stage 1 and --stage 2 are implemented')
+    console.error('Only --stage 1, --stage 2 and --stage 3 are implemented')
     process.exit(2)
   }
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
@@ -935,48 +1074,20 @@ async function main(): Promise<void> {
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
   const report = stage === 1
     ? auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
-    : auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
+    : stage === 2
+      ? auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
+      : auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
   if (args.includes('--write')) {
-    if (stage === 1) {
-      const verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-      const content = `/**
- * Verified conditional formatting capabilities for Stage 1.
- * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts.
- */
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${verified.map(id => `  '${id}',`).join('\n')}
-])
-`
-      writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
-      // eslint-disable-next-line no-console
-      console.log(`wrote ${verified.length} verified capabilities to src/xlsx/cf/verifiedCapabilities.ts`)
-    } else {
-      const stage1Report = auditStage1Manifest(manifest, { rootDir: REPO_ROOT })
-      const stage1Verified = stage1Report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-      const stage2Verified = report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-      const allVerified = [...new Set([...stage1Verified, ...stage2Verified])].sort()
-      const content = `/**
- * Verified conditional formatting capabilities for Stage 1 and Stage 2.
- * Generated via bun scripts/cf-refs/audit.ts --stage 2 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts and tests/xlsx-cf-stage2.test.ts.
- */
-export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
-${stage1Verified.map(id => `  '${id}',`).join('\n')}
-])
-
-export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
-${stage2Verified.map(id => `  '${id}',`).join('\n')}
-])
-
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${allVerified.map(id => `  '${id}',`).join('\n')}
-])
-`
-      writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
-      // eslint-disable-next-line no-console
-      console.log(`wrote ${allVerified.length} verified capabilities (${stage1Verified.length} S1, ${stage2Verified.length} S2) to src/xlsx/cf/verifiedCapabilities.ts`)
-    }
+    const content = renderVerifiedCapabilitiesSource(manifest, stage, REPO_ROOT)
+    writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
+    const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
+    const detail = stage === 1
+      ? ''
+      : stage === 2
+        ? ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2)`
+        : ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3)`
+    // eslint-disable-next-line no-console
+    console.log(`wrote ${count('VERIFIED_CAPABILITIES')} verified capabilities${detail} to src/xlsx/cf/verifiedCapabilities.ts`)
   }
   const cases = only ? report.perCase.filter(c => c.id === only) : report.perCase
   for (const entry of cases) printCase(entry)

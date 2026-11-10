@@ -7,7 +7,7 @@
  * Requires an awake, unlocked macOS display (`CGSSessionScreenIsLocked=false`).
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { capture } from '../xlsx-refs/capture'
@@ -16,12 +16,23 @@ import { closeOwnedWorkbook, isDisplayLocked } from './build'
 import { CF_CASES, type CfManifest, type CfOracleCase } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
+  type BarHypothesis,
+  type BarSettingsRow,
+  type CfObservedBar,
+  type DecodedPng,
+  type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
+  discriminateBar,
+  evaluateBarSettingsProbe,
+  isCellInSqref,
+  measureBarGeometry,
   observeCellsFromCapture,
   readZipPartsSync,
   verifyCfCase,
 } from './verify'
+import { barCapabilityKind } from './cases'
+import { parseXml } from '../../src/core/xml'
 
 export { capture }
 
@@ -227,6 +238,260 @@ export function buildColorScaleCriteriaProbeScript(workbookName: string, sheetNa
   ]
 }
 
+/**
+ * Data bar object-model readback (Ruling S3-A, Excel.sdef `databar format condition` :3185-3204, `databar border`
+ * :3181-3184, `negative bar format` :3488-3493). One `|||` row per bar format condition on the sheet, `:::` fields in
+ * the order priority, axis, fill type, border type, min point percent, max point percent, direction, show value,
+ * negative colour type. Every read is its own `try`, so one unreadable property never aborts the probe. Preparation
+ * only: this script has not been run against Excel.
+ */
+export function buildDataBarSettingsProbeScript(workbookName: string, sheetName: string): string[] {
+  const guarded = (variable: string, expr: string): string[] => [
+    `    set ${variable} to "missing value"`,
+    `    try`,
+    `      set ${variable} to (${expr} as string)`,
+    `    end try`,
+  ]
+  return [
+    `set wb to workbook "${q(workbookName)}"`,
+    `set ws to worksheet "${q(sheetName)}" of wb`,
+    `set outList to {}`,
+    `try`,
+    `  repeat with fc in (get format conditions of ws)`,
+    ...guarded('axisVal', 'databar axis position of fc'),
+    ...guarded('fillVal', 'databar fill type of fc'),
+    ...guarded('borderVal', 'databar border type of databar border of fc'),
+    ...guarded('minVal', 'min point percent of fc'),
+    ...guarded('maxVal', 'max point percent of fc'),
+    ...guarded('dirVal', 'databar direction of fc'),
+    ...guarded('showVal', 'format condition show value of fc'),
+    ...guarded('negVal', 'negative bar color type of negative bar format of fc'),
+    ...guarded('prioVal', 'format condition priority of fc'),
+    `    if axisVal is not "missing value" then`,
+    `      set end of outList to (prioVal & ":::" & axisVal & ":::" & fillVal & ":::" & borderVal & ":::" & minVal & ":::" & maxVal & ":::" & dirVal & ":::" & showVal & ":::" & negVal)`,
+    `    end if`,
+    `  end repeat`,
+    `end try`,
+    `set AppleScript's text item delimiters to "|||"`,
+    `return outList as string`,
+  ]
+}
+
+/** Parses the `buildDataBarSettingsProbeScript` output into rows (an empty or unparseable answer yields no rows). */
+export function parseDataBarSettingsReadback(out: string): BarSettingsRow[] {
+  const rows: BarSettingsRow[] = []
+  for (const line of out.split('|||')) {
+    const f = line.split(':::').map(x => x.trim())
+    if (f.length !== 9) continue
+    const priority = Number(f[0])
+    if (!Number.isFinite(priority)) continue
+    rows.push({
+      priority,
+      axis: f[1]!,
+      fillType: f[2]!,
+      borderType: f[3]!,
+      minPointPercent: f[4]!,
+      maxPointPercent: f[5]!,
+      direction: f[6]!,
+      showValue: f[7]!,
+      negativeColorType: f[8]!,
+    })
+  }
+  return rows
+}
+
+export type LockGuardResult =
+  | { kind: 'captured' }
+  | { kind: 'refused'; code: 'display-locked'; phase: 'before' | 'after'; reason: string }
+
+/**
+ * Ruling S3-A step 1: the display lock is checked immediately before and after every capture, not only at process
+ * start. A locked (or unknown) display refuses before capturing; a lock observed after capturing discards what the
+ * capture wrote, and so does a capture that throws.
+ */
+export function captureUnderLockGuard(o: { isLocked: () => boolean; run: () => void; discard: () => void }): LockGuardResult {
+  if (o.isLocked()) {
+    return { kind: 'refused', code: 'display-locked', phase: 'before', reason: 'display locked (or unknown) before capture' }
+  }
+  try {
+    o.run()
+  } catch (error) {
+    o.discard()
+    throw error
+  }
+  if (o.isLocked()) {
+    o.discard()
+    return { kind: 'refused', code: 'display-locked', phase: 'after', reason: 'display locked (or unknown) after capture; the capture was discarded' }
+  }
+  return { kind: 'captured' }
+}
+
+/** Numeric cell values of `xl/worksheets/sheet1.xml` (cached numbers only; no text, boolean or error cells). */
+export function readNumericCellValues(parts: Map<string, Uint8Array>): Map<string, number> {
+  const out = new Map<string, number>()
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return out
+  const root = parseXml(new TextDecoder().decode(raw)) as Record<string, any>
+  const ws = root.worksheet ?? root
+  const rows = ([] as any[]).concat(ws?.sheetData?.row ?? [])
+  for (const row of rows) {
+    for (const cell of ([] as any[]).concat(row?.c ?? [])) {
+      const attrs = cell?.['@attrs'] ?? {}
+      const t = attrs.t
+      if (t !== undefined && t !== 'n') continue
+      const v = typeof cell?.v === 'object' ? cell.v?.['#text'] : cell?.v
+      const n = Number(v)
+      if (attrs.r && v !== undefined && v !== '' && Number.isFinite(n)) out.set(String(attrs.r).toUpperCase(), n)
+    }
+  }
+  return out
+}
+
+const LENGTH_CAPABILITIES: ReadonlySet<string> = new Set([
+  'bar:lengths-default-10-90',
+  'bar:lengths-explicit-0-100',
+  'bar:bounds-min-max',
+  'bar:bounds-num',
+  'bar:bounds-percent',
+])
+
+/**
+ * Predicted bar extents (absolute px) per designated cell for the length family, one hypothesis per candidate length
+ * model: the x14 companion's `minLength`/`maxLength`, the base rule's, and the full 0/100 span. The cell's left edge
+ * and width come from the MEASURED capture geometry, never from the viewer; identical models are merged so a model
+ * is only a hypothesis when it predicts something different. Only positive-only scopes with min/max/num/percent bounds
+ * are predicted; every other capability gets no hypotheses and therefore stays unverified (Task 19/20 supply the
+ * variant-parameterised predictors for the rest). Values outside the bounds are never clamped: they skip the capability.
+ */
+export function buildLengthHypotheses(
+  c: CfOracleCase,
+  values: ReadonlyMap<string, number>,
+  observed: ReadonlyMap<string, CfObservedBar>,
+): Record<string, Record<string, BarHypothesis[]>> {
+  const out: Record<string, Record<string, BarHypothesis[]>> = {}
+  for (const cap of LENGTH_CAPABILITIES) {
+    const base = c.markers.find(m => m.capabilityId === cap && m.extension === 'legacy' && m.bar)
+    if (!base?.bar) continue
+    const companion = c.markers.find(m => m.capabilityId === cap && m.extension === 'x14' && m.bar && m.sqref === base.sqref)
+    const scope = [...values.entries()].filter(([ref]) => isCellInSqref(ref, base.sqref))
+    if (scope.length === 0 || scope.some(([, v]) => !(v >= 0))) continue
+    const nums = scope.map(([, v]) => v)
+    const lo0 = Math.min(...nums)
+    const hi0 = Math.max(...nums)
+    const bound = (cfvo: { type: string; val?: string } | undefined, which: 'lo' | 'hi'): number | undefined => {
+      if (!cfvo) return undefined
+      if (cfvo.type === 'min') return lo0
+      if (cfvo.type === 'max') return hi0
+      const n = Number(cfvo.val)
+      if (!Number.isFinite(n)) return undefined
+      if (cfvo.type === 'num') return n
+      if (cfvo.type === 'percent') return lo0 + ((hi0 - lo0) * n) / 100
+      void which
+      return undefined
+    }
+    const lo = bound(base.bar.cfvo[0], 'lo')
+    const hi = bound(base.bar.cfvo[1], 'hi')
+    if (lo === undefined || hi === undefined || !(hi > lo)) continue
+    const length = (m: typeof base | undefined, name: 'minLength' | 'maxLength', dflt: number): number => {
+      const n = Number(m?.bar?.attrs[name])
+      return Number.isFinite(n) ? n : dflt
+    }
+    const models: Array<{ id: string; min: number; max: number }> = [
+      { id: 'x14-lengths', min: length(companion ?? base, 'minLength', 10), max: length(companion ?? base, 'maxLength', 90) },
+      { id: 'base-lengths', min: length(base, 'minLength', 10), max: length(base, 'maxLength', 90) },
+      { id: 'full-span', min: 0, max: 100 },
+    ]
+    const perRef: Record<string, BarHypothesis[]> = {}
+    let usable = true
+    for (const [ref, v] of scope) {
+      const obs = observed.get(ref)
+      if (!obs || obs.bar === null) continue
+      if (v < lo || v > hi) {
+        usable = false
+        break
+      }
+      const t = (v - lo) / (hi - lo)
+      perRef[ref] = models.map(m => ({
+        id: m.id,
+        leftPx: obs.cellLeftPx,
+        rightPx: Math.round((obs.cellLeftPx + ((m.min + (m.max - m.min) * t) / 100) * obs.cellWidthPx - 1) * 100) / 100,
+      }))
+    }
+    const refs = Object.keys(perRef)
+    if (!usable || refs.length === 0) continue
+    // Merge models that predict the same extents everywhere (they are one hypothesis).
+    const ids = models.map(m => m.id)
+    const keep = ids.filter((id, i) => !ids.slice(0, i).some(prev => refs.every(r => {
+      const a = perRef[r]!.find(h => h.id === id)!
+      const b = perRef[r]!.find(h => h.id === prev)!
+      return a.leftPx === b.leftPx && a.rightPx === b.rightPx
+    })))
+    out[cap] = Object.fromEntries(refs.map(r => [r, perRef[r]!.filter(h => keep.includes(h.id))]))
+  }
+  return out
+}
+
+/** Which evidence the capture established for each designated bar cell, derived with the verifier's own rules. */
+export function classifyBarCapture(
+  c: CfOracleCase,
+  observed: ReadonlyMap<string, CfObservedBar>,
+  hypotheses: Record<string, Record<string, BarHypothesis[]>>,
+  readback: unknown,
+): Map<string, NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>> {
+  const labels = new Map<string, NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>>()
+  const settingsOk = Array.isArray(readback) && readback.length > 0
+  for (const cap of new Set(c.markers.map(m => m.capabilityId))) {
+    const kind = barCapabilityKind(cap)
+    const cells = c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref)))
+    for (const cell of cells) {
+      const prev = labels.get(cell.ref) ?? { settings: 'unverified' as const, geometry: 'unverified' as const }
+      if (kind === 'settings') {
+        const ok = settingsOk && (cap !== 'bar:settings-precondition-probe' || evaluateBarSettingsProbe(readback).ok)
+        labels.set(cell.ref, { ...prev, settings: ok ? 'excel-object-model' : 'unverified' })
+      } else if (kind === 'geometry') {
+        const hyps = hypotheses[cap]
+        const withBar = cells.filter(x => observed.get(x.ref)?.bar)
+        const used: Record<string, readonly BarHypothesis[]> = {}
+        const meas: Record<string, { leftPx: number; rightPx: number }> = {}
+        for (const x of withBar) {
+          if (hyps?.[x.ref]) used[x.ref] = hyps[x.ref]!
+          meas[x.ref] = observed.get(x.ref)!.bar!
+        }
+        const disc = hyps ? discriminateBar(used, meas, 1, 3) : undefined
+        const geometry = disc?.status === 'discriminating' ? 'pixel-measured' : disc?.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
+        labels.set(cell.ref, { ...prev, geometry })
+      }
+    }
+  }
+  return labels
+}
+
+/** Everything a Stage 3 bar capture adds to its sidecar (lock states, raw px, readback, hypotheses). */
+export function buildBarSidecarExtras(
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  decoded: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  opts: { lockBefore: 'locked' | 'unlocked'; lockAfter: 'locked' | 'unlocked'; readback?: BarSettingsRow[] },
+): { extras: Record<string, unknown>; observed: ReadonlyMap<string, CfObservedBar> | undefined; refusal?: string } {
+  const refs = c.expected.cells.filter(cell => cell.matched).map(cell => cell.ref)
+  const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
+  const measured = measureBarGeometry(decoded, geom, refs, { controlOf, axisArgb: 'FF000000', tolerancePx: 1, caseId: c.id })
+  const base = {
+    zoom: 100,
+    dpr: 1,
+    lockBefore: opts.lockBefore,
+    lockAfter: opts.lockAfter,
+    ...(opts.readback ? { barSettingsReadback: opts.readback } : {}),
+  }
+  if ('kind' in measured) return { extras: base, observed: undefined, refusal: `${measured.code}: ${measured.reason}` }
+  const hypotheses = buildLengthHypotheses(c, readNumericCellValues(parts), measured)
+  return {
+    extras: { ...base, observedBars: [...measured.values()], barHypotheses: hypotheses },
+    observed: measured,
+  }
+}
+
 export function probeLiveExcelCellObservations(
   c: CfOracleCase,
   savedAbs: string,
@@ -237,6 +502,7 @@ export function probeLiveExcelCellObservations(
   cellColors: Record<string, { displayFormatFill?: string; baseFill?: string }>
   geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null
   colorScaleCriteria?: Record<string, { type: string; value?: string }[]>
+  barSettingsReadback?: BarSettingsRow[]
 } | null {
   try {
     const name = openWorkbook(savedAbs)
@@ -314,6 +580,15 @@ export function probeLiveExcelCellObservations(
         // criteria query errors leave colorScaleCriteria undefined
       }
 
+      let barSettingsReadback: BarSettingsRow[] | undefined
+      if (c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar')) {
+        try {
+          barSettingsReadback = parseDataBarSettingsReadback(runScript(buildDataBarSettingsProbeScript(name, c.sheet), 30_000))
+        } catch {
+          // an unreadable object model leaves the readback undefined: settings stay unverified
+        }
+      }
+
       let geometry: { widthPt: number; heightPt: number; colWidthsPt: number[]; rowHeightsPt: number[] } | null = null
       try {
         const geomScriptLines = [
@@ -359,7 +634,7 @@ export function probeLiveExcelCellObservations(
         // geometry query errors leave geometry null
       }
 
-      return { cellTexts, cellDecorations, cellColors, geometry, colorScaleCriteria }
+      return { cellTexts, cellDecorations, cellColors, geometry, colorScaleCriteria, ...(barSettingsReadback ? { barSettingsReadback } : {}) }
     } finally {
       closeOwnedWorkbook(name, preExisting)
     }
@@ -412,6 +687,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         >
       | undefined
     let colorScaleCriteria: Record<string, { type: string; value?: string }[]> | undefined
+    let barReadback: BarSettingsRow[] | undefined
+    const isBarCase = c.stage === 3 && c.markers.some(m => m.ruleType === 'dataBar')
+    let sidecarLockBefore: 'locked' | 'unlocked' | undefined
+    let sidecarLockAfter: 'locked' | 'unlocked' | undefined
+    let barObserved: ReadonlyMap<string, CfObservedBar> | undefined
+    let barHypothesesForLabels: Record<string, Record<string, BarHypothesis[]>> = {}
+    let lockRefusal: string | undefined
+    let barRefusal: string | undefined
     let sidecarExcelVersion = excelVersion
     let sidecarCapturedAt = new Date().toISOString()
     let sidecarHostTimeZone = 'Asia/Taipei'
@@ -435,6 +718,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                 rowHeightsPt: sc.rowHeightsPt as number[],
               }) ?? geom
           }
+          if (Array.isArray(sc.barSettingsReadback)) barReadback = sc.barSettingsReadback as BarSettingsRow[]
+          if (sc.lockBefore === 'unlocked' || sc.lockBefore === 'locked') sidecarLockBefore = sc.lockBefore
+          if (sc.lockAfter === 'unlocked' || sc.lockAfter === 'locked') sidecarLockAfter = sc.lockAfter
           if (typeof sc.excelTodaySerial === 'number') {
             clockState = {
               excelTodaySerial: sc.excelTodaySerial,
@@ -482,6 +768,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       cellDecorations = liveObs?.cellDecorations
       cellColors = liveObs?.cellColors
       colorScaleCriteria = liveObs?.colorScaleCriteria
+      barReadback = liveObs?.barSettingsReadback
     }
 
     const updatedTemplate = CF_CASES.find(tc => tc.id === c.id)
@@ -505,8 +792,24 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       const pngAbs = resolve(REPO_ROOT, cap.pngPath)
       const sidecarAbs = resolve(REPO_ROOT, cap.sidecarPath)
       if (!verifyOnly) {
-        capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance })
+        // Ruling S3-A step 1: the lock is re-checked immediately before and after every capture; a capture taken
+        // across a lock is discarded and the case stays recipe-pending.
+        const guard = captureUnderLockGuard({
+          isLocked: () => isDisplayLocked(),
+          run: () => capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance }),
+          discard: () => {
+            rmSync(pngAbs, { force: true })
+            rmSync(sidecarAbs, { force: true })
+          },
+        })
+        if (guard.kind === 'refused') {
+          lockRefusal = `display-locked (${guard.phase}): ${guard.reason}`
+          return cap
+        }
+        sidecarLockBefore = 'unlocked'
+        sidecarLockAfter = 'unlocked'
       }
+      if (lockRefusal) return cap
       const pngBytes = new Uint8Array(readFileSync(pngAbs))
       const pngSha256 = sha256Hex(pngBytes)
       const decoded = decodePngSync(pngBytes)
@@ -521,8 +824,20 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           }) ?? capGeom
       }
 
+      const barExtra =
+        isBarCase && decoded && capGeom && sidecarLockBefore && sidecarLockAfter
+          ? buildBarSidecarExtras(cWithUpdatedExpected, parts!, decoded, capGeom, { lockBefore: sidecarLockBefore, lockAfter: sidecarLockAfter, ...(barReadback ? { readback: barReadback } : {}) })
+          : undefined
+      if (barExtra) {
+        barObserved = barExtra.observed
+        barHypothesesForLabels = (barExtra.extras.barHypotheses as Record<string, Record<string, BarHypothesis[]>> | undefined) ?? {}
+        if (barExtra.refusal) barRefusal = barExtra.refusal
+      }
+
       const observedCells =
-        decoded && capGeom
+        isBarCase
+          ? null
+          : decoded && capGeom
           ? observeCellsFromCapture(decoded, capGeom, cWithUpdatedExpected, {
               observedCellTexts: cellTexts,
               observedCellDecorations: cellDecorations,
@@ -583,6 +898,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
                 : {}),
               ...(finalObservedCells ? { observedCells: finalObservedCells } : {}),
               ...(colorScaleCriteria ? { colorScaleCriteria } : {}),
+              ...(barExtra ? barExtra.extras : {}),
             },
             null,
             2,
@@ -592,13 +908,26 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       return { ...cap, pngSha256 }
     })
 
+    if (lockRefusal || barRefusal) {
+      const why = lockRefusal ?? `bar measurement refused (${barRefusal})`
+      manifest.cases[i] = { ...c, status: 'recipe-pending', ...(lockRefusal ? {} : { captures: updatedCaptures }), reason: lockRefusal ? `Capture discarded: ${why}` : `Capture kept but not promoted: ${why}` }
+      console.warn(`[cf-refs/capture] ${c.id} remained recipe-pending: ${why}`)
+      continue
+    }
+
     const hasResave =
       c.resavedByExcel === true &&
       c.resaveReceipt !== undefined &&
       c.resaveReceipt.savedSha256 === savedSha256 &&
       c.resaveReceipt.openedRepairFree === true
 
+    const barLabels = isBarCase && barObserved ? classifyBarCapture(cWithUpdatedExpected, barObserved, barHypothesesForLabels, barReadback) : undefined
     const populatedExpectedCells = currentExpected.cells.map(exp => {
+      if (barLabels && exp.matched) {
+        // Observed truth, never a guess: barApplied follows the PNG and barEvidence the verifier's own rules.
+        const measured = barObserved?.get(exp.ref)
+        return { ...exp, ...(measured ? { barApplied: measured.bar !== null } : {}), barEvidence: barLabels.get(exp.ref) ?? { settings: 'unverified' as const, geometry: 'unverified' as const } }
+      }
       const col = cellColors?.[exp.ref]
       if (col?.displayFormatFill && exp.matched && exp.scaleApplied) {
         return {

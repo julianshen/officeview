@@ -19,7 +19,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { getPaintables } from '../src/render/paint'
 import { computeMetrics } from '../src/xlsx/render'
 import type { XlsxDocument } from '../src/xlsx/types'
-import { parseRangeA1, parseA1 } from './cf-refs/verify'
+import { parseRangeA1, parseA1, type CfObservedBar } from './cf-refs/verify'
 import type { CfManifest, CfOracleCase } from './cf-refs/cases'
 import { CF_MANIFEST_PATH } from './cf-refs/generate'
 import { verifyCfCase } from './cf-refs/verify'
@@ -179,6 +179,36 @@ export function stage2ObservedFills(c: CfOracleCase, rootDir: string): Map<strin
   // Same trust boundary as tests/xlsx-cf-oracle-conformance.test.ts: Excel display-format fills of visible cells only.
   for (const cell of sidecar.observedCells ?? []) {
     if (cell.fillRgb && cell.fillSource === 'excel-display-format' && !cell.hidden) out.set(cell.ref, cell.fillRgb.toUpperCase())
+  }
+  return out
+}
+
+/**
+ * Stage 3 observed bars: the raw px (`observedBars`) the Excel capture recorded per designated cell, never fractions
+ * (Ruling S3-A step 5), so conformance compares production layout px at the same scale and no expected value is ever
+ * computed by the code under test. Only a Stage 3 case with a readable screen sidecar yields a map; entries with a
+ * malformed edge record are dropped rather than guessed.
+ */
+export function stage3ObservedBars(c: CfOracleCase, rootDir: string): Map<string, CfObservedBar> | undefined {
+  if (c.stage !== 3) return undefined
+  const cap = c.captures.find(x => x.appearance === 'screen') ?? c.captures[0]
+  if (!cap?.sidecarPath) return undefined
+  const path = resolve(rootDir, cap.sidecarPath)
+  if (!existsSync(path)) return undefined
+  let sidecar: { observedBars?: unknown }
+  try {
+    sidecar = JSON.parse(readFileSync(path, 'utf8')) as { observedBars?: unknown }
+  } catch {
+    return undefined
+  }
+  const out = new Map<string, CfObservedBar>()
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+  for (const raw of Array.isArray(sidecar.observedBars) ? sidecar.observedBars : []) {
+    const b = raw as Partial<CfObservedBar> | null
+    if (!b || typeof b.ref !== 'string' || !finite(b.cellLeftPx) || !finite(b.cellWidthPx)) continue
+    const edges = b.bar
+    if (edges !== null && !(edges && finite(edges.leftPx) && finite(edges.rightPx) && finite(edges.topPx) && finite(edges.bottomPx))) continue
+    out.set(b.ref.toUpperCase(), b as CfObservedBar)
   }
   return out
 }

@@ -13,8 +13,12 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
-import { prepareCfPaint } from '../src/xlsx/cf/render'
+import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
+import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
+import { createCfService } from '../src/xlsx/cf/service'
+import type { CfCellState, CfOutcome } from '../src/xlsx/cf/model'
+import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { isCellInSqref } from '../scripts/cf-refs/verify'
 import type { CfManifest } from '../scripts/cf-refs/cases'
 
@@ -430,6 +434,64 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(exactCount).toBe(364)
     expect(withheldCount).toBe(34)
     expect(exactCount + withheldCount).toBe(grandTotalChecked)
+  })
+
+  /** A bar is withheld when the cell is not `ready` or its visual slot carries no data bar descriptor. */
+  const barWithheld = (outcome: CfOutcome<CfCellState>): boolean => outcome.kind !== 'ready' || outcome.value.visual?.dataBar === undefined
+
+  it('stage 3 bar cells are withheld until their evidence lands', async () => {
+    // The guard itself has teeth: a ready cell that carries a bar descriptor is NOT withheld.
+    expect(barWithheld({ kind: 'ready', value: { properties: {}, visual: { dataBar: { fraction: 0.5, color: 'FF0000FF' } } } })).toBe(false)
+    expect(barWithheld({ kind: 'ready', value: { properties: {} } })).toBe(true)
+    expect(barWithheld({ kind: 'no-match' })).toBe(true)
+    expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
+
+    const stage3 = manifest.cases.filter(c => c.stage === 3)
+    expect(stage3.map(c => c.id)).toHaveLength(12)
+    let checked = 0
+    let barCells = 0
+    for (const c of stage3) {
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+      expect(sheet.conditionalFormatting, `${c.id} must carry conditional formatting`).toBeDefined()
+      const memory = createCfMemory()
+      const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence })
+      const stamp = { owner: 'conformance', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const source = residentSource(sheet, stamp, memory, 'engine')
+      const rect = (() => {
+        const ends = c.range.split(':').map(refToRowCol)
+        return { firstRow: ends[0]!.row, lastRow: ends[1]!.row, firstCol: ends[0]!.col, lastCol: ends[1]!.col }
+      })()
+      const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, source)
+      try {
+        for (const exp of c.expected.cells) {
+          const { row, col } = refToRowCol(exp.ref)
+          const outcome = lease.value.at(row, col)
+          checked++
+          if (exp.barApplied === true) barCells++
+          // Production evidence: no bar:* capability is verified, so no cell may carry a bar.
+          expect(barWithheld(outcome), `${c.id}:${exp.ref} must withhold its bar until its evidence lands`).toBe(true)
+        }
+      } finally {
+        lease.release()
+      }
+      service.dispose()
+      expect(memory.currentBytes, `${c.id} leaked CF memory`).toBe(0)
+    }
+    // Non-vacuous: every designated bar cell and its control was visited.
+    expect(checked).toBe(stage3.reduce((n, c) => n + c.expected.cells.length, 0))
+    expect(barCells).toBeGreaterThan(200)
+
+    // Bar FINDINGS are withheld-only (extends the guard): a bar can never be recorded as painted.
+    type BarFinding = { outcome: 'withheld'; reason: string }
+    const BAR_FINDINGS: Record<string, BarFinding> = {}
+    for (const [key, f] of Object.entries(BAR_FINDINGS)) expect(f.outcome, key).toBe('withheld')
+    const validateBarFinding = (f: BarFinding) => {
+      if (f.outcome !== 'withheld') throw new Error(`Non-withheld bar outcome: ${(f as any).outcome}`)
+    }
+    expect(() => validateBarFinding({ outcome: 'painted' as any, reason: 'bar painted before evidence' })).toThrow(/Non-withheld bar outcome/)
+    expect(() => validateBarFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
   })
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {

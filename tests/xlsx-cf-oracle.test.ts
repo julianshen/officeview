@@ -9,8 +9,9 @@ import JSZip from 'jszip'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const hasOsacompile = process.platform === 'darwin' && spawnSync('which', ['osacompile']).status === 0
-import { compareCfCase } from '../scripts/cf-compare'
-import { assertCanCloseWorkbook, filterCasesForStage, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
+import { compareCfCase, stage3ObservedBars } from '../scripts/cf-compare'
+import { auditStage3Manifest, renderVerifiedCapabilitiesSource } from '../scripts/cf-refs/audit'
+import { assertCanCloseWorkbook, filterCasesForStage, isDisplayLocked, parseScreenLockState, shouldSkipCaseOnResume } from '../scripts/cf-refs/build'
 import {
   CF_CAPABILITIES,
   CF_CASES,
@@ -18,6 +19,11 @@ import {
   CF_STAGE1_CASES,
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
+  CF_STAGE3_CAPABILITIES,
+  CF_STAGE3_CASES,
+  CF_STAGE3_NONDISCRIMINATING,
+  barCapabilityKind,
+  type CfCellExpectation,
   type CfManifest,
   type CfOracleCase,
   type CfPartMarker,
@@ -26,19 +32,29 @@ import {
 import {
   buildColorProbeScript,
   buildColorScaleCriteriaProbeScript,
+  buildDataBarSettingsProbeScript,
+  buildBarSidecarExtras,
   buildDecorationProbeScript,
   buildTextProbeScript,
+  captureUnderLockGuard,
+  classifyBarCapture,
+  parseDataBarSettingsReadback,
   parseExcelColorToArgb,
+  readNumericCellValues,
 } from '../scripts/cf-refs/capture'
+import { hasEvidence, VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
 import {
+  type CfObservedBar,
   type ComputeGeometryOptions,
   type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
+  discriminateBar,
   isCapabilityVerified,
   isCellWithinRange,
   isSupportedExcelVersion,
+  measureBarGeometry,
   observeCellsFromCapture,
   parseA1,
   readZipPartsSync,
@@ -584,20 +600,6 @@ describe('CF oracle verifier', () => {
     }
   })
 
-  it('stage 2 cases join the manifest and stage 1 cases are unchanged', () => {
-    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
-    expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
-    expect(CF_STAGE1_CAPABILITIES.length).toBeGreaterThanOrEqual(90)
-    expect(CF_STAGE2_CAPABILITIES.length).toBeGreaterThan(0)
-    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length)
-    expect(CF_STAGE2_CASES).toHaveLength(8)
-    for (const c of manifest.cases.filter(c => c.stage === 2)) {
-      expect(['recipe-pending', 'unsupported', 'measured']).toContain(c.status)
-      expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
-      expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
-    }
-  })
-
   it('scale marker pins cfvo and colour order exactly', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-scale-pin-'))
     dirs.push(dir)
@@ -986,6 +988,7 @@ describe('CF oracle verifier', () => {
         buildDecorationProbeScript(`${c.id}.xlsx`, c.sheet, refs),
         buildColorProbeScript(`${c.id}.xlsx`, c.sheet, refs),
         buildColorScaleCriteriaProbeScript(`${c.id}.xlsx`, c.sheet),
+        ...(c.stage === 3 ? [buildDataBarSettingsProbeScript(`${c.id}.xlsx`, c.sheet)] : []),
       ]
       for (const lines of scripts) {
         const full = ['tell application "Microsoft Excel"', ...lines, 'end tell'].join('\n')
@@ -993,7 +996,7 @@ describe('CF oracle verifier', () => {
         expect(res.status, `osacompile failed for ${c.id}: ${res.stderr}`).toBe(0)
       }
     }
-  }, 30_000)
+  }, 120_000)
 
   it('correctly validates cell coordinates within range even with hidden rows (stage2-scale-scope)', () => {
     const scopeCase = CF_CASES.find(c => c.id === 'stage2-scale-scope')!
@@ -3094,5 +3097,705 @@ describe('CF oracle verifier', () => {
       expect(res.status).toBe('unsupported')
       expect(res.code).toBe('unsupported-capability')
     }
+  })
+  // -------------------------------------------------------------------------------------------------------------------
+  // Stage 3 data bars (Task 18)
+  // -------------------------------------------------------------------------------------------------------------------
+
+  const X14_DECL = 'xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"'
+  const XM_DECL = 'xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"'
+  const GUID1 = '{3B3B0001-0000-4000-8000-000000000001}'
+
+  /** Excel's canonical paired form (cfRule-level `<x14:id>` plus an x14 companion without priority). */
+  const pairedBarXml = (
+    o: {
+      link?: boolean
+      second?: boolean
+      baseCfvo?: string
+      baseDataBarAttrs?: string
+      baseColor?: string
+      x14Attrs?: string
+      x14Cfvo?: string
+      x14Extra?: string
+    } = {},
+  ): string => {
+    const base = `<cfRule type="dataBar" priority="1"><dataBar${o.baseDataBarAttrs ?? ' minLength="10" maxLength="90"'}>${o.baseCfvo ?? '<cfvo type="min"/><cfvo type="max"/>'}${o.baseColor ?? '<color rgb="FF0000FF"/>'}</dataBar>${o.link === false ? '' : `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" ${X14_DECL}><x14:id>${GUID1}</x14:id></ext></extLst>`}</cfRule>`
+    const second = o.second
+      ? `<cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" ${X14_DECL}><x14:id>${GUID1}</x14:id></ext></extLst></cfRule>`
+      : ''
+    const companion = `<x14:cfRule type="dataBar" id="${GUID1}"><x14:dataBar${o.x14Attrs ?? ' minLength="0" maxLength="100" gradient="0"'}>${o.x14Cfvo ?? '<x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="autoMax"/>'}${o.x14Extra ?? ''}<x14:negativeFillColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule>`
+    return (
+      `<conditionalFormatting sqref="B2:B3">${base}${second}</conditionalFormatting>` +
+      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}>${companion}<xm:sqref>B2:B3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+    )
+  }
+
+  const barPart = 'xl/worksheets/sheet1.xml'
+  const pairedBaseMarker: CfPartMarker = {
+    part: barPart,
+    extension: 'legacy',
+    capabilityId: 'bar:pairing-paired',
+    sqref: 'B2:B3',
+    ruleType: 'dataBar',
+    priority: 1,
+    formulas: [],
+    bar: { pairing: 'paired', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { minLength: '10', maxLength: '90' }, colors: { fill: 'FF0000FF' } },
+  }
+  const pairedCompanionMarker: CfPartMarker = {
+    part: barPart,
+    extension: 'x14',
+    capabilityId: 'bar:settings-paired-precedence',
+    sqref: 'B2:B3',
+    ruleType: 'dataBar',
+    formulas: [],
+    bar: {
+      pairing: 'paired',
+      cfvo: [{ type: 'num', f: '20' }, { type: 'autoMax' }],
+      attrs: { minLength: '0', maxLength: '100', gradient: '0', negativeBarColorSameAsPositive: '0' },
+      colors: { negativeFill: 'FFFF0000', axis: 'FF000000' },
+    },
+  }
+  const TOL = { meanAbs: 0.015, rowMax: 0.08, strong: 12 }
+
+  it('stage 3 cases join the manifest and stage 1-2 cases are unchanged', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    expect(manifest.cases.map(c => c.id)).toEqual(CF_CASES.map(c => c.id))
+    // Stage 1 and 2 catalogs and capability ids are exactly what Stage 2 shipped.
+    expect(CF_STAGE1_CAPABILITIES).toHaveLength(115)
+    expect(CF_STAGE2_CAPABILITIES).toHaveLength(46)
+    expect(CF_STAGE1_CASES).toHaveLength(13)
+    expect(CF_STAGE2_CASES).toHaveLength(8)
+    expect(CF_CAPABILITIES.length).toBe(CF_STAGE1_CAPABILITIES.length + CF_STAGE2_CAPABILITIES.length + CF_STAGE3_CAPABILITIES.length)
+    expect(new Set(CF_CAPABILITIES.map(c => c.capabilityId)).size).toBe(CF_CAPABILITIES.length)
+    expect(CF_CASES.slice(0, 21).map(c => c.stage)).toEqual([...Array(13).fill(1), ...Array(8).fill(2)])
+
+    expect(CF_STAGE3_CASES.map(c => c.id)).toEqual([
+      'stage3-bar-settings-probe',
+      'stage3-bar-lengths',
+      'stage3-bar-degenerate',
+      'stage3-bar-axis-negative',
+      'stage3-bar-rendering',
+      'stage3-bar-geometry',
+      'stage3-bar-showvalue',
+      'stage3-bar-participation',
+      'stage3-bar-scope',
+      'stage3-bar-composition',
+      'stage3-bar-pairing',
+      'stage3-bar-unresolved-shapes',
+    ])
+    for (const c of manifest.cases.filter(x => x.stage === 3)) {
+      // Preparation only: nothing was captured, so nothing may claim evidence.
+      expect(['recipe-pending', 'unsupported']).toContain(c.status)
+      expect(c.expected.provenance).toBe('seed-hypothesis')
+      expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(c.resavedByExcel).not.toBe(true)
+      for (const cap of c.captures) expect(cap.pngSha256).toBeUndefined()
+      for (const cell of c.expected.cells) {
+        if (cell.barEvidence) expect(cell.barEvidence).toEqual({ settings: 'unverified', geometry: 'unverified' })
+      }
+      const res = verifyCfCase(c, { rootDir: REPO_ROOT })
+      expect(res.kind).toBe('refusal')
+      if (res.kind === 'refusal') {
+        expect(res.structuralValid).toBe(true)
+        expect(['semantic-evidence-pending', 'unsupported-capability']).toContain(res.code)
+      }
+    }
+    // Every Stage 3 capability is a bar:* capability with a ruling citation, and production holds none of them.
+    for (const entry of CF_STAGE3_CAPABILITIES) {
+      expect(entry.capabilityId.startsWith('bar:')).toBe(true)
+      expect(entry.failClosedDisposition).toMatch(/S3-[A-S]|Always unsupported/)
+      expect(hasEvidence(entry.capabilityId)).toBe(false)
+      expect(VERIFIED_CAPABILITIES.has(entry.capabilityId)).toBe(false)
+    }
+    expect(CF_STAGE3_CAPABILITIES.filter(e => barCapabilityKind(e.capabilityId) === 'settings').map(e => e.capabilityId).sort()).toEqual([
+      'bar:pairing-base-only',
+      'bar:pairing-paired',
+      'bar:pairing-standalone',
+      'bar:settings-paired-precedence',
+      'bar:settings-precondition-probe',
+      'bar:settings-schema-defaults',
+      'bar:showvalue-copy-text',
+    ])
+    for (const id of Object.keys(CF_STAGE3_NONDISCRIMINATING)) {
+      expect(CF_STAGE3_CAPABILITIES.some(e => e.capabilityId === id)).toBe(true)
+    }
+  })
+
+  it('bar marker pins cfvo, attributes, colours and pairing exactly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-pin-'))
+    dirs.push(dir)
+    const makeBarCase = (filename: string, hash: string, markers: CfPartMarker[] = [pairedBaseMarker, pairedCompanionMarker]): CfOracleCase => ({
+      id: 'bar-pin-case',
+      stage: 3,
+      question: 'Pins exact bar cfvo, attributes, colours and pairing',
+      input: filename,
+      saved: filename,
+      sheet: 'Sheet1',
+      range: 'A1:B3',
+      requiredAppearances: ['screen'],
+      markers,
+      expected: {
+        inputSha256: hash,
+        savedSha256: hash,
+        provenance: 'seed-hypothesis',
+        positiveRefs: ['B2'],
+        negativeRefs: ['B3'],
+        cells: [
+          { ref: 'B2', controlRef: 'A2', matched: true, barApplied: true, fillSource: 'unverified' },
+          { ref: 'B3', controlRef: 'A3', matched: false, barApplied: false, fillSource: 'unverified' },
+        ],
+      },
+      captures: [],
+      status: 'recipe-pending',
+      reason: 'Testing bar marker pinning',
+      tolerance: TOL,
+    })
+    let n = 0
+    const run = async (xml: string, markers?: CfPartMarker[]) => {
+      const bytes = await makeSyntheticXlsx({ sheetRuleXml: xml, dxfCount: 0 })
+      const name = `bar-${n++}.xlsx`
+      writeFileSync(join(dir, name), bytes)
+      return verifyCfCase(makeBarCase(name, sha256(bytes), markers), { rootDir: dir })
+    }
+
+    // 0. Canonical paired archive is structurally valid.
+    expect(await run(pairedBarXml())).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
+
+    // The six mutations the verifier must refuse.
+    const mutations: Array<[string, string]> = [
+      ['reordered cfvo', pairedBarXml({ baseCfvo: '<cfvo type="max"/><cfvo type="min"/>' })],
+      ['minLength 0 -> 10', pairedBarXml({ x14Attrs: ' minLength="10" maxLength="100" gradient="0"' })],
+      ['dropped <x14:id>', pairedBarXml({ link: false })],
+      ['<x14:fillColor> added to a paired companion', pairedBarXml({ x14Extra: '<x14:fillColor rgb="FF0000FF"/>' })],
+      ['xm:f "20" -> "2"', pairedBarXml({ x14Cfvo: '<x14:cfvo type="num"><xm:f>2</xm:f></x14:cfvo><x14:cfvo type="autoMax"/>' })],
+      ['negativeBarColorSameAsPositive flipped', pairedBarXml({ x14Attrs: ' minLength="0" maxLength="100" gradient="0" negativeBarColorSameAsPositive="1"' })],
+      ['colour changed', pairedBarXml({ baseColor: '<color rgb="FF00FF00"/>' })],
+      ['duplicate GUID link', pairedBarXml({ second: true })],
+    ]
+    for (const [label, xml] of mutations) {
+      const res = await run(xml)
+      expect(res, label).toMatchObject({ kind: 'refusal', code: 'stripped-rule', structuralValid: false })
+    }
+
+    // Semantics, not raw strings: attribute order, hex case and explicit schema defaults all verify.
+    const semantic = pairedBarXml({
+      baseDataBarAttrs: ' maxLength="90" showValue="1" minLength="10"',
+      baseColor: '<color rgb="ff0000ff"/>',
+      x14Attrs: ' gradient="0" maxLength="100" negativeBarColorSameAsPositive="0" minLength="0" axisPosition="automatic"',
+    })
+    expect(await run(semantic)).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
+    // An unpinned non-default attribute is a mismatch, not a silent pass.
+    expect(await run(pairedBarXml({ baseDataBarAttrs: ' minLength="10" maxLength="90" showValue="0"' }))).toMatchObject({ code: 'stripped-rule', structuralValid: false })
+
+    // Standalone x14 needs <x14:fillColor> and @priority; base-only must not be linked.
+    const standaloneMarker: CfPartMarker = {
+      part: barPart, extension: 'x14', capabilityId: 'bar:pairing-standalone', sqref: 'B2:B3', ruleType: 'dataBar', priority: 2, formulas: [],
+      bar: { pairing: 'standalone', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { gradient: '0' }, colors: { fill: 'FF0000FF' } },
+    }
+    const standaloneXml = (fill: string, priority = ' priority="2"') =>
+      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}><x14:cfRule type="dataBar"${priority} id="${GUID1}"><x14:dataBar gradient="0"><x14:cfvo type="min"/><x14:cfvo type="max"/>${fill}</x14:dataBar></x14:cfRule><xm:sqref>B2:B3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+    expect(await run(standaloneXml('<x14:fillColor rgb="FF0000FF"/>'), [standaloneMarker])).toMatchObject({ code: 'semantic-evidence-pending', structuralValid: true })
+    expect(await run(standaloneXml(''), [standaloneMarker])).toMatchObject({ code: 'stripped-rule', structuralValid: false })
+    expect(await run(standaloneXml('<x14:fillColor rgb="FF0000FF"/>', ''), [standaloneMarker])).toMatchObject({ code: 'stripped-rule', structuralValid: false })
+    const baseOnlyMarker: CfPartMarker = {
+      part: barPart, extension: 'legacy', capabilityId: 'bar:pairing-base-only', sqref: 'B2:B3', ruleType: 'dataBar', priority: 1, formulas: [],
+      bar: { pairing: 'base-only', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: {}, colors: { fill: 'FF0000FF' } },
+    }
+    const baseOnlyXml = '<conditionalFormatting sqref="B2:B3"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
+    expect(await run(baseOnlyXml, [baseOnlyMarker])).toMatchObject({ code: 'semantic-evidence-pending', structuralValid: true })
+    expect(await run(pairedBarXml({ baseDataBarAttrs: '' }), [baseOnlyMarker])).toMatchObject({ code: 'stripped-rule', structuralValid: false })
+  })
+
+  /** A 240x90 capture of `A1:B3` (col A 40 px, col B 200 px, rows 30 px): painted by `paint` over white. */
+  const barGeom: WorksheetRangeGeometry = {
+    minRow: 0, maxRow: 2, minCol: 0, maxCol: 1,
+    rowHeightsPt: [30, 30, 30], colWidthChars: [6, 28], colWidthsPt: [40, 200],
+    expectedHeightPt: 90, expectedWidthPt: 240,
+  }
+  const paintBarPng = (paint: (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>) => void): Uint8Array => {
+    const canvas = createCanvas(240, 90)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 240, 90)
+    paint(ctx)
+    return new Uint8Array(canvas.toBuffer('image/png'))
+  }
+  const measureOpts = { controlOf: () => 'B3', tolerancePx: 1, caseId: 'bar-measure-test' }
+
+  it('bar edges are located by column scan within +-1 px', () => {
+    // Solid bar at px 40..119 in B1 (cell left edge is 40).
+    const solid = decodePngSync(paintBarPng(ctx => { ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 80, 30) }))!
+    const solidRes = measureBarGeometry(solid, barGeom, ['B1'], measureOpts)
+    expect(solidRes).toBeInstanceOf(Map)
+    const bar = (solidRes as ReadonlyMap<string, CfObservedBar>).get('B1')!
+    expect(bar.cellLeftPx).toBe(40)
+    expect(bar.cellWidthPx).toBe(200)
+    expect(bar.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
+
+    // A 1 px black axis at px 80, over the bar.
+    const axis = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 80, 30)
+      ctx.fillStyle = '#000000'; ctx.fillRect(80, 0, 1, 30)
+    }))!
+    const axisRes = measureBarGeometry(axis, barGeom, ['B1'], { ...measureOpts, axisArgb: 'FF000000' }) as ReadonlyMap<string, CfObservedBar>
+    expect(axisRes.get('B1')).toMatchObject({ axisPx: 80, bar: { leftPx: 40, rightPx: 119 } })
+
+    // Scanlines (y = 7, 15, 22) that disagree by 2 px refuse.
+    const unstable = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#0000ff'
+      ctx.fillRect(40, 0, 80, 10)
+      ctx.fillRect(42, 10, 78, 10)
+      ctx.fillRect(40, 20, 80, 10)
+    }))!
+    expect(measureBarGeometry(unstable, barGeom, ['B1'], measureOpts)).toMatchObject({ kind: 'refusal', code: 'bar-edge-unstable' })
+    // 1 px disagreement is inside the tolerance.
+    const within = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#0000ff'
+      ctx.fillRect(40, 0, 80, 10)
+      ctx.fillRect(41, 10, 79, 10)
+      ctx.fillRect(40, 20, 80, 10)
+    }))!
+    expect(measureBarGeometry(within, barGeom, ['B1'], measureOpts)).toBeInstanceOf(Map)
+
+    // A fade with no strong delta (< 64 per channel) is no bar.
+    const fade = decodePngSync(paintBarPng(ctx => { ctx.fillStyle = '#e0e0ff'; ctx.fillRect(40, 0, 80, 30) }))!
+    const fadeRes = measureBarGeometry(fade, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>
+    expect(fadeRes.get('B1')!.bar).toBeNull()
+
+    // A 2 px inset: leftPx is cellLeftPx + 2.
+    const inset = decodePngSync(paintBarPng(ctx => { ctx.fillStyle = '#0000ff'; ctx.fillRect(42, 0, 76, 30) }))!
+    const insetBar = (measureBarGeometry(inset, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>).get('B1')!
+    expect(insetBar.bar!.leftPx).toBe(insetBar.cellLeftPx + 2)
+    expect(insetBar.bar!.rightPx).toBe(117)
+    // An unknown cell refuses instead of inventing a measurement.
+    expect(measureBarGeometry(solid, barGeom, ['Z9'], measureOpts)).toMatchObject({ kind: 'refusal' })
+  })
+
+  it('non-discriminating bar variant keeps its gate closed (Lesson 3)', () => {
+    const measured = { B2: { leftPx: 84, rightPx: 143 }, B4: { leftPx: 84, rightPx: 190 } }
+    // Two hypotheses 2 px apart at every designated cell cannot be told apart.
+    const close = {
+      B2: [{ id: 'a', leftPx: 84, rightPx: 143 }, { id: 'b', leftPx: 84, rightPx: 145 }],
+      B4: [{ id: 'a', leftPx: 84, rightPx: 190 }, { id: 'b', leftPx: 84, rightPx: 192 }],
+    }
+    expect(discriminateBar(close, measured, 1)).toMatchObject({ status: 'non-discriminating' })
+    // 3 px apart with exactly one hypothesis matching discriminates.
+    const apart = {
+      B2: [{ id: 'a', leftPx: 84, rightPx: 143 }, { id: 'b', leftPx: 84, rightPx: 146 }],
+      B4: [{ id: 'a', leftPx: 84, rightPx: 190 }, { id: 'b', leftPx: 84, rightPx: 193 }],
+    }
+    expect(discriminateBar(apart, measured, 1)).toEqual({ status: 'discriminating', matched: 'a' })
+    // Separated enough but neither hypothesis matches: bar-hypothesis-none.
+    expect(discriminateBar(apart, { B2: { leftPx: 84, rightPx: 160 }, B4: { leftPx: 84, rightPx: 160 } }, 1)).toMatchObject({ status: 'none' })
+    // A single hypothesis cannot discriminate anything.
+    expect(discriminateBar({ B2: [{ id: 'a', leftPx: 84, rightPx: 143 }] }, { B2: measured.B2 }, 1)).toMatchObject({ status: 'non-discriminating' })
+    // The static registry candidate is withheld and production holds no evidence for it.
+    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-automax']).toMatch(/autoMax/)
+    expect(hasEvidence('bar:bounds-automax')).toBe(false)
+    expect(VERIFIED_CAPABILITIES.has('bar:bounds-automax')).toBe(false)
+  })
+
+  describe('measured bar cases', () => {
+    const geometryCap = 'bar:lengths-explicit-0-100'
+    const settingsCap = 'bar:pairing-base-only'
+    const baseOnlyBarXml = '<conditionalFormatting sqref="B2"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
+    const barMarkerFor = (capabilityId: string): CfPartMarker => ({
+      part: barPart, extension: 'legacy', capabilityId, sqref: 'B2', ruleType: 'dataBar', priority: 1, formulas: [],
+      bar: { pairing: 'base-only', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: {}, colors: { fill: 'FF0000FF' } },
+    })
+    const BAR_LEFT = 84
+    const BAR_RIGHT = 143
+    const makeBarPng = (): Uint8Array => {
+      const canvas = createCanvas(168, 54)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, 168, 54)
+      ctx.fillStyle = '#0000ff'
+      ctx.fillRect(BAR_LEFT, 18, BAR_RIGHT - BAR_LEFT + 1, 18)
+      return new Uint8Array(canvas.toBuffer('image/png'))
+    }
+
+    type Overrides = {
+      capabilityId?: string
+      evidence?: CfCellExpectation['barEvidence']
+      hypotheses?: Record<string, Array<{ id: string; leftPx: number; rightPx: number }>> | null
+      readback?: unknown
+      lockAfter?: string
+      barApplied?: boolean
+      calibration?: CfOracleCase['barCalibration']
+    }
+    const build = async (dir: string, o: Overrides): Promise<{ c: CfOracleCase; savedHash: string }> => {
+      const xlsx = await makeSyntheticXlsx({ sheetRuleXml: baseOnlyBarXml, dxfCount: 0 })
+      const hash = sha256(xlsx)
+      const png = makeBarPng()
+      const pngHash = sha256(png)
+      writeFileSync(join(dir, 'bar.xlsx'), xlsx)
+      writeFileSync(join(dir, 'bar.png'), png)
+      const cap = o.capabilityId ?? geometryCap
+      const sidecar = {
+        excelVersion: '16.114',
+        route: 'copy-picture',
+        appearance: 'screen',
+        scale: 1,
+        pxPerPt: 1,
+        zoom: 100,
+        dpr: 1,
+        width: 168,
+        height: 54,
+        colWidthsPt: [84, 84],
+        rowHeightsPt: [18, 18, 18],
+        geometrySource: 'excel-measured',
+        resavedByExcel: true,
+        resaveSavedSha256: hash,
+        sheet: 'Sheet1',
+        range: 'A1:B3',
+        savedSha256: hash,
+        pngSha256: pngHash,
+        capturedAt: '2026-11-11T08:00:00Z',
+        lockBefore: 'unlocked',
+        lockAfter: o.lockAfter ?? 'unlocked',
+        observedBars: [{ ref: 'B2', cellLeftPx: 84, cellWidthPx: 84, bar: { leftPx: BAR_LEFT, rightPx: BAR_RIGHT, topPx: 18, bottomPx: 35 } }],
+        ...(o.hypotheses === null
+          ? {}
+          : { barHypotheses: { [cap]: o.hypotheses ?? { B2: [{ id: 'h-a', leftPx: BAR_LEFT, rightPx: BAR_RIGHT }, { id: 'h-b', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 6 }] } } }),
+        ...(o.readback !== undefined ? { barSettingsReadback: o.readback } : {}),
+      }
+      writeFileSync(join(dir, 'bar.json'), JSON.stringify(sidecar))
+      const c: CfOracleCase = {
+        id: 'bar-measured-case',
+        stage: 3,
+        question: 'Bar evidence kinds',
+        input: 'bar.xlsx',
+        saved: 'bar.xlsx',
+        sheet: 'Sheet1',
+        range: 'A1:B3',
+        requiredAppearances: ['screen'],
+        markers: [barMarkerFor(cap)],
+        ...(o.calibration ? { barCalibration: o.calibration } : {}),
+        expected: {
+          inputSha256: hash,
+          savedSha256: hash,
+          provenance: 'excel-observed',
+          positiveRefs: ['B2'],
+          negativeRefs: ['B3'],
+          cells: [
+            { ref: 'B2', controlRef: 'B3', matched: true, barApplied: o.barApplied ?? true, fillSource: 'unverified', barEvidence: o.evidence ?? { settings: 'unverified', geometry: 'pixel-measured' } },
+            { ref: 'B3', controlRef: 'B2', matched: false, barApplied: false, fillSource: 'unverified' },
+          ],
+        },
+        resavedByExcel: true,
+        resaveReceipt: { openedRepairFree: true, excelVersion: '16.114', inputSha256: hash, savedSha256: hash, resavedAt: '2026-11-11T08:00:00Z' },
+        captures: [{ appearance: 'screen', pngPath: 'bar.png', sidecarPath: 'bar.json', pngSha256: pngHash }],
+        status: 'measured',
+        tolerance: TOL,
+      }
+      return { c, savedHash: hash }
+    }
+
+    it('bar capability requires its evidence kind', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-kind-'))
+      dirs.push(dir)
+
+      // Baseline: a discriminating pixel measurement verifies the geometry capability.
+      const ok = await build(dir, {})
+      const okRes = verifyCfCase(ok.c, { rootDir: dir })
+      expect(okRes).toMatchObject({ kind: 'verified' })
+      expect(okRes.kind === 'verified' ? okRes.verifiedCapabilities : []).toEqual([geometryCap])
+
+      // A geometry capability backed only by the object model refuses.
+      const geoOnlyOm = await build(dir, { evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [{ priority: 1 }] })
+      expect(verifyCfCase(geoOnlyOm.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+
+      // A settings capability backed only by pixels refuses.
+      const settingsOnlyPx = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'unverified', geometry: 'pixel-measured' } })
+      expect(verifyCfCase(settingsOnlyPx.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+
+      // pixel-measured relabelled as excel-object-model: no settings readback exists in the sidecar.
+      const relabelled = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'excel-object-model', geometry: 'unverified' } })
+      expect(verifyCfCase(relabelled.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
+
+      // A real readback row backs the settings claim.
+      const readbackRow = { priority: 1, axis: 'databar axis automatic', fillType: 'databar fill gradient', borderType: 'databar border none', minPointPercent: '10', maxPointPercent: '90', direction: '-4152', showValue: 'true', negativeColorType: 'databar color type color' }
+      const settingsOk = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [readbackRow] })
+      const settingsOkRes = verifyCfCase(settingsOk.c, { rootDir: dir })
+      expect(settingsOkRes).toMatchObject({ kind: 'verified' })
+      expect(settingsOkRes.kind === 'verified' ? settingsOkRes.verifiedCapabilities : []).toEqual([settingsCap])
+
+      // A non-discriminating capability marked pixel-measured refuses (hypotheses 2 px apart cannot discriminate).
+      const closeHyps = { B2: [{ id: 'h-a', leftPx: BAR_LEFT, rightPx: BAR_RIGHT }, { id: 'h-b', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 2 }] }
+      const markedVerified = await build(dir, { hypotheses: closeHyps })
+      expect(verifyCfCase(markedVerified.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+      // Labelled non-discriminating and consistent: the case verifies but the capability is withheld.
+      const honest = await build(dir, { hypotheses: closeHyps, evidence: { settings: 'unverified', geometry: 'non-discriminating' } })
+      const honestRes = verifyCfCase(honest.c, { rootDir: dir })
+      expect(honestRes).toMatchObject({ kind: 'verified', verifiedCapabilities: [], nonDiscriminatingCapabilities: [geometryCap] })
+      // Labelled non-discriminating while the evidence discriminates is also a lie.
+      const underclaim = await build(dir, { evidence: { settings: 'unverified', geometry: 'non-discriminating' } })
+      expect(verifyCfCase(underclaim.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+
+      // No hypothesis matches the measurement.
+      const none = await build(dir, { hypotheses: { B2: [{ id: 'h-a', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 10 }, { id: 'h-b', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 20 }] } })
+      expect(verifyCfCase(none.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-hypothesis-none' })
+
+      // Without hypotheses a pixel-measured claim is unbacked and refuses; an unclaimed capability is just unverified.
+      const noHypsClaimed = await build(dir, { hypotheses: null })
+      expect(verifyCfCase(noHypsClaimed.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+      const noHyps = await build(dir, { hypotheses: null, evidence: { settings: 'unverified', geometry: 'unverified' } })
+      expect(verifyCfCase(noHyps.c, { rootDir: dir })).toMatchObject({ kind: 'verified', verifiedCapabilities: [] })
+
+      // The recorded barApplied must agree with the measured bar.
+      const wrongApplied = await build(dir, { barApplied: false })
+      expect(verifyCfCase(wrongApplied.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'cell-expectation-mismatch' })
+    })
+
+    it('settings readback equal to the default refuses, and a failed calibration refuses', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-probe-'))
+      dirs.push(dir)
+      const control = { priority: 2, axis: 'databar axis automatic', fillType: 'databar fill gradient', borderType: 'databar border none', minPointPercent: '10', maxPointPercent: '90', direction: '-4152', showValue: 'true', negativeColorType: 'databar color type color' }
+      const probe = { priority: 1, axis: 'databar axis midpoint', fillType: 'databar fill solid', borderType: 'databar border solid', minPointPercent: '0', maxPointPercent: '100', direction: '-4152', showValue: 'false', negativeColorType: 'databar color type color' }
+      const probeCap = 'bar:settings-precondition-probe'
+      const evidence = { settings: 'excel-object-model', geometry: 'unverified' } as const
+      // direction equal to the control's integer: the probe did not observe the setting.
+      const sameDirection = await build(dir, { capabilityId: probeCap, evidence, readback: [probe, control] })
+      expect(verifyCfCase(sameDirection.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
+      // missing value in the readback.
+      const missing = await build(dir, { capabilityId: probeCap, evidence, readback: [{ ...probe, direction: '4152', axis: 'missing value' }, control] })
+      expect(verifyCfCase(missing.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
+      // an unauthored (default) probe equals the control entirely.
+      const allDefault = await build(dir, { capabilityId: probeCap, evidence, readback: [{ ...control, priority: 1 }, control] })
+      expect(verifyCfCase(allDefault.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
+      // a probe that differs everywhere it must verifies.
+      const good = await build(dir, { capabilityId: probeCap, evidence, readback: [{ ...probe, direction: '-5001' }, control] })
+      expect(verifyCfCase(good.c, { rootDir: dir })).toMatchObject({ kind: 'verified', verifiedCapabilities: [probeCap] })
+
+      // Calibration: the PNG has no gridlines, so gridline-to-gridline widths cannot be measured.
+      const calibCap = 'bar:pixel-calibration'
+      const failed = await build(dir, { capabilityId: calibCap, hypotheses: null, calibration: { columns: ['A', 'B'], scanRow: 3, solidRef: 'B2', solidArgb: 'FF00FF00' } })
+      expect(verifyCfCase(failed.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-calibration-failed' })
+    })
+
+    it('a lock observed around a capture refuses and the verifier refuses a locked sidecar', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-lock-'))
+      dirs.push(dir)
+      const locked = await build(dir, { lockAfter: 'locked' })
+      expect(verifyCfCase(locked.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'display-locked' })
+    })
+
+    it('geometry capabilities need the calibration and settings capabilities need the probe (cross-case gate)', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-cross-'))
+      dirs.push(dir)
+      const geo = await build(dir, {})
+      const manifest: CfManifest = { version: 1, excelBuild: '16.114', locale: 'zh-TW', dateSystem: '1900', hostTimeZone: 'Asia/Taipei', generatedAt: '2026-11-11T00:00:00Z', cases: [geo.c] }
+      // Verified in isolation, but bar:pixel-calibration is not verified anywhere: the gate stays closed.
+      expect(isCapabilityVerified(geometryCap, manifest, { rootDir: dir })).toBe(false)
+      expect(isCapabilityVerified('bar:pixel-calibration', manifest, { rootDir: dir })).toBe(false)
+    })
+  })
+
+  it('capture refuses on a locked or unknown display', () => {
+    const plist = (body: string): string => `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><array><dict><key>IOKitBuildVersion</key><string>x</string>${body}</dict></array></plist>`
+    expect(parseScreenLockState(plist('<key>CGSSessionScreenIsLocked</key><true/>'))).toBe('locked')
+    expect(parseScreenLockState(plist('<key>CGSSessionScreenIsLocked</key>\n\t<true/>'))).toBe('locked')
+    expect(parseScreenLockState(plist('<key>CGSSessionScreenIsLocked</key><false/>'))).toBe('unlocked')
+    expect(parseScreenLockState(plist(''))).toBe('unlocked')
+    // Malformed input is never "unlocked".
+    expect(parseScreenLockState('')).toBe('locked')
+    expect(parseScreenLockState('not a plist')).toBe('locked')
+    expect(parseScreenLockState(plist('<key>CGSSessionScreenIsLocked</key><integer>1</integer>'))).toBe('locked')
+    expect(parseScreenLockState(plist('<key>CGSSessionScreenIsLocked</key>'))).toBe('locked')
+
+    // An ioreg failure is a locked display, not an unlocked one.
+    expect(isDisplayLocked(() => { throw new Error('ioreg: not found') })).toBe(true)
+    expect(isDisplayLocked(() => plist('<key>CGSSessionScreenIsLocked</key><false/>'))).toBe(false)
+    expect(isDisplayLocked(() => plist('<key>CGSSessionScreenIsLocked</key><true/>'))).toBe(true)
+    expect(isDisplayLocked(() => '')).toBe(true)
+
+    // The lock is checked immediately before and after every capture.
+    const events: string[] = []
+    const states = ['unlocked', 'unlocked']
+    const ok = captureUnderLockGuard({ isLocked: () => states.shift() === 'locked', run: () => { events.push('run') }, discard: () => { events.push('discard') } })
+    expect(ok).toEqual({ kind: 'captured' })
+    expect(events).toEqual(['run'])
+
+    const beforeEvents: string[] = []
+    const lockedBefore = captureUnderLockGuard({ isLocked: () => true, run: () => { beforeEvents.push('run') }, discard: () => { beforeEvents.push('discard') } })
+    expect(lockedBefore).toMatchObject({ kind: 'refused', code: 'display-locked', phase: 'before' })
+    expect(beforeEvents).toEqual([])
+
+    const afterEvents: string[] = []
+    const afterStates = [false, true]
+    const lockedAfter = captureUnderLockGuard({ isLocked: () => afterStates.shift() === true, run: () => { afterEvents.push('run') }, discard: () => { afterEvents.push('discard') } })
+    expect(lockedAfter).toMatchObject({ kind: 'refused', code: 'display-locked', phase: 'after' })
+    expect(afterEvents).toEqual(['run', 'discard'])
+
+    // A capture that throws is discarded too.
+    const thrown: string[] = []
+    expect(() => captureUnderLockGuard({ isLocked: () => false, run: () => { throw new Error('boom') }, discard: () => { thrown.push('discard') } })).toThrow('boom')
+    expect(thrown).toEqual(['discard'])
+  })
+
+  it('probes data bar settings with every property read guarded by try', () => {
+    const script = buildDataBarSettingsProbeScript('wb.xlsx', 'Sheet1').join('\n')
+    expect(script).toContain('set wb to workbook "wb.xlsx"')
+    for (const prop of [
+      'databar axis position of fc',
+      'databar fill type of fc',
+      'databar border type of databar border of fc',
+      'min point percent of fc',
+      'max point percent of fc',
+      'databar direction of fc',
+      'format condition show value of fc',
+      'negative bar color type of negative bar format of fc',
+      'format condition priority of fc',
+    ]) {
+      expect(script, prop).toMatch(new RegExp(`try[\\s\\S]*?${prop}[\\s\\S]*?end try`))
+    }
+    expect(script).toMatch(/set axisVal to "missing value"/)
+    expect(script).toContain('|||')
+    expect(script).toContain(':::')
+  })
+
+  it('parses the settings readback into one row per format condition', () => {
+    const out = ['1', 'databar axis midpoint', 'databar fill solid', 'databar border solid', '0', '100', '-4152', 'false', 'databar color type color'].join(':::') + '|||' +
+      ['2', 'databar axis automatic', 'databar fill gradient', 'databar border none', '10', '90', '-5002', 'true', 'databar color type color'].join(':::')
+    const rows = parseDataBarSettingsReadback(out)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ priority: 1, axis: 'databar axis midpoint', fillType: 'databar fill solid', borderType: 'databar border solid', minPointPercent: '0', maxPointPercent: '100', direction: '-4152', showValue: 'false', negativeColorType: 'databar color type color' })
+    expect(parseDataBarSettingsReadback('')).toEqual([])
+  })
+
+  it('audit --stage 3 --write is idempotent (Lesson 4)', () => {
+    const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const first = renderVerifiedCapabilitiesSource(manifest, 3, REPO_ROOT)
+    const second = renderVerifiedCapabilitiesSource(manifest, 3, REPO_ROOT)
+    expect(second).toBe(first)
+    // Stage 1/2 sets are exactly what is committed; Stage 3 holds nothing without captures.
+    const listed = (name: string): string[] => {
+      const m = new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(first)
+      expect(m, name).not.toBeNull()
+      return [...m![1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!)
+    }
+    expect(listed('VERIFIED_STAGE1_CAPABILITIES')).toEqual([...VERIFIED_STAGE1_CAPABILITIES].sort())
+    expect(listed('VERIFIED_STAGE2_CAPABILITIES')).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
+    expect(listed('VERIFIED_STAGE3_CAPABILITIES')).toEqual([])
+    expect(listed('VERIFIED_CAPABILITIES')).toEqual([...VERIFIED_CAPABILITIES].sort())
+    // Stage 2's own rendering is unchanged by the Stage 3 work (no VERIFIED_STAGE3 export).
+    expect(renderVerifiedCapabilitiesSource(manifest, 2, REPO_ROOT)).not.toContain('VERIFIED_STAGE3_CAPABILITIES')
+
+    const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+    expect(report.ok).toBe(true)
+    expect(report.stageComplete).toBe(false)
+    expect(report.summary.cases).toBe(12)
+    expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
+    expect(report.blockedCapabilities.length).toBeGreaterThan(0)
+    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-'))).toBe(true)
+  })
+  it('stage3ObservedBars reads the recorded px and ignores malformed entries', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-observed-'))
+    dirs.push(dir)
+    const mk = (stage: 2 | 3): CfOracleCase => ({
+      id: 'observed-bars-case', stage, question: 'q', input: 'x.xlsx', saved: 'x.xlsx', sheet: 'Sheet1', range: 'A1:B3', markers: [],
+      expected: { inputSha256: '', savedSha256: '', provenance: 'seed-hypothesis', positiveRefs: [], negativeRefs: [], cells: [] },
+      captures: [{ appearance: 'screen', pngPath: 'x.png', sidecarPath: 'x.json' }], status: 'recipe-pending', tolerance: TOL,
+    })
+    writeFileSync(join(dir, 'x.json'), JSON.stringify({
+      observedBars: [
+        { ref: 'b2', cellLeftPx: 84, cellWidthPx: 84, bar: { leftPx: 84, rightPx: 143, topPx: 18, bottomPx: 35 }, axisPx: 90 },
+        { ref: 'B3', cellLeftPx: 84, cellWidthPx: 84, bar: null },
+        { ref: 'B4', cellLeftPx: 84, cellWidthPx: 84, bar: { leftPx: 'x' } },
+        { cellLeftPx: 1 },
+      ],
+    }))
+    const observed = stage3ObservedBars(mk(3), dir)!
+    expect([...observed.keys()].sort()).toEqual(['B2', 'B3'])
+    expect(observed.get('B2')).toMatchObject({ axisPx: 90, bar: { leftPx: 84, rightPx: 143 } })
+    expect(observed.get('B3')!.bar).toBeNull()
+    expect(stage3ObservedBars(mk(2), dir)).toBeUndefined()
+    expect(stage3ObservedBars({ ...mk(3), captures: [] }, dir)).toBeUndefined()
+    writeFileSync(join(dir, 'x.json'), '{not json')
+    expect(stage3ObservedBars(mk(3), dir)).toBeUndefined()
+  })
+  it('the capture pipeline (measure, hypotheses, labels) feeds a verifier that verifies exactly what it discriminates', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-pipeline-'))
+    dirs.push(dir)
+    const tpl = CF_STAGE3_CASES.find(x => x.id === 'stage3-bar-lengths')!
+    const bytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, tpl.saved)))
+    writeFileSync(join(dir, 'lengths.xlsx'), bytes)
+    const hash = sha256(bytes)
+    const parts = readZipPartsSync(bytes)!
+    const geom = computeWorksheetRangeGeometry(parts, tpl.range)!
+    const values = readNumericCellValues(parts)
+    expect(values.get('C4')).toBe(50)
+
+    // Paint a bar per designated cell of the explicit 0/100 column exactly as a 0..100 model predicts (min/max bounds,
+    // x14 minLength 0 / maxLength 100): the "excel" PNG is synthetic, the pipeline is real.
+    const canvas = createCanvas(geom.expectedWidthPt, geom.expectedHeightPt)
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    const colBefore = (col: number): number => geom.colWidthsPt.slice(0, col - geom.minCol).reduce((a, b) => a + b, 0)
+    const colIdx = 2 // column C
+    const x0 = Math.round(colBefore(colIdx))
+    const x1 = Math.round(colBefore(colIdx) + geom.colWidthsPt[colIdx - geom.minCol]!)
+    const rowTop = (row0: number): number => Math.round(geom.rowHeightsPt.slice(0, row0).reduce((a, b) => a + b, 0))
+    ctx.fillStyle = '#0000ff'
+    for (let r = 1; r <= 5; r++) {
+      const v = values.get(`C${r + 1}`)!
+      const len = Math.round(((x1 - x0) * v) / 100)
+      if (len > 0) ctx.fillRect(x0, rowTop(r), len, rowTop(r + 1) - rowTop(r))
+    }
+    const png = new Uint8Array(canvas.toBuffer('image/png'))
+    const pngHash = sha256(png)
+    writeFileSync(join(dir, 'lengths.png'), png)
+    const decoded = decodePngSync(png)!
+
+    const base: CfOracleCase = { ...tpl, input: 'lengths.xlsx', saved: 'lengths.xlsx' }
+    const { extras, observed, refusal } = buildBarSidecarExtras(base, parts, decoded, geom, { lockBefore: 'unlocked', lockAfter: 'unlocked' })
+    expect(refusal).toBeUndefined()
+    expect(observed!.get('C4')!.bar).toMatchObject({ leftPx: x0 })
+    expect(observed!.get('C2')!.bar).toBeNull() // value 0 under 0/100: no bar
+    const hyps = (extras.barHypotheses as Record<string, Record<string, Array<{ id: string }>>>)['bar:lengths-explicit-0-100']!
+    expect(Object.keys(hyps).sort()).toEqual(['C3', 'C4', 'C5', 'C6'])
+    // x14 0/100 and the full 0..100 span are one hypothesis; the base rule's 10/90 is the other.
+    expect(hyps.C4!.map(h => h.id).sort()).toEqual(['base-lengths', 'x14-lengths'])
+
+    const labels = classifyBarCapture(base, observed!, extras.barHypotheses as never, undefined)
+    expect(labels.get('C4')).toEqual({ settings: 'unverified', geometry: 'pixel-measured' })
+    // Columns with no painted bars and no hypotheses stay unverified.
+    expect(labels.get('B4')?.geometry ?? 'unverified').toBe('unverified')
+
+    const cells: CfCellExpectation[] = tpl.expected.cells.map(cell => {
+      if (!cell.matched) return cell
+      const m = observed!.get(cell.ref)
+      return { ...cell, ...(m ? { barApplied: m.bar !== null } : {}), barEvidence: labels.get(cell.ref) ?? { settings: 'unverified', geometry: 'unverified' } }
+    })
+    // Only the discriminating capability's cells claim anything (the no-bar cell C2 is part of that measurement).
+    const claimed = cells.filter(cell => cell.barEvidence?.geometry === 'pixel-measured').map(cell => cell.ref).sort()
+    expect(claimed).toEqual(['C2', 'C3', 'C4', 'C5', 'C6'])
+    const measuredCase: CfOracleCase = {
+      ...base,
+      status: 'measured',
+      resavedByExcel: true,
+      resaveReceipt: { openedRepairFree: true, excelVersion: '16.114', inputSha256: hash, savedSha256: hash, resavedAt: '2026-11-11T08:00:00Z' },
+      captures: [{ appearance: 'screen', pngPath: 'lengths.png', sidecarPath: 'lengths.json', pngSha256: pngHash }],
+      expected: { ...tpl.expected, inputSha256: hash, savedSha256: hash, provenance: 'excel-observed', cells },
+    }
+    const sidecar = {
+      excelVersion: '16.114', route: 'copy-picture', appearance: 'screen', scale: 1, pxPerPt: 1,
+      width: decoded.width, height: decoded.height, colWidthsPt: geom.colWidthsPt, rowHeightsPt: geom.rowHeightsPt,
+      geometrySource: 'excel-measured', resavedByExcel: true, resaveSavedSha256: hash, sheet: tpl.sheet, range: tpl.range,
+      savedSha256: hash, pngSha256: pngHash, capturedAt: '2026-11-11T08:00:00Z', ...extras,
+    }
+    writeFileSync(join(dir, 'lengths.json'), JSON.stringify(sidecar))
+    // Only the capability whose cells discriminate is claimed, and it is the only one that verifies.
+    const res = verifyCfCase(measuredCase, { rootDir: dir })
+    expect(res).toMatchObject({ kind: 'verified', verifiedCapabilities: ['bar:lengths-explicit-0-100'], nonDiscriminatingCapabilities: [] })
+
+    // Move one painted bar by 5 px: the sidecar no longer matches the PNG hash-bound measurement.
+    const tampered = { ...sidecar, observedBars: (extras.observedBars as Array<{ ref: string; bar: { leftPx: number; rightPx: number } | null }>).map(b => (b.ref === 'C4' && b.bar ? { ...b, bar: { ...b.bar, rightPx: b.bar.rightPx + 5 } } : b)) }
+    writeFileSync(join(dir, 'lengths.json'), JSON.stringify(tampered))
+    expect(verifyCfCase(measuredCase, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
   })
 })
