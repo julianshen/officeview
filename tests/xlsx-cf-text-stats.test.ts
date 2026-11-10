@@ -8,7 +8,7 @@ import { prepareCfTextScope } from '../src/xlsx/cf/text'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import type { XlsxSheet } from '../src/xlsx/types'
 
-const budget: FormatBudget = { reserve: () => {}, release: () => {}, retain: (_t, _b, commit) => { commit() }, settle: () => {} } as unknown as FormatBudget
+const budget: FormatBudget = { reserve: () => {}, release: () => {}, retain: (_t: unknown, _b: unknown, commit: () => void) => { commit() }, settle: () => {} } as unknown as FormatBudget
 
 function countingSheet(rows: number, definition: Record<string, unknown>, writes: string[]): { sheet: XlsxSheet; reads: () => number } {
   let reads = 0
