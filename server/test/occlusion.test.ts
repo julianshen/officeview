@@ -146,6 +146,7 @@ describe('runDetails (S3a Task 2)', () => {
     const { details: d } = details((c) => { text(c, 'Hello', 20, 50); text(c, 'World', 20, 80) })
     expect(d.map((r) => r.text)).toEqual(['Hello', 'World'])
     for (const r of d) expect(r).toMatchObject({ servable: true })
+    expect(d[0]!.seq).toBeLessThan(d[1]!.seq)
     expect(d[0]!.reason).toBeUndefined()
     expect(d[0]!.ink.x).toBeGreaterThanOrEqual(19)
     expect(d[0]!.ink.y + d[0]!.ink.height).toBeLessThanOrEqual(56)

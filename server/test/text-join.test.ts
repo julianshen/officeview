@@ -11,8 +11,10 @@ function span(text: string, x: number, y: number, width: number, transform = IDE
   const px = transform.a * x + transform.c * y + transform.e, py = transform.b * x + transform.d * y + transform.f
   return { text, x: px, y: py, width: width * Math.hypot(transform.a, transform.b), fontSize: 20, placement }
 }
-const run = (text: string, x: number, y: number, width: number, height: number, servable = true): RunDetail =>
-  servable ? { text, ink: { x, y, width, height }, servable } : { text, ink: { x, y, width, height }, servable, reason: 'covered' }
+/** Runs get increasing paint-order `seq` in creation order unless one is given. */
+let nextSeq = 1
+const run = (text: string, x: number, y: number, width: number, height: number, servable = true, seq = nextSeq++): RunDetail =>
+  servable ? { seq, text, ink: { x, y, width, height }, servable } : { seq, text, ink: { x, y, width, height }, servable, reason: 'covered' }
 
 describe('joinSpans (R1)', () => {
   test('one span, one servable run at the same box ⇒ served', () => {
@@ -37,12 +39,40 @@ describe('joinSpans (R1)', () => {
   test('run text missing a character of the span ⇒ withheld', () => {
     expect(joinSpans([span('abc', 20, 50, 30)], [run('a', 20, 38, 10, 14), run('b', 30, 38, 10, 14)], 1).withheld).toBe(1)
   })
-  test('coverage counts code points as a multiset (repeated letters need repeated runs)', () => {
+  test('each run is consumed once: repeated letters need repeated runs', () => {
     expect(joinSpans([span('aa', 20, 50, 20)], [run('a', 20, 38, 10, 14)], 1).withheld).toBe(1)
     expect(joinSpans([span('aa', 20, 50, 20)], [run('a', 20, 38, 10, 14), run('a', 30, 38, 10, 14)], 1).served).toHaveLength(1)
     // astral code points are one unit each, no normalisation
     expect(joinSpans([span('😀', 20, 50, 20)], [run('😀', 20, 38, 20, 14)], 1).served).toHaveLength(1)
-    expect(joinSpans([span('é', 20, 50, 20)], [run('é', 20, 38, 20, 14)], 1).withheld).toBe(1) // NFC span vs NFD run
+    expect(joinSpans([span('\u00e9', 20, 50, 20)], [run('e\u0301', 20, 38, 20, 14)], 1).withheld).toBe(1) // NFC span vs NFD run
+  })
+  test('an anagram run does not authorise a span (STOP vs POST), in either input order', () => {
+    const stop = span('STOP', 20, 50, 50), post = span('POST', 20, 50, 50)
+    const r = run('POST', 20, 35, 50, 20)
+    expect(joinSpans([stop, post], [r], 1)).toEqual({ served: [post], withheld: 1 })
+    expect(joinSpans([post, stop], [r], 1)).toEqual({ served: [post], withheld: 1 })
+  })
+  test('two identical spans over one run: the first is served, the second withheld (budget)', () => {
+    const a = span('POST', 20, 50, 50), b = span('POST', 20, 50, 50)
+    expect(joinSpans([a, b], [run('POST', 20, 35, 50, 20)], 1)).toEqual({ served: [a], withheld: 1 })
+  })
+  test('per-glyph runs must be painted in reading order (c, b, a ⇒ withheld)', () => {
+    const r = joinSpans([span('abc', 20, 50, 30)], [run('c', 40, 38, 10, 14, true, 1), run('b', 30, 38, 10, 14, true, 2), run('a', 20, 38, 10, 14, true, 3)], 1)
+    expect(r.withheld).toBe(1)
+    // candidates are ordered by seq, not by array position
+    const s = span('abc', 20, 50, 30)
+    expect(joinSpans([s], [run('c', 40, 38, 10, 14, true, 3), run('b', 30, 38, 10, 14, true, 2), run('a', 20, 38, 10, 14, true, 1)], 1).served).toEqual([s])
+  })
+  test('the span text must be a contiguous substring of the candidates (whitespace stripped)', () => {
+    const s = span('lo wo', 40, 50, 50)
+    expect(joinSpans([s], [run('hello world', 20, 35, 110, 20)], 1).served).toEqual([s])
+    expect(joinSpans([span('hw', 40, 50, 50)], [run('hello world', 20, 35, 110, 20)], 1).withheld).toBe(1)
+  })
+  test('one long run serves its consecutive spans until its budget is spent', () => {
+    const hello = span('hello', 20, 50, 50), world = span('world', 75, 50, 50), again = span('hello', 20, 50, 50)
+    const long = run('hello world', 20, 35, 110, 20)
+    expect(joinSpans([hello, world], [long], 1)).toEqual({ served: [hello, world], withheld: 0 })
+    expect(joinSpans([hello, world, again], [long], 1)).toEqual({ served: [hello, world], withheld: 1 })
   })
   test('scale 2 ink maps onto page-px spans', () => {
     const s = span('Hello', 20, 50, 50)

@@ -31,6 +31,8 @@ export interface OcclusionEvidence {
 }
 /** One recorded text run with its verdict (server-side only — the visible-text join's input). */
 export interface RunDetail {
+  /** Paint order (the observer's sequence number for this run). */
+  seq: number
   text: string
   /** Ink hull in device px (the scale bucket applied). */
   ink: { x: number; y: number; width: number; height: number }
@@ -251,7 +253,7 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
       return runs.map((r) => {
         const reason = verdict(r)
         const ink = { x: r.ink[0], y: r.ink[1], width: r.ink[2] - r.ink[0], height: r.ink[3] - r.ink[1] }
-        return reason ? { text: r.text, ink, servable: false, reason } : { text: r.text, ink, servable: true }
+        return reason ? { seq: r.seq, text: r.text, ink, servable: false, reason } : { seq: r.seq, text: r.text, ink, servable: true }
       })
     },
   }

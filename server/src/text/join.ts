@@ -11,8 +11,13 @@
  * - Run ink (device px) is divided by `scale`. A run is a candidate when its ink
  *   centre lies in the span box inflated by 2 px, or the span box centre lies in
  *   the run ink.
- * - Served iff ≥ 1 candidate, every candidate servable, and every non-whitespace
- *   code point of the span is covered by the multiset of the candidates' code points.
+ * - Served iff ≥ 1 candidate, every candidate servable, and ordered
+ *   correspondence: with whitespace removed, the span's code points T are a
+ *   contiguous substring of the candidates' texts concatenated in paint (`seq`)
+ *   order, and the candidates' unconsumed budget is ≥ |T|. A run's budget starts
+ *   at its stripped code-point length; a served span consumes |T| from its
+ *   candidates in seq order. Spans are processed in input order, so one painted
+ *   run never authorises more text than it painted (no anagrams, no reuse).
  * - A whitespace-only span is served iff at least one nearest same-line
  *   (baselines within 1 px) non-whitespace neighbour exists, before or after it
  *   in list order, and every such neighbour is served.
@@ -46,20 +51,21 @@ function spanBox(span: TextSpan): Box {
 const contains = (b: Box, x: number, y: number) => x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1
 const isWhitespace = (s: string) => s.trim() === ''
 
-function covered(text: string, candidates: RunDetail[]): boolean {
-  const pool = new Map<string, number>()
-  for (const r of candidates) for (const cp of r.text) pool.set(cp, (pool.get(cp) ?? 0) + 1)
-  for (const cp of text) {
-    if (isWhitespace(cp)) continue
-    const n = pool.get(cp) ?? 0
-    if (n === 0) return false
-    pool.set(cp, n - 1)
+/** Code points with whitespace removed (no normalisation). */
+const stripped = (s: string) => Array.from(s).filter((cp) => !isWhitespace(cp))
+
+/** Contiguous code-point substring test. */
+function containsRun(hay: string[], needle: string[]): boolean {
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer
+    return true
   }
-  return true
+  return false
 }
 
 export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): JoinResult {
   if (!(Number.isFinite(scale) && scale > 0)) return { served: [], withheld: spans.length }
+  const budget = runs.map((r) => stripped(r.text).length)
   const inks: Box[] = runs.map(({ ink }) => ({ x0: ink.x / scale, y0: ink.y / scale, x1: (ink.x + ink.width) / scale, y1: (ink.y + ink.height) / scale }))
 
   const verdict: Array<boolean | undefined> = spans.map((span) => {
@@ -67,11 +73,17 @@ export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): 
     const b = spanBox(span)
     const grown: Box = { x0: b.x0 - INFLATE, y0: b.y0 - INFLATE, x1: b.x1 + INFLATE, y1: b.y1 + INFLATE }
     const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2
-    const candidates = runs.filter((_, i) => {
+    const candidates = runs.flatMap((_, i) => {
       const k = inks[i]!
-      return contains(grown, (k.x0 + k.x1) / 2, (k.y0 + k.y1) / 2) || contains(k, cx, cy)
-    })
-    return candidates.length > 0 && candidates.every((r) => r.servable) && covered(span.text, candidates)
+      return contains(grown, (k.x0 + k.x1) / 2, (k.y0 + k.y1) / 2) || contains(k, cx, cy) ? [i] : []
+    }).sort((a, b) => runs[a]!.seq - runs[b]!.seq)
+    if (!candidates.length || !candidates.every((i) => runs[i]!.servable)) return false
+    const t = stripped(span.text)
+    const left = candidates.reduce((n, i) => n + budget[i]!, 0)
+    if (left < t.length || !containsRun(candidates.flatMap((i) => stripped(runs[i]!.text)), t)) return false
+    let need = t.length
+    for (const i of candidates) { const take = Math.min(need, budget[i]!); budget[i] = budget[i]! - take; need -= take }
+    return true
   })
 
   const sameLine = (a: TextSpan, b: TextSpan) => Math.abs(a.y - b.y) <= LINE_TOLERANCE
