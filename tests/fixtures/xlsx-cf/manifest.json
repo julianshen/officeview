@@ -18871,8 +18871,8 @@
       ],
       "expected": {
         "inputSha256": "f097671368f66c869fa7d3aabf88b5a8482d07deda6ff48879b15de9ca3c4561",
-        "savedSha256": "f097671368f66c869fa7d3aabf88b5a8482d07deda6ff48879b15de9ca3c4561",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "7f5c69ffe2c476e09982119f01dad23048d3b75c4c1b3e1c1dfa0ede71c0340c",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -18976,7 +18976,7 @@
             "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "pixel-measured",
+              "settings": "unverified",
               "geometry": "unverified"
             }
           },
@@ -18987,7 +18987,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "pixel-measured",
+              "settings": "unverified",
               "geometry": "unverified"
             }
           },
@@ -18998,7 +18998,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "pixel-measured",
+              "settings": "unverified",
               "geometry": "unverified"
             }
           },
@@ -19009,7 +19009,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "pixel-measured",
+              "settings": "unverified",
               "geometry": "unverified"
             }
           },
@@ -19020,7 +19020,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "pixel-measured",
+              "settings": "unverified",
               "geometry": "unverified"
             }
           },
@@ -19266,14 +19266,20 @@
           "pngSha256": "fa6077f9130b7ed979ffa396da5ffedb64aec58a89dfec557ffb01c6e79e0a5a"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-11T17:46:04.566Z",
+        "excelVersion": "16.114",
+        "inputSha256": "f097671368f66c869fa7d3aabf88b5a8482d07deda6ff48879b15de9ca3c4561",
+        "savedSha256": "7f5c69ffe2c476e09982119f01dad23048d3b75c4c1b3e1c1dfa0ede71c0340c",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage3-bar-unresolved-shapes",

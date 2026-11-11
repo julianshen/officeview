@@ -29,13 +29,14 @@
     30
   ],
   "geometrySource": "excel-measured",
-  "resavedByExcel": false,
+  "resavedByExcel": true,
+  "resaveSavedSha256": "7f5c69ffe2c476e09982119f01dad23048d3b75c4c1b3e1c1dfa0ede71c0340c",
   "sheet": "Sheet1",
   "range": "A1:F12",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "f097671368f66c869fa7d3aabf88b5a8482d07deda6ff48879b15de9ca3c4561",
+  "savedSha256": "7f5c69ffe2c476e09982119f01dad23048d3b75c4c1b3e1c1dfa0ede71c0340c",
   "pngSha256": "fa6077f9130b7ed979ffa396da5ffedb64aec58a89dfec557ffb01c6e79e0a5a",
-  "capturedAt": "2026-11-11T16:35:07.984Z",
+  "capturedAt": "2026-11-11T17:46:05.026Z",
   "zoom": 100,
   "dpr": 1,
   "lockBefore": "unlocked",
@@ -410,88 +411,6 @@
             "fill": "gradient"
           },
           "anyExtent": true
-        }
-      ]
-    },
-    "bar:pairing-standalone": {
-      "C2": [
-        {
-          "id": "drawn",
-          "question": "drawn",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
-        },
-        {
-          "id": "ignored",
-          "question": "ignored",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
-        }
-      ],
-      "C3": [
-        {
-          "id": "drawn",
-          "question": "drawn",
-          "leftPx": 266,
-          "rightPx": 309,
-          "rgb": "FF0000FF"
-        },
-        {
-          "id": "ignored",
-          "question": "ignored",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
-        }
-      ],
-      "C4": [
-        {
-          "id": "drawn",
-          "question": "drawn",
-          "leftPx": 266,
-          "rightPx": 354,
-          "rgb": "FF0000FF"
-        },
-        {
-          "id": "ignored",
-          "question": "ignored",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
-        }
-      ],
-      "C5": [
-        {
-          "id": "drawn",
-          "question": "drawn",
-          "leftPx": 266,
-          "rightPx": 398,
-          "rgb": "FF0000FF"
-        },
-        {
-          "id": "ignored",
-          "question": "ignored",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
-        }
-      ],
-      "C6": [
-        {
-          "id": "drawn",
-          "question": "drawn",
-          "leftPx": 266,
-          "rightPx": 442,
-          "rgb": "FF0000FF"
-        },
-        {
-          "id": "ignored",
-          "question": "ignored",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
         }
       ]
     },
