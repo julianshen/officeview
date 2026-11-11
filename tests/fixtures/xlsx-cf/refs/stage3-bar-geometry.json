@@ -1,0 +1,299 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 1650,
+  "height": 345,
+  "colWidthsPt": [
+    84,
+    180,
+    270,
+    360,
+    188,
+    195,
+    180,
+    12,
+    180
+  ],
+  "rowHeightsPt": [
+    30,
+    12,
+    40,
+    30,
+    30,
+    30,
+    30,
+    12,
+    40,
+    30,
+    30,
+    30
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "3eb98194240c75bd5a2fc21b74d2e908db939c8533d97fd7f84040ea97277324",
+  "sheet": "Sheet1",
+  "range": "A1:I12",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "3eb98194240c75bd5a2fc21b74d2e908db939c8533d97fd7f84040ea97277324",
+  "pngSha256": "3a6e2548dde8965815992e4b8ba7551c23d50454c29ca84f894c71e14672b352",
+  "capturedAt": "2026-11-11T16:32:59.115Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "barSettingsReadback": [],
+  "observedBars": [
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 129,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    },
+    {
+      "ref": "B5",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 174,
+        "topPx": 114,
+        "bottomPx": 139
+      }
+    },
+    {
+      "ref": "B6",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 218,
+        "topPx": 144,
+        "bottomPx": 169
+      }
+    },
+    {
+      "ref": "C4",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 332,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    },
+    {
+      "ref": "C5",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 399,
+        "topPx": 114,
+        "bottomPx": 139
+      }
+    },
+    {
+      "ref": "C6",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 465,
+        "topPx": 144,
+        "bottomPx": 169
+      }
+    },
+    {
+      "ref": "D4",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 624,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    },
+    {
+      "ref": "D5",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 714,
+        "topPx": 114,
+        "bottomPx": 139
+      }
+    },
+    {
+      "ref": "D6",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 803,
+        "topPx": 144,
+        "bottomPx": 169
+      }
+    },
+    {
+      "ref": "E4",
+      "cellLeftPx": 894,
+      "cellWidthPx": 188,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 941,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    },
+    {
+      "ref": "E5",
+      "cellLeftPx": 894,
+      "cellWidthPx": 188,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 988,
+        "topPx": 114,
+        "bottomPx": 139
+      }
+    },
+    {
+      "ref": "E6",
+      "cellLeftPx": 894,
+      "cellWidthPx": 188,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 1034,
+        "topPx": 144,
+        "bottomPx": 169
+      }
+    },
+    {
+      "ref": "F4",
+      "cellLeftPx": 1082,
+      "cellWidthPx": 195,
+      "bar": {
+        "leftPx": 1084,
+        "rightPx": 1131,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    },
+    {
+      "ref": "F5",
+      "cellLeftPx": 1082,
+      "cellWidthPx": 195,
+      "bar": {
+        "leftPx": 1084,
+        "rightPx": 1179,
+        "topPx": 114,
+        "bottomPx": 139
+      }
+    },
+    {
+      "ref": "F6",
+      "cellLeftPx": 1082,
+      "cellWidthPx": 195,
+      "bar": {
+        "leftPx": 1084,
+        "rightPx": 1227,
+        "topPx": 144,
+        "bottomPx": 169
+      }
+    },
+    {
+      "ref": "G2",
+      "cellLeftPx": 1277,
+      "cellWidthPx": 180,
+      "bar": null
+    },
+    {
+      "ref": "G3",
+      "cellLeftPx": 1277,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1279,
+        "rightPx": 1280,
+        "topPx": 44,
+        "bottomPx": 79
+      }
+    },
+    {
+      "ref": "G6",
+      "cellLeftPx": 1277,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1279,
+        "rightPx": 1279,
+        "topPx": 144,
+        "bottomPx": 169
+      }
+    },
+    {
+      "ref": "H4",
+      "cellLeftPx": 1457,
+      "cellWidthPx": 12,
+      "bar": {
+        "leftPx": 1459,
+        "rightPx": 1467,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    },
+    {
+      "ref": "H5",
+      "cellLeftPx": 1457,
+      "cellWidthPx": 12,
+      "bar": {
+        "leftPx": 1459,
+        "rightPx": 1467,
+        "topPx": 114,
+        "bottomPx": 139
+      }
+    },
+    {
+      "ref": "I2",
+      "cellLeftPx": 1469,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1471,
+        "rightPx": 1647,
+        "topPx": 32,
+        "bottomPx": 39
+      }
+    },
+    {
+      "ref": "I3",
+      "cellLeftPx": 1469,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1471,
+        "rightPx": 1647,
+        "topPx": 44,
+        "bottomPx": 79
+      }
+    },
+    {
+      "ref": "I4",
+      "cellLeftPx": 1469,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1471,
+        "rightPx": 1647,
+        "topPx": 84,
+        "bottomPx": 109
+      }
+    }
+  ],
+  "barHypotheses": {}
+}
