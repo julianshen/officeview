@@ -13,7 +13,7 @@
 import { createRecordingContext, findMatches, rectsForRange, spansToLines, type IndexLine, type TextIndex, type TextSpan } from '../../../src/core/search'
 import { hitTest, normalizeRange, rectsForSelectionOnPage, selectionSlices, textForRange, type CaretPos, type SelectionRange } from '../../../src/core/selection'
 import type { HighlightRect } from '../../../src/core/overlay'
-import type { LogicalTextRange, LogicalTextSource } from '../../../src/core/text-recording'
+import { RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from '../../../src/core/text-recording'
 import { setWatermarkMuted } from '../../../src/core/watermark'
 import type { RunDetail } from '../occlusion'
 import { joinSpans } from './join'
@@ -73,16 +73,50 @@ export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny
     }
     return spans.length
   }
+  /** Preflight, before core capture measures, maps or serialises anything:
+   * the record's cost from its inputs alone (array lengths are read, never
+   * copied), against the same running total the sink charges. */
+  const preflight = (text: unknown, logical?: LogicalTextRange) => {
+    let n = 256 + String(text).length * 2
+    if (logical) {
+      n += 8 * (logical.graphemeBoundaries?.length ?? 0)
+      if (logical.source && !sources.has(logical.source)) n += 64 + String(logical.source.text).length * 2
+      if (logical.clip) n += 16 * 4
+      const v = logical.visual
+      if (v) n += 16 * ((v.polygon?.length ?? 0) + (v.clusters?.length ?? 0) + (v.bands?.length ?? 0) * 2 + (v.cells?.length ?? 0) * 4 + (v.tris?.length ?? 0) * 3)
+    }
+    if (over || spent + n > maxBytes) { over = true; throw new TextBudgetExceeded() }
+  }
   setWatermarkMuted(true)
   try {
     tiny.save()
-    try { paint(createRecordingContext(tiny, spans)) } finally { tiny.restore() }
+    try { paint(guardRecording(createRecordingContext(tiny, spans), preflight)) } finally { tiny.restore() }
   } finally {
     setWatermarkMuted(false)
   }
   if (over) throw new TextBudgetExceeded()
   // A plain array for every later consumer.
   return [...spans]
+}
+
+/** Intercepts the recording context's text entry points (RECORD_TEXT,
+ * fillText, strokeText) so `preflight` runs before core capture. */
+function guardRecording(rec: CanvasRenderingContext2D, preflight: (text: unknown, logical?: LogicalTextRange) => void): CanvasRenderingContext2D {
+  const target = rec as unknown as Record<string | symbol, unknown>
+  return new Proxy(target, {
+    get(t, prop) {
+      if (prop === RECORD_TEXT) {
+        const record = t[RECORD_TEXT] as ((text: string, x: number, y: number, width: number, logical: LogicalTextRange) => void) | undefined
+        return record && ((text: string, x: number, y: number, width: number, logical: LogicalTextRange) => { preflight(text, logical); record(text, x, y, width, logical) })
+      }
+      if (prop === 'fillText' || prop === 'strokeText') {
+        const draw = t[prop] as (text: string, x: number, y: number, maxWidth?: number) => void
+        return (text: string, x: number, y: number, maxWidth?: number) => { preflight(text); maxWidth === undefined ? draw(text, x, y) : draw(text, x, y, maxWidth) }
+      }
+      return t[prop]
+    },
+    set(t, prop, value) { t[prop] = value; return true },
+  }) as unknown as CanvasRenderingContext2D
 }
 
 const isBlank = (s: string) => s.trim() === ''

@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import JSZip from 'jszip'
 import { buildTextIndex, type TextSpan } from '../../src/core/search'
 import { textForRange } from '../../src/core/selection'
-import type { LogicalTextSource } from '../../src/core/text-recording'
+import { RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from '../../src/core/text-recording'
 import { occlusionObserver, type RunDetail } from '../src/occlusion'
 import { joinSpans } from '../src/text/join'
 import { DEFAULT_CAPS } from '../src/admission'
@@ -441,5 +441,59 @@ describe('fix round 2: running text-work limits and size metadata lifecycle', ()
     }
     p.dispose()
     expect(p.stats().unitSizes).toBe(0)
+  }, 60_000)
+})
+
+describe('fix round 3: a single record is preflighted before capture maps it', () => {
+  type Doc = { paintables: Array<{ spec: { widthPx: number; heightPx: number }; paint(c: CanvasRenderingContext2D): void }> }
+  async function hostWith(paint: (c: CanvasRenderingContext2D) => void) {
+    const host = new DocumentHost()
+    const o = await host.open('pre', deck, 'visible-only')
+    const doc = (host as unknown as { docs: Map<string, Doc> }).docs.get(o.docKey)!
+    doc.paintables[0] = { spec: doc.paintables[0]!.spec, paint }
+    const { w, h } = o.units[0]!
+    return { host, docKey: o.docKey, grant: prepareWorkspace(w, h) }
+  }
+  /** Arrays whose every/map report how many elements core capture walked. */
+  function counted<T>(items: T[], c: { points: number }): T[] {
+    items.every = function (this: T[], ...a: Parameters<T[]['every']>) { c.points += this.length; return Array.prototype.every.apply(this, a as never) } as T[]['every']
+    items.map = function (this: T[], ...a: Parameters<T[]['map']>) { c.points += this.length; return Array.prototype.map.apply(this, a as never) } as T[]['map']
+    return items
+  }
+  const recordingPaint = (clusters: number, c: { points: number }) => (ctx: CanvasRenderingContext2D) => {
+    const rec = (ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] as undefined | ((t: string, x: number, y: number, w: number, l: LogicalTextRange) => void)
+    if (!rec) { ctx.font = '16px sans-serif'; ctx.fillText('hello', 10, 20); return }
+    ctx.font = '16px sans-serif'
+    const polygon = counted<[number, number]>([[0, 0], [100, 0], [100, 40], [0, 40]], c)
+    const cl = counted<[number, number]>(Array.from({ length: clusters }, (_, i) => [10 + (i % 5) * 8, 15] as [number, number]), c)
+    rec('hello', 10, 20, 40, { source: { text: 'hello' }, start: 0, end: 5, visual: { polygon, clusters: cl } })
+  }
+
+  test('a RECORD_TEXT record with 1,100,000 cluster points is refused with zero points mapped', async () => {
+    const c = { points: 0 }
+    const { host, docKey, grant } = await hostWith(recordingPaint(1_100_000, c))
+    expect(() => host.text(docKey, { op: 'prepare', unit: 0 }, grant)).toThrow(expect.objectContaining({ name: 'RenderRefusal', code: 'grant' }))
+    expect(c.points).toBe(0)
+    expect(host.servedUnit(docKey, 0)).toBeUndefined()
+  }, 60_000)
+
+  test('a normal RECORD_TEXT record still records (and is mapped)', async () => {
+    const c = { points: 0 }
+    const { host, docKey, grant } = await hostWith(recordingPaint(5, c))
+    expect(host.text(docKey, { op: 'prepare', unit: 0 }, grant)).toMatchObject({ op: 'prepare', served: 1, withheld: 0 })
+    expect(c.points).toBeGreaterThan(0)
+    expect(host.servedUnit(docKey, 0)!.lines[0]!.spans[0]!.placement!.visual!.clusters!.length).toBe(5)
+  }, 60_000)
+
+  test('an over-long RECORD_TEXT string (and its source) is refused before its geometry is mapped', async () => {
+    const c = { points: 0 }
+    const long = 'x'.repeat(1024 * 1024)
+    const { host, docKey, grant } = await hostWith((ctx) => {
+      const rec = (ctx as unknown as Record<symbol, unknown>)[RECORD_TEXT] as undefined | ((t: string, x: number, y: number, w: number, l: LogicalTextRange) => void)
+      if (!rec) return
+      rec(long, 0, 20, 40, { source: { text: long }, start: 0, end: long.length, visual: { polygon: counted<[number, number]>([[0, 0], [10, 0], [10, 10]], c) } })
+    })
+    expect(() => host.text(docKey, { op: 'prepare', unit: 0 }, grant)).toThrow(expect.objectContaining({ name: 'RenderRefusal', code: 'grant' }))
+    expect(c.points).toBe(0)
   }, 60_000)
 })
