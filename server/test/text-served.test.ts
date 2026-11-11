@@ -592,3 +592,30 @@ describe('task 3b: paragraph and cell identity (RECORD_GROUP)', () => {
     assertInvariant(unit, unit.lines.flatMap((l) => l.spans.map((s) => s.text)))
   }, 60_000)
 })
+
+describe('text decorations do not withhold the decorated word (Task 3c)', () => {
+  /** One paragraph: an underlined hyperlink (words with descenders, so the
+   * underline overlaps their ink) and a struck word, between plain words. */
+  async function decorated(): Promise<Uint8Array> {
+    const zip = await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'Visit the ' }, { text: 'typing guide' }, { text: ' today, not ' }, { text: 'gone' }, { text: ' tomorrow.' }] }]))
+    let xml = await zip.file('word/document.xml')!.async('string')
+    const run = (t: string) => new RegExp(`<w:r><w:rPr>([^<]*?)</w:rPr><w:t xml:space="preserve">${t}</w:t></w:r>`)
+    xml = xml.replace(run('typing guide'), '<w:hyperlink w:anchor="target"><w:r><w:rPr>$1<w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">typing guide</w:t></w:r></w:hyperlink>')
+    xml = xml.replace(run('gone'), '<w:r><w:rPr>$1<w:strike/></w:rPr><w:t xml:space="preserve">gone</w:t></w:r>')
+    expect(xml).toContain('<w:u w:val="single"/>')
+    expect(xml).toContain('<w:strike/>')
+    zip.file('word/document.xml', xml)
+    return zip.generateAsync({ type: 'uint8array' })
+  }
+
+  test('real DOCX with an underlined hyperlink: the link text is searchable and copy returns it with its neighbouring spaces', async () => {
+    const d = await opened(await decorated())
+    expect(await d.text({ op: 'prepare', unit: 0 })).toMatchObject({ op: 'prepare', withheld: 0 })
+    const s = await d.text({ op: 'search', query: 'typing guide', caseSensitive: true, fromUnit: 0, toUnit: 0, maxMatches: 10 }) as Extract<TextReply, { op: 'search' }>
+    expect(s.matches.length).toBe(1)
+    const g = await d.text({ op: 'search', query: 'not gone tomorrow', caseSensitive: true, fromUnit: 0, toUnit: 0, maxMatches: 10 }) as Extract<TextReply, { op: 'search' }>
+    expect(g.matches.length).toBe(1)
+    const copy = await d.text(copyAll) as Extract<TextReply, { op: 'copy'; text: string }>
+    expect(copy.text).toBe('Visit the typing guide today, not gone tomorrow.')
+  }, 60_000)
+})

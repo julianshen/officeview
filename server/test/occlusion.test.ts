@@ -186,6 +186,78 @@ describe('stroke bounds', () => {
   })
 })
 
+describe('text decorations (S3a Task 3c)', () => {
+  // 'Typing' has a descender, so an underline below the baseline overlaps its ink.
+  const word = (c: CanvasRenderingContext2D) => text(c, 'Typing', 20, 50)
+  const ink = (() => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    word(o.wrap(ctx))
+    const i = o.runDetails()[0]!.ink
+    return { ...i, x1: i.x + i.width, y1: i.y + i.height }
+  })()
+  /** An opaque bar across the word, `t` px thick, starting `at` px below the ink top. */
+  const bar = (c: CanvasRenderingContext2D, at: number, t: number) => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, ink.y + at, ink.width + 4, t) }
+  const verdict = (paint: (c: CanvasRenderingContext2D) => void, scale?: number) => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100, undefined, scale)
+    paint(o.wrap(ctx))
+    const d = o.runDetails()
+    expect(d).toHaveLength(1)
+    return d[0]!
+  }
+  it('the fixture word is tall enough for the thresholds below to be meaningful', () => {
+    expect(ink.height).toBeGreaterThan(15)
+  })
+  it('a 1 px underline fillRect below the baseline does not withhold the word', () => {
+    // Baseline at y=50; the descender reaches below it.
+    expect(ink.y1).toBeGreaterThan(52)
+    expect(verdict((c) => { word(c); c.fillStyle = '#000'; c.fillRect(20, 51, ink.width, 1) })).toMatchObject({ servable: true })
+  })
+  it('a 1 px strike through the middle does not withhold the word', () => {
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1) })).toMatchObject({ servable: true })
+  })
+  it('a stroke()d line path over the word (strokes are recorded as cover marks) does not withhold it', () => {
+    // The observer records a stroke segment padded by lineWidth/2·√2: 1.41 px thick here.
+    expect(verdict((c) => { word(c); c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(ink.x, ink.y + ink.height / 2); c.lineTo(ink.x1, ink.y + ink.height / 2); c.stroke() })).toMatchObject({ servable: true })
+  })
+  it('underline + strike + overline together (≤ 25 % of ink height) still served', () => {
+    expect(verdict((c) => { word(c); bar(c, 0, 1); bar(c, ink.height / 2, 1); bar(c, ink.height - 1, 1) })).toMatchObject({ servable: true })
+  })
+  it('repeated bars at one place merge: their union, not their sum, is measured', () => {
+    expect(verdict((c) => { word(c); for (let i = 0; i < 10; i++) bar(c, ink.height / 2, 1) })).toMatchObject({ servable: true })
+  })
+  it('four thin bars totalling > 25 % of ink height ⇒ covered', () => {
+    const t = ink.height * 0.1
+    expect(verdict((c) => { word(c); for (const at of [0, 0.25, 0.5, 0.75]) bar(c, ink.height * at, t) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a bar thicker than 12 % of ink height (and > 1.5 px) ⇒ covered', () => {
+    const t = Math.max(1.6, ink.height * 0.13)
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, t) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('an opaque rect over the whole word ⇒ covered (unchanged)', () => {
+    expect(verdict((c) => { word(c); c.fillStyle = '#fff'; c.fillRect(ink.x - 1, ink.y - 1, ink.width + 2, ink.height + 2) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a thin bar with a non-source-over composite or a filter still withholds (unchanged)', () => {
+    expect(verdict((c) => { word(c); c.globalCompositeOperation = 'destination-out'; bar(c, ink.height / 2, 1) })).toMatchObject({ servable: false, reason: 'composite' })
+    expect(verdict((c) => { word(c); c.clearRect(ink.x, ink.y + ink.height / 2, ink.width, 1) })).toMatchObject({ servable: false, reason: 'composite' })
+    expect(verdict((c) => { word(c); c.filter = 'blur(1px)'; bar(c, ink.height / 2, 1) })).toMatchObject({ servable: false, reason: 'filter' })
+  })
+  it('a thin decoration does not excuse a separate thick cover', () => {
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1); c.fillStyle = '#fff'; c.fillRect(ink.x, ink.y, ink.width / 3, ink.height) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('the 1.5 px floor scales with the render scale', () => {
+    // Thicker than 12 % of the ink and than 1.5 px, but under 1.5 × 2 = 3 px.
+    const t = Math.min(2.9, ink.height * 0.25)
+    expect(t).toBeGreaterThan(Math.max(1.5, ink.height * 0.12))
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, t) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, t) }, 2)).toMatchObject({ servable: true })
+  })
+  it('evidence() agrees: the decorated word is servable text', () => {
+    expect(run((c) => { word(c); bar(c, ink.height / 2, 1) })).toMatchObject({ servable: 1, withheld: 0, servableText: ['Typing'] })
+  })
+})
+
 describe('destructive composites (review 4)', () => {
   for (const op of ['copy', 'destination-in', 'source-in', 'source-out', 'destination-atop'] as const) it(`${op} far from the ink still withholds it (it clears outside its source)`, () => {
     const e = run((c) => { text(c); c.globalCompositeOperation = op; c.fillRect(170, 70, 20, 20) })

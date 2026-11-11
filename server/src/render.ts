@@ -50,8 +50,8 @@ export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitI
 export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
 
 /** §7.7: every paint pass that serves a unit records occlusion evidence. */
-function observe(ctx: CanvasRenderingContext2D, w: number, h: number, observers: readonly PaintObserver[], maxObserverBytes?: number) {
-  const occ = occlusionObserver(w, h, maxObserverBytes)
+function observe(ctx: CanvasRenderingContext2D, w: number, h: number, scale: number, observers: readonly PaintObserver[], maxObserverBytes?: number) {
+  const occ = occlusionObserver(w, h, maxObserverBytes, scale)
   let painted = occ.wrap(ctx)
   for (const o of observers) if (o.wrap) painted = o.wrap(painted)
   return { painted, evidence: () => occ.evidence(), runDetails: () => occ.runDetails(), exceeded: () => occ.exceeded() }
@@ -237,7 +237,7 @@ export class DocumentHost {
     const canvas = this.backend.createCanvas(w, h)
     const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
     ctx.scale(scale, scale)
-    const { painted, evidence, runDetails, exceeded } = observe(ctx, w, h, observers, maxObserverBytes)
+    const { painted, evidence, runDetails, exceeded } = observe(ctx, w, h, scale, observers, maxObserverBytes)
     for (const o of observers) o.beforeUnit(painted, index)
     paintable.paint(painted)
     for (const o of observers) o.afterUnit(painted, index)
@@ -257,7 +257,7 @@ export class DocumentHost {
     // Font pinning sits OUTSIDE the recorder so recorded fonts carry pack names.
     const ctx = pinFonts(rec.ctx, loadPack())
     ctx.scale(scale, scale)
-    const { painted, evidence } = observe(ctx, w, h, observers)
+    const { painted, evidence } = observe(ctx, w, h, scale, observers)
     for (const o of observers) o.beforeUnit(painted, index)
     paintable.paint(painted)
     for (const o of observers) o.afterUnit(painted, index)

@@ -15,6 +15,14 @@
  *   clip (tracked exactly only while every clip is an axis-aligned rect), is
  *   not fully transparent, and no ink cell was covered — or touched by a
  *   non-`source-over` op or a filter — after the run was drawn.
+ * - Text decorations (S3a Task 3c): a later `cover` mark whose extent across
+ *   the ink (perpendicular to the ink's longer side) is at most
+ *   max(1.5 × scale px, 12 % of the ink's extent on that axis) is a thin
+ *   decoration — an underline, strike or overline that leaves the word
+ *   legible. Decorations are ignored while their merged extent over the ink
+ *   stays ≤ 25 % of it; past that the run is `covered`. Erase and filter
+ *   marks, and every thicker cover, withhold as before. Rotated text keeps
+ *   its axis-aligned hull, so its decorations may not qualify (withheld).
  */
 import type { PaintObserver } from './render'
 
@@ -69,6 +77,18 @@ function colorAlpha(style: unknown): number | undefined {
   return /^[a-z]+$/.test(s) ? 1 : undefined
 }
 
+/** Task 3c decoration rule: thin-mark floor (× scale), thin-mark ratio and union cap (× ink extent). */
+const DECORATION_FLOOR_PX = 1.5, DECORATION_RATIO = 0.12, DECORATION_UNION = 0.25
+/** Total length of the union of intervals (sorts `bands` in place). */
+function unionLength(bands: Array<[number, number]>): number {
+  bands.sort((p, q) => p[0] - q[0])
+  let total = 0, s = bands[0]![0], e = bands[0]![1]
+  for (const [b0, b1] of bands) {
+    if (b0 > e) { total += e - s; s = b0; e = b1 } else e = Math.max(e, b1)
+  }
+  return total + (e - s)
+}
+
 type Grid = 'cover' | 'erase' | 'filter'
 /** Thrown from a hooked op once an observer's record budget is spent. */
 export class ObserverBudgetExceeded extends Error { constructor() { super('occlusion observer record budget exceeded'); this.name = 'ObserverBudgetExceeded' } }
@@ -79,8 +99,10 @@ export class ObserverBudgetExceeded extends Error { constructor() { super('occlu
  * decremented). When the next record would pass it, the op throws
  * ObserverBudgetExceeded before recording and `exceeded()` stays true. Unset
  * (every render path) means unlimited.
+ * `scale`: the render scale the painter's ctx carries (device px per page
+ * px); it scales the decoration floor. Unset means 1.
  */
-export function occlusionObserver(width: number, height: number, maxBytes = Number.POSITIVE_INFINITY): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[]; exceeded(): boolean } {
+export function occlusionObserver(width: number, height: number, maxBytes = Number.POSITIVE_INFINITY, scale = 1): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[]; exceeded(): boolean } {
   let spent = 0, over = false
   const charge = (n: number) => {
     if (over || spent + n > maxBytes) { over = true; throw new ObserverBudgetExceeded() }
@@ -182,7 +204,16 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   function verdict(r: Run): OcclusionReason | undefined {
     if (r.reason) return r.reason
     const later = new Set<Grid>()
-    for (const m of marks) if (m.seq > r.seq && overlaps(m.box, r.ink)) later.add(m.grid)
+    // Decorations are measured across the ink: along y for a wide hull, x for a tall one.
+    const a = r.ink[2] - r.ink[0] >= r.ink[3] - r.ink[1] ? 1 : 0, lo = r.ink[a]!, hi = r.ink[a + 2]!
+    const thin = Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (hi - lo))
+    const bands: Array<[number, number]> = []
+    for (const m of marks) {
+      if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
+      if (m.grid === 'cover' && m.box[a + 2]! - m.box[a]! <= thin) bands.push([Math.max(m.box[a]!, lo), Math.min(m.box[a + 2]!, hi)])
+      else later.add(m.grid)
+    }
+    if (bands.length && unionLength(bands) > DECORATION_UNION * (hi - lo)) later.add('cover')
     return later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
   }
 
