@@ -11,6 +11,8 @@ export interface Manifest {
   session: { sid: string; token: string; expiresSec: number; resume: 'session' }
   policy: { contentPolicy: 'visible-only' | 'full'; protection: 'final-raster' | 'culled-commands' | 'commands'; semantic: 'visible-only' | 'off'; contentPolicyId: string; viewerMarkId: string }
   can: { search: boolean; copy: boolean; print: boolean; textA11y: boolean; present: boolean; notes: boolean; links: boolean }
+  /** Text-service caps (Stage 3a). `copy` null = copy off; a null cap = uncapped. */
+  caps: { copy: null | { maxParagraphs: number | null; maxSessionParagraphs: number | null }; a11y: 'off' | 'unit' | 'focused' }
   recorder: { commands: 'ovsd-1'; textMode: 'text'; scalesBuckets: number[]; requiredFaces: Array<{ id: string; hash: string; alias?: string }>; projection: 'final-raster' | 'culled-commands' | 'commands' }
   limits: { maxUnitPx: number; maxAssetBytes: number; wsFrameBytes: number; tilePx: number }
   notices: string[]
@@ -26,6 +28,7 @@ const str = (v: unknown, f: string, max = 256, re?: RegExp): string => { if (typ
 const int = (v: unknown, f: string, min: number, max: number): number => { if (!Number.isInteger(v) || (v as number) < min || (v as number) > max) throw new Bad(f); return v as number }
 const bool = (v: unknown, f: string): boolean => { if (typeof v !== 'boolean') throw new Bad(f); return v }
 const oneOf = <T extends string>(v: unknown, f: string, set: readonly T[]): T => { if (!set.includes(v as T)) throw new Bad(f); return v as T }
+const cap = (v: unknown, f: string): number | null => v === null ? null : int(v, f, 1, Number.MAX_SAFE_INTEGER)
 const arr = (v: unknown, f: string, max: number): unknown[] => { if (!Array.isArray(v) || v.length > max) throw new Bad(f); return v }
 
 const HEX = /^[0-9a-f]+$/
@@ -38,7 +41,8 @@ export function validateManifest(json: unknown): ManifestResult {
     const units = obj(m.units, 'units')
     const list = arr(units.list, 'units.list', MAX_UNITS).map((u, i) => { const o = obj(u, `units.list[${i}]`); return { w: int(o.w, `units.list[${i}].w`, 1, 8192), h: int(o.h, `units.list[${i}].h`, 1, 8192) } })
     if (int(units.count, 'units.count', 0, MAX_UNITS) !== list.length) throw new Bad('units.count')
-    const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits')
+    const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits'), k = obj(m.caps, 'caps')
+    const kc = k.copy === null ? null : obj(k.copy, 'caps.copy')
     const manifest: Manifest = {
       v: 1,
       docRef: str(m.docRef, 'docRef', 24, /^[0-9a-f]{24}$/),
@@ -55,6 +59,10 @@ export function validateManifest(json: unknown): ManifestResult {
         viewerMarkId: str(p.viewerMarkId, 'policy.viewerMarkId', 64),
       },
       can: Object.fromEntries((['search', 'copy', 'print', 'textA11y', 'present', 'notes', 'links'] as const).map((k) => [k, bool(c[k], `can.${k}`)])) as Manifest['can'],
+      caps: {
+        copy: kc && { maxParagraphs: cap(kc.maxParagraphs, 'caps.copy.maxParagraphs'), maxSessionParagraphs: cap(kc.maxSessionParagraphs, 'caps.copy.maxSessionParagraphs') },
+        a11y: oneOf(k.a11y, 'caps.a11y', ['off', 'unit', 'focused'] as const),
+      },
       recorder: {
         commands: oneOf(r.commands, 'recorder.commands', ['ovsd-1'] as const),
         textMode: oneOf(r.textMode, 'recorder.textMode', ['text'] as const),

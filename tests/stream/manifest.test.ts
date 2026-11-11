@@ -9,7 +9,8 @@ export const exampleManifest = (): Manifest => ({
   layoutFingerprint: 'f'.repeat(64),
   session: { sid: '0123456789ab', token: 'x.y.z', expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
-  can: { search: false, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+  can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+  caps: { copy: null, a11y: 'off' },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [{ id: 'carlito-regular', hash: 'f6418f708baede9789daef5d', alias: 'Calibri' }], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
   notices: ['forensic-off'],
@@ -36,8 +37,22 @@ describe('MANIFEST', () => {
     ['units.list[0].w', { units: { count: 1, list: [{ w: 8193, h: 1 }] } }], ['units.count', { units: { count: 3, list: [] } }],
     ['session.token', { session: { ...exampleManifest().session, token: 't'.repeat(513) } }], ['v', { v: 2 }],
     ['recorder.requiredFaces[0].hash', { recorder: { ...exampleManifest().recorder, requiredFaces: [{ id: 'a', hash: 'zz' }] } }],
+    ['caps', { caps: undefined }],
+    ['caps.copy.maxParagraphs', { caps: { copy: { maxParagraphs: -1, maxSessionParagraphs: null }, a11y: 'focused' } }],
+    ['caps.copy.maxParagraphs', { caps: { copy: { maxParagraphs: 1.5, maxSessionParagraphs: null }, a11y: 'focused' } }],
+    ['caps.copy.maxSessionParagraphs', { caps: { copy: { maxParagraphs: 3, maxSessionParagraphs: 0 }, a11y: 'focused' } }],
+    ['caps.copy', { caps: { copy: 'full', a11y: 'unit' } }],
+    ['caps.a11y', { caps: { copy: null, a11y: 'everything' } }],
   ])('rejects %s', (field, patch) => {
     expect(validateManifest({ ...exampleManifest(), ...patch })).toEqual({ ok: false, field })
+  })
+  it.each([
+    [{ copy: null, a11y: 'off' }],
+    [{ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit' }],
+    [{ copy: { maxParagraphs: 3, maxSessionParagraphs: 20 }, a11y: 'focused' }],
+  ])('keeps caps %j', (caps) => {
+    const r = validateManifest({ ...exampleManifest(), caps: { ...caps, extra: 1 } })
+    expect(r).toEqual({ ok: true, manifest: { ...exampleManifest(), caps } })
   })
   it('a gzip space bomb is refused at the decoded cap', async () => {
     const res = await throughFrames(new Uint8Array(1 << 20).fill(0x20))

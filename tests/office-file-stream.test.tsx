@@ -15,7 +15,8 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function fakeDoc(name = 'deck.pptx'): RemoteOfficeDoc & { close: Mock; paint: Mock } {
   const manifest = {
     name, kind: 'pptx', units: { count: 2, list: [{ w: 100, h: 50 }, { w: 100, h: 50 }] },
-    can: { search: false, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+    can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+    caps: { copy: null, a11y: 'off' },
     recorder: { scalesBuckets: [1, 2] }, notices: [],
   }
   return {

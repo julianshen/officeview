@@ -46,7 +46,7 @@ describe('RemoteOfficeDoc', () => {
 })
 
 function fakeSession(payloads: UnitPayload[], ended?: Promise<StreamSessionError | undefined>): SessionLike & { requests: number; closes: number; released: number } {
-  const manifest = { units: { count: 1, list: [{ w: 4, h: 4 }] }, recorder: { scalesBuckets: [1, 2] }, can: { search: false, copy: false } } as unknown as Manifest
+  const manifest = { units: { count: 1, list: [{ w: 4, h: 4 }] }, recorder: { scalesBuckets: [1, 2] }, can: { search: true, copy: false }, caps: { copy: null, a11y: 'off' } } as unknown as Manifest
   const s = {
     manifest, requests: 0, closes: 0, released: 0,
     async unit() { const p = payloads[Math.min(s.requests, payloads.length - 1)]!; s.requests++; return { ...p, release: () => { s.released++ } } },

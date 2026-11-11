@@ -20,7 +20,7 @@ import { deriveBasisKey } from './mark/basis'
 import { LeaseFull, ScratchLease } from './scratch'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
-import { effectivePolicy, forensicNotices, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
+import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
@@ -233,7 +233,9 @@ export function createStreamServer(o: StreamServerOptions) {
     const tokenProof = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
     const d = await o.authorize({ ...req, resume: { sid: s.sid }, ...(tokenProof ? {} : { token: resume.resumeProof }) })
     if (gone(ws)) return
-    const ok = !!d && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(effectivePolicy(d)) === JSON.stringify(s.effectivePolicy)
+    // R3: copy and textA11y may change on resume; every other field is exact-match.
+    const policy = d ? effectivePolicy(d) : undefined
+    const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     const token = await issueToken(o.keys.kToken, { docRef: s.docRef, sid: s.sid, ttlSec: ttl, now: nowSec() })
     if (gone(ws)) return
@@ -244,6 +246,8 @@ export function createStreamServer(o: StreamServerOptions) {
     table.supersede(s.sid, ws as never, token.jti)
     sd.tokenExp = token.exp
     sd.decision = d!
+    sd.policy = policy!
+    table.setPolicy(s.sid, policy!)
     ws.data.sid = s.sid
     ws.data.rates = sessionRates.get(s.sid) ?? ws.data.rates
     sendManifest(ws, reqId, s.sid, token.token)
@@ -276,8 +280,9 @@ export function createStreamServer(o: StreamServerOptions) {
       layoutFingerprint: sd.doc.fingerprint,
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
-      // Stage 1: semantic services, presentation and notes land in Stage 3.
-      can: { search: false, copy: false, print: p.print, textA11y: false, present: false, notes: false, links: false },
+      // Presentation, notes and links land later in Stage 3.
+      can: { search: true, copy: p.copy !== false, print: p.print, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
+      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y },
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
       notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],
