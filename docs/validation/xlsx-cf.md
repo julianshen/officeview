@@ -476,3 +476,59 @@ All eleven other Stage 3 inputs were first regenerated with the corrected x14 UR
 `audit.ts --stage 3`: `ok=true`, 7 measured, 4 pending, 1 unsupported; verified capabilities: `bar:pixel-calibration` only; 1 unverified-nondiscriminating; 56 blocked. Measured captures do not yet verify their capabilities because only the length family has hypotheses and settings cannot be labelled from pixels (OD-7 as amended); that is Task 18b. `tests/xlsx-cf`: 637 pass. No `--write` was run.
 
 Harness observations: `capture.ts` leaves the saved workbook open in Excel (the orchestrator closed them by name); during an earlier batch the manifest entries and PNGs of already-verified cases were reset by a later step that could not be reproduced in isolation (suspect: a capture process killed by a timeout), so each capture was committed individually.
+
+### Stage 3 Task 18b (2026-11-12): captures verified from pixels (offline, no Excel)
+
+No Excel, `osascript` or `osacompile` was run. The manifest changed only through `capture.ts --stage 3 --verify-only` and `generate.ts --stage 3 --case <id>`; `audit.ts --write` was not run, so `verifiedCapabilities.ts` is untouched and production still withholds every bar (conformance pins the withheld count to the manifest).
+
+**What changed.**
+
+- **Evidence kind (OD-7 as amended).** Every bar capability, settings included, is proven from the hash-bound PNG. The verifier recomputes each claim (`evaluateBarCapabilities` in `scripts/cf-refs/verify.ts`), and `capture.ts` labels cells with that same function. An `excel-object-model` claim now refuses (`unobserved-expectation`). Settings claims go in `barEvidence.settings`, geometry claims in `barEvidence.geometry`. The sidecar's `barHypotheses` must equal the recomputation; trusting it is no longer possible.
+- **Hypotheses.** They are predicted from the saved workbook (values, hidden and filtered rows, merges, theme), the markers and the measured cell boxes, never from the viewer. Each capability varies one knob (for example `percentile` inc/exc/range or `axis` automatic/middle/none) and crosses the nuisance knobs its fixture cannot hold still. The matched answer is recorded (`matchedHypotheses`). The discrimination rule is unchanged (±1 px match, at least 3 px separation). It now also counts bar versus no bar, colour (±8 per channel, separation 17, which is more than twice the tolerance) and traits (solid/gradient, border, value text) as differences. Exact capabilities (insets, snapping, minimum width, clipping) use tolerance 0 and separation 1 (S3-A step 6). The calibration cell's 8-per-channel tolerance is reused for colours. It is the plan's border and gradient tolerance, not one fitted to a capture.
+- **Inset model.** Every predictor uses the same inset model, and `bar:geometry-insets` verifies it exactly: the bar spans `[cell left + 2, cell right - 2]`, and its rows are `[row top + 2, row bottom - 3]`. The lengths are `round-half-up(fraction × (width − 3))`. Any capability with hypotheses now also needs `bar:geometry-insets` verified, and settings capabilities need `bar:pixel-calibration`.
+- **Measurer (deliverable 1).**
+  - The four corners are now sampled 1 px inside the cell. A bar keeps its vertical inset, so it never covers them. That fixes composition D3, where the old 2 px corners sat on the bar.
+  - A filled cell with a full-height bar refuses whatever the gap, which settles round-3 Minor (a).
+  - A uniformly filled cell is "no bar", for example a scale-filled zero (composition D5). The full-width fallback is retired.
+  - Excel's axis is dotted (3 px on, 1 off). It is found by a vertical scan and is never counted as bar ink, so the zero-length cell axis-negative B4 is now a clean `bar: null` plus `axisPx`.
+  - The first column of a cell is the shared gridline, where Excel paints the left neighbour's fill. That bleed is not ink.
+  - None of the seven measured cases moved by a pixel.
+- **Precondition probe (re-specified, fail-closed).** The probe is a pixel precondition: probe B against default control C in the same capture. Fill (solid/gradient), border, direction, axis (anchored at the midpoint versus the edge; on all-positive data Excel draws no axis line) and value text are all observed and differ from the control. Two pinned settings cannot be seen in this capture, so the probe refuses `bar-settings-unobserved` and every settings capability stays gated:
+  - minLength/maxLength: the bars start at a midpoint axis.
+  - The negative colour type: there is no negative value.
+- **Pairing resave.** Excel 16.114 resaves a standalone x14 bar in canonical paired form (`stage3-bar-pairing.rejected.xlsx`). The base `<cfRule priority="2">` carries `<color>` and an `<x14:id>` link. The companion keeps neither `@priority` nor `<x14:fillColor>`. The verifier now accepts that form (test built from the real file). Excel also drops the base `minLength="10" maxLength="90"` of the paired rule. Those are the schema defaults, so they were already accepted. It also adds `<x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>`, which are unpinned and accepted.
+- **Harness.**
+  - `generate.ts` keeps a `measured` case verbatim unless `--force` is passed (round-3 Minor b).
+  - `capture.ts` closes the workbook its capture opened, but never a workbook that was already open (`captureAndCloseOwned`).
+  - `--verify-only` skips a kept capture whose sidecar records an older saved workbook instead of rebinding it.
+  - The Stage 3 withheld count in the conformance test is pinned to the manifest (round-3 Minor c).
+
+**Findings.**
+
+- **S3-18B-A, axis-negative: Excel reads x14 colours by position.**
+  - Input F had `negativeBarColorSameAsPositive="1"` and still carried `<x14:negativeFillColor FFFF0000>`. Excel dropped that element and assigned its colour to the axis: the resave has `<x14:axisColor FFFF0000>`, and the kept capture shows a red dotted axis at x 864.
+  - H (`negativeBarBorderColorSameAsPositive="1"` with an orange `negativeBorderColor`) came back with an orange axis.
+  - D (`axisPosition="none"`) lost its `axisColor`.
+  - This is our authoring defect: the generator now writes Excel's canonical lists, and the input was regenerated.
+  - It also means a real workbook that carries a colour its flags make redundant is drawn with shifted colours. Task 19 should decide whether to read such colour lists the way Excel does or leave them unresolved.
+- **S3-18B-B, Excel's default 10/90 is not linear on the span.** `stage3-bar-lengths` column B measures 9 / 44 / 115 / 150 px for 0 / 25 / 75 / 100 on a 177 px span. 10/90 linear on the span predicts 18 / 53 / 124 / 159, and 0/100 predicts none / 44 / 133 / 177. So `bar:lengths-default-10-90` is refused with `bar-hypothesis-none`; the px are in the sidecar. Pairing B, the paired x14 0/100 case, measures exactly 0/100.
+- **Development check, not evidence.** The kept axis-negative capture shows the old input, and F/H are mis-coloured. With F and H excluded, the axis, negative-fill and negative-border hypotheses for B, C, D, E, G and I each match exactly one answer: automatic at one third, middle at the midpoint, none from the minimum. The capture after the rebuild is what will count.
+
+**Capability table (after `--verify-only`; before Task 18b: 1 verified, 1 non-discriminating, 56 blocked).**
+
+| Disposition | Capabilities |
+|---|---|
+| verified (26) | `bar:pixel-calibration`, `bar:lengths-explicit-0-100`, `bar:bounds-min-max`, `bar:bounds-percentile` (PERCENTILE.INC), `bar:bounds-automin` (zero-anchored), `bar:lengths-all-negative` (grows from the right edge), `bar:degenerate-equal-values` and `bar:degenerate-single-cell` (half length), `bar:degenerate-inverted` (bounds swapped), `bar:degenerate-beyond-bounds` (clamped), `bar:bounds-out-of-domain` (percent used literally), `bar:render-solid`, `bar:render-border`, `bar:direction-ltr`, `bar:direction-rtl`, `bar:direction-context-ltr-sheet`, `bar:colors-theme-tint` (the workbook's own theme accent1 156082 at tint −0.25), `bar:colors-indexed`, `bar:geometry-insets`, `bar:geometry-snapping` (round half up), `bar:geometry-narrow-clip`, `bar:showvalue-canvas-suppression`, `bar:scope-disjoint` (union), `bar:scope-duplicate-blocks` (first block wins), `bar:scope-hidden-row` and `bar:scope-autofilter-hidden-row` (hidden extremes count) |
+| unverified-nondiscriminating (7, registered in `CF_STAGE3_NONDISCRIMINATING`) | `bar:bounds-automax`; `bar:bounds-num` (num 20/80 equals the data's min/max); `bar:bounds-percent` (on 0..100 data percent equals num); `bar:geometry-min-visible-width` (0.5 already rounds to 1 px); `bar:scope-merged-cell` (the hypotheses are 1 px apart); `bar:bounds-positional` (base-only bars are gradient, so no length can be measured); `bar:showvalue-copy-text` (clipboard text, not pixels) |
+| blocked (25) | `bar:settings-precondition-probe` (fail-closed: two settings unobservable, see Needs ruling); `bar:settings-schema-defaults` (pixel evidence matches; gated by the probe); `bar:lengths-default-10-90` (refused: S3-18B-B); `bar:axis-automatic`, `bar:axis-middle`, `bar:axis-none` and the four `bar:negative-*` (rebuild and recapture axis-negative); `bar:render-gradient-stops` (no gradient-stop model: needs one, Task 20); `bar:participation-types`, `-error-presence`, `-dateserial` (rebuild and recapture participation); `bar:composition-dxf-fill`, `-with-scale`, `-overlapping-bars`, `-matching-stopIfTrue-ahead` (rebuild and recapture composition), `bar:composition-bar-stopIfTrue` (needs a background-fill observation) and `bar:composition-unresolved-stub` (needs an expression predictor); `bar:pairing-paired`, `bar:settings-paired-precedence`, `bar:pairing-base-only`, `bar:scope-whole-column` (rebuild and recapture pairing; the settings ones are also gated by the probe), `bar:pairing-standalone` (after the rebuild the saved workbook holds the canonical paired form, so the capture cannot exercise the standalone shape: Needs ruling) |
+
+**Cases the orchestrator must rebuild and recapture:**
+
+| Case | Why |
+|---|---|
+| `stage3-bar-axis-negative` | Input regenerated with the canonical colour lists |
+| `stage3-bar-participation` | Input regenerated: the date serial moves to 30, clear of the control's date text that caused `bar-edge-under-text` at D5 |
+| `stage3-bar-composition` | It was never resaved (the saved workbook is byte-identical to the input). The kept capture now measures cleanly |
+| `stage3-bar-pairing` | The verifier now accepts Excel's canonical resave |
+
+The commands are `build.ts --stage 3 --case <id>` then `capture.ts --stage 3 --case <id>`. The probe should not be recaptured unless a ruling extends it.

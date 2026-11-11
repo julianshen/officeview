@@ -30,11 +30,23 @@ bun scripts/cf-refs/audit.ts --stage 3 --case stage3-bar-settings-probe
 
 `build.ts` opens the generated input in Excel, requires a repair-free open, resaves it, preserves a stripped or repaired result as `tests/fixtures/xlsx-cf/stage3-bar-settings-probe.rejected.xlsx`, and records the resave receipt (`--refresh-clock-date` has no effect on Stage 3: there are no clock cases). `capture.ts` takes the `copy picture` bitmap at zoom 100 (1 px per point, DPR 1), reads the data bar settings through `buildDataBarSettingsProbeScript` (the `databar format condition`, `databar border` and `negative bar format` readback, one row per bar by priority), measures the bars with `measureBarGeometry`, and writes `refs/stage3-bar-settings-probe.png` and `.json` (raw px in `observedBars`, `barSettingsReadback`, `barHypotheses`, `lockBefore`/`lockAfter`, `zoom`, `dpr`).
 
-**Gate.** The case must come back `measured`, and the audit line must show both `bar:settings-precondition-probe` and `bar:pixel-calibration` verified. The two ways it fails:
+**Gate (re-specified by Task 18b, OD-7 as amended).** The object-model readback is retired: `databar format condition` is unreachable on Excel 16.114, and any `excel-object-model` claim refuses. The probe is now a **pixel precondition**. In the same capture, probe B (priority 1) and default control C (priority 2) are compared, and each pinned setting must be visible and different from the control:
+
+- fill: solid versus gradient (the bar's ends 2 px inside its edges: within ±8 per channel is solid, more than 16 apart is gradient);
+- border: present (outermost column ±8 of `FF00B050`) versus none;
+- direction: the fixed end is on the right versus on the left;
+- axis: anchored at the cell midpoint versus at the edge (on all-positive data Excel draws no axis line);
+- value text: hidden versus shown.
+
+The probe's fill must also be within ±8 of `FF0000FF`.
+
+minLength/maxLength (the bars start at a midpoint axis) and the negative colour type (there is no negative value) cannot be seen in this capture. The probe therefore fails closed with `bar-settings-unobserved` until a ruling either accepts the five visible settings or extends the probe fixture. **Do not recapture the probe for this**: calibration is verified, and geometry capabilities do not depend on the probe. Every other settings capability (`bar:settings-*`, `bar:pairing-*`) is gated by the probe and also needs `bar:pixel-calibration`. Every capability with pixel hypotheses also needs `bar:geometry-insets`.
+
+The case must come back `measured` with `bar:pixel-calibration` verified. The ways it fails:
 
 | Refusal code in the case `reason` | Meaning | Action |
 |---|---|---|
-| `bar-settings-unobserved` | A probe readback value is `missing value` or equals the default control's, so the object model did not observe the setting. | **Stop.** Record it in `docs/validation/xlsx-cf.md` section 11. Every `bar:settings-*` / `bar:pairing-*` capability stays unverified. |
+| `bar-settings-unobserved` | A probe setting is not observed consistently in the pixels, equals the default control's observation, or cannot be seen in this capture (see the gate above). | Record it in `docs/validation/xlsx-cf.md` section 11. Every `bar:settings-*` / `bar:pairing-*` capability stays unverified. Geometry capabilities are unaffected. |
 | `bar-calibration-failed` | Gridline-to-gridline widths of the 10/30/60 character columns differ from `computeWorksheetRangeGeometry` by more than 1 px (or no gridline was found), or the solid DXF cell is more than 8 per channel off its ARGB. | **Stop.** Record it. Every geometry capability stays unverified. |
 
 If either fails, do not run the remaining cases: record the failure, leave every case `recipe-pending`, and hand back. Never retry with edited tolerances.
@@ -73,6 +85,19 @@ After every case:
    | `cell-expectation-mismatch` | `barApplied` disagrees with the PNG. |
    | `geometry-mismatch` / `sidecar-mismatch` | Excel-measured geometry, hashes or the recorded px disagree with the capture. |
 3. If a case stays `recipe-pending`, leave it: do not rerun with different flags to "make it pass", and do not edit the manifest.
+4. **Rerun once.** These are transient, not findings, so rerun the same case once with the same commands, and stop if the second run refuses the same way:
+   - `display-locked`;
+   - a capture that promoted with `geometrySource: "unverified"` (the live geometry read failed; run 3 saw it once).
+5. **Close check.** `capture.ts` now closes the workbook its capture opened (`captureAndCloseOwned`) and never a pre-existing one. After each `capture.ts` run, the open-workbook list must equal the pre-existing set from step 0, with no `<id>.xlsx` left open. If one is left, record it as a harness defect.
+
+Refusal codes added or changed by Task 18b:
+
+| Code | Meaning |
+|---|---|
+| `bar-hypothesis-none` | Now also a **per-capability finding**. An unclaimed capability whose measurement matches no hypothesis is listed in the verifier's `refusedCapabilities` and the case still verifies. Only a claimed one refuses the case. |
+| `unobserved-expectation` | Also covers an `excel-object-model` claim (retired) and a claim recorded in the wrong `barEvidence` field. |
+| `sidecar-mismatch` | Also covers sidecar `barHypotheses` that differ from the verifier's recomputation. |
+| `bar-background-unresolved` | A filled cell whose corner samples (1 px inside the cell) split: a full-height bar or a near-full bar over a fill. Excel's vertically inset bars never trigger it. |
 
 ## 3. The unresolved-shapes case (named explicitly)
 
@@ -93,7 +118,7 @@ Record Excel's open/repair/strip outcome per shape (orphan x14, duplicate GUID, 
 ## 5. Re-verify, audit, write evidence
 
 ```
-bun scripts/cf-refs/capture.ts --stage 3 --verify-only     # re-verifies every Stage 3 sidecar without touching Excel
+bun scripts/cf-refs/capture.ts --stage 3 --verify-only     # re-verifies every Stage 3 sidecar without touching Excel; relabels barEvidence from the pixel recomputation; skips a kept capture whose sidecar records an older saved workbook
 bun scripts/cf-refs/audit.ts --stage 3                     # needs ok=true; stageComplete=true only when every supported capability is verified
 bun scripts/cf-refs/audit.ts --stage 3 --write             # only if capabilities verified; the only way verifiedCapabilities.ts changes
 bun scripts/cf-refs/audit.ts --stage 3 --write             # second run must change nothing (idempotent, Lesson 4)
