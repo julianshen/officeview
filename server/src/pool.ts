@@ -14,14 +14,20 @@ import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
 import type { MarkRasterResult } from './mark/mark-raster'
 import type { MarkSpec, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
+import type { TextJob, TextReply } from './text/served'
 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
 export class RenderFailed extends Error { constructor(m: string, readonly refusal?: string) { super(m); this.name = 'RenderFailed' } }
+/** A text op whose units do not all fit the worker's served-index cache at once (Task 5 maps it to copy-too-large). */
+export class TextTooLarge extends Error { constructor(readonly missing: number[]) { super(`text range exceeds the served-index cache (${missing.length} units missing)`); this.name = 'TextTooLarge' } }
 
 export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'full'; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
 /** A per-session Layer-1 encode (§9.4); no document affinity. */
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
+export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & TextJob
+/** Admission charge of one text op (a prepare paints one unit surface). */
+export const TEXT_JOB_BYTES = 8 * 1024 * 1024
 export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
@@ -196,6 +202,37 @@ export class Pool {
         const msg: WorkerRequest = { type: 'encode', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, ...(this.testHooks && job.hangMs ? { hangMs: job.hangMs } : {}), ...(this.testHooks && job.crash ? { crash: true } : {}) }
         this.encodes++
         return this.runJob(slot, admitted, msg) as Promise<MarkRasterResult>
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** A text op on the docRef's worker (affinity, admission, deadline as
+   * `render`). A `{ missing }` answer prepares each missing unit (one job
+   * each, render deadline) and retries the op once; still missing ⇒
+   * TextTooLarge. All of it runs in one exclusive turn of the slot, and the
+   * recycle check comes only after the op is answered. */
+  async text(sessionId: string, job: PoolTextJob, bytesEstimate = TEXT_JOB_BYTES): Promise<TextReply> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    const slot = this.pick(job.docRef)
+    const { docRef: _d, contentPolicy: _c, ...op } = job
+    try {
+      return await this.exclusive(slot, async () => {
+        const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+        const run = (j: TextJob) => this.runJob(slot, admitted, { type: 'text', id: this.nextId++, docKey, job: j }) as Promise<TextReply>
+        let r = await run(op as TextJob)
+        if ('missing' in r) {
+          for (const unit of r.missing) await run({ op: 'prepare', unit })
+          r = await run(op as TextJob)
+          if ('missing' in r) throw new TextTooLarge(r.missing)
+        }
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
