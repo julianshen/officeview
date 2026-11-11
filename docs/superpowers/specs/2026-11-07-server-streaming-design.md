@@ -800,7 +800,7 @@ drops the unit and re-requests once.
 
 - **`final-raster` (default):** whole units painted to the final frame
   server-side, shipped as rasters; occlusion is structural.
-- **`culled-commands` (protected, opt-in; details in appendix §20, the
+- **`culled-commands` (protected, opt-in; not built — §17 close-out note; details in appendix §20, the
   M-rule's normative home):** ships commands after a **stored per-command
   occlusion proof**; the M-rule constraints and the mixed-unit rule are
   defined in §20, so a unit failing them downgrades to `final-raster`.
@@ -1643,6 +1643,16 @@ Each stage a PR; gates by §16 suite IDs; measured, not narrated.
 | **3b/3c/3d** | stream presentation per §12a (static+notes; animation; optional media = §12a.6) | §12a.8 lists (restored round 8); T5 green; 3c further blocked on the T5 prototype gates |
 | **4a/4b/4c** | XLSX tiles via the viewport pipeline; selection parity; server sort/filter with the C1 purge + authorization + hostile tests + rate class + pivot/slicer refusal strips | T8 green **including tile p95 ≤ 120 ms (500×100), sort/filter row-order parity with local mode, selection parity, and the off-viewport covered-cell withholding** (round-8 restore) |
 
+> **Stage 2 closed without 2c (owner decision, 2026-11-11).** Stages 2a (PR #65) and 2b (PR #68)
+> shipped. The remaining Stage-2 items — the command-culling occlusion store, the M-rule
+> prototype and the per-session scratch lease — are **not built**. A corpus measurement
+> (`docs/validation/streaming-s2c-measure.md`) found `culled-commands` saves only 0–8 % of bytes
+> over `final-raster` while the visible mark stays baked into the raster; the larger saving
+> (33–48 %) comes from moving the visible mark out of the raster, which a modified replayer
+> could strip. The owner keeps the visible mark baked in for protected sessions, so
+> `culled-commands` stays unshipped and protected sessions answer `final-raster`. Reopen only
+> with dense-page evidence and a new owner decision.
+
 ## 18. Boundaries
 
 **Always:** developer chooses mode by source type; once a session is open
@@ -1700,7 +1710,7 @@ The default projection is `final-raster`. The command-projection extension
 ships later, stage-gated, for deployments that want smaller payloads:
 
 
-- **`culled-commands` (protected, opt-in):** per-command occlusion proof
+- **`culled-commands` (protected, opt-in) — not built; see the Stage 2 close-out note in §17:** per-command occlusion proof
   (recorded with the record, never the recorder's opinion); units failing
   proof downgrade to `final-raster`. The **M-rule** requires **every
   content-bearing component** of the unit to be a protected transmitted
