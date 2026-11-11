@@ -18909,7 +18909,7 @@
             "ref": "B2",
             "controlRef": "B8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -18964,7 +18964,7 @@
             "ref": "C2",
             "controlRef": "C8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -19074,7 +19074,7 @@
             "ref": "E2",
             "controlRef": "F2",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -19253,11 +19253,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-pairing.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-pairing.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-pairing.json",
+          "pngSha256": "fa6077f9130b7ed979ffa396da5ffedb64aec58a89dfec557ffb01c6e79e0a5a"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
