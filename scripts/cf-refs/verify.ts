@@ -1672,9 +1672,14 @@ export function measureBarGeometry(
     const h = box.y1 - box.y0
     if (w <= 0 || h <= 0) return refuse('geometry-mismatch', `Bar cell ${ref} has no pixel area`)
     const ys = BAR_SCAN_FRACTIONS.map(f => box.y0 + Math.min(h - 1, Math.floor(h * f)))
+    // Bar ink must differ from the control AND from the cell's own background: a control that shows value text
+    // (while the bar cell hides it) must not read as bar. The control's background stands in for the cell's, because
+    // a full-width bar can cover the bar cell's own perimeter (the control carries no bar).
+    const background = sampleCellBackgroundRgb(png, ctrl)
     const delta = (dx: number, y: number): number => {
       const cy = Math.min(png.height - 1, ctrl.y0 + (y - box.y0))
-      return rgbMaxDelta(pixelAt(png, box.x0 + dx, y), pixelAt(png, ctrl.x0 + dx, cy))
+      const px = pixelAt(png, box.x0 + dx, y)
+      return Math.min(rgbMaxDelta(px, pixelAt(png, ctrl.x0 + dx, cy)), rgbMaxDelta(px, background))
     }
     const edges = ys.map(y => {
       let left = -1

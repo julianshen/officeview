@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -3184,21 +3184,38 @@ describe('CF oracle verifier', () => {
       'stage3-bar-unresolved-shapes',
     ])
     for (const c of manifest.cases.filter(x => x.stage === 3)) {
-      // Preparation only: nothing was captured, so nothing may claim evidence.
-      expect(['recipe-pending', 'unsupported']).toContain(c.status)
-      expect(c.expected.provenance).toBe('seed-hypothesis')
+      // Invariants that hold before, during and after capture, as the harness writes the manifest.
+      expect(['recipe-pending', 'unsupported', 'measured']).toContain(c.status)
       expect(c.expected.inputSha256).toMatch(/^[0-9a-f]{64}$/)
       expect(c.expected.savedSha256).toMatch(/^[0-9a-f]{64}$/)
-      expect(c.resavedByExcel).not.toBe(true)
-      for (const cap of c.captures) expect(cap.pngSha256).toBeUndefined()
+      if (c.resavedByExcel === true) {
+        expect(c.expected.savedSha256).toBe(sha256(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved)))))
+      }
+      let hasSidecar = false
+      for (const cap of c.captures) {
+        if (cap.pngSha256 === undefined) continue
+        const png = resolve(REPO_ROOT, cap.pngPath)
+        expect(existsSync(png), cap.pngPath).toBe(true)
+        expect(existsSync(resolve(REPO_ROOT, cap.sidecarPath)), cap.sidecarPath).toBe(true)
+        expect(sha256(new Uint8Array(readFileSync(png)))).toBe(cap.pngSha256)
+        hasSidecar = true
+      }
       for (const cell of c.expected.cells) {
-        if (cell.barEvidence) expect(cell.barEvidence).toEqual({ settings: 'unverified', geometry: 'unverified' })
+        if (!cell.barEvidence) continue
+        expect(['excel-object-model', 'unverified']).toContain(cell.barEvidence.settings)
+        expect(['pixel-measured', 'non-discriminating', 'unverified']).toContain(cell.barEvidence.geometry)
+        if (cell.barEvidence.settings === 'excel-object-model' || cell.barEvidence.geometry === 'pixel-measured') {
+          expect(hasSidecar, `${c.id}:${cell.ref} claims evidence without a capture sidecar`).toBe(true)
+        }
       }
       const res = verifyCfCase(c, { rootDir: REPO_ROOT })
-      expect(res.kind).toBe('refusal')
       if (res.kind === 'refusal') {
         expect(res.structuralValid).toBe(true)
         expect(['semantic-evidence-pending', 'unsupported-capability']).toContain(res.code)
+      } else {
+        expect(res.status).toBe('measured')
+        expect(c.status).toBe('measured')
+        expect(res.savedSha256).toBe(c.expected.savedSha256)
       }
     }
     // Every Stage 3 capability is a bar:* capability with a ruling citation, and production holds none of them.
@@ -3370,6 +3387,24 @@ describe('CF oracle verifier', () => {
     expect(insetBar.bar!.rightPx).toBe(117)
     // An unknown cell refuses instead of inventing a measurement.
     expect(measureBarGeometry(solid, barGeom, ['Z9'], measureOpts)).toMatchObject({ kind: 'refusal' })
+  })
+
+  it('bar edges ignore the control cell\'s value text and still see a bar lighter than text', () => {
+    // Control B3 shows value text (dark pixels on the middle scanline only) to the right of the bar; the bar cell hides its value.
+    const withText = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 80, 30)
+      ctx.fillStyle = '#000000'; ctx.fillRect(160, 72, 10, 6)
+    }))!
+    const res = measureBarGeometry(withText, barGeom, ['B1'], measureOpts)
+    expect(res).toBeInstanceOf(Map)
+    expect((res as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
+    // A bar lighter than text (but >= 64 from the background) still measures.
+    const light = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#9090ff'; ctx.fillRect(40, 0, 80, 30)
+      ctx.fillStyle = '#000000'; ctx.fillRect(160, 72, 10, 6)
+    }))!
+    const lightRes = measureBarGeometry(light, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>
+    expect(lightRes.get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
   })
 
   it('non-discriminating bar variant keeps its gate closed (Lesson 3)', () => {
