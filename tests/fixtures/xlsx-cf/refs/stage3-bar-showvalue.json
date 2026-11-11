@@ -1,0 +1,211 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 625,
+  "height": 361,
+  "colWidthsPt": [
+    84,
+    180,
+    180,
+    180
+  ],
+  "rowHeightsPt": [
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "940b06e74d7131476be89d6dd95c93bd44fb801754dd1c549547e994d98e3eb3",
+  "sheet": "Sheet1",
+  "range": "A1:D12",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "940b06e74d7131476be89d6dd95c93bd44fb801754dd1c549547e994d98e3eb3",
+  "pngSha256": "5ceb947bd83df80331a5e73cf692ba3cb29f6147b363212cbc03f324f5a096b5",
+  "capturedAt": "2026-11-11T16:33:30.162Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "barSettingsReadback": [],
+  "observedBars": [
+    {
+      "ref": "B2",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 120,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "B3",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 156,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 191,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "B5",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 227,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "B6",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 262,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "C2",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 300,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "C3",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 336,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "C4",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 371,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "C5",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 407,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "C6",
+      "cellLeftPx": 264,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 442,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "D2",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 480,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "D3",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 516,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "D4",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 551,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "D5",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 587,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "D6",
+      "cellLeftPx": 444,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 446,
+        "rightPx": 622,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    }
+  ],
+  "barHypotheses": {}
+}
