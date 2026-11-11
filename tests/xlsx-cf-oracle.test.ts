@@ -3126,7 +3126,7 @@ describe('CF oracle verifier', () => {
     const companion = `<x14:cfRule type="dataBar" id="${GUID1}"><x14:dataBar${o.x14Attrs ?? ' minLength="0" maxLength="100" gradient="0"'}>${o.x14Cfvo ?? '<x14:cfvo type="num"><xm:f>20</xm:f></x14:cfvo><x14:cfvo type="autoMax"/>'}${o.x14Extra ?? ''}<x14:negativeFillColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule>`
     return (
       `<conditionalFormatting sqref="B2:B3">${base}${second}</conditionalFormatting>` +
-      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}>${companion}<xm:sqref>B2:B3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}>${companion}<xm:sqref>B2:B3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
     )
   }
 
@@ -3294,7 +3294,7 @@ describe('CF oracle verifier', () => {
       bar: { pairing: 'standalone', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { gradient: '0' }, colors: { fill: 'FF0000FF' } },
     }
     const standaloneXml = (fill: string, priority = ' priority="2"') =>
-      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}><x14:cfRule type="dataBar"${priority} id="${GUID1}"><x14:dataBar gradient="0"><x14:cfvo type="min"/><x14:cfvo type="max"/>${fill}</x14:dataBar></x14:cfRule><xm:sqref>B2:B3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+      `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}><x14:cfRule type="dataBar"${priority} id="${GUID1}"><x14:dataBar gradient="0"><x14:cfvo type="min"/><x14:cfvo type="max"/>${fill}</x14:dataBar></x14:cfRule><xm:sqref>B2:B3</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
     expect(await run(standaloneXml('<x14:fillColor rgb="FF0000FF"/>'), [standaloneMarker])).toMatchObject({ code: 'semantic-evidence-pending', structuralValid: true })
     expect(await run(standaloneXml(''), [standaloneMarker])).toMatchObject({ code: 'stripped-rule', structuralValid: false })
     expect(await run(standaloneXml('<x14:fillColor rgb="FF0000FF"/>', ''), [standaloneMarker])).toMatchObject({ code: 'stripped-rule', structuralValid: false })
@@ -3572,7 +3572,7 @@ describe('CF oracle verifier', () => {
       // The probe rule as the oracle authors it: every default overridden (paired form, priority 1).
       const probeXml =
         `<conditionalFormatting sqref="B2"><cfRule type="dataBar" priority="1"><dataBar showValue="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" ${X14_DECL}><x14:id>${GUID1}</x14:id></ext></extLst></cfRule></conditionalFormatting>` +
-        `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}><x14:cfRule type="dataBar" id="${GUID1}"><x14:dataBar minLength="0" maxLength="100" gradient="0" border="1" axisPosition="middle" direction="rightToLeft" negativeBarColorSameAsPositive="0"><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:borderColor rgb="FF00B050"/><x14:negativeFillColor rgb="FFFF0000"/></x14:dataBar></x14:cfRule><xm:sqref>B2</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
+        `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}><x14:cfRule type="dataBar" id="${GUID1}"><x14:dataBar minLength="0" maxLength="100" gradient="0" border="1" axisPosition="middle" direction="rightToLeft" negativeBarColorSameAsPositive="0"><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:borderColor rgb="FF00B050"/><x14:negativeFillColor rgb="FFFF0000"/></x14:dataBar></x14:cfRule><xm:sqref>B2</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
       const probeMarkers: CfPartMarker[] = [
         { part: barPart, extension: 'legacy', capabilityId: probeCap, sqref: 'B2', ruleType: 'dataBar', priority: 1, formulas: [], bar: { pairing: 'paired', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { showValue: '0' }, colors: { fill: 'FF0000FF' } } },
         { part: barPart, extension: 'x14', capabilityId: probeCap, sqref: 'B2', ruleType: 'dataBar', formulas: [], bar: { pairing: 'paired', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { minLength: '0', maxLength: '100', gradient: '0', border: '1', axisPosition: 'middle', direction: 'rightToLeft', negativeBarColorSameAsPositive: '0' }, colors: { border: 'FF00B050', negativeFill: 'FFFF0000' } } },

@@ -16,7 +16,7 @@ import { xlsxBytes } from './helpers/xlsx-package'
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 const X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 const XM = 'http://schemas.microsoft.com/office/excel/2006/main'
-const CF_EXT = '{78C0D931-6437-407d-A8EE-F0AA7539E650}'
+const CF_EXT = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
 const DB_EXT = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
 
 const DXF_FILL = `<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>`

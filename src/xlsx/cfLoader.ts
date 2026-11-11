@@ -40,7 +40,7 @@ export async function ensureCfParser<T = CfParser>(
  * (mirroring `CF_X14_EXTENSION_URI` in `./cf/parse`) so this bridge stays
  * eager-trivial: no runtime import of the lazy CF chunk.
  */
-export const CF_PRESENCE_EXTENSION_URI = '{78C0D931-6437-407d-A8EE-F0AA7539E650}'
+export const CF_PRESENCE_EXTENSION_URI = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
 
 /**
  * Lexical presence check for conditional formatting on a worksheet node.

@@ -9413,8 +9413,8 @@
         "solidArgb": "FFC6EFCE"
       },
       "expected": {
-        "inputSha256": "5dd93c7f0cf75f5a23898546cd2d0340eb7971af767296fee8586a446aac9b9d",
-        "savedSha256": "5dd93c7f0cf75f5a23898546cd2d0340eb7971af767296fee8586a446aac9b9d",
+        "inputSha256": "a596063f9c497e33cc2e7a8a6abf626919356671cb25c699e9f9d57fd2fc90c5",
+        "savedSha256": "3776abb44c54a96458e76b2fb494ec66f3ffbafe6fd406a9e4294f086f950123",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -9658,17 +9658,25 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.json",
+          "pngSha256": "932b9eac6db89d245666d2e840dccb9170c0d3cff34c25d5bb9334731ead332e"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s3/tests/fixtures/xlsx-cf/stage3-bar-settings-probe.rejected.xlsx: bar bar:settings-precondition-probe on B2:B6: the base rule has no <x14:id> link to its companion",
+      "reason": "Capture kept but not promoted: bar measurement refused (bar-edge-unstable: Bar cell B2: scanline edges disagree beyond 1 px (left 156/156/156, right 173/260/173))",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-11T15:37:40.038Z",
+        "excelVersion": "16.114",
+        "inputSha256": "a596063f9c497e33cc2e7a8a6abf626919356671cb25c699e9f9d57fd2fc90c5",
+        "savedSha256": "3776abb44c54a96458e76b2fb494ec66f3ffbafe6fd406a9e4294f086f950123",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage3-bar-lengths",

@@ -46,7 +46,7 @@ const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 const NS_X14AC = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac'
 const NS_X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 const NS_XM = 'http://schemas.microsoft.com/office/excel/2006/main'
-const X14_CF_EXT_URI = '{78C0D931-6437-407d-A8EE-F0AA7539E650}'
+const X14_CF_EXT_URI = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
 
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')

@@ -51,7 +51,7 @@ import { X14_MAIN_NS } from '../tableStyles/parseStylesExtras'
 export const XM_MAIN_NS = 'http://schemas.microsoft.com/office/excel/2006/main'
 export const SPREADSHEETML_MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 /** Worksheet `ext` URI carrying `x14:conditionalFormattings`. */
-export const CF_X14_EXTENSION_URI = '{78C0D931-6437-407d-A8EE-F0AA7539E650}'
+export const CF_X14_EXTENSION_URI = '{78C0D931-6437-407d-A8EE-F0AAD7539E65}'
 /** Rule `ext` URI carrying the data-bar pairing `<x14:id>`. */
 export const DB_X14_EXTENSION_URI = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}'
 

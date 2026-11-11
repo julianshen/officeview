@@ -554,7 +554,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
       // The bounded lazy second pass applies the complete namespace policy.
       if ((nsDepth === 1 && nsStack[0]?.local === 'worksheet' && local === 'conditionalFormatting') ||
           (nsDepth === 3 && nsStack[0]?.local === 'worksheet' && nsStack[1]?.local === 'extLst' &&
-           nsParent?.local === 'ext' && nsParent.extensionUri === '{78C0D931-6437-407d-A8EE-F0AA7539E650}' &&
+           nsParent?.local === 'ext' && nsParent.extensionUri === '{78C0D931-6437-407d-A8EE-F0AAD7539E65}' &&
            local === 'conditionalFormattings')) meta.hasConditionalFormatting = true
       const isSparklineExtension = local === 'sparklineGroups' && uri === X14_SPARKLINE_NS
         && nsParent?.local === 'ext' && nsParent.uri === SPREADSHEETML_NS && nsParent.extensionUri === SPARKLINE_EXTENSION_URI

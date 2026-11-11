@@ -38,7 +38,7 @@ describe('paged CF capture', () => {
         twoColorScale +
         threeColorScale +
         themeScale +
-        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1=&quot;茶&quot;</xm:f></x14:cfRule><xm:sqref>C1</xm:sqref></x14:conditionalFormatting>' +
+        '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1=&quot;茶&quot;</xm:f></x14:cfRule><xm:sqref>C1</xm:sqref></x14:conditionalFormatting>' +
         x14Scale +
         '</x14:conditionalFormattings></ext></extLst>',
     )
@@ -125,7 +125,7 @@ it('cancel during the paged CF pass drains the partial collector and publishes n
 it('keeps excluded AlternateContent and wrong-namespace paths out of effective CF', async () => {
   for (const inner of [
     `<AlternateContent><Choice>${base}</Choice></AlternateContent>`,
-    '<extLst><ext xmlns="urn:wrong" uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings><x14:conditionalFormatting><xm:sqref>A1</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>',
+    '<extLst><ext xmlns="urn:wrong" uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><xm:sqref>A1</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>',
   ]) {
     const result = await stream(wrap(inner))
     expect(result.lease.value.rules).toEqual([])
@@ -152,7 +152,7 @@ it('refuses CF before constructing unadmitted raw DXFs, preserving the base impo
   } finally { await session.release(); allocator.mockRestore(); loader.mockRestore() }
 })
 it('publishes late x14 definitions with the same normalized model as resident parsing', async () => {
-  const extension = '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AA7539E650}"><x14:conditionalFormattings xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:conditionalFormatting><x14:cfRule type="expression" priority="1" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1&gt;2</xm:f><x14:dxf><x14:font><x14:b/></x14:font></x14:dxf></x14:cfRule><xm:sqref>A1:A4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'
+  const extension = '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:conditionalFormatting><x14:cfRule type="expression" priority="1" id="{01234567-89AB-CDEF-0123-456789ABCDEF}"><xm:f>A1&gt;2</xm:f><x14:dxf><x14:font><x14:b/></x14:font></x14:dxf></x14:cfRule><xm:sqref>A1:A4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'
   const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(xlsxBytes({ afterSheetData: extension })).buffer]) }, { docId: 'x14-cf', profile: 'D' })
   try {
     await session.done
