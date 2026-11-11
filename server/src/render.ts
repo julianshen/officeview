@@ -5,7 +5,7 @@
  * or record commands (relaxed sessions). Deterministic: no clock, no
  * randomness; the mark text is a parameter (§14).
  */
-import { occlusionObserver, type OcclusionEvidence } from './occlusion'
+import { ObserverBudgetExceeded, occlusionObserver, type OcclusionEvidence } from './occlusion'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -20,7 +20,7 @@ import { UNIT_RASTER_DECODED_CAP } from '../../src/stream/raster'
 import { serverBackend } from './backend'
 import { facesUsed, loadPack, pinFonts } from './fonts'
 import { admit, projectPackage, type PolicyDiagnostic } from './policy'
-import { answerText, buildServedUnit, prepareWorkspace, recordSpans, ServedCache, spansBytes, TEXT_PREPARE_ALLOWANCE, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
+import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
 export const SCALE_BUCKETS = [1, 2] as const
@@ -50,11 +50,11 @@ export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitI
 export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
 
 /** §7.7: every paint pass that serves a unit records occlusion evidence. */
-function observe(ctx: CanvasRenderingContext2D, w: number, h: number, observers: readonly PaintObserver[]) {
-  const occ = occlusionObserver(w, h)
+function observe(ctx: CanvasRenderingContext2D, w: number, h: number, observers: readonly PaintObserver[], maxObserverBytes?: number) {
+  const occ = occlusionObserver(w, h, maxObserverBytes)
   let painted = occ.wrap(ctx)
   for (const o of observers) if (o.wrap) painted = o.wrap(painted)
-  return { painted, evidence: () => occ.evidence(), runDetails: () => occ.runDetails() }
+  return { painted, evidence: () => occ.evidence(), runDetails: () => occ.runDetails(), exceeded: () => occ.exceeded() }
 }
 
 const root = resolve(import.meta.dir, '../..')
@@ -211,24 +211,37 @@ export class DocumentHost {
     const w = sizeCeil(Math.max(1, r.widthPx)), h = sizeCeil(Math.max(1, r.heightPx))
     if (!unitSurfaceAllowed(w, h)) throw new RenderRefusal('oversize')
     if (!(prepareWorkspace(w, h) <= grant)) throw new RenderRefusal('grant', `prepare needs ${prepareWorkspace(w, h)} bytes, granted ${grant}`)
-    const spans = recordSpans((ctx) => paintable.paint(ctx), this.backend.createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D)
-    // Bounded text work: recorded spans, run details, sanitised copies and lines must fit the allowance.
-    if (!(4 * spansBytes(spans) <= TEXT_PREPARE_ALLOWANCE)) throw new RenderRefusal('grant', 'unit text exceeds the prepare allowance')
+    // Bounded text work: running caps on recorded spans and on the visual
+    // pass's observer records, both inside TEXT_PREPARE_ALLOWANCE.
+    let spans
+    try {
+      spans = recordSpans((ctx) => paintable.paint(ctx), this.backend.createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D, TEXT_RECORD_BUDGET)
+    } catch (err) {
+      if (err instanceof TextBudgetExceeded) throw new RenderRefusal('grant', err.message)
+      throw err
+    }
     this.pages++
-    const { runDetails } = this.paintPass(paintable, index, w, h, 1, [])
-    return buildServedUnit(spans, runDetails(), 1)
+    let pass
+    try {
+      pass = this.paintPass(paintable, index, w, h, 1, [], OBSERVER_BUDGET)
+    } catch (err) {
+      if (err instanceof ObserverBudgetExceeded) throw new RenderRefusal('grant', err.message)
+      throw err
+    }
+    if (pass.exceeded()) throw new RenderRefusal('grant', 'occlusion observer record budget exceeded')
+    return buildServedUnit(spans, pass.runDetails(), 1)
   }
 
   /** The observed paint of one unit (shared by the raster render and the text visual pass). */
-  private paintPass(paintable: PaintableArray[number], index: number, w: number, h: number, scale: number, observers: readonly PaintObserver[]) {
+  private paintPass(paintable: PaintableArray[number], index: number, w: number, h: number, scale: number, observers: readonly PaintObserver[], maxObserverBytes?: number) {
     const canvas = this.backend.createCanvas(w, h)
     const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
     ctx.scale(scale, scale)
-    const { painted, evidence, runDetails } = observe(ctx, w, h, observers)
+    const { painted, evidence, runDetails, exceeded } = observe(ctx, w, h, observers, maxObserverBytes)
     for (const o of observers) o.beforeUnit(painted, index)
     paintable.paint(painted)
     for (const o of observers) o.afterUnit(painted, index)
-    return { canvas, ctx, evidence, runDetails }
+    return { canvas, ctx, evidence, runDetails, exceeded }
   }
 
   private raster(paintable: PaintableArray[number], index: number, w: number, h: number, scale: number, page: { widthPx: number; heightPx: number }, mark: WatermarkOptions | undefined, observers: readonly PaintObserver[]): RenderedUnit & { kind: 'raster' } {

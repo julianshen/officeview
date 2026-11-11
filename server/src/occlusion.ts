@@ -70,7 +70,22 @@ function colorAlpha(style: unknown): number | undefined {
 }
 
 type Grid = 'cover' | 'erase' | 'filter'
-export function occlusionObserver(width: number, height: number): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[] } {
+/** Thrown from a hooked op once an observer's record budget is spent. */
+export class ObserverBudgetExceeded extends Error { constructor() { super('occlusion observer record budget exceeded'); this.name = 'ObserverBudgetExceeded' } }
+/**
+ * `maxBytes` (optional): a running cap on the observer's records — marks,
+ * runs, path elements, clip stack — estimated as they are added (64 B per
+ * mark/path element, 96 B + 2 B/char per run, 16 B per saved clip; never
+ * decremented). When the next record would pass it, the op throws
+ * ObserverBudgetExceeded before recording and `exceeded()` stays true. Unset
+ * (every render path) means unlimited.
+ */
+export function occlusionObserver(width: number, height: number, maxBytes = Number.POSITIVE_INFINITY): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[]; exceeded(): boolean } {
+  let spent = 0, over = false
+  const charge = (n: number) => {
+    if (over || spent + n > maxBytes) { over = true; throw new ObserverBudgetExceeded() }
+    spent += n
+  }
   /** The coverage "grid" at full precision: every painting op's device box, in
    * sequence order (a 4 px cell grid withheld every spreadsheet cell next to a
    * gridline; a 1 px grid costs ~40 MB per page). */
@@ -89,7 +104,7 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
 
   const mark = (grid: Grid, r: Rect) => {
     const b = intersect(r, surface)
-    if (b[2] > b[0] && b[3] > b[1]) marks.push({ seq, box: b, grid })
+    if (b[2] > b[0] && b[3] > b[1]) { charge(64); marks.push({ seq, box: b, grid }) }
   }
   const overlaps = (a: Rect, b: Rect) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 
@@ -102,6 +117,7 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   const axisAligned = (ctx: CanvasRenderingContext2D) => { const t = ctx.getTransform(); return Math.abs(t.b) < 1e-9 && Math.abs(t.c) < 1e-9 }
   /** Extend the current subpath through device points (one segment's hull). */
   const segment = (pts: Array<[number, number]>) => {
+    charge(192)
     let r = cur ? grow(EMPTY, cur[0], cur[1]) : EMPTY
     for (const p of pts) r = grow(r, p[0], p[1])
     if (!subpaths.length || !cur) { subpaths.push(r); start = pts[0]; segInSub = 0 }
@@ -157,6 +173,7 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
     else if (!inside(ink, surface)) run.reason = 'off-surface'
     else if (clip === 'nonrect') run.reason = 'nonrect-clip'
     else if (clip && !inside(ink, clip)) run.reason = 'clipped'
+    charge(96 + 2 * str.length)
     runs.push(run)
     draw(ctx, ink, style)
   }
@@ -177,17 +194,17 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   }
 
   const hooks: Record<string, (ctx: CanvasRenderingContext2D, a: unknown[]) => void> = {
-    save: () => { clipStack.push(clip) },
+    save: () => { charge(16); clipStack.push(clip) },
     restore: () => { if (clipStack.length) clip = clipStack.pop() },
     beginPath: () => { subpaths = []; segments = []; joins = []; segInSub = 0; cur = start = undefined; pathRects = 0; pathOther = false; pathRect = undefined },
-    moveTo: (c, a) => { cur = start = devicePoint(c, a[0] as number, a[1] as number); subpaths.push(grow(EMPTY, cur[0], cur[1])); segInSub = 0 },
+    moveTo: (c, a) => { charge(64); cur = start = devicePoint(c, a[0] as number, a[1] as number); subpaths.push(grow(EMPTY, cur[0], cur[1])); segInSub = 0 },
     lineTo: (c, a) => segment(pts(c, a, 1)),
     quadraticCurveTo: (c, a) => segment(pts(c, a, 2)),
     bezierCurveTo: (c, a) => segment(pts(c, a, 3)),
     arcTo: (c, a) => segment(pts(c, a, 2)),
     arc: (c, a) => { const [x, y, r] = a as number[]; segment(box(c, x! - r!, y! - r!, x! + r!, y! + r!)) },
     ellipse: (c, a) => { const [x, y, rx, ry] = a as number[]; const r = Math.max(rx!, ry!); segment(box(c, x! - r, y! - r, x! + r, y! + r)) },
-    closePath: () => { if (cur && start) { segments.push(grow(grow(EMPTY, cur[0], cur[1]), start[0], start[1])); joins.push(cur, start); cur = start } },
+    closePath: () => { if (cur && start) { charge(192); segments.push(grow(grow(EMPTY, cur[0], cur[1]), start[0], start[1])); joins.push(cur, start); cur = start } },
     rect: (c, a) => {
       const [x, y, w, h] = a as number[]
       const [p0, p1, p2, p3] = box(c, x!, y!, x! + w!, y! + h!)
@@ -222,6 +239,7 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   }
 
   return {
+    exceeded: () => over,
     beforeUnit() {},
     afterUnit() {},
     wrap(ctx) {

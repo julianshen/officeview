@@ -10,7 +10,7 @@ import { DEFAULT_CAPS } from '../src/admission'
 import { serverBackend } from '../src/backend'
 import { AdmissionRefused, Pool, TEXT_JOB_BYTES, TextTooLarge, type PoolTextJob } from '../src/pool'
 import { DocumentHost, FIXED_MARK_TEXT } from '../src/render'
-import { answerText, buildServedUnit, prepareWorkspace, recordSpans, TEXT_PREPARE_ALLOWANCE, type ServedUnit, type TextReply } from '../src/text/served'
+import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, TEXT_PREPARE_ALLOWANCE, TEXT_RECORD_BUDGET, type ServedUnit, type TextReply } from '../src/text/served'
 import { augmentedFixtures } from './fixtures'
 import { corpus, disposePool, pool } from './harness'
 
@@ -391,5 +391,55 @@ describe('fix round 1: prepare admission and recycle on refusal', () => {
     // The pool still answers afterwards.
     expect(await d.text({ op: 'a11y', unit: 0 })).toMatchObject({ op: 'a11y' })
     expect(p.stats()).toMatchObject({ reserved: 0, running: 0 })
+  }, 60_000)
+})
+
+describe('fix round 2: running text-work limits and size metadata lifecycle', () => {
+  type Doc = { paintables: Array<{ spec: { widthPx: number; heightPx: number }; paint(c: CanvasRenderingContext2D): void }> }
+  async function hostWith(paint: (c: CanvasRenderingContext2D) => void) {
+    const host = new DocumentHost()
+    const o = await host.open('lim', deck, 'visible-only')
+    const doc = (host as unknown as { docs: Map<string, Doc> }).docs.get(o.docKey)!
+    const p0 = doc.paintables[0]!
+    doc.paintables[0] = { spec: p0.spec, paint }
+    const { w, h } = o.units[0]!
+    return { host, docKey: o.docKey, grant: prepareWorkspace(w, h) }
+  }
+
+  test('150,000 fillText calls are refused while recording, long before the paint completes', async () => {
+    let calls = 0
+    const { host, docKey, grant } = await hostWith((c) => { for (let i = 0; i < 150_000; i++) { calls++; c.fillText('x', 10 + (i % 50), 20) } })
+    expect(() => host.text(docKey, { op: 'prepare', unit: 0 }, grant)).toThrow(expect.objectContaining({ name: 'RenderRefusal', code: 'grant' }))
+    expect(calls).toBeGreaterThan(0)
+    expect(calls).toBeLessThan(150_000 / 4)
+    expect(calls * 258).toBeLessThanOrEqual(TEXT_RECORD_BUDGET + 1024)
+    expect(host.pages).toBe(0)
+    expect(host.servedUnit(docKey, 0)).toBeUndefined()
+  }, 60_000)
+
+  test('the visual pass observer is capped: a paint of 200,000 rects is refused before it completes', async () => {
+    let calls = 0
+    const { host, docKey, grant } = await hostWith((c) => { c.fillText('ok', 10, 20); for (let i = 0; i < 200_000; i++) { calls++; c.fillRect(i % 90, 30, 1, 1) } })
+    expect(() => host.text(docKey, { op: 'prepare', unit: 0 }, grant)).toThrow(expect.objectContaining({ name: 'RenderRefusal', code: 'grant' }))
+    // The recording pass runs the paint once in full (rects are not text); the
+    // observed pass must stop early.
+    expect(calls - 200_000).toBeLessThan(200_000 / 2)
+    expect(host.servedUnit(docKey, 0)).toBeUndefined()
+    expect(TEXT_RECORD_BUDGET * 3 + OBSERVER_BUDGET * 2).toBeLessThanOrEqual(TEXT_PREPARE_ALLOWANCE)
+  }, 60_000)
+
+  test('open/forget cycles return the pool size metadata to baseline', async () => {
+    const p = new Pool({ workers: 1 }); pools.push(p)
+    const base = p.stats().unitSizes
+    for (let i = 0; i < 4; i++) {
+      await p.open(`cycle-${i}`, deck, 'visible-only')
+      await p.open(`cycle-${i}`, deck, 'full')
+      await p.text('s1', { docRef: `cycle-${i}`, contentPolicy: 'visible-only', op: 'prepare', unit: 0 })
+      expect(p.stats().unitSizes).toBe(base + 2)
+      p.forget(`cycle-${i}`)
+      expect(p.stats().unitSizes).toBe(base)
+    }
+    p.dispose()
+    expect(p.stats().unitSizes).toBe(0)
   }, 60_000)
 })

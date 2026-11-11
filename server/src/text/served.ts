@@ -38,17 +38,41 @@ export interface ServedUnit { lines: IndexLine[]; served: number; withheld: numb
 
 /** R6: served-index cache bound per document per worker. */
 export const SERVED_CACHE_BYTES = 32 * 1024 * 1024
-/** Fixed allowance for one prepare's text structures (recorded spans, run
- * details, sanitised copies, lines). The worker refuses a unit whose recorded
- * spans estimate above a quarter of it (those four copies). */
+/** Fixed allowance for one prepare's text structures, split into the two
+ * running caps below: 3 × TEXT_RECORD_BUDGET + 2 × OBSERVER_BUDGET = 15 MiB. */
 export const TEXT_PREPARE_ALLOWANCE = 16 * 1024 * 1024
+/** Running estimate cap on recorded spans (≤ 3 copies live: recorded, sanitised, lines). */
+export const TEXT_RECORD_BUDGET = 3 * 1024 * 1024
+/** Running estimate cap on the prepare visual pass's observer records (≤ 2 copies: records + run details). */
+export const OBSERVER_BUDGET = 3 * 1024 * 1024
 /** Workspace one prepare needs: the scale-1 RGBA visual canvas plus the allowance. */
 export const prepareWorkspace = (w: number, h: number) => 4 * w * h + TEXT_PREPARE_ALLOWANCE
 
+/** Thrown once recorded spans would pass the recording budget. */
+export class TextBudgetExceeded extends Error { constructor() { super('recorded text exceeds the prepare allowance'); this.name = 'TextBudgetExceeded' } }
+
 /** Records one unit's text spans in paint order (the `buildTextIndex` setup:
- * a tiny context, the watermark muted, the caller's state restored). */
-export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny: CanvasRenderingContext2D): TextSpan[] {
+ * a tiny context, the watermark muted, the caller's state restored).
+ * `maxBytes`: a running cap on the spans' estimated size (`spansBytes`). The
+ * span that would pass it is not kept and the paint is aborted by throwing
+ * TextBudgetExceeded; if a painter swallows that, every later span is refused
+ * too and the throw is repeated after the paint returns. */
+export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny: CanvasRenderingContext2D, maxBytes = Number.POSITIVE_INFINITY): TextSpan[] {
   const spans: TextSpan[] = []
+  const sources = new Set<LogicalTextSource>()
+  let spent = 0, over = false
+  const keep = spans.push.bind(spans)
+  spans.push = (...items: TextSpan[]) => {
+    for (const span of items) {
+      let n = spanBytes(span)
+      if (span.logical && !sources.has(span.logical.source)) n += 64 + span.logical.source.text.length * 2
+      if (over || spent + n > maxBytes) { over = true; throw new TextBudgetExceeded() }
+      spent += n
+      if (span.logical) sources.add(span.logical.source)
+      keep(span)
+    }
+    return spans.length
+  }
   setWatermarkMuted(true)
   try {
     tiny.save()
@@ -56,7 +80,9 @@ export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny
   } finally {
     setWatermarkMuted(false)
   }
-  return spans
+  if (over) throw new TextBudgetExceeded()
+  // A plain array for every later consumer.
+  return [...spans]
 }
 
 const isBlank = (s: string) => s.trim() === ''

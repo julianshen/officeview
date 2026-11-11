@@ -344,6 +344,9 @@ export class Pool {
   /** Forgets a document everywhere (no session references it any more). */
   forget(docRef: string): void {
     this.dropParsed(docRef, 'visible-only'); this.dropParsed(docRef, 'full')
+    // Size metadata goes with the document; a worker recycle keeps it (the
+    // next ensureOpen re-parses and regenerates it), so does dropParsed.
+    this.unitSizes.delete(`${docRef}|visible-only`); this.unitSizes.delete(`${docRef}|full`)
     this.sources.delete(docRef)
     this.affinity.delete(docRef)
   }
@@ -352,7 +355,7 @@ export class Pool {
     return {
       workers: this.slots.map((s) => ({ index: s.index, generation: s.generation, pages: s.pages, parses: s.parses, docs: s.docs.size, busy: s.busy, closed: s.closed })),
       reserved: this.admission.reserved, running: this.admission.runningCount, queued: this.admission.queued,
-      retired: this.retired, recycled: this.recycled, encodes: this.encodes, affinity: Object.fromEntries(this.affinity),
+      retired: this.retired, recycled: this.recycled, encodes: this.encodes, affinity: Object.fromEntries(this.affinity), unitSizes: this.unitSizes.size,
     }
   }
 
@@ -362,6 +365,7 @@ export class Pool {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.unitSizes.clear()
     for (const [id, wake] of this.waiters) { this.admission.cancel(id); wake(false) }
     this.waiters.clear()
     for (const s of this.slots) {
