@@ -36,11 +36,11 @@ import {
   buildBarSidecarExtras,
   buildDecorationProbeScript,
   buildTextProbeScript,
+  captureAndCloseOwned,
   captureUnderLockGuard,
   classifyBarCapture,
   parseDataBarSettingsReadback,
   parseExcelColorToArgb,
-  readNumericCellValues,
   verifyOnlyCaptureState,
 } from '../scripts/cf-refs/capture'
 import { hasEvidence, VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
@@ -51,11 +51,14 @@ import {
   type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
+  BAR_PIXEL_PROBE_UNOBSERVABLE,
   discriminateBar,
+  evaluateBarPixelProbe,
   isCapabilityVerified,
   isCellWithinRange,
   isSupportedExcelVersion,
   measureBarGeometry,
+  measureCaseBars,
   observeCellsFromCapture,
   parseA1,
   readZipPartsSync,
@@ -3417,9 +3420,13 @@ describe('CF oracle verifier', () => {
     }))
     expect(own).toBeInstanceOf(Map)
     expect((own as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 60, rightPx: 119 })
-    // A full-width bar (perimeter covered by the bar) still measures through the control-background fallback.
-    const full = barOf(paintBarPng(ctx => { ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 200, 30) }))
-    expect((full as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 239 })
+    // A uniformly painted cell (no inset anywhere) is a filled cell with no bar: Excel's bars keep a vertical inset
+    // (bar:geometry-insets), so the old full-width fallback that read such a fill as a bar is retired.
+    const uniform = barOf(paintBarPng(ctx => { ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 200, 30) }))
+    expect((uniform as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toBeNull()
+    // A full-width bar drawn as Excel draws it (2 px vertical inset) measures through to the cell's last bar column.
+    const full = barOf(paintBarPng(ctx => { ctx.fillStyle = '#0000ff'; ctx.fillRect(42, 2, 197, 25) }))
+    expect((full as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 42, rightPx: 238 })
     // Perimeter samples that disagree beyond the strong delta leave no consistent background.
     const split = barOf(paintBarPng(ctx => {
       ctx.fillStyle = '#e0a0a0'; ctx.fillRect(40, 0, 100, 30)
@@ -3430,7 +3437,7 @@ describe('CF oracle verifier', () => {
 
     // Value text: glyphs over the bar's last columns in the bar cell, the same glyphs over white in the control.
     const glyphOverEnd = barOf(paintBarPng(ctx => {
-      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 200, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(42, 2, 197, 26)
       ctx.fillStyle = '#000000'; ctx.fillRect(232, 5, 8, 20); ctx.fillRect(232, 65, 8, 20)
     }))
     expect(glyphOverEnd).toMatchObject({ kind: 'refusal', code: 'bar-edge-under-text' })
@@ -3442,13 +3449,52 @@ describe('CF oracle verifier', () => {
     expect((clear as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
   })
 
-  it('a near-full bar in a filled cell refuses instead of measuring an inverted sliver', () => {
-    // 98 percent bar (40..237) over a light fill: the fill gap at 238..239 must not read as a bar.
-    const png = decodePngSync(paintBarPng(ctx => {
+  it('a near-full bar in a filled cell refuses instead of measuring an inverted sliver, whatever the gap (round-3 Minor a)', () => {
+    const fillWithBar = (barWidth: number) => decodePngSync(paintBarPng(ctx => {
       ctx.fillStyle = '#e0a0a0'; ctx.fillRect(40, 0, 200, 30)
-      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 198, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, barWidth, 30)
     }))!
-    expect(measureBarGeometry(png, barGeom, ['B1'], measureOpts)).toMatchObject({ kind: 'refusal', code: 'bar-background-unresolved' })
+    // Gaps of 2, 4 and 10 px at the far edge of a filled cell: the corners 1 px inside the cell split, so the fill and
+    // the bar cannot be told apart and the measurement refuses (the old < 4 px sliver rule failed open at 4+ px).
+    for (const gap of [2, 4, 10]) {
+      expect(measureBarGeometry(fillWithBar(200 - gap), barGeom, ['B1'], measureOpts), `gap ${gap}`).toMatchObject({ kind: 'refusal', code: 'bar-background-unresolved' })
+    }
+    // A 1 px gap leaves all four corners on the bar: the sliver rule refuses it.
+    expect(measureBarGeometry(fillWithBar(199), barGeom, ['B1'], measureOpts)).toMatchObject({ kind: 'refusal', code: 'bar-background-unresolved' })
+    // The same near-full bar drawn as Excel draws it (vertical inset) leaves the fill on every corner and measures exactly.
+    const excelLike = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#e0a0a0'; ctx.fillRect(40, 0, 200, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(42, 2, 190, 25)
+    }))!
+    expect((measureBarGeometry(excelLike, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 42, rightPx: 231 })
+  })
+
+  it('a bar left of a filled neighbour, an Excel dotted axis and a zero-length bar measure cleanly (run 4: composition D3, axis-negative B4)', () => {
+    // Composition D3: a vertically inset bar over a scale fill (the corners sit on the fill, two of the old corners sat on the bar).
+    const overFill = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#9f9c74'; ctx.fillRect(40, 0, 200, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(42, 2, 106, 26)
+    }))!
+    expect((measureBarGeometry(overFill, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 42, rightPx: 147 })
+    // A scale-filled cell whose value is the minimum: no bar, not a full-width one.
+    const filledNoBar = decodePngSync(paintBarPng(ctx => { ctx.fillStyle = '#f8696b'; ctx.fillRect(40, 0, 200, 30) }))!
+    expect((measureBarGeometry(filledNoBar, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toBeNull()
+    // The left neighbour's fill painted over the shared gridline column is not bar ink.
+    const bleed = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#63be7b'; ctx.fillRect(0, 0, 41, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(42, 2, 60, 26)
+    }))!
+    expect((measureBarGeometry(bleed, barGeom, ['B1'], measureOpts) as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 42, rightPx: 101 })
+    // Excel's dotted axis (3 on, 1 off) at x 100: a zero-length bar is "no bar" with its axis, not an unstable edge.
+    const dotted = (ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>) => {
+      ctx.fillStyle = '#000000'
+      for (let y = 0; y < 30; y += 4) ctx.fillRect(100, y, 1, 3)
+    }
+    const zero = decodePngSync(paintBarPng(dotted))!
+    expect((measureBarGeometry(zero, barGeom, ['B1'], { ...measureOpts, axisArgb: 'FF000000' }) as ReadonlyMap<string, CfObservedBar>).get('B1')).toMatchObject({ bar: null, axisPx: 100 })
+    // A positive bar starting after the axis: the axis column is never part of the bar.
+    const positive = decodePngSync(paintBarPng(ctx => { dotted(ctx); ctx.fillStyle = '#0000ff'; ctx.fillRect(101, 2, 60, 26) }))!
+    expect((measureBarGeometry(positive, barGeom, ['B1'], { ...measureOpts, axisArgb: 'FF000000' }) as ReadonlyMap<string, CfObservedBar>).get('B1')).toMatchObject({ bar: { leftPx: 101, rightPx: 160 }, axisPx: 100 })
   })
 
   it('--verify-only skips a case with no capture on disk and fails loudly when a claimed capture is missing', () => {
@@ -3488,7 +3534,6 @@ describe('CF oracle verifier', () => {
 
   describe('measured bar cases', () => {
     const geometryCap = 'bar:lengths-explicit-0-100'
-    const settingsCap = 'bar:pairing-base-only'
     const baseOnlyBarXml = '<conditionalFormatting sqref="B2"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
     const barMarkerFor = (capabilityId: string): CfPartMarker => ({
       part: barPart, extension: 'legacy', capabilityId, sqref: 'B2', ruleType: 'dataBar', priority: 1, formulas: [],
@@ -3585,105 +3630,11 @@ describe('CF oracle verifier', () => {
       return { c, savedHash: hash }
     }
 
-    it('bar capability requires its evidence kind', async () => {
-      const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-kind-'))
-      dirs.push(dir)
-
-      // Baseline: a discriminating pixel measurement verifies the geometry capability.
-      const ok = await build(dir, {})
-      const okRes = verifyCfCase(ok.c, { rootDir: dir })
-      expect(okRes).toMatchObject({ kind: 'verified' })
-      expect(okRes.kind === 'verified' ? okRes.verifiedCapabilities : []).toEqual([geometryCap])
-
-      // A geometry capability backed only by the object model refuses.
-      const geoOnlyOm = await build(dir, { evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [{ priority: 1 }] })
-      expect(verifyCfCase(geoOnlyOm.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
-
-      // A settings capability backed only by pixels refuses.
-      const settingsOnlyPx = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'unverified', geometry: 'pixel-measured' } })
-      expect(verifyCfCase(settingsOnlyPx.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
-
-      // pixel-measured relabelled as excel-object-model: no settings readback exists in the sidecar.
-      const relabelled = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'excel-object-model', geometry: 'unverified' } })
-      expect(verifyCfCase(relabelled.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
-
-      // A real readback row backs the settings claim.
-      const readbackRow = { priority: 1, axis: 'databar axis automatic', fillType: 'databar fill gradient', borderType: 'databar border none', minPointPercent: '10', maxPointPercent: '90', direction: '-4152', showValue: 'true', negativeColorType: 'databar color type color' }
-      const settingsOk = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [readbackRow] })
-      const settingsOkRes = verifyCfCase(settingsOk.c, { rootDir: dir })
-      expect(settingsOkRes).toMatchObject({ kind: 'verified' })
-      expect(settingsOkRes.kind === 'verified' ? settingsOkRes.verifiedCapabilities : []).toEqual([settingsCap])
-
-      // The readback must agree with what the markers pin: a rule authored minLength 0 whose readback says 10 refuses.
-      const minLength0Xml = '<conditionalFormatting sqref="B2"><cfRule type="dataBar" priority="1"><dataBar minLength="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar></cfRule></conditionalFormatting>'
-      const minLength0Marker: CfPartMarker = { ...barMarkerFor(settingsCap), bar: { pairing: 'base-only', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { minLength: '0' }, colors: { fill: 'FF0000FF' } } }
-      const disagreeing = await build(dir, { capabilityId: settingsCap, xml: minLength0Xml, markers: [minLength0Marker], evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [readbackRow] })
-      expect(verifyCfCase(disagreeing.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
-      const agreeing = await build(dir, { capabilityId: settingsCap, xml: minLength0Xml, markers: [minLength0Marker], evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [{ ...readbackRow, minPointPercent: '0' }] })
-      expect(verifyCfCase(agreeing.c, { rootDir: dir })).toMatchObject({ kind: 'verified', verifiedCapabilities: [settingsCap] })
-      // No row for the rule's priority is also unobserved.
-      const wrongRow = await build(dir, { capabilityId: settingsCap, evidence: { settings: 'excel-object-model', geometry: 'unverified' }, readback: [{ ...readbackRow, priority: 7 }] })
-      expect(verifyCfCase(wrongRow.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
-
-      // A non-discriminating capability marked pixel-measured refuses (hypotheses 2 px apart cannot discriminate).
-      const closeHyps = { B2: [{ id: 'h-a', leftPx: BAR_LEFT, rightPx: BAR_RIGHT }, { id: 'h-b', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 2 }] }
-      const markedVerified = await build(dir, { hypotheses: closeHyps })
-      expect(verifyCfCase(markedVerified.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
-      // Labelled non-discriminating and consistent: the case verifies but the capability is withheld.
-      const honest = await build(dir, { hypotheses: closeHyps, evidence: { settings: 'unverified', geometry: 'non-discriminating' } })
-      const honestRes = verifyCfCase(honest.c, { rootDir: dir })
-      expect(honestRes).toMatchObject({ kind: 'verified', verifiedCapabilities: [], nonDiscriminatingCapabilities: [geometryCap] })
-      // Labelled non-discriminating while the evidence discriminates is also a lie.
-      const underclaim = await build(dir, { evidence: { settings: 'unverified', geometry: 'non-discriminating' } })
-      expect(verifyCfCase(underclaim.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
-
-      // No hypothesis matches the measurement.
-      const none = await build(dir, { hypotheses: { B2: [{ id: 'h-a', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 10 }, { id: 'h-b', leftPx: BAR_LEFT, rightPx: BAR_RIGHT + 20 }] } })
-      expect(verifyCfCase(none.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-hypothesis-none' })
-
-      // Without hypotheses a pixel-measured claim is unbacked and refuses; an unclaimed capability is just unverified.
-      const noHypsClaimed = await build(dir, { hypotheses: null })
-      expect(verifyCfCase(noHypsClaimed.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
-      const noHyps = await build(dir, { hypotheses: null, evidence: { settings: 'unverified', geometry: 'unverified' } })
-      expect(verifyCfCase(noHyps.c, { rootDir: dir })).toMatchObject({ kind: 'verified', verifiedCapabilities: [] })
-
-      // The recorded barApplied must agree with the measured bar.
-      const wrongApplied = await build(dir, { barApplied: false })
-      expect(verifyCfCase(wrongApplied.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'cell-expectation-mismatch' })
-    })
-
-    it('settings readback equal to the default refuses, and a failed calibration refuses', async () => {
+    it('a failed calibration refuses', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-probe-'))
       dirs.push(dir)
-      const control = { priority: 2, axis: 'databar axis automatic', fillType: 'databar fill gradient', borderType: 'databar border none', minPointPercent: '10', maxPointPercent: '90', direction: '-4152', showValue: 'true', negativeColorType: 'databar color type color' }
-      const probe = { priority: 1, axis: 'databar axis midpoint', fillType: 'databar fill solid', borderType: 'databar border solid', minPointPercent: '0', maxPointPercent: '100', direction: '-4152', showValue: 'false', negativeColorType: 'databar color type color' }
-      const probeCap = 'bar:settings-precondition-probe'
-      const evidence = { settings: 'excel-object-model', geometry: 'unverified' } as const
-      // The probe rule as the oracle authors it: every default overridden (paired form, priority 1).
-      const probeXml =
-        `<conditionalFormatting sqref="B2"><cfRule type="dataBar" priority="1"><dataBar showValue="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" ${X14_DECL}><x14:id>${GUID1}</x14:id></ext></extLst></cfRule></conditionalFormatting>` +
-        `<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" ${X14_DECL}><x14:conditionalFormattings><x14:conditionalFormatting ${XM_DECL}><x14:cfRule type="dataBar" id="${GUID1}"><x14:dataBar minLength="0" maxLength="100" gradient="0" border="1" axisPosition="middle" direction="rightToLeft" negativeBarColorSameAsPositive="0"><x14:cfvo type="min"/><x14:cfvo type="max"/><x14:borderColor rgb="FF00B050"/><x14:negativeFillColor rgb="FFFF0000"/></x14:dataBar></x14:cfRule><xm:sqref>B2</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>`
-      const probeMarkers: CfPartMarker[] = [
-        { part: barPart, extension: 'legacy', capabilityId: probeCap, sqref: 'B2', ruleType: 'dataBar', priority: 1, formulas: [], bar: { pairing: 'paired', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { showValue: '0' }, colors: { fill: 'FF0000FF' } } },
-        { part: barPart, extension: 'x14', capabilityId: probeCap, sqref: 'B2', ruleType: 'dataBar', formulas: [], bar: { pairing: 'paired', cfvo: [{ type: 'min' }, { type: 'max' }], attrs: { minLength: '0', maxLength: '100', gradient: '0', border: '1', axisPosition: 'middle', direction: 'rightToLeft', negativeBarColorSameAsPositive: '0' }, colors: { border: 'FF00B050', negativeFill: 'FFFF0000' } } },
-      ]
-      const probeCase = (readback: unknown[]) => build(dir, { capabilityId: probeCap, evidence, xml: probeXml, markers: probeMarkers, readback })
-      // direction equal to the control's integer: the probe did not observe the setting.
-      const sameDirection = await probeCase([probe, control])
-      expect(verifyCfCase(sameDirection.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
-      // missing value in the readback.
-      const missing = await probeCase([{ ...probe, direction: '-5001', axis: 'missing value' }, control])
-      expect(verifyCfCase(missing.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
-      // an unauthored (default) probe equals the control entirely.
-      const allDefault = await probeCase([{ ...control, priority: 1 }, control])
-      expect(verifyCfCase(allDefault.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-settings-unobserved' })
-      // a probe that differs everywhere it must, and agrees with what was authored, verifies.
-      const good = await probeCase([{ ...probe, direction: '-5001' }, control])
-      expect(verifyCfCase(good.c, { rootDir: dir })).toMatchObject({ kind: 'verified', verifiedCapabilities: [probeCap] })
-
       // Calibration: the PNG has no gridlines, so gridline-to-gridline widths cannot be measured.
-      const calibCap = 'bar:pixel-calibration'
-      const failed = await build(dir, { capabilityId: calibCap, hypotheses: null, calibration: { columns: ['A', 'B'], scanRow: 3, solidRef: 'B2', solidArgb: 'FF00FF00' } })
+      const failed = await build(dir, { capabilityId: 'bar:pixel-calibration', hypotheses: null, calibration: { columns: ['A', 'B'], scanRow: 3, solidRef: 'B2', solidArgb: 'FF00FF00' } })
       expect(verifyCfCase(failed.c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-calibration-failed' })
     })
 
@@ -3836,86 +3787,154 @@ describe('CF oracle verifier', () => {
     writeFileSync(join(dir, 'x.json'), '{not json')
     expect(stage3ObservedBars(mk(3), dir)).toBeUndefined()
   })
-  it('the capture pipeline (measure, hypotheses, labels) feeds a verifier that verifies exactly what it discriminates', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-pipeline-'))
-    dirs.push(dir)
+  /**
+   * The committed Excel capture of `stage3-bar-lengths` (real PNG, real resaved workbook) run through the capture
+   * pipeline and the verifier in a temp dir: labels come from the pipeline, the verifier recomputes them.
+   */
+  const realLengthsCase = (dir: string) => {
     const tpl = CF_STAGE3_CASES.find(x => x.id === 'stage3-bar-lengths')!
-    const bytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, tpl.saved)))
+    const man = (JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest).cases.find(x => x.id === tpl.id)!
+    const bytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, man.saved)))
+    const png = new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-lengths.png')))
+    const committed = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-lengths.json'), 'utf8')) as Record<string, unknown>
     writeFileSync(join(dir, 'lengths.xlsx'), bytes)
-    const hash = sha256(bytes)
-    const parts = readZipPartsSync(bytes)!
-    const geom = computeWorksheetRangeGeometry(parts, tpl.range)!
-    const values = readNumericCellValues(parts)
-    expect(values.get('C4')).toBe(50)  // present in the workbook, just not designated
-
-    // Paint a bar per designated cell of the explicit 0/100 column exactly as a 0..100 model predicts (min/max bounds,
-    // x14 minLength 0 / maxLength 100): the "excel" PNG is synthetic, the pipeline is real.
-    const canvas = createCanvas(geom.expectedWidthPt, geom.expectedHeightPt)
-    const ctx = canvas.getContext('2d')
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    const colBefore = (col: number): number => geom.colWidthsPt.slice(0, col - geom.minCol).reduce((a, b) => a + b, 0)
-    const colIdx = 2 // column C
-    const x0 = Math.round(colBefore(colIdx))
-    const x1 = Math.round(colBefore(colIdx) + geom.colWidthsPt[colIdx - geom.minCol]!)
-    const rowTop = (row0: number): number => Math.round(geom.rowHeightsPt.slice(0, row0).reduce((a, b) => a + b, 0))
-    ctx.fillStyle = '#0000ff'
-    for (let r = 1; r <= 5; r++) {
-      const v = values.get(`C${r + 1}`)!
-      const len = Math.round(((x1 - x0) * v) / 100)
-      if (len > 0) ctx.fillRect(x0, rowTop(r), len, rowTop(r + 1) - rowTop(r))
-    }
-    const png = new Uint8Array(canvas.toBuffer('image/png'))
-    const pngHash = sha256(png)
+    writeFileSync(join(dir, 'lengths.input.xlsx'), readFileSync(resolve(REPO_ROOT, man.input)))
     writeFileSync(join(dir, 'lengths.png'), png)
+    const parts = readZipPartsSync(bytes)!
+    const geom = computeWorksheetRangeGeometry(parts, tpl.range, { colWidthsPt: committed.colWidthsPt as number[], rowHeightsPt: committed.rowHeightsPt as number[] })!
     const decoded = decodePngSync(png)!
-
-    const base: CfOracleCase = { ...tpl, input: 'lengths.xlsx', saved: 'lengths.xlsx' }
-    const { extras, observed, refusal } = buildBarSidecarExtras(base, parts, decoded, geom, { lockBefore: 'unlocked', lockAfter: 'unlocked' })
+    const base: CfOracleCase = { ...man, markers: tpl.markers, input: 'lengths.input.xlsx', saved: 'lengths.xlsx', captures: [{ appearance: 'screen', pngPath: 'lengths.png', sidecarPath: 'lengths.json', pngSha256: sha256(png) }] }
+    const { extras, observed, evaluation, refusal } = buildBarSidecarExtras(base, parts, decoded, geom, { lockBefore: 'unlocked', lockAfter: 'unlocked' })
     expect(refusal).toBeUndefined()
-    expect(observed!.get('C3')!.bar).toMatchObject({ leftPx: x0 })
-    expect(observed!.get('C4')).toBeUndefined() // the midpoint cell (50) is not designated: it cannot tell 10/90 from 0/100
-    expect(observed!.get('C2')!.bar).toBeNull() // value 0 under 0/100: no bar
-    const hyps = (extras.barHypotheses as Record<string, Record<string, Array<{ id: string }>>>)['bar:lengths-explicit-0-100']!
-    expect(Object.keys(hyps).sort()).toEqual(['C3', 'C5', 'C6'])
-    // x14 0/100 and the full 0..100 span are one hypothesis; the base rule's 10/90 is the other.
-    expect(hyps.C3!.map(h => h.id).sort()).toEqual(['base-lengths', 'x14-lengths'])
-
-    const labels = classifyBarCapture(base, observed!, extras.barHypotheses as never, undefined)
-    expect(labels.get('C3')).toEqual({ settings: 'unverified', geometry: 'pixel-measured' })
-    // Columns with no painted bars and no hypotheses stay unverified.
-    expect(labels.get('B4')?.geometry ?? 'unverified').toBe('unverified')
-
+    const labels = classifyBarCapture(base, evaluation!)
     const cells: CfCellExpectation[] = tpl.expected.cells.map(cell => {
       if (!cell.matched) return cell
       const m = observed!.get(cell.ref)
       return { ...cell, ...(m ? { barApplied: m.bar !== null } : {}), barEvidence: labels.get(cell.ref) ?? { settings: 'unverified', geometry: 'unverified' } }
     })
-    // Only the discriminating capability's cells claim anything (the no-bar cell C2 is part of that measurement).
-    const claimed = cells.filter(cell => cell.barEvidence?.geometry === 'pixel-measured').map(cell => cell.ref).sort()
-    expect(claimed).toEqual(['C2', 'C3', 'C5', 'C6'])
-    const measuredCase: CfOracleCase = {
-      ...base,
-      status: 'measured',
-      resavedByExcel: true,
-      resaveReceipt: { openedRepairFree: true, excelVersion: '16.114', inputSha256: hash, savedSha256: hash, resavedAt: '2026-11-11T08:00:00Z' },
-      captures: [{ appearance: 'screen', pngPath: 'lengths.png', sidecarPath: 'lengths.json', pngSha256: pngHash }],
-      expected: { ...tpl.expected, inputSha256: hash, savedSha256: hash, provenance: 'excel-observed', cells },
-    }
-    const sidecar = {
-      excelVersion: '16.114', route: 'copy-picture', appearance: 'screen', scale: 1, pxPerPt: 1,
-      width: decoded.width, height: decoded.height, colWidthsPt: geom.colWidthsPt, rowHeightsPt: geom.rowHeightsPt,
-      geometrySource: 'excel-measured', resavedByExcel: true, resaveSavedSha256: hash, sheet: tpl.sheet, range: tpl.range,
-      savedSha256: hash, pngSha256: pngHash, capturedAt: '2026-11-11T08:00:00Z', ...extras,
-    }
-    writeFileSync(join(dir, 'lengths.json'), JSON.stringify(sidecar))
-    // Only the capability whose cells discriminate is claimed, and it is the only one that verifies.
-    const res = verifyCfCase(measuredCase, { rootDir: dir })
-    expect(res).toMatchObject({ kind: 'verified', verifiedCapabilities: ['bar:lengths-explicit-0-100'], nonDiscriminatingCapabilities: [] })
+    const c: CfOracleCase = { ...base, expected: { ...man.expected, cells } }
+    const sidecar = { ...committed, ...extras }
+    const write = (sc: Record<string, unknown>) => writeFileSync(join(dir, 'lengths.json'), JSON.stringify(sc))
+    write(sidecar)
+    return { c, sidecar, write, evaluation: evaluation!, labels }
+  }
 
-    // Move one painted bar by 5 px: the sidecar no longer matches the PNG hash-bound measurement.
-    const tampered = { ...sidecar, observedBars: (extras.observedBars as Array<{ ref: string; bar: { leftPx: number; rightPx: number } | null }>).map(b => (b.ref === 'C3' && b.bar ? { ...b, bar: { ...b.bar, rightPx: b.bar.rightPx + 5 } } : b)) }
-    writeFileSync(join(dir, 'lengths.json'), JSON.stringify(tampered))
-    expect(verifyCfCase(measuredCase, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+  it('the capture pipeline feeds a verifier that recomputes every bar claim from the hash-bound PNG (real lengths capture)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-pipeline-'))
+    dirs.push(dir)
+    const { c, sidecar, write, evaluation, labels } = realLengthsCase(dir)
+    // Predicted px come from the saved workbook's values, the markers and the measured cell boxes (Excel's 2 px / 1 px
+    // inset model); 0/100 discriminates from 10/90 on the off-midpoint cells.
+    expect(evaluation['bar:lengths-explicit-0-100']).toMatchObject({ status: 'discriminating', matched: 'effective' })
+    expect(labels.get('C3')).toEqual({ settings: 'unverified', geometry: 'pixel-measured' })
+    // num 20/80 equals this data's min/max: both answers predict the same px (non-discriminating, Lesson 3).
+    expect(evaluation['bar:bounds-num']).toMatchObject({ status: 'non-discriminating' })
+    expect(labels.get('E3')).toEqual({ settings: 'unverified', geometry: 'non-discriminating' })
+    // Excel's default 10/90 matches neither 10/90 linear on the span nor 0/100: a finding, never a claim.
+    expect(evaluation['bar:lengths-default-10-90']).toMatchObject({ status: 'none' })
+    expect(labels.get('B3')).toEqual({ settings: 'unverified', geometry: 'unverified' })
+
+    const res = verifyCfCase(c, { rootDir: dir })
+    expect(res, JSON.stringify(res).slice(0, 400)).toMatchObject({ kind: 'verified' })
+    if (res.kind !== 'verified') return
+    expect([...res.verifiedCapabilities].sort()).toEqual(['bar:bounds-automin', 'bar:bounds-min-max', 'bar:bounds-percentile', 'bar:lengths-all-negative', 'bar:lengths-explicit-0-100'])
+    expect([...(res.nonDiscriminatingCapabilities ?? [])].sort()).toEqual(['bar:bounds-automax', 'bar:bounds-num', 'bar:bounds-percent'])
+    expect(res.refusedCapabilities).toEqual([expect.objectContaining({ capabilityId: 'bar:lengths-default-10-90', code: 'bar-hypothesis-none' })])
+    expect(res.matchedHypotheses?.['bar:bounds-percentile']).toBe('inc')
+
+    const relabel = (ref: string, ev: CfCellExpectation['barEvidence']): CfOracleCase => ({ ...c, expected: { ...c.expected, cells: c.expected.cells.map(x => (x.ref === ref ? { ...x, barEvidence: ev } : x)) } })
+    const relabelCap = (refs: string[], ev: CfCellExpectation['barEvidence']): CfOracleCase => ({ ...c, expected: { ...c.expected, cells: c.expected.cells.map(x => (refs.includes(x.ref) ? { ...x, barEvidence: ev } : x)) } })
+    // The retired object-model kind refuses, wherever it is claimed.
+    expect(verifyCfCase(relabel('C3', { settings: 'excel-object-model', geometry: 'pixel-measured' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+    // A geometry capability claimed in the settings field refuses.
+    expect(verifyCfCase(relabelCap(['C2', 'C3', 'C5', 'C6'], { settings: 'pixel-measured', geometry: 'unverified' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+    // A non-discriminating capability relabelled pixel-measured refuses; an underclaim refuses too.
+    expect(verifyCfCase(relabelCap(['E2', 'E3', 'E4', 'E5', 'E6'], { settings: 'unverified', geometry: 'pixel-measured' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+    expect(verifyCfCase(relabelCap(['C2', 'C3', 'C5', 'C6'], { settings: 'unverified', geometry: 'non-discriminating' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+    // Claiming the refused 10/90 family refuses the case with bar-hypothesis-none.
+    expect(verifyCfCase(relabelCap(['B2', 'B3', 'B5', 'B6'], { settings: 'unverified', geometry: 'pixel-measured' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-hypothesis-none' })
+    // barApplied must follow the PNG.
+    expect(verifyCfCase({ ...c, expected: { ...c.expected, cells: c.expected.cells.map(x => (x.ref === 'C3' ? { ...x, barApplied: false } : x)) } }, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'cell-expectation-mismatch' })
+
+    // Sidecar hypotheses are recomputed, never trusted: a moved prediction refuses, and so does a missing one.
+    const hyps = sidecar.barHypotheses as Record<string, Record<string, Array<{ id: string; rightPx: number }>>>
+    const moved = JSON.parse(JSON.stringify(hyps)) as typeof hyps
+    moved['bar:lengths-explicit-0-100']!.C3![1]!.rightPx += 9
+    write({ ...sidecar, barHypotheses: moved })
+    expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+    const { ['bar:lengths-explicit-0-100']: _gone, ...without } = hyps
+    write({ ...sidecar, barHypotheses: without })
+    expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+    // Recorded px that disagree with the PNG refuse.
+    write({ ...sidecar, observedBars: (sidecar.observedBars as Array<{ ref: string; bar: { rightPx: number } | null }>).map(b => (b.ref === 'C3' && b.bar ? { ...b, bar: { ...b.bar, rightPx: b.bar.rightPx + 5 } } : b)) })
+    expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+  })
+
+  it('the pixel precondition probe observes each visible setting against the default control and fails closed on the rest', () => {
+    const man = (JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest).cases.find(x => x.id === 'stage3-bar-settings-probe')!
+    const tpl = CF_STAGE3_CASES.find(x => x.id === man.id)!
+    const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.json'), 'utf8')) as Record<string, number[]>
+    const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, man.saved))))!
+    const geom = computeWorksheetRangeGeometry(parts, man.range, { colWidthsPt: sc.colWidthsPt!, rowHeightsPt: sc.rowHeightsPt! })!
+    const png = decodePngSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.png'))))!
+    const c: CfOracleCase = { ...man, markers: tpl.markers, expected: { ...man.expected, cells: tpl.expected.cells } }
+    const measured = measureCaseBars(c, png, geom) as ReadonlyMap<string, CfObservedBar>
+    const res = evaluateBarPixelProbe(c, png, geom, measured)
+    // Fill, border, direction, axis and value text are observed and differ from the control; lengths and the negative
+    // colour type draw nothing distinguishable in this capture, so the probe stays closed (bar-settings-unobserved).
+    expect(res.status).toBe('unobserved')
+    expect(res.reason).toMatch(/observed and distinct: fill, border, direction, axis, showValue/)
+    expect(res.reason).toMatch(/minLength\/maxLength/)
+    expect(Object.keys(BAR_PIXEL_PROBE_UNOBSERVABLE).length).toBeGreaterThan(0)
+    // A probe rule measured against itself (control = probe cells) equals the control: refused for that reason first.
+    const same: CfOracleCase = { ...c, markers: c.markers.map(m => (m.bar && m.priority === 2 ? { ...m, sqref: 'B2:B6' } : m)) }
+    expect(evaluateBarPixelProbe(same, png, geom, measured)).toMatchObject({ status: 'unobserved', reason: expect.stringMatching(/equals the default control/) })
+  })
+
+  it('Excel\'s canonical resave of a standalone x14 bar (paired base + companion) is structurally accepted (stage3-bar-pairing.rejected.xlsx)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-standalone-'))
+    dirs.push(dir)
+    const rejected = new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/stage3-bar-pairing.rejected.xlsx')))
+    writeFileSync(join(dir, 'rejected.xlsx'), rejected)
+    const tpl = CF_STAGE3_CASES.find(x => x.id === 'stage3-bar-pairing')!
+    const h = sha256(rejected)
+    const c: CfOracleCase = { ...tpl, input: 'rejected.xlsx', saved: 'rejected.xlsx', captures: [], expected: { ...tpl.expected, inputSha256: h, savedSha256: h } }
+    // Every marker, the standalone one included, is found: only the evidence is pending.
+    expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
+    // The same file with the companion's link GUID broken is not the canonical form and refuses.
+    const zip = await JSZip.loadAsync(rejected)
+    const xml = (await zip.file('xl/worksheets/sheet1.xml')!.async('string')).replace('<x14:id>{3B3B000B-0000-4000-8000-000000000002}</x14:id>', '<x14:id>{3B3B000B-0000-4000-8000-0000000000FF}</x14:id>')
+    zip.file('xl/worksheets/sheet1.xml', xml)
+    const broken = new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+    writeFileSync(join(dir, 'broken.xlsx'), broken)
+    const hb = sha256(broken)
+    expect(verifyCfCase({ ...c, input: 'broken.xlsx', saved: 'broken.xlsx', expected: { ...c.expected, inputSha256: hb, savedSha256: hb } }, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'stripped-rule' })
+  })
+
+  it('capture closes the workbook it opened, never a pre-existing one, even when the capture throws', () => {
+    const closed: string[] = []
+    const close = (name: string) => { closed.push(name) }
+    captureAndCloseOwned('/x/y/stage3-bar-lengths.xlsx', new Set(), () => {}, close)
+    expect(closed).toEqual(['stage3-bar-lengths.xlsx'])
+    expect(() => captureAndCloseOwned('/x/y/a.xlsx', new Set(), () => { throw new Error('boom') }, close)).toThrow('boom')
+    expect(closed).toEqual(['stage3-bar-lengths.xlsx', 'a.xlsx'])
+    captureAndCloseOwned('/x/y/mine.xlsx', new Set(['mine.xlsx']), () => {}, close)
+    expect(closed).toEqual(['stage3-bar-lengths.xlsx', 'a.xlsx'])
+  })
+
+  it('generate never resets a measured case unless --force is passed (round-3 Minor b)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-gen-measured-'))
+    dirs.push(dir)
+    mkdirSync(join(dir, 'tests/fixtures/xlsx-cf/inputs'), { recursive: true })
+    const real = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+    const measured = real.cases.find(x => x.id === 'stage3-bar-lengths')!
+    // A measured entry whose saved workbook is gone (so it no longer verifies) must still be kept verbatim.
+    writeFileSync(join(dir, 'tests/fixtures/xlsx-cf/manifest.json'), JSON.stringify({ ...real, cases: [measured] }))
+    const kept = await generateAllStage1({ rootDir: dir, onlyCaseId: measured.id, stage: 3 })
+    expect(kept.cases.find(x => x.id === measured.id)).toEqual(measured)
+    const forced = await generateAllStage1({ rootDir: dir, onlyCaseId: measured.id, stage: 3, force: true })
+    const after = forced.cases.find(x => x.id === measured.id)!
+    expect(after.status).toBe('recipe-pending')
+    expect(after.captures[0]!.pngSha256).toBeUndefined()
   })
 })

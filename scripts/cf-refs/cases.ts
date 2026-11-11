@@ -134,7 +134,11 @@ export interface CfCellExpectation {
    * `non-discriminating` was measured but cannot tell its hypotheses apart; `unverified` is anything else.
    */
   barEvidence?: {
-    settings: 'excel-object-model' | 'unverified'
+    /**
+     * `pixel-measured` / `non-discriminating`: recomputed from the PNG (OD-7 as amended). `excel-object-model` is retired
+     * (the data bar object model is unreachable on Excel 16.114) and every claim of it refuses.
+     */
+    settings: 'pixel-measured' | 'non-discriminating' | 'excel-object-model' | 'unverified'
     geometry: 'pixel-measured' | 'non-discriminating' | 'unverified'
   }
   /** Whether a data bar is drawn on this cell in Excel. */
@@ -298,6 +302,12 @@ export interface VerifiedEvidence {
   verifiedCapabilities: readonly string[]
   /** Stage 3: capabilities measured by a capture that cannot discriminate their hypotheses (withheld, Lesson 3). */
   nonDiscriminatingCapabilities?: readonly string[]
+  /** Stage 3: capabilities whose recomputation refuses (findings such as `bar-hypothesis-none`). */
+  refusedCapabilities?: ReadonlyArray<{ capabilityId: string; code: CfRefusalCode; reason: string }>
+  /** Stage 3: why each other capability is not verified (no hypotheses, unclaimed). */
+  capabilityNotes?: Readonly<Record<string, string>>
+  /** Stage 3: the hypothesis each verified capability matched. */
+  matchedHypotheses?: Readonly<Record<string, string>>
 }
 
 export interface Refusal {
@@ -4020,11 +4030,15 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
       rules: [
         bar('bar:axis-automatic', 'B2:B6', 1, { x14Attrs: { ...SOLID_0_100, axisPosition: 'automatic', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
         bar('bar:axis-middle', 'C2:C6', 2, { x14Attrs: { ...SOLID_0_100, axisPosition: 'middle', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
-        bar('bar:axis-none', 'D2:D6', 3, { x14Attrs: { ...SOLID_0_100, axisPosition: 'none', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        // Excel's canonical form drops the axis colour when no axis is drawn (stage3-bar-axis-negative.rejected.xlsx).
+        bar('bar:axis-none', 'D2:D6', 3, { x14Attrs: { ...SOLID_0_100, axisPosition: 'none', negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED } }),
         bar('bar:negative-fill-color', 'E2:E6', 4, { x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
-        bar('bar:negative-fill-same-as-positive', 'F2:F6', 5, { x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '1' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        // No <x14:negativeFillColor> when the negative fill is the positive one: Excel reads the x14 colours by position
+        // for the flags set, so an extra colour shifts into the axis slot (run 4: the resave and the capture show a red axis).
+        bar('bar:negative-fill-same-as-positive', 'F2:F6', 5, { x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '1' }, colors: { fill: BLUE, axis: BLACK } }),
         bar('bar:negative-border-color', 'G2:G6', 6, { x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, border: GREEN, negativeBorder: ORANGE, axis: BLACK } }),
-        bar('bar:negative-border-same-as-positive', 'H2:H6', 7, { x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '1' }, colors: { fill: BLUE, negativeFill: RED, border: GREEN, negativeBorder: ORANGE, axis: BLACK } }),
+        // No <x14:negativeBorderColor> when the negative border is the positive one (same positional read: run 4 showed an orange axis).
+        bar('bar:negative-border-same-as-positive', 'H2:H6', 7, { x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '1' }, colors: { fill: BLUE, negativeFill: RED, border: GREEN, axis: BLACK } }),
         bar('bar:axis-automatic', 'I2:I6', 8, { x14Attrs: { ...SOLID_0_100, axisPosition: 'automatic' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
       ],
     },
@@ -4114,7 +4128,9 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
       cols: [
         col('B', 'Types', [10, 90, true, '5', '', null, { f: '20+30', v: 50 }, { err: '#N/A' }, 70]),
         col('C', 'ErrorPresence', [10, 20, { err: '#N/A' }, 30, 40, 50, 60, 70, 80]),
-        col('D', 'DateSerial', [10, 50, 90, { date: 70 }]),
+        // The date serial sits at 30 (a short bar) so its edge stays clear of the control's long date text: at 70 the edge fell
+        // under the text and refused bar-edge-under-text (run 4, D5).
+        col('D', 'DateSerial', [10, 50, 90, { date: 30 }]),
       ],
       rules: [
         bar('bar:participation-types', 'B2:B10', 1, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
@@ -4508,6 +4524,18 @@ const S3_RULINGS: Record<string, string> = {
 export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'bar:bounds-automax':
     'On all-positive data autoMax equals max, so a pixel measurement cannot tell the autoMax bound from the max bound. Re-measure with data where Excel\'s automatic maximum differs from the maximum value.',
+  'bar:bounds-num':
+    'The fixture\'s num 20/80 bounds equal its data\'s min/max (20..80), so num and min/max predict identical px (Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80.',
+  'bar:bounds-percent':
+    'On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (Task 18b recomputation). Re-measure with data whose range is not 0..100.',
+  'bar:geometry-min-visible-width':
+    'The smallest positive value (0.5 of 0..100 on a 177 px span) already rounds to a 1 px bar, so "no minimum" and "1 px minimum" predict the same px (Task 18b recomputation). Re-measure with a value under 0.28 percent of the span.',
+  'bar:scope-merged-cell':
+    'The merged host B8 is the only designated cell, and "statistics over the host alone across the merged width" and "all four values on the host column only" put the bar end 1 px apart (Task 18b recomputation). Re-measure with a merge whose hypotheses differ by 3 px or more.',
+  'bar:bounds-positional':
+    'Both positional shapes are base-only bars, which are gradient (the schema default): their visible extent is the fade, not the bar geometry, so no length hypothesis can be checked (S3-M, Task 18b). Re-author them with an x14 companion at gradient="0" carrying the same positional cfvo.',
+  'bar:showvalue-copy-text':
+    'Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind.',
 }
 
 /** Complete capability-to-evidence registry for all Stage 3 markers (one entry per distinct capability id). */

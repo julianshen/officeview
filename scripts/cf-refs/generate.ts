@@ -1615,6 +1615,8 @@ export interface GenerateStage1Options {
   stage?: number
   /** Anchor local date (`YYYY-MM-DD` in `Asia/Taipei`) for clock-dependent fixtures. */
   anchorLocalDate?: string
+  /** Regenerate `measured` cases too, dropping their captures and observed expectations (`--force`). */
+  force?: boolean
 }
 
 export async function generateAllStage1(options: GenerateStage1Options | string = {}): Promise<CfManifest> {
@@ -1650,6 +1652,17 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
     }
     if (targetStage !== undefined && template.stage !== targetStage && prev) {
       // Do not touch other stages when targeting a specific stage
+      cases.push(prev)
+      continue
+    }
+
+    if (prev?.status === 'measured' && !opts.force) {
+      // A measured case holds committed Excel evidence (captures, observed expectations, the resave receipt). It is
+      // never reset by regeneration, even when it no longer verifies: only an explicit --force clobbers it.
+      const regenerated = sha256Hex(await generateCaseArchive(template.id, prev.clockRequirement?.anchorLocalDate ?? anchorDateIso))
+      if (regenerated !== prev.expected.inputSha256) {
+        console.warn(`[cf-refs/generate] ${template.id} is measured: kept as is although its template now generates a different input (pass --force to regenerate and drop its evidence)`)
+      }
       cases.push(prev)
       continue
     }
@@ -1729,6 +1742,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const onlyCaseId = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
   const stage = args.includes('--stage') ? Number(args[args.indexOf('--stage') + 1]) : undefined
   const anchorLocalDate = args.includes('--anchor-date') ? args[args.indexOf('--anchor-date') + 1] : undefined
-  const manifest = await generateAllStage1({ onlyCaseId, stage, anchorLocalDate })
+  const force = args.includes('--force')
+  const manifest = await generateAllStage1({ onlyCaseId, stage, anchorLocalDate, force })
   console.log(`[cf-refs/generate] generated ${manifest.cases.length} oracle cases -> ${CF_MANIFEST_PATH}`)
 }

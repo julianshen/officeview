@@ -209,7 +209,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Ensures we audited the full Stage 1 cell corpus (220+ cells)
     expect(checkedCells).toBeGreaterThan(200)
     // Stage 3 (reported separately from the 398/364/34 Stage 1/2 totals): every measured bar cell was withheld.
-    expect(stage3BarWithheld).toBeGreaterThan(0)
+    // Pinned to the value derived from the manifest itself: every expected cell of a measured Stage 3 case that lies under
+    // a dataBar marker with a capability production does not hold (a regression that skips or paints one moves it).
+    const expectedStage3Withheld = manifest.cases
+      .filter(c => c.stage === 3 && c.status === 'measured')
+      .flatMap(c => (c.expected?.cells ?? []).filter(exp => {
+        const caps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+        return caps.length > 0 && !caps.every(id => VERIFIED_CAPABILITIES.has(id))
+      })).length
+    expect(expectedStage3Withheld).toBeGreaterThan(0)
+    expect(stage3BarWithheld).toBe(expectedStage3Withheld)
     expect(stage3BarWithheld).toBeLessThanOrEqual(stage3Checked)
   })
 

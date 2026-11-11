@@ -16,17 +16,16 @@ import { closeOwnedWorkbook, isDisplayLocked } from './build'
 import { CF_CASES, type CfManifest, type CfOracleCase } from './cases'
 import { CF_MANIFEST_PATH, CF_REFS_DIR } from './generate'
 import {
-  type BarHypothesis,
   type BarSettingsRow,
   type CfObservedBar,
   type DecodedPng,
   type WorksheetRangeGeometry,
   computeWorksheetRangeGeometry,
   decodePngSync,
-  discriminateBar,
-  evaluateBarSettingsProbe,
+  type BarCapabilityEvaluation,
+  evaluateBarCapabilities,
   isCellInSqref,
-  measureBarGeometry,
+  measureCaseBars,
   observeCellsFromCapture,
   readZipPartsSync,
   verifyCfCase,
@@ -314,6 +313,25 @@ export function verifyOnlyCaptureState(c: CfOracleCase, rootDir: string): 'skip'
   return onDisk === 0 ? 'skip' : 'verify'
 }
 
+/**
+ * Runs one `copy picture` capture of `savedAbs` and then closes the workbook the capture opened (the shared `capture()`
+ * opens it by its file name and leaves it open). A workbook that was already open before the harness started is
+ * never closed (`assertCanCloseWorkbook`); the close runs even when the capture throws.
+ */
+export function captureAndCloseOwned(
+  savedAbs: string,
+  preExisting: ReadonlySet<string>,
+  run: () => void,
+  close: (name: string, preExisting: ReadonlySet<string>) => void = closeOwnedWorkbook,
+): void {
+  const name = savedAbs.split('/').pop()!
+  try {
+    run()
+  } finally {
+    if (!preExisting.has(name)) close(name, preExisting)
+  }
+}
+
 export type LockGuardResult =
   | { kind: 'captured' }
   | { kind: 'refused'; code: 'display-locked'; phase: 'before' | 'after'; reason: string }
@@ -361,136 +379,45 @@ export function readNumericCellValues(parts: Map<string, Uint8Array>): Map<strin
   return out
 }
 
-const LENGTH_CAPABILITIES: ReadonlySet<string> = new Set([
-  'bar:lengths-default-10-90',
-  'bar:lengths-explicit-0-100',
-  'bar:bounds-min-max',
-  'bar:bounds-num',
-  'bar:bounds-percent',
-])
-
 /**
- * Predicted bar extents (absolute px) per designated cell for the length family, one hypothesis per candidate length
- * model: the x14 companion's `minLength`/`maxLength`, the base rule's, and the full 0/100 span. The cell's left edge
- * and width come from the MEASURED capture geometry, never from the viewer; identical models are merged so a model
- * is only a hypothesis when it predicts something different. Only positive-only scopes with min/max/num/percent bounds
- * are predicted; every other capability gets no hypotheses and therefore stays unverified (Task 19/20 supply the
- * variant-parameterised predictors for the rest). Values outside the bounds are never clamped: they skip the capability.
+ * Which evidence the capture established for each designated bar cell: exactly the verifier's own recomputation
+ * (`evaluateBarCapabilities`), written into `barEvidence.settings` for a settings capability and `barEvidence.geometry`
+ * for a geometry one. A cell under several capabilities keeps a label only where they agree.
  */
-export function buildLengthHypotheses(
-  c: CfOracleCase,
-  values: ReadonlyMap<string, number>,
-  observed: ReadonlyMap<string, CfObservedBar>,
-): Record<string, Record<string, BarHypothesis[]>> {
-  const out: Record<string, Record<string, BarHypothesis[]>> = {}
-  for (const cap of LENGTH_CAPABILITIES) {
-    const base = c.markers.find(m => m.capabilityId === cap && m.extension === 'legacy' && m.bar)
-    if (!base?.bar) continue
-    const companion = c.markers.find(m => m.capabilityId === cap && m.extension === 'x14' && m.bar && m.sqref === base.sqref)
-    const scope = [...values.entries()].filter(([ref]) => isCellInSqref(ref, base.sqref))
-    if (scope.length === 0 || scope.some(([, v]) => !(v >= 0))) continue
-    const nums = scope.map(([, v]) => v)
-    const lo0 = Math.min(...nums)
-    const hi0 = Math.max(...nums)
-    const bound = (cfvo: { type: string; val?: string } | undefined, which: 'lo' | 'hi'): number | undefined => {
-      if (!cfvo) return undefined
-      if (cfvo.type === 'min') return lo0
-      if (cfvo.type === 'max') return hi0
-      const n = Number(cfvo.val)
-      if (!Number.isFinite(n)) return undefined
-      if (cfvo.type === 'num') return n
-      if (cfvo.type === 'percent') return lo0 + ((hi0 - lo0) * n) / 100
-      void which
-      return undefined
-    }
-    const lo = bound(base.bar.cfvo[0], 'lo')
-    const hi = bound(base.bar.cfvo[1], 'hi')
-    if (lo === undefined || hi === undefined || !(hi > lo)) continue
-    const length = (m: typeof base | undefined, name: 'minLength' | 'maxLength', dflt: number): number => {
-      const n = Number(m?.bar?.attrs[name])
-      return Number.isFinite(n) ? n : dflt
-    }
-    const models: Array<{ id: string; min: number; max: number }> = [
-      { id: 'x14-lengths', min: length(companion ?? base, 'minLength', 10), max: length(companion ?? base, 'maxLength', 90) },
-      { id: 'base-lengths', min: length(base, 'minLength', 10), max: length(base, 'maxLength', 90) },
-      { id: 'full-span', min: 0, max: 100 },
-    ]
-    const perRef: Record<string, BarHypothesis[]> = {}
-    let usable = true
-    for (const [ref, v] of scope) {
-      const obs = observed.get(ref)
-      if (!obs || obs.bar === null) continue
-      if (v < lo || v > hi) {
-        usable = false
-        break
-      }
-      const t = (v - lo) / (hi - lo)
-      perRef[ref] = models.map(m => ({
-        id: m.id,
-        leftPx: obs.cellLeftPx,
-        rightPx: Math.round((obs.cellLeftPx + ((m.min + (m.max - m.min) * t) / 100) * obs.cellWidthPx - 1) * 100) / 100,
-      }))
-    }
-    const refs = Object.keys(perRef)
-    if (!usable || refs.length === 0) continue
-    // Merge models that predict the same extents everywhere (they are one hypothesis).
-    const ids = models.map(m => m.id)
-    const keep = ids.filter((id, i) => !ids.slice(0, i).some(prev => refs.every(r => {
-      const a = perRef[r]!.find(h => h.id === id)!
-      const b = perRef[r]!.find(h => h.id === prev)!
-      return a.leftPx === b.leftPx && a.rightPx === b.rightPx
-    })))
-    out[cap] = Object.fromEntries(refs.map(r => [r, perRef[r]!.filter(h => keep.includes(h.id))]))
-  }
-  return out
-}
-
-/** Which evidence the capture established for each designated bar cell, derived with the verifier's own rules. */
 export function classifyBarCapture(
   c: CfOracleCase,
-  observed: ReadonlyMap<string, CfObservedBar>,
-  hypotheses: Record<string, Record<string, BarHypothesis[]>>,
-  readback: unknown,
+  evaluation: Readonly<Record<string, BarCapabilityEvaluation>>,
 ): Map<string, NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>> {
-  const labels = new Map<string, NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>>()
-  const settingsOk = Array.isArray(readback) && readback.length > 0
+  type Ev = NonNullable<CfOracleCase['expected']['cells'][number]['barEvidence']>
+  const votes = new Map<string, { settings: Set<string>; geometry: Set<string> }>()
   for (const cap of new Set(c.markers.map(m => m.capabilityId))) {
     const kind = barCapabilityKind(cap)
-    const cells = c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref)))
-    for (const cell of cells) {
-      const prev = labels.get(cell.ref) ?? { settings: 'unverified' as const, geometry: 'unverified' as const }
-      if (kind === 'settings') {
-        const ok = settingsOk && (cap !== 'bar:settings-precondition-probe' || evaluateBarSettingsProbe(readback).ok)
-        labels.set(cell.ref, { ...prev, settings: ok ? 'excel-object-model' : 'unverified' })
-      } else if (kind === 'geometry') {
-        const hyps = hypotheses[cap]
-        const withBar = cells.filter(x => observed.get(x.ref)?.bar)
-        const used: Record<string, readonly BarHypothesis[]> = {}
-        const meas: Record<string, { leftPx: number; rightPx: number }> = {}
-        for (const x of withBar) {
-          if (hyps?.[x.ref]) used[x.ref] = hyps[x.ref]!
-          meas[x.ref] = observed.get(x.ref)!.bar!
-        }
-        const disc = hyps ? discriminateBar(used, meas, 1, 3) : undefined
-        const geometry = disc?.status === 'discriminating' ? 'pixel-measured' : disc?.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
-        labels.set(cell.ref, { ...prev, geometry })
-      }
+    if (kind !== 'settings' && kind !== 'geometry') continue
+    const rec = evaluation[cap]
+    const label = rec?.status === 'discriminating' ? 'pixel-measured' : rec?.status === 'non-discriminating' ? 'non-discriminating' : 'unverified'
+    for (const cell of c.expected.cells.filter(x => x.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(x.ref, m.sqref)))) {
+      const v = votes.get(cell.ref) ?? { settings: new Set<string>(), geometry: new Set<string>() }
+      v[kind].add(label)
+      votes.set(cell.ref, v)
     }
+  }
+  const labels = new Map<string, Ev>()
+  for (const [ref, v] of votes) {
+    const pick = (set: Set<string>): string => (set.size === 1 ? [...set][0]! : 'unverified')
+    labels.set(ref, { settings: pick(v.settings) as Ev['settings'], geometry: pick(v.geometry) as Ev['geometry'] })
   }
   return labels
 }
 
-/** Everything a Stage 3 bar capture adds to its sidecar (lock states, raw px, readback, hypotheses). */
+/** Everything a Stage 3 bar capture adds to its sidecar (lock states, raw px, the recomputed hypotheses). */
 export function buildBarSidecarExtras(
   c: CfOracleCase,
   parts: Map<string, Uint8Array>,
   decoded: DecodedPng,
   geom: WorksheetRangeGeometry,
   opts: { lockBefore: 'locked' | 'unlocked'; lockAfter: 'locked' | 'unlocked'; readback?: BarSettingsRow[] },
-): { extras: Record<string, unknown>; observed: ReadonlyMap<string, CfObservedBar> | undefined; refusal?: string } {
-  const refs = c.expected.cells.filter(cell => cell.matched).map(cell => cell.ref)
-  const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
-  const measured = measureBarGeometry(decoded, geom, refs, { controlOf, axisArgb: 'FF000000', tolerancePx: 1, caseId: c.id })
+): { extras: Record<string, unknown>; observed: ReadonlyMap<string, CfObservedBar> | undefined; evaluation?: Record<string, BarCapabilityEvaluation>; refusal?: string } {
+  const measured = measureCaseBars(c, decoded, geom)
   const base = {
     zoom: 100,
     dpr: 1,
@@ -499,10 +426,12 @@ export function buildBarSidecarExtras(
     ...(opts.readback ? { barSettingsReadback: opts.readback } : {}),
   }
   if ('kind' in measured) return { extras: base, observed: undefined, refusal: `${measured.code}: ${measured.reason}` }
-  const hypotheses = buildLengthHypotheses(c, readNumericCellValues(parts), measured)
+  const evaluation = evaluateBarCapabilities(c, parts, decoded, geom, measured)
+  const hypotheses = Object.fromEntries(Object.entries(evaluation).filter(([, e]) => e.hypotheses).map(([cap, e]) => [cap, e.hypotheses]))
   return {
     extras: { ...base, observedBars: [...measured.values()], barHypotheses: hypotheses },
     observed: measured,
+    evaluation,
   }
 }
 
@@ -710,7 +639,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let sidecarLockBefore: 'locked' | 'unlocked' | undefined
     let sidecarLockAfter: 'locked' | 'unlocked' | undefined
     let barObserved: ReadonlyMap<string, CfObservedBar> | undefined
-    let barHypothesesForLabels: Record<string, Record<string, BarHypothesis[]>> = {}
+    let barEvaluation: Record<string, BarCapabilityEvaluation> | undefined
     let lockRefusal: string | undefined
     let barRefusal: string | undefined
     let sidecarExcelVersion = excelVersion
@@ -814,7 +743,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         // across a lock is discarded and the case stays recipe-pending.
         const guard = captureUnderLockGuard({
           isLocked: () => isDisplayLocked(),
-          run: () => capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance }),
+          run: () => captureAndCloseOwned(savedAbs, preExisting, () => capture(savedAbs, c.sheet, c.range, pngAbs, { appearance: cap.appearance })),
           discard: () => {
             rmSync(pngAbs, { force: true })
             rmSync(sidecarAbs, { force: true })
@@ -848,7 +777,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
           : undefined
       if (barExtra) {
         barObserved = barExtra.observed
-        barHypothesesForLabels = (barExtra.extras.barHypotheses as Record<string, Record<string, BarHypothesis[]>> | undefined) ?? {}
+        barEvaluation = barExtra.evaluation
         if (barExtra.refusal) barRefusal = barExtra.refusal
       }
 
@@ -939,7 +868,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       c.resaveReceipt.savedSha256 === savedSha256 &&
       c.resaveReceipt.openedRepairFree === true
 
-    const barLabels = isBarCase && barObserved ? classifyBarCapture(cWithUpdatedExpected, barObserved, barHypothesesForLabels, barReadback) : undefined
+    const barLabels = isBarCase && barObserved ? classifyBarCapture(cWithUpdatedExpected, barEvaluation ?? {}) : undefined
     const populatedExpectedCells = currentExpected.cells.map(exp => {
       if (barLabels && exp.matched) {
         // Observed truth, never a guess: barApplied follows the PNG and barEvidence the verifier's own rules.
