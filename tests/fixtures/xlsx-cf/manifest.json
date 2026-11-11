@@ -10149,8 +10149,8 @@
       ],
       "expected": {
         "inputSha256": "65a467ba1cdc8f996167beb186c3c3cec136a1d2d4dc65d7f2acf55301f823fa",
-        "savedSha256": "65a467ba1cdc8f996167beb186c3c3cec136a1d2d4dc65d7f2acf55301f823fa",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "283722a3fbba1ea39d9719f83e14765fafcfd02a1d6140743730e8f62fe5a576",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -10282,7 +10282,7 @@
             "ref": "C2",
             "controlRef": "C8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10326,7 +10326,7 @@
             "ref": "D2",
             "controlRef": "D8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10381,7 +10381,7 @@
             "ref": "E2",
             "controlRef": "E8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10436,7 +10436,7 @@
             "ref": "F2",
             "controlRef": "F8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10447,7 +10447,7 @@
             "ref": "F3",
             "controlRef": "F9",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10491,7 +10491,7 @@
             "ref": "G2",
             "controlRef": "G8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10579,7 +10579,7 @@
             "ref": "I2",
             "controlRef": "I8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10656,7 +10656,7 @@
             "ref": "J6",
             "controlRef": "J12",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -10981,17 +10981,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-lengths.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-lengths.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-lengths.json",
+          "pngSha256": "4605dc52cc827ed5558568af8aa52e477ab3d0cf01477143516151777f7c401c"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-11T16:30:07.156Z",
+        "excelVersion": "16.114",
+        "inputSha256": "65a467ba1cdc8f996167beb186c3c3cec136a1d2d4dc65d7f2acf55301f823fa",
+        "savedSha256": "283722a3fbba1ea39d9719f83e14765fafcfd02a1d6140743730e8f62fe5a576",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage3-bar-degenerate",
@@ -18631,11 +18638,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-composition.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-composition.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-composition.json",
+          "pngSha256": "0fdeefaef491113da1372c1a47056dddf90e886786086f11bcb186208f093aaf"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "reason": "Capture kept but not promoted: bar measurement refused (bar-background-unresolved: Bar cell D3: perimeter samples (0,0,255 / 0,0,255 / 159,156,116 / 159,156,116) disagree beyond 64, so no consistent background exists)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -19898,7 +19906,7 @@
       },
       "captures": [],
       "status": "unsupported",
-      "reason": "Unresolved bar shapes fail closed per Rulings S3-C, S3-F, S3-Q and S3-R; recorded for Excel's open/repair/strip outcome and lift no capability",
+      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s3/tests/fixtures/xlsx-cf/stage3-bar-unresolved-shapes.rejected.xlsx: Rule bar:unresolved-orphan-x14 (dataBar) on sqref B2:B6 with formulas [] missing from xl/worksheets/sheet1.xml",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
