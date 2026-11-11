@@ -9450,7 +9450,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "unverified",
+              "settings": "pixel-measured",
               "geometry": "unverified"
             }
           },
@@ -9461,7 +9461,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "unverified",
+              "settings": "pixel-measured",
               "geometry": "unverified"
             }
           },
@@ -9472,7 +9472,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "unverified",
+              "settings": "pixel-measured",
               "geometry": "unverified"
             }
           },
@@ -9483,7 +9483,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "unverified",
+              "settings": "pixel-measured",
               "geometry": "unverified"
             }
           },
@@ -9494,7 +9494,7 @@
             "barApplied": true,
             "fillSource": "unverified",
             "barEvidence": {
-              "settings": "unverified",
+              "settings": "pixel-measured",
               "geometry": "unverified"
             }
           },
