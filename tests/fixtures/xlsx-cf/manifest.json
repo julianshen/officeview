@@ -9415,7 +9415,7 @@
       "expected": {
         "inputSha256": "a596063f9c497e33cc2e7a8a6abf626919356671cb25c699e9f9d57fd2fc90c5",
         "savedSha256": "3776abb44c54a96458e76b2fb494ec66f3ffbafe6fd406a9e4294f086f950123",
-        "provenance": "seed-hypothesis",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -9557,7 +9557,7 @@
             "ref": "G2",
             "controlRef": "G8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -9662,8 +9662,7 @@
           "pngSha256": "932b9eac6db89d245666d2e840dccb9170c0d3cff34c25d5bb9334731ead332e"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture kept but not promoted: bar measurement refused (bar-edge-unstable: Bar cell B2: scanline edges disagree beyond 1 px (left 156/156/156, right 173/260/173))",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
