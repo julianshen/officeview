@@ -1949,7 +1949,19 @@ export function discriminateBar(
   const answers = [...new Set(ids.map(question))]
   if (answers.length < 2) return { status: 'non-discriminating', reason: 'fewer than two hypotheses' }
   const matchedAnswers = [...new Set(matched.map(question))]
-  if (matchedAnswers.length !== 1) return { status: 'non-discriminating', reason: `${matchedAnswers.length} hypotheses (${matchedAnswers.join(', ')}) match the measurement` }
+  // Largest px difference between two hypotheses at any designated cell (Infinity for bar versus no bar).
+  const pxSeparation = (x: string, y: string): number => Math.max(0, ...refs.map(ref => {
+    const a = at(x, ref)
+    const b = at(y, ref)
+    if (!a || !b) return 0
+    if (Boolean(a.noBar) !== Boolean(b.noBar)) return Infinity
+    if (a.noBar || a.anyExtent || b.anyExtent) return 0
+    return Math.max(Math.abs(a.leftPx - b.leftPx), Math.abs(a.rightPx - b.rightPx), Math.abs((a.topPx ?? 0) - (b.topPx ?? 0)), Math.abs((a.bottomPx ?? 0) - (b.bottomPx ?? 0)))
+  }))
+  if (matchedAnswers.length !== 1) {
+    const sep = Math.max(0, ...matched.flatMap(x => matched.filter(y => question(y) !== question(x)).map(y => pxSeparation(x, y))))
+    return { status: 'non-discriminating', reason: `${matchedAnswers.length} hypotheses (${matchedAnswers.join(', ')}) match the measurement (largest separation between them ${sep} px)` }
+  }
   for (const m of matched) {
     for (const o of ids) {
       if (question(o) === question(m)) continue
@@ -1958,7 +1970,7 @@ export function discriminateBar(
         const b = at(o, ref)
         return a !== undefined && b !== undefined && separable(a, b)
       })
-      if (!apart) return { status: 'non-discriminating', reason: `hypotheses ${question(m)} and ${question(o)} cannot be told apart at any designated cell (less than ${minSeparationPx} px, same bar presence, same colour)` }
+      if (!apart) return { status: 'non-discriminating', reason: `hypotheses ${question(m)} and ${question(o)} cannot be told apart at any designated cell (largest separation ${pxSeparation(m, o)} px, need ${minSeparationPx}; same bar presence, colour and traits)` }
     }
   }
   return { status: 'discriminating', matched: matchedAnswers[0]! }
@@ -2732,12 +2744,13 @@ export function buildBarHypotheses(
  * listed in `BAR_PIXEL_PROBE_UNOBSERVABLE` and fail the probe closed until a ruling or a re-authored probe settles them.
  */
 export const BAR_PIXEL_PROBE_SETTINGS = ['fill', 'border', 'direction', 'axis', 'showValue'] as const
-export const BAR_PIXEL_PROBE_UNOBSERVABLE: Readonly<Record<string, string>> = {
-  'minLength/maxLength':
-    'the probe draws its bars from a midpoint axis, so 0/100 versus the default 10/90 changes no pixel a model can predict here (the length family settles lengths separately)',
-  negativeBarColorSameAsPositive:
-    'the probe has no negative value, so the negative colour type and negativeFillColor draw nothing',
-}
+/**
+ * Pinned probe settings the probe capture cannot show, each of which would fail the probe closed. Empty by Ruling
+ * S3-PROBE5 (owner, 2026-11-12): the gate is the five pixel-observable settings above; minLength/maxLength (the probe's
+ * bars start at a midpoint axis) and the negative colour type (the probe has no negative value) are verified by their
+ * own cases (`bar:lengths-*`, `bar:negative-*`), not by the probe.
+ */
+export const BAR_PIXEL_PROBE_UNOBSERVABLE: Readonly<Record<string, string>> = {}
 
 /**
  * `bar:settings-precondition-probe`, re-specified as a PIXEL precondition: the probe rule (priority 1) and the default
@@ -3070,7 +3083,8 @@ function verifyBarCapture(
         return fail('cell-expectation-mismatch', `Cell ${cell.ref} barApplied=${String(cell.barApplied)} but the capture ${m.bar ? 'shows a bar' : 'shows no bar'}`)
       }
       const r = recorded.find(x => String(x.ref).toUpperCase() === cell.ref.toUpperCase())
-      const same = r !== undefined && (r.bar === null ? m.bar === null : m.bar !== null && r.bar?.leftPx === m.bar.leftPx && r.bar?.rightPx === m.bar.rightPx)
+      const sameBar = r !== undefined && (r.bar === null ? m.bar === null : m.bar !== null && (['leftPx', 'rightPx', 'topPx', 'bottomPx'] as const).every(k => r.bar?.[k] === m.bar![k]))
+      const same = sameBar && (r.axisPx ?? null) === (m.axisPx ?? null)
       if (!same) return fail('sidecar-mismatch', `Sidecar observedBars for ${cell.ref} disagrees with the PNG measurement`)
     }
     if (cap !== 'bar:settings-precondition-probe') {

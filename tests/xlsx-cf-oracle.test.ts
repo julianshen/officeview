@@ -3866,30 +3866,46 @@ describe('CF oracle verifier', () => {
     const { ['bar:lengths-explicit-0-100']: _gone, ...without } = hyps
     write({ ...sidecar, barHypotheses: without })
     expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
+    // Recorded vertical edges and the axis are compared too (review Minor 1).
+    for (const field of ['topPx', 'bottomPx'] as const) {
+      write({ ...sidecar, observedBars: (sidecar.observedBars as Array<{ ref: string; bar: Record<string, number> | null }>).map(b => (b.ref === 'C3' && b.bar ? { ...b, bar: { ...b.bar, [field]: b.bar[field]! + 1 } } : b)) })
+      expect(verifyCfCase(c, { rootDir: dir }), field).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
+    }
+    write({ ...sidecar, observedBars: (sidecar.observedBars as Array<{ ref: string }>).map(b => (b.ref === 'C3' ? { ...b, axisPx: 300 } : b)) })
+    expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
     // Recorded px that disagree with the PNG refuse.
     write({ ...sidecar, observedBars: (sidecar.observedBars as Array<{ ref: string; bar: { rightPx: number } | null }>).map(b => (b.ref === 'C3' && b.bar ? { ...b, bar: { ...b.bar, rightPx: b.bar.rightPx + 5 } } : b)) })
     expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'sidecar-mismatch' })
   })
 
-  it('the pixel precondition probe observes each visible setting against the default control and fails closed on the rest', () => {
+  it('the pixel precondition probe passes on its five observed settings and refuses when any one is unobserved or equals the control (Ruling S3-PROBE5)', () => {
     const man = (JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest).cases.find(x => x.id === 'stage3-bar-settings-probe')!
     const tpl = CF_STAGE3_CASES.find(x => x.id === man.id)!
     const sc = JSON.parse(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.json'), 'utf8')) as Record<string, number[]>
     const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, man.saved))))!
     const geom = computeWorksheetRangeGeometry(parts, man.range, { colWidthsPt: sc.colWidthsPt!, rowHeightsPt: sc.rowHeightsPt! })!
-    const png = decodePngSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.png'))))!
+    const pngBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, 'tests/fixtures/xlsx-cf/refs/stage3-bar-settings-probe.png')))
+    const png = decodePngSync(pngBytes)!
     const c: CfOracleCase = { ...man, markers: tpl.markers, expected: { ...man.expected, cells: tpl.expected.cells } }
     const measured = measureCaseBars(c, png, geom) as ReadonlyMap<string, CfObservedBar>
-    const res = evaluateBarPixelProbe(c, png, geom, measured)
-    // Fill, border, direction, axis and value text are observed and differ from the control; lengths and the negative
-    // colour type draw nothing distinguishable in this capture, so the probe stays closed (bar-settings-unobserved).
-    expect(res.status).toBe('unobserved')
-    expect(res.reason).toMatch(/observed and distinct: fill, border, direction, axis, showValue/)
-    expect(res.reason).toMatch(/minLength\/maxLength/)
-    expect(Object.keys(BAR_PIXEL_PROBE_UNOBSERVABLE).length).toBeGreaterThan(0)
-    // A probe rule measured against itself (control = probe cells) equals the control: refused for that reason first.
+    // Ruling S3-PROBE5: the gate is fill, border, direction, axis and value text; lengths and negative colours are
+    // verified by their own cases, so nothing else blocks the probe.
+    expect(BAR_PIXEL_PROBE_UNOBSERVABLE).toEqual({})
+    expect(evaluateBarPixelProbe(c, png, geom, measured)).toMatchObject({ status: 'discriminating' })
+    // One setting equal to the control: the probe measured against the control's own cells.
     const same: CfOracleCase = { ...c, markers: c.markers.map(m => (m.bar && m.priority === 2 ? { ...m, sqref: 'B2:B6' } : m)) }
     expect(evaluateBarPixelProbe(same, png, geom, measured)).toMatchObject({ status: 'unobserved', reason: expect.stringMatching(/equals the default control/) })
+    // One setting unobserved: B2's border painted over with its fill, so the probe's border is not seen consistently.
+    const patched = decodePngSync(pngBytes)!
+    const b2 = measured.get('B2')!.bar!
+    const fillAt = (x: number, y: number) => (y * patched.width + x) * 4
+    for (const x of [b2.leftPx, b2.rightPx]) {
+      for (let y = b2.topPx; y <= b2.bottomPx; y++) for (let k = 0; k < 4; k++) patched.data[fillAt(x, y) + k] = patched.data[fillAt(b2.leftPx + 3, y) + k]!
+    }
+    expect(evaluateBarPixelProbe(c, patched, geom, measured)).toMatchObject({ status: 'unobserved', reason: expect.stringMatching(/probe border is not observed consistently/) })
+    // Fewer than two probe bars: nothing to observe.
+    const empty = new Map([...measured].map(([ref, o]) => [ref, ref.startsWith('B') ? { ...o, bar: null } : o]))
+    expect(evaluateBarPixelProbe(c, png, geom, empty)).toMatchObject({ status: 'unobserved' })
   })
 
   it('Excel\'s canonical resave of a standalone x14 bar (paired base + companion) is structurally accepted (stage3-bar-pairing.rejected.xlsx)', async () => {
@@ -3943,6 +3959,12 @@ describe('CF oracle verifier', () => {
     writeFileSync(join(dir, 'tests/fixtures/xlsx-cf/manifest.json'), JSON.stringify({ ...real, cases: [measured] }))
     const kept = await generateAllStage1({ rootDir: dir, onlyCaseId: measured.id, stage: 3 })
     expect(kept.cases.find(x => x.id === measured.id)).toEqual(measured)
+    // A recipe-pending case keeps its kept captures too (review Minor 4)...
+    const pending = { ...measured, status: 'recipe-pending' as const, reason: 'kept capture refused' }
+    writeFileSync(join(dir, 'tests/fixtures/xlsx-cf/manifest.json'), JSON.stringify({ ...real, cases: [pending] }))
+    const keptPending = await generateAllStage1({ rootDir: dir, onlyCaseId: measured.id, stage: 3 })
+    expect(keptPending.cases.find(x => x.id === measured.id)!.captures).toEqual(measured.captures)
+    // ...and only --force drops either.
     const forced = await generateAllStage1({ rootDir: dir, onlyCaseId: measured.id, stage: 3, force: true })
     const after = forced.cases.find(x => x.id === measured.id)!
     expect(after.status).toBe('recipe-pending')

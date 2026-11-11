@@ -1713,7 +1713,9 @@ export async function generateAllStage1(options: GenerateStage1Options | string 
       ...(preserveExistingSaved && prev?.resaveReceipt ? { resaveReceipt: prev.resaveReceipt } : {}),
       status: preserveExistingSaved && prev ? prev.status : template.status,
       reason: preserveExistingSaved && prev ? prev.reason : template.reason,
-      captures: preserveExistingSaved && prev ? prev.captures : template.captures,
+      // A recipe-pending case's kept captures (a refused capture is still Excel evidence to diagnose) survive too unless
+      // --force: --verify-only then skips them as stale if the saved workbook changed under them.
+      captures: preserveExistingSaved && prev ? prev.captures : prev && !opts.force && prev.captures.some(cap => cap.pngSha256 !== undefined) ? prev.captures : template.captures,
       expected: {
         ...(preserveExistingSaved && prev && prevVerify?.kind === 'verified' ? prev.expected : template.expected),
         inputSha256,

@@ -7,7 +7,7 @@ All commands run from the Stage 3 worktree root (`.worktrees/cf-s3`). **Always p
 ## 0. Preconditions
 
 1. The owner keeps the display awake and **unlocked** for the whole run (for example `caffeinate -d` in another terminal). The capture harness refuses on a locked or unknown display (`display-locked`); it never captures through a lock.
-2. Excel is installed at `/Applications/Microsoft Excel.app`. Note the workbooks that are already open: the harness never closes a workbook that was open before it started (`assertCanCloseWorkbook`).
+2. Excel is installed at `/Applications/Microsoft Excel.app`. Note the workbooks that are already open: the harness never closes a workbook that was open before it started (`assertCanCloseWorkbook`). **No workbook with the same file name as a case** (`stage3-bar-*.xlsx`, `*.candidate.xlsx`) may be open before a run. The harness matches workbooks by name, not by full path. A same-named workbook from another folder would be treated as the harness's own (or refused as pre-existing), so close any such workbook first.
 3. Baseline must be green before touching Excel:
    ```
    npx vitest run tests/xlsx-cf-oracle.test.ts tests/xlsx-cf-oracle-conformance.test.ts
@@ -40,7 +40,7 @@ bun scripts/cf-refs/audit.ts --stage 3 --case stage3-bar-settings-probe
 
 The probe's fill must also be within ±8 of `FF0000FF`.
 
-minLength/maxLength (the bars start at a midpoint axis) and the negative colour type (there is no negative value) cannot be seen in this capture. The probe therefore fails closed with `bar-settings-unobserved` until a ruling either accepts the five visible settings or extends the probe fixture. **Do not recapture the probe for this**: calibration is verified, and geometry capabilities do not depend on the probe. Every other settings capability (`bar:settings-*`, `bar:pairing-*`) is gated by the probe and also needs `bar:pixel-calibration`. Every capability with pixel hypotheses also needs `bar:geometry-insets`.
+**Ruling S3-PROBE5 (owner, 2026-11-12): the gate is exactly these five settings.** minLength/maxLength (the probe's bars start at a midpoint axis) and the negative colour type (the probe has no negative value) do not block it, because they are verified by their own cases (`bar:lengths-*`, `bar:negative-*`). If any one of the five is not observed consistently, or equals the control's observation, the probe refuses with `bar-settings-unobserved`. Passing the gate only unblocks the other settings capabilities (`bar:settings-*`, `bar:pairing-*`). Each of them still verifies only on its own discriminating pixel evidence, and also needs `bar:pixel-calibration`. Every capability with pixel hypotheses also needs `bar:geometry-insets`.
 
 The case must come back `measured` with `bar:pixel-calibration` verified. The ways it fails:
 

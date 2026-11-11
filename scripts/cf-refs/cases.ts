@@ -4525,15 +4525,17 @@ export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
   'bar:bounds-automax':
     'On all-positive data autoMax equals max, so a pixel measurement cannot tell the autoMax bound from the max bound. Re-measure with data where Excel\'s automatic maximum differs from the maximum value.',
   'bar:bounds-num':
-    'The fixture\'s num 20/80 bounds equal its data\'s min/max (20..80), so num and min/max predict identical px (Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80.',
+    'The fixture\'s num 20/80 bounds equal its data\'s min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80.',
   'bar:bounds-percent':
-    'On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (Task 18b recomputation). Re-measure with data whose range is not 0..100.',
+    'On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (largest separation 0 px; Task 18b recomputation). Re-measure with data whose range is not 0..100.',
   'bar:geometry-min-visible-width':
-    'The smallest positive value (0.5 of 0..100 on a 177 px span) already rounds to a 1 px bar, so "no minimum" and "1 px minimum" predict the same px (Task 18b recomputation). Re-measure with a value under 0.28 percent of the span.',
+    'The smallest positive value (0.5 of 0..100 on a 177 px span) already rounds to a 1 px bar, so "no minimum" and "1 px minimum" predict the same px (largest separation 0 px; Task 18b recomputation). Re-measure with a value under 0.28 percent of the span.',
   'bar:scope-merged-cell':
-    'The merged host B8 is the only designated cell, and "statistics over the host alone across the merged width" and "all four values on the host column only" put the bar end 1 px apart (Task 18b recomputation). Re-measure with a merge whose hypotheses differ by 3 px or more.',
+    'The merged host B8 is the only designated cell, and "statistics over the host alone across the merged width" and "all four values on the host column only" put the bar end 2 px apart, under the 3 px separation the +-1 px tolerance needs (Task 18b recomputation). Re-measure with a merge whose hypotheses differ by 3 px or more.',
   'bar:bounds-positional':
     'Both positional shapes are base-only bars, which are gradient (the schema default): their visible extent is the fade, not the bar geometry, so no length hypothesis can be checked (S3-M, Task 18b). Re-author them with an x14 companion at gradient="0" carrying the same positional cfvo.',
+  'bar:negative-border-same-as-positive':
+    'With negativeBarBorderColorSameAsPositive="1" Excel\'s canonical form carries no <x14:negativeBorderColor> (an extra one shifts into the axis colour, finding S3-18B-A), so the alternative "a distinct negative border" has no colour to predict and both answers predict the same pixels (largest separation 0 px; fix round 1 recomputation). Re-measure only once Excel\'s default negative border colour is known.',
   'bar:showvalue-copy-text':
     'Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind.',
 }
