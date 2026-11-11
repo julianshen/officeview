@@ -3407,6 +3407,40 @@ describe('CF oracle verifier', () => {
     expect(lightRes.get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
   })
 
+  it('bar edges use the bar cell\'s own background and never read through value text', () => {
+    const barOf = (png: Uint8Array) => measureBarGeometry(decodePngSync(png)!, barGeom, ['B1'], measureOpts)
+    // Own fill (light, >= 64 from white) with a solid bar at 60..119; the control is white.
+    const own = barOf(paintBarPng(ctx => {
+      ctx.fillStyle = '#e0a0a0'; ctx.fillRect(40, 0, 200, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(60, 0, 60, 30)
+    }))
+    expect(own).toBeInstanceOf(Map)
+    expect((own as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 60, rightPx: 119 })
+    // A full-width bar (perimeter covered by the bar) still measures through the control-background fallback.
+    const full = barOf(paintBarPng(ctx => { ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 200, 30) }))
+    expect((full as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 239 })
+    // Perimeter samples that disagree beyond the strong delta leave no consistent background.
+    const split = barOf(paintBarPng(ctx => {
+      ctx.fillStyle = '#e0a0a0'; ctx.fillRect(40, 0, 100, 30)
+      ctx.fillStyle = '#20c020'; ctx.fillRect(140, 0, 100, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(90, 8, 30, 14)
+    }))
+    expect(split).toMatchObject({ kind: 'refusal', code: 'bar-background-unresolved' })
+
+    // Value text: glyphs over the bar's last columns in the bar cell, the same glyphs over white in the control.
+    const glyphOverEnd = barOf(paintBarPng(ctx => {
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 200, 30)
+      ctx.fillStyle = '#000000'; ctx.fillRect(232, 5, 8, 20); ctx.fillRect(232, 65, 8, 20)
+    }))
+    expect(glyphOverEnd).toMatchObject({ kind: 'refusal', code: 'bar-edge-under-text' })
+    // A bar that ends well left of the glyph band measures its true edges with the mask present.
+    const clear = barOf(paintBarPng(ctx => {
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 80, 30)
+      ctx.fillStyle = '#000000'; ctx.fillRect(200, 5, 8, 20); ctx.fillRect(200, 65, 8, 20)
+    }))
+    expect((clear as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
+  })
+
   it('non-discriminating bar variant keeps its gate closed (Lesson 3)', () => {
     const measured = { B2: { leftPx: 84, rightPx: 143 }, B4: { leftPx: 84, rightPx: 190 } }
     // Two hypotheses 2 px apart at every designated cell cannot be told apart.

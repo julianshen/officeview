@@ -280,6 +280,8 @@ export type CfRefusalCode =
   | 'display-locked'
   | 'bar-calibration-failed'
   | 'bar-edge-unstable'
+  | 'bar-edge-under-text'
+  | 'bar-background-unresolved'
   | 'bar-hypothesis-none'
   | 'bar-settings-unobserved'
 

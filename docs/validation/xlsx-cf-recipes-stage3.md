@@ -66,6 +66,8 @@ After every case:
    |---|---|
    | `display-locked` | The display was locked (or unknown) before or after the capture; the capture was discarded. Ask the owner to unlock, rerun that case only. |
    | `bar-edge-unstable` | The three scanlines disagreed by more than 1 px, or only some scanlines found an edge. The px are not recorded as a measurement; investigate the PNG, do not loosen tolerances. |
+   | `bar-edge-under-text` | A measured bar edge lies within 1 px of the control cell's value text (the control shows text where the bar cell may hide or overprint it), so the true edge is unknown. Not a measurement; capture a variant with `showValue="0"` or text clear of the edge rather than loosening the mask. |
+   | `bar-background-unresolved` | The bar cell's own fill is detected (three or more corners differ from the control's background) but the corner samples disagree beyond 64 per channel, so no consistent background exists. Investigate the PNG. |
    | `bar-hypothesis-none` | The measurement matches none of the length hypotheses. Record the recorded px in `docs/validation/xlsx-cf.md` as a finding; the capability is refused. |
    | `unobserved-expectation` | A claimed evidence kind is wrong or unbacked (settings claimed from pixels, geometry from the object model, a label that the recomputation does not support, no hypotheses). The capability stays unverified. |
    | `cell-expectation-mismatch` | `barApplied` disagrees with the PNG. |

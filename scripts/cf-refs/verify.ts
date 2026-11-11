@@ -1672,26 +1672,62 @@ export function measureBarGeometry(
     const h = box.y1 - box.y0
     if (w <= 0 || h <= 0) return refuse('geometry-mismatch', `Bar cell ${ref} has no pixel area`)
     const ys = BAR_SCAN_FRACTIONS.map(f => box.y0 + Math.min(h - 1, Math.floor(h * f)))
-    // Bar ink must differ from the control AND from the cell's own background: a control that shows value text
-    // (while the bar cell hides it) must not read as bar. The control's background stands in for the cell's, because
-    // a full-width bar can cover the bar cell's own perimeter (the control carries no bar).
-    const background = sampleCellBackgroundRgb(png, ctrl)
-    const delta = (dx: number, y: number): number => {
-      const cy = Math.min(png.height - 1, ctrl.y0 + (y - box.y0))
-      const px = pixelAt(png, box.x0 + dx, y)
-      return Math.min(rgbMaxDelta(px, pixelAt(png, ctrl.x0 + dx, cy)), rgbMaxDelta(px, background))
-    }
-    const edges = ys.map(y => {
-      let left = -1
-      let right = -1
-      for (let dx = 0; dx < w; dx++) {
-        if (delta(dx, y) >= BAR_STRONG_DELTA) {
-          if (left < 0) left = dx
-          right = dx
+    // Text mask: columns where the CONTROL cell (inset 1 px from the gridlines) shows ink. The bar cell's own text is
+    // never used (it can sit on the bar). Masked columns are excluded from edge detection.
+    const ctrlBg = sampleCellBackgroundRgb(png, ctrl)
+    const masked = new Array<boolean>(w).fill(false)
+    for (let dx = 1; dx < w - 1; dx++) {
+      for (let cy = ctrl.y0 + 1; cy < ctrl.y1 - 1 && cy < png.height; cy++) {
+        if (rgbMaxDelta(pixelAt(png, ctrl.x0 + dx, cy), ctrlBg) >= BAR_STRONG_DELTA) {
+          masked[dx] = true
+          break
         }
       }
-      return left < 0 ? null : { left: box.x0 + left, right: box.x0 + right }
-    })
+    }
+    // Background: the bar cell's own (it may carry its own fill). The four 2 px corner samples decide: a fill covers
+    // all four, whereas a bar anchored at an edge covers at most two. Fewer than three corners differing from the
+    // control's background means the control's is the cell's too; three or more must agree with each other (else
+    // bar-background-unresolved). If the own background then shows no ink at all the perimeter was covered by a
+    // full-width bar, and the control's background is the fallback.
+    const cx = [box.x0 + 2, box.x1 - 3]
+    const cyy = [box.y0 + 2, box.y1 - 3]
+    const corners = cx.flatMap(x => cyy.map(y => pixelAt(png, Math.max(0, Math.min(png.width - 1, x)), Math.max(0, Math.min(png.height - 1, y)))))
+    const differing = corners.filter(c => rgbMaxDelta(c, ctrlBg) >= BAR_STRONG_DELTA)
+    const ownDiffers = differing.length >= 3
+    const ownBg = differing[0] ?? ctrlBg
+    if (ownDiffers) {
+      for (const a of differing) {
+        for (const b of differing) {
+          if (rgbMaxDelta(a, b) >= BAR_STRONG_DELTA) {
+            return refuse('bar-background-unresolved', `Bar cell ${ref}: perimeter samples (${corners.map(c => c.join(',')).join(' / ')}) disagree beyond ${BAR_STRONG_DELTA}, so no consistent background exists`)
+          }
+        }
+      }
+    }
+    const scan = (background: [number, number, number]) => {
+      const isInk = (dx: number, y: number): boolean => {
+        if (masked[dx]) return false
+        const cy = Math.min(png.height - 1, ctrl.y0 + (y - box.y0))
+        const px = pixelAt(png, box.x0 + dx, y)
+        return rgbMaxDelta(px, background) >= BAR_STRONG_DELTA && rgbMaxDelta(px, pixelAt(png, ctrl.x0 + dx, cy)) >= BAR_STRONG_DELTA
+      }
+      const lines = ys.map(y => {
+        let left = -1
+        let right = -1
+        for (let dx = 0; dx < w; dx++) {
+          if (isInk(dx, y)) {
+            if (left < 0) left = dx
+            right = dx
+          }
+        }
+        return left < 0 ? null : { left: box.x0 + left, right: box.x0 + right }
+      })
+      return { lines, isInk }
+    }
+    let scanned = scan(ownDiffers ? ownBg : ctrlBg)
+    if (ownDiffers && scanned.lines.every(e => e === null)) scanned = scan(ctrlBg)
+    const edges = scanned.lines
+    const delta = (dx: number, y: number): number => (scanned.isInk(dx, y) ? BAR_STRONG_DELTA : 0)
     const found = edges.filter((e): e is { left: number; right: number } => e !== null)
     const base = { ref, cellLeftPx: box.x0, cellWidthPx: box.x1 - box.x0 }
     if (found.length === 0) {
@@ -1708,7 +1744,12 @@ export function measureBarGeometry(
     }
     const leftPx = median3(lefts)
     const rightPx = median3(rights)
-    const midX = Math.floor((leftPx + rightPx) / 2) - box.x0
+    const nearMask = (dx: number): boolean => [-1, 0, 1].some(d => masked[dx + d] === true)
+    if (nearMask(leftPx - box.x0) || nearMask(rightPx - box.x0)) {
+      return refuse('bar-edge-under-text', `Bar cell ${ref}: a measured edge (left ${leftPx}, right ${rightPx}) lies within 1 px of the control's value text, so the true edge is unknown`)
+    }
+    let midX = Math.floor((leftPx + rightPx) / 2) - box.x0
+    for (let d = 0; masked[midX] && d < w; d++) midX = Math.min(w - 1, Math.max(0, midX + (d % 2 === 0 ? d + 1 : -(d + 1))))
     let top = -1
     let bottom = -1
     for (let y = box.y0; y < box.y1; y++) {
