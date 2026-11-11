@@ -4,10 +4,11 @@ import JSZip from 'jszip'
 import { buildTextIndex, type TextSpan } from '../../src/core/search'
 import { textForRange } from '../../src/core/selection'
 import type { LogicalTextSource } from '../../src/core/text-recording'
-import type { RunDetail } from '../src/occlusion'
+import { occlusionObserver, type RunDetail } from '../src/occlusion'
+import { joinSpans } from '../src/text/join'
 import { Pool, type PoolTextJob } from '../src/pool'
 import { DocumentHost, FIXED_MARK_TEXT } from '../src/render'
-import { answerText, buildServedUnit, type ServedUnit, type TextReply } from '../src/text/served'
+import { answerText, buildServedUnit, recordSpans, type ServedUnit, type TextReply } from '../src/text/served'
 import { augmentedFixtures } from './fixtures'
 import { corpus, disposePool, pool } from './harness'
 
@@ -127,6 +128,27 @@ describe('served text via the pool', () => {
     expect(host.text(o.docKey, { op: 'prepare', unit: 0 })).toMatchObject({ op: 'prepare' })
     expect(host.text(o.docKey, copyAll)).toEqual({ missing: units(o.units.length) })
     host.drop(o.docKey)
+  }, 60_000)
+
+  test('select across units wholly selects the units between; anchor/focus order does not matter', async () => {
+    const d = await opened(corpus('lo-tdf115394.pptx'))
+    const n = d.open.units.length
+    expect(n).toBe(5)
+    const last = d.open.units[n - 1]!
+    const fwd = await d.text({ op: 'select', range: { anchor: { unit: 0, x: 0, y: 0 }, focus: { unit: n - 1, x: last.w, y: last.h } } }) as Extract<TextReply, { op: 'select' }>
+    const back = await d.text({ op: 'select', range: { anchor: { unit: n - 1, x: last.w, y: last.h }, focus: { unit: 0, x: 0, y: 0 } } })
+    const all = await d.text({ op: 'select', range: { all: true } }) as Extract<TextReply, { op: 'select' }>
+    expect(back).toEqual(fwd)
+    const middle = (r: typeof fwd) => r.units.filter((x) => x.unit > 0 && x.unit < n - 1)
+    expect(middle(fwd).length).toBeGreaterThan(0)
+    expect(middle(fwd)).toEqual(middle(all))
+    expect(fwd.paragraphs).toBe(all.paragraphs)
+  }, 60_000)
+
+  test('malformed copy caps fail closed', async () => {
+    const d = await opened(deck)
+    for (const bad of [{ maxBytes: Number.NaN }, { maxBytes: undefined }, { maxParagraphs: Number.NaN }, { maxParagraphs: undefined }])
+      expect(await d.text({ ...copyAll, ...bad } as never)).toMatchObject({ op: 'copy', refused: 'too-large' })
   }, 60_000)
 
   test('xlsx copy answers painted display text, not the formula', async () => {
@@ -292,7 +314,17 @@ describe('sanitised served units', () => {
         const r = host.text(o.docKey, { op: 'prepare', unit: u }) as Extract<TextReply, { op: 'prepare' }>
         served += r.served; withheld += r.withheld
         const unit = host.servedUnit(o.docKey, u)!
-        assertInvariant(unit, unit.lines.flatMap((l) => l.spans.map((s) => s.text)))
+        // An independent join (recorded order, scale 1, unit-size canvas, no mark).
+        const paint = (host as unknown as { docs: Map<string, { paintables: Array<{ paint(c: CanvasRenderingContext2D): void }> }> }).docs.get(o.docKey)!.paintables[u]!
+        const spans = recordSpans((c) => paint.paint(c), host.backend.createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D)
+        const { w, h } = o.units[u]!
+        const occ = occlusionObserver(w, h)
+        paint.paint(occ.wrap(host.backend.createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D))
+        const join = joinSpans(spans, occ.runDetails(), 1)
+        expect({ served: join.served.length, withheld: join.withheld }).toEqual({ served: r.served, withheld: r.withheld })
+        const cached = unit.lines.flatMap((l) => l.spans.map((s) => s.text)).sort()
+        expect(cached).toEqual(join.served.map((s) => s.text).sort())
+        assertInvariant(unit, join.served.map((s) => s.text))
       }
       counts.push(`${name} served=${served} withheld=${withheld}`)
       host.drop(o.docKey)

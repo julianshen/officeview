@@ -264,9 +264,10 @@ export function answerText(job: Exclude<TextJob, { op: 'prepare' }>, unitCount: 
     return { op: 'select', paragraphs, units: needed.flatMap((u) => { const rects = rectsForSelectionOnPage(index, u, sel); return rects.length ? [{ unit: u, rects: flat(rects) }] : [] }) }
   }
   if (paragraphs === 0) return { op: 'copy', text: '', paragraphs: 0 }
-  if (job.maxParagraphs !== null && paragraphs > job.maxParagraphs) return { op: 'copy', refused: 'too-large', paragraphs, bytes: 0 }
+  // Caps fail closed: a malformed cap (NaN, undefined) refuses.
+  if (job.maxParagraphs !== null && !(paragraphs <= job.maxParagraphs)) return { op: 'copy', refused: 'too-large', paragraphs, bytes: 0 }
   const text = textForRange(index, sel)
   const bytes = Buffer.byteLength(text, 'utf8')
-  if (bytes > job.maxBytes) return { op: 'copy', refused: 'too-large', paragraphs, bytes }
+  if (!(bytes <= job.maxBytes)) return { op: 'copy', refused: 'too-large', paragraphs, bytes }
   return { op: 'copy', text, paragraphs }
 }
