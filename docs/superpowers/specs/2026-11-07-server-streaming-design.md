@@ -1703,6 +1703,11 @@ render pipeline.
    abstain explicitly (§13.2); whole-search attribution bounds are
    simulation-verified over the declared table (§13.5), never analytic
    promises.
+9. **Stage 3 service limits (owner, 2026-11-11; Stage 3 design):** per-session
+   copy/print caps reset when the viewer opens the document again; search
+   answers only highlight boxes but repeated probing can reconstruct text
+   even with copy off (rate-limited, not prevented); a11y text follows the
+   copy setting.
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 
