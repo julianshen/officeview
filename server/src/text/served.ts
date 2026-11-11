@@ -13,7 +13,7 @@
 import { createRecordingContext, findMatches, rectsForRange, spansToLines, type IndexLine, type TextIndex, type TextSpan } from '../../../src/core/search'
 import { hitTest, normalizeRange, rectsForSelectionOnPage, selectionSlices, textForRange, type CaretPos, type SelectionRange } from '../../../src/core/selection'
 import type { HighlightRect } from '../../../src/core/overlay'
-import { RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from '../../../src/core/text-recording'
+import { RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from '../../../src/core/text-recording'
 import { setWatermarkMuted } from '../../../src/core/watermark'
 import type { RunDetail } from '../occlusion'
 import { joinSpans } from './join'
@@ -51,8 +51,22 @@ export const prepareWorkspace = (w: number, h: number) => 4 * w * h + TEXT_PREPA
 /** Thrown once recorded spans would pass the recording budget. */
 export class TextBudgetExceeded extends Error { constructor() { super('recorded text exceeds the prepare allowance'); this.name = 'TextBudgetExceeded' } }
 
+/** Paragraph/cell group of a recorded span (RECORD_GROUP), kept off the
+ * library's TextSpan. The value is an opaque per-recording token, never the
+ * painter's key object, so a served unit retains no layout or cell model.
+ * `sanitizeSpans` carries the tag onto the spans it copies. */
+const groups = new WeakMap<TextSpan, object>()
+/** A copy of `from` that keeps its group tag. */
+function carry(from: TextSpan, to: TextSpan): TextSpan {
+  const g = groups.get(from)
+  if (g) groups.set(to, g)
+  return to
+}
+
 /** Records one unit's text spans in paint order (the `buildTextIndex` setup:
  * a tiny context, the watermark muted, the caller's state restored).
+ * The recording context defines RECORD_GROUP: each kept span is tagged with
+ * the painter's current group (a token per distinct painter key).
  * `maxBytes`: a running cap on the spans' estimated size (`spansBytes`). The
  * span that would pass it is not kept and the paint is aborted by throwing
  * TextBudgetExceeded; if a painter swallows that, every later span is refused
@@ -61,6 +75,10 @@ export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny
   const spans: TextSpan[] = []
   const sources = new Set<LogicalTextSource>()
   let spent = 0, over = false
+  // Painter key → token, minted only when a span is kept under it.
+  const tokens = new Map<object, object>()
+  let current: object | undefined
+  const setGroup = (key: unknown) => { current = key !== null && (typeof key === 'object' || typeof key === 'function') ? key : undefined }
   const keep = spans.push.bind(spans)
   spans.push = (...items: TextSpan[]) => {
     for (const span of items) {
@@ -70,6 +88,11 @@ export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny
       spent += n
       if (span.logical) sources.add(span.logical.source)
       keep(span)
+      if (current) {
+        let token = tokens.get(current)
+        if (!token) { token = {}; tokens.set(current, token) }
+        groups.set(span, token)
+      }
     }
     return spans.length
   }
@@ -90,7 +113,7 @@ export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny
   setWatermarkMuted(true)
   try {
     tiny.save()
-    try { paint(guardRecording(createRecordingContext(tiny, spans), preflight)) } finally { tiny.restore() }
+    try { paint(guardRecording(createRecordingContext(tiny, spans), preflight, setGroup)) } finally { tiny.restore() }
   } finally {
     setWatermarkMuted(false)
   }
@@ -100,11 +123,13 @@ export function recordSpans(paint: (ctx: CanvasRenderingContext2D) => void, tiny
 }
 
 /** Intercepts the recording context's text entry points (RECORD_TEXT,
- * fillText, strokeText) so `preflight` runs before core capture. */
-function guardRecording(rec: CanvasRenderingContext2D, preflight: (text: unknown, logical?: LogicalTextRange) => void): CanvasRenderingContext2D {
+ * fillText, strokeText) so `preflight` runs before core capture, and defines
+ * RECORD_GROUP (which the library's recording context does not). */
+function guardRecording(rec: CanvasRenderingContext2D, preflight: (text: unknown, logical?: LogicalTextRange) => void, setGroup: (key: unknown) => void): CanvasRenderingContext2D {
   const target = rec as unknown as Record<string | symbol, unknown>
   return new Proxy(target, {
     get(t, prop) {
+      if (prop === RECORD_GROUP) return setGroup
       if (prop === RECORD_TEXT) {
         const record = t[RECORD_TEXT] as ((text: string, x: number, y: number, width: number, logical: LogicalTextRange) => void) | undefined
         return record && ((text: string, x: number, y: number, width: number, logical: LogicalTextRange) => { preflight(text, logical); record(text, x, y, width, logical) })
@@ -126,10 +151,10 @@ const isBlank = (s: string) => s.trim() === ''
 export function sanitizeSpans(served: TextSpan[]): TextSpan[] {
   const out: TextSpan[] = served.map((span) => {
     const { logical, ...rest } = span
-    if (!logical) return { ...rest }
+    if (!logical) return carry(span, { ...rest })
     // A span whose source slice is not its own text carries no logical range.
-    if (logical.source.text.slice(logical.start, logical.end) !== span.text) return { ...rest }
-    return { ...rest, logical }
+    if (logical.source.text.slice(logical.start, logical.end) !== span.text) return carry(span, { ...rest })
+    return carry(span, { ...rest, logical })
   })
   const bySource = new Map<LogicalTextSource, number[]>()
   out.forEach((span, i) => {
@@ -163,7 +188,7 @@ export function sanitizeSpans(served: TextSpan[]): TextSpan[] {
         // Boundaries are absolute source offsets within the span; any outside
         // its own range is dropped with the whole list (fail closed).
         if (gb && gb.every((b) => b >= old.start && b <= old.end)) logical.graphemeBoundaries = gb.map((b) => b - seg.start)
-        out[i] = { ...out[i]!, logical }
+        out[i] = carry(out[i]!, { ...out[i]!, logical })
       }
     })
   }
@@ -231,8 +256,11 @@ export class ServedCache {
 const flat = (rects: HighlightRect[]) => rects.flatMap((r) => [r.x, r.y, r.width, r.height])
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
 
-/** Paragraph identity (R2): a non-blank logical source, else the span itself. */
+/** Paragraph identity (R2, Task 3b): the span's group (paragraph or cell),
+ * else a non-blank logical source, else the span itself. Blank text has none. */
 function paragraphKey(span: TextSpan): object | undefined {
+  const group = groups.get(span)
+  if (group) return isBlank(span.text) ? undefined : group
   if (span.logical) return isBlank(span.logical.source.text) ? undefined : span.logical.source
   return isBlank(span.text) ? undefined : span
 }
@@ -294,22 +322,39 @@ export function answerText(job: Exclude<TextJob, { op: 'prepare' }>, unitCount: 
   }
 
   if (job.op === 'a11y') {
+    // A group (paragraph or cell) is one paragraph: its served spans' text per
+    // line, lines joined as textForRange joins source-less lines. Its blank
+    // spans join it, but a group with no ink is no paragraph.
     const order: object[] = []
-    const paras = new Map<object, { rects: HighlightRect[]; text: string }>()
-    for (const line of units.get(job.unit)!.lines) {
+    const paras = new Map<object, { rects: HighlightRect[]; text: string; ink: boolean; pieces?: Array<{ line: number; text: string }> }>()
+    units.get(job.unit)!.lines.forEach((line, li) => {
       let off = 0
       for (const span of line.spans) {
         const a = off; off += span.text.length
-        const key = paragraphKey(span)
+        const group = groups.get(span)
+        const key = group ?? paragraphKey(span)
         if (!key) continue
         let p = paras.get(key)
-        if (!p) { p = { rects: [], text: span.logical ? span.logical.source.text : span.text }; paras.set(key, p); order.push(key) }
+        if (!p) {
+          p = group ? { rects: [], text: '', ink: false, pieces: [] } : { rects: [], text: span.logical ? span.logical.source.text : span.text, ink: true }
+          paras.set(key, p); order.push(key)
+        }
+        if (p.pieces) {
+          const last = p.pieces[p.pieces.length - 1]
+          if (last?.line === li) last.text += span.text
+          else p.pieces.push({ line: li, text: span.text })
+          if (!isBlank(span.text)) p.ink = true
+        }
         p.rects.push(...rectsForRange(line, a, off))
       }
+    })
+    for (const p of paras.values()) {
+      const pieces = p.pieces
+      if (pieces) p.text = pieces.map((x, i) => i === pieces.length - 1 ? x.text : x.text.replace(/\s+$/, '')).join('\n')
     }
     return {
       op: 'a11y',
-      paragraphs: order.map((key, k) => {
+      paragraphs: order.filter((key) => paras.get(key)!.ink).map((key, k) => {
         const p = paras.get(key)!
         const x0 = Math.min(...p.rects.map((r) => r.x)), y0 = Math.min(...p.rects.map((r) => r.y))
         const x1 = Math.max(...p.rects.map((r) => r.x + r.width)), y1 = Math.max(...p.rects.map((r) => r.y + r.height))

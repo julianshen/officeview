@@ -13,7 +13,7 @@ import { paintScene } from '../drawing/scene-paint'
 import { paintDrawingContent } from '../drawing/content-paint'
 import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
-import { graphemes } from '../core/text-recording'
+import { graphemes, RECORD_GROUP, type TextRecordingContext } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
 import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
 import { BUILTIN_DATE_FORMATS, formatBuiltinDate } from './builtinDate'
@@ -1430,24 +1430,28 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
   if (phase === 'fill') return undefined
   const text = layout.text
   if (text) {
-    ctx.fillStyle = text.color
-    ctx.font = text.font
-    if (text.kind === 'layout') paintCellText(ctx, text)
-    else if (text.clipX) {
-      // Horizontal clip only: plain text keeps its unclipped vertical extent.
-      ctx.save()
-      ctx.beginPath()
-      ctx.rect(text.clipX.x0, y - hh * 8, text.clipX.x1 - text.clipX.x0, hh * 17)
-      ctx.clip()
-      ctx.textBaseline = 'alphabetic'
-      ctx.fillText(text.text, text.tx, text.ty)
-      if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
-      ctx.restore()
-    } else {
-      ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty)
-      if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
-    }
-    if (text.kind === 'layout' && text.decoration && !text.stacked) paintLayoutDecoration(ctx, text, x, w)
+    const group = (ctx as TextRecordingContext)[RECORD_GROUP]
+    group?.(layout)
+    try {
+      ctx.fillStyle = text.color
+      ctx.font = text.font
+      if (text.kind === 'layout') paintCellText(ctx, text)
+      else if (text.clipX) {
+        // Horizontal clip only: plain text keeps its unclipped vertical extent.
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(text.clipX.x0, y - hh * 8, text.clipX.x1 - text.clipX.x0, hh * 17)
+        ctx.clip()
+        ctx.textBaseline = 'alphabetic'
+        ctx.fillText(text.text, text.tx, text.ty)
+        if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
+        ctx.restore()
+      } else {
+        ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty)
+        if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
+      }
+      if (text.kind === 'layout' && text.decoration && !text.stacked) paintLayoutDecoration(ctx, text, x, w)
+    } finally { group?.(undefined) }
   }
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders

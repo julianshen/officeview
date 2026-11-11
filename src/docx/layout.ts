@@ -16,7 +16,7 @@ import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { layoutTextBody } from '../drawing/text-layout'
 import { clusterOrientation } from '../drawing/vertical-orientation'
-import { graphemes, RECORD_TEXT, type LogicalTextRange, type TextRecordingContext } from '../core/text-recording'
+import { graphemes, RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type TextRecordingContext } from '../core/text-recording'
 import type { DrawingTextParagraph, LocalAffine, TextDirection } from '../drawing/text'
 
 export interface RunStyle {
@@ -82,6 +82,8 @@ export interface LineBox {
   logical?: LogicalTextRange
   defaultStyle?: RunStyle
   bidi?: boolean
+  /** Identity shared by every line of one laid-out paragraph (RECORD_GROUP key). */
+  paragraph?: object
 }
 
 export interface PageLayout {
@@ -270,6 +272,7 @@ function layoutParagraph(
   }
 ): { lines: LineBox[]; endY: number } {
   const lines: LineBox[] = []
+  const paragraph = {}
   const { contentX, contentWidth, startY, defaults } = opts
   const indentLeft = twipsToPx(para.indentLeftTwips ?? 0)
   const indentRight = twipsToPx(para.indentRightTwips ?? 0)
@@ -418,6 +421,7 @@ function layoutParagraph(
       contentWidthPx: lineUsable,
       marker,
       bidi: isBidiRtl,
+      paragraph,
       ...(boxes.length ? { inlineImages: boxes, baselinePx: y + h - descent } : {})
     })
     y += h
@@ -1077,7 +1081,9 @@ export function renderPages(
     }
     const paintLines = (allLines: LineBox[]) => {
       ctx.textAlign = 'left'
+      const group = (ctx as TextRecordingContext)[RECORD_GROUP]
       for (const line of allLines) {
+        group?.(line.paragraph)
         if (line.bidi) ctx.direction = 'rtl'
         try {
           let offset = 0
@@ -1171,6 +1177,7 @@ export function renderPages(
           }
         } finally {
           if (line.bidi) ctx.direction = 'ltr'
+          group?.(undefined)
         }
       }
     }

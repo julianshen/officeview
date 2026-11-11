@@ -12,6 +12,7 @@ import { AdmissionRefused, Pool, TEXT_JOB_BYTES, TextTooLarge, type PoolTextJob 
 import { DocumentHost, FIXED_MARK_TEXT } from '../src/render'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, TEXT_PREPARE_ALLOWANCE, TEXT_RECORD_BUDGET, type ServedUnit, type TextReply } from '../src/text/served'
 import { augmentedFixtures } from './fixtures'
+import { buildDocx, buildXlsx } from '../../src/testdata/ooxml-builders'
 import { corpus, disposePool, pool } from './harness'
 
 afterAll(() => disposePool())
@@ -495,5 +496,97 @@ describe('fix round 3: a single record is preflighted before capture maps it', (
     })
     expect(() => host.text(docKey, { op: 'prepare', unit: 0 }, grant)).toThrow(expect.objectContaining({ name: 'RenderRefusal', code: 'grant' }))
     expect(c.points).toBe(0)
+  }, 60_000)
+})
+
+describe('task 3b: paragraph and cell identity (RECORD_GROUP)', () => {
+  const EXAMPLE = 'The quick brown fox jumps over the lazy dog and keeps running across the wide green field until the sun goes down behind the distant hills.'
+  /** A narrow page (5000 twips, 720 margins) so EXAMPLE wraps over several lines. */
+  async function docx(paras: string[], tables: Parameters<typeof buildDocx>[1] = []): Promise<Uint8Array> {
+    const zip = await JSZip.loadAsync(await buildDocx(paras.map((text) => ({ runs: [{ text }] })), tables))
+    const doc = await zip.file('word/document.xml')!.async('string')
+    zip.file('word/document.xml', doc.replace('<w:pgSz w:w="12240" w:h="15840"/>', '<w:pgSz w:w="5000" w:h="15840"/>').replace('w:right="1440" w:bottom="1440" w:left="1440"', 'w:right="720" w:bottom="1440" w:left="720"'))
+    return zip.generateAsync({ type: 'uint8array' })
+  }
+  /** A1 wraps (wrapText, narrow column, tall row); the other cells are plain. */
+  async function xlsx(others: string[]): Promise<Uint8Array> {
+    const refs = others.map((_, i) => String.fromCharCode(66 + i) + '1')
+    const base = await buildXlsx([{ name: 'S', cols: '<col min="1" max="1" width="12" customWidth="1"/>', rows: [
+      { r: 1, cells: [{ ref: 'A1', t: 's', v: 0, style: 3 }, ...refs.map((ref, i) => ({ ref, t: 's' as const, v: i + 1 }))] },
+    ] }], ['alpha beta gamma delta epsilon zeta', ...others])
+    const zip = await JSZip.loadAsync(base)
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    zip.file('xl/styles.xml', styles.replace('<cellXfs count="3">', '<cellXfs count="4">').replace('</cellXfs>', '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1"/></xf></cellXfs>'))
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    zip.file('xl/worksheets/sheet1.xml', sheet.replace('<row r="1">', '<row r="1" ht="80" customHeight="1">'))
+    return zip.generateAsync({ type: 'uint8array' })
+  }
+  /** Opens on a host and prepares unit 0; every span must be served, so the counts are not vacuous. */
+  async function prepared(bytes: Uint8Array) {
+    const host = new DocumentHost()
+    const o = await host.open(`g-${++refs}`, bytes, 'visible-only')
+    const prep = host.text(o.docKey, { op: 'prepare', unit: 0 }) as Extract<TextReply, { op: 'prepare' }>
+    expect(prep.served).toBeGreaterThan(0)
+    expect(prep.withheld).toBe(0)
+    const ask = (job: Exclude<PoolTextJob, { op: 'prepare' }> | Record<string, unknown>) => host.text(o.docKey, job as never)
+    const lineCount = host.servedUnit(o.docKey, 0)!.lines.length
+    return { host, o, ask, lineCount }
+  }
+  const unit0 = { op: 'copy', range: { anchor: { unit: 0, x: 0, y: 0 }, focus: { unit: 0, x: 1e6, y: 1e6 } }, maxParagraphs: null, maxBytes: 4 << 20 } as const
+
+  test('a wrapped DOCX body paragraph counts as one paragraph', async () => {
+    const d = await prepared(await docx([EXAMPLE]))
+    expect(d.lineCount).toBeGreaterThanOrEqual(3)
+    expect(d.ask({ op: 'select', range: { all: true } })).toMatchObject({ op: 'select', paragraphs: 1 })
+    const c = d.ask(unit0) as { text: string; paragraphs: number }
+    expect(c.paragraphs).toBe(1)
+    expect(c.text.replace(/\s+/g, ' ')).toBe(EXAMPLE)
+  }, 60_000)
+
+  test('two DOCX body paragraphs count as two', async () => {
+    const d = await prepared(await docx([EXAMPLE, 'Second paragraph.']))
+    expect(d.ask({ op: 'select', range: { all: true } })).toMatchObject({ op: 'select', paragraphs: 2 })
+  }, 60_000)
+
+  test('a DOCX table with 2×2 single-paragraph cells counts four', async () => {
+    const cell = (text: string) => ({ paragraphs: [{ runs: [{ text }] }] })
+    const d = await prepared(await docx([], [{ gridCols: ['1500', '1500'], rows: [{ cells: [cell('north west'), cell('north east')] }, { cells: [cell('south west'), cell('south east')] }] }]))
+    expect(d.ask(unit0)).toMatchObject({ op: 'copy', paragraphs: 4 })
+  }, 60_000)
+
+  test('a wrapped XLSX cell counts as one; N non-empty cells count N', async () => {
+    const one = await prepared(await xlsx([]))
+    expect(one.lineCount).toBeGreaterThan(1)
+    expect(one.ask(copyAll)).toMatchObject({ op: 'copy', paragraphs: 1 })
+    const three = await prepared(await xlsx(['bee', 'sea']))
+    expect(three.ask(copyAll)).toMatchObject({ op: 'copy', paragraphs: 3 })
+  }, 60_000)
+
+  test('copy maxParagraphs: 1 allows one whole wrapped paragraph and refuses two', async () => {
+    const one = await prepared(await docx([EXAMPLE]))
+    const ok = one.ask({ ...unit0, maxParagraphs: 1 }) as { text: string; paragraphs: number }
+    expect(ok.paragraphs).toBe(1)
+    expect(ok.text.replace(/\s+/g, ' ')).toBe(EXAMPLE)
+    const two = await prepared(await docx([EXAMPLE, 'Second paragraph.']))
+    expect(two.ask({ ...unit0, maxParagraphs: 1 })).toEqual({ op: 'copy', refused: 'too-large', paragraphs: 2, bytes: 0 })
+  }, 60_000)
+
+  test('a11y returns one entry per DOCX paragraph, not per word', async () => {
+    const d = await prepared(await docx([EXAMPLE, 'Second paragraph.']))
+    const r = d.ask({ op: 'a11y', unit: 0 }) as Extract<TextReply, { op: 'a11y' }>
+    expect(r.paragraphs.length).toBe(2)
+    expect(r.paragraphs[0]!.text!.replace(/\s+/g, ' ')).toBe(EXAMPLE)
+    expect(r.paragraphs[1]!.text).toBe('Second paragraph.')
+    for (const p of r.paragraphs) expect(p.rect.length).toBe(4)
+    // Lines are joined as textForRange joins them: the whole-unit copy is the paragraphs joined.
+    expect(r.paragraphs.map((p) => p.text).join('\n')).toBe((d.ask(copyAll) as { text: string }).text)
+    const k = d.ask({ op: 'a11y', unit: 0, paragraph: 1 }) as Extract<TextReply, { op: 'a11y' }>
+    expect(k.paragraphs).toEqual([{ rect: r.paragraphs[0]!.rect }, { rect: r.paragraphs[1]!.rect, text: 'Second paragraph.' }])
+  }, 60_000)
+
+  test('served units hold no painter group objects (tokens only)', async () => {
+    const d = await prepared(await docx([EXAMPLE, 'Second paragraph.']))
+    const unit = d.host.servedUnit(d.o.docKey, 0)!
+    assertInvariant(unit, unit.lines.flatMap((l) => l.spans.map((s) => s.text)))
   }, 60_000)
 })
