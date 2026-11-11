@@ -441,188 +441,714 @@
     "bar:lengths-default-10-90": {
       "B2": [
         {
-          "id": "x14-lengths",
-          "leftPx": 84,
-          "rightPx": 101
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 86,
+          "rightPx": 103
         },
         {
-          "id": "full-span",
-          "leftPx": 84,
-          "rightPx": 83
+          "id": "full",
+          "question": "full",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
         }
       ],
       "B3": [
         {
-          "id": "x14-lengths",
-          "leftPx": 84,
-          "rightPx": 137
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 86,
+          "rightPx": 138
         },
         {
-          "id": "full-span",
-          "leftPx": 84,
-          "rightPx": 128
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 129
         }
       ],
       "B5": [
         {
-          "id": "x14-lengths",
-          "leftPx": 84,
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 86,
           "rightPx": 209
         },
         {
-          "id": "full-span",
-          "leftPx": 84,
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
           "rightPx": 218
         }
       ],
       "B6": [
         {
-          "id": "x14-lengths",
-          "leftPx": 84,
-          "rightPx": 245
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 86,
+          "rightPx": 244
         },
         {
-          "id": "full-span",
-          "leftPx": 84,
-          "rightPx": 263
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 262
         }
       ]
     },
     "bar:lengths-explicit-0-100": {
-      "C3": [
+      "C2": [
         {
-          "id": "x14-lengths",
-          "leftPx": 264,
-          "rightPx": 308
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
         },
         {
-          "id": "base-lengths",
-          "leftPx": 264,
-          "rightPx": 317
+          "id": "base",
+          "question": "base",
+          "leftPx": 266,
+          "rightPx": 283
+        }
+      ],
+      "C3": [
+        {
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 266,
+          "rightPx": 309
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 266,
+          "rightPx": 318
         }
       ],
       "C5": [
         {
-          "id": "x14-lengths",
-          "leftPx": 264,
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 266,
           "rightPx": 398
         },
         {
-          "id": "base-lengths",
-          "leftPx": 264,
+          "id": "base",
+          "question": "base",
+          "leftPx": 266,
           "rightPx": 389
         }
       ],
       "C6": [
         {
-          "id": "x14-lengths",
-          "leftPx": 264,
-          "rightPx": 443
+          "id": "effective",
+          "question": "effective",
+          "leftPx": 266,
+          "rightPx": 442
         },
         {
-          "id": "base-lengths",
-          "leftPx": 264,
-          "rightPx": 425
+          "id": "base",
+          "question": "base",
+          "leftPx": 266,
+          "rightPx": 424
         }
       ]
     },
     "bar:bounds-min-max": {
-      "D3": [
+      "D2": [
         {
-          "id": "x14-lengths",
-          "leftPx": 444,
-          "rightPx": 488
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
         },
         {
-          "id": "base-lengths",
-          "leftPx": 444,
-          "rightPx": 497
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 446,
+          "rightPx": 480
+        }
+      ],
+      "D3": [
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 446,
+          "rightPx": 489
+        },
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 446,
+          "rightPx": 516
         }
       ],
       "D4": [
         {
-          "id": "x14-lengths",
-          "leftPx": 444,
-          "rightPx": 533
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 446,
+          "rightPx": 534
         },
         {
-          "id": "base-lengths",
-          "leftPx": 444,
-          "rightPx": 533
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 446,
+          "rightPx": 551
         }
       ],
       "D5": [
         {
-          "id": "x14-lengths",
-          "leftPx": 444,
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 446,
           "rightPx": 578
         },
         {
-          "id": "base-lengths",
-          "leftPx": 444,
-          "rightPx": 569
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 446,
+          "rightPx": 587
         }
       ],
       "D6": [
         {
-          "id": "x14-lengths",
-          "leftPx": 444,
-          "rightPx": 623
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 446,
+          "rightPx": 622
         },
         {
-          "id": "base-lengths",
-          "leftPx": 444,
-          "rightPx": 605
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 446,
+          "rightPx": 622
         }
       ]
     },
     "bar:bounds-num": {
-      "E3": [
+      "E2": [
         {
-          "id": "x14-lengths",
-          "leftPx": 624,
-          "rightPx": 668
+          "id": "num",
+          "question": "num",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
         },
         {
-          "id": "base-lengths",
-          "leftPx": 624,
-          "rightPx": 677
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E3": [
+        {
+          "id": "num",
+          "question": "num",
+          "leftPx": 626,
+          "rightPx": 669
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 626,
+          "rightPx": 669
         }
       ],
       "E4": [
         {
-          "id": "x14-lengths",
-          "leftPx": 624,
-          "rightPx": 713
+          "id": "num",
+          "question": "num",
+          "leftPx": 626,
+          "rightPx": 714
         },
         {
-          "id": "base-lengths",
-          "leftPx": 624,
-          "rightPx": 713
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 626,
+          "rightPx": 714
         }
       ],
       "E5": [
         {
-          "id": "x14-lengths",
-          "leftPx": 624,
+          "id": "num",
+          "question": "num",
+          "leftPx": 626,
           "rightPx": 758
         },
         {
-          "id": "base-lengths",
-          "leftPx": 624,
-          "rightPx": 749
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 626,
+          "rightPx": 758
         }
       ],
       "E6": [
         {
-          "id": "x14-lengths",
-          "leftPx": 624,
-          "rightPx": 803
+          "id": "num",
+          "question": "num",
+          "leftPx": 626,
+          "rightPx": 802
         },
         {
-          "id": "base-lengths",
-          "leftPx": 624,
-          "rightPx": 785
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 626,
+          "rightPx": 802
+        }
+      ]
+    },
+    "bar:bounds-percent": {
+      "F2": [
+        {
+          "id": "percent",
+          "question": "percent",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "num",
+          "question": "num",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F3": [
+        {
+          "id": "percent",
+          "question": "percent",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "num",
+          "question": "num",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F4": [
+        {
+          "id": "percent",
+          "question": "percent",
+          "leftPx": 806,
+          "rightPx": 894
+        },
+        {
+          "id": "num",
+          "question": "num",
+          "leftPx": 806,
+          "rightPx": 894
+        }
+      ],
+      "F5": [
+        {
+          "id": "percent",
+          "question": "percent",
+          "leftPx": 806,
+          "rightPx": 982
+        },
+        {
+          "id": "num",
+          "question": "num",
+          "leftPx": 806,
+          "rightPx": 982
+        }
+      ],
+      "F6": [
+        {
+          "id": "percent",
+          "question": "percent",
+          "leftPx": 806,
+          "rightPx": 982
+        },
+        {
+          "id": "num",
+          "question": "num",
+          "leftPx": 806,
+          "rightPx": 982
+        }
+      ]
+    },
+    "bar:bounds-percentile": {
+      "G2": [
+        {
+          "id": "inc|beyond=clamp",
+          "question": "inc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "inc|beyond=none",
+          "question": "inc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=clamp",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=none",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "range|beyond=clamp",
+          "question": "range",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "range|beyond=none",
+          "question": "range",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "G3": [
+        {
+          "id": "inc|beyond=clamp",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1002
+        },
+        {
+          "id": "inc|beyond=none",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1002
+        },
+        {
+          "id": "exc|beyond=clamp",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=none",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "range|beyond=clamp",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 987
+        },
+        {
+          "id": "range|beyond=none",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 987
+        }
+      ],
+      "G4": [
+        {
+          "id": "inc|beyond=clamp",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1031
+        },
+        {
+          "id": "inc|beyond=none",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1031
+        },
+        {
+          "id": "exc|beyond=clamp",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=none",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "range|beyond=clamp",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 1012
+        },
+        {
+          "id": "range|beyond=none",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 1012
+        }
+      ],
+      "G5": [
+        {
+          "id": "inc|beyond=clamp",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1059
+        },
+        {
+          "id": "inc|beyond=none",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1059
+        },
+        {
+          "id": "exc|beyond=clamp",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=none",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "range|beyond=clamp",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 1037
+        },
+        {
+          "id": "range|beyond=none",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 1037
+        }
+      ],
+      "G6": [
+        {
+          "id": "inc|beyond=clamp",
+          "question": "inc",
+          "leftPx": 986,
+          "rightPx": 1162
+        },
+        {
+          "id": "inc|beyond=none",
+          "question": "inc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=clamp",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exc|beyond=none",
+          "question": "exc",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "range|beyond=clamp",
+          "question": "range",
+          "leftPx": 986,
+          "rightPx": 1162
+        },
+        {
+          "id": "range|beyond=none",
+          "question": "range",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ]
+    },
+    "bar:bounds-automin": {
+      "H2": [
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 1166,
+          "rightPx": 1224
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "H3": [
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 1166,
+          "rightPx": 1283
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 1166,
+          "rightPx": 1254
+        }
+      ],
+      "H4": [
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 1166,
+          "rightPx": 1342
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 1166,
+          "rightPx": 1342
+        }
+      ]
+    },
+    "bar:bounds-automax": {
+      "I2": [
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "I3": [
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 1346,
+          "rightPx": 1434
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 1346,
+          "rightPx": 1434
+        }
+      ],
+      "I4": [
+        {
+          "id": "zero-anchored",
+          "question": "zero-anchored",
+          "leftPx": 1346,
+          "rightPx": 1522
+        },
+        {
+          "id": "min-max",
+          "question": "min-max",
+          "leftPx": 1346,
+          "rightPx": 1522
+        }
+      ]
+    },
+    "bar:lengths-all-negative": {
+      "J2": [
+        {
+          "id": "axis",
+          "question": "axis",
+          "leftPx": 1526,
+          "rightPx": 1702
+        },
+        {
+          "id": "from-min",
+          "question": "from-min",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "J3": [
+        {
+          "id": "axis",
+          "question": "axis",
+          "leftPx": 1570,
+          "rightPx": 1702
+        },
+        {
+          "id": "from-min",
+          "question": "from-min",
+          "leftPx": 1526,
+          "rightPx": 1569
+        }
+      ],
+      "J4": [
+        {
+          "id": "axis",
+          "question": "axis",
+          "leftPx": 1614,
+          "rightPx": 1702
+        },
+        {
+          "id": "from-min",
+          "question": "from-min",
+          "leftPx": 1526,
+          "rightPx": 1614
+        }
+      ],
+      "J5": [
+        {
+          "id": "axis",
+          "question": "axis",
+          "leftPx": 1659,
+          "rightPx": 1702
+        },
+        {
+          "id": "from-min",
+          "question": "from-min",
+          "leftPx": 1526,
+          "rightPx": 1658
+        }
+      ],
+      "J6": [
+        {
+          "id": "axis",
+          "question": "axis",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "from-min",
+          "question": "from-min",
+          "leftPx": 1526,
+          "rightPx": 1702
         }
       ]
     }

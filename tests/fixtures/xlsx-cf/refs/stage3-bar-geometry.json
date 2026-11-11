@@ -295,5 +295,702 @@
       }
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:geometry-insets": {
+      "B4": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 86,
+          "rightPx": 129,
+          "topPx": 84,
+          "bottomPx": 109
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 84,
+          "rightPx": 128,
+          "topPx": 82,
+          "bottomPx": 111
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 85,
+          "rightPx": 129,
+          "topPx": 83,
+          "bottomPx": 110
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 86,
+          "rightPx": 129,
+          "topPx": 84,
+          "bottomPx": 109
+        }
+      ],
+      "B5": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 86,
+          "rightPx": 174,
+          "topPx": 114,
+          "bottomPx": 139
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 84,
+          "rightPx": 173,
+          "topPx": 112,
+          "bottomPx": 141
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 85,
+          "rightPx": 173,
+          "topPx": 113,
+          "bottomPx": 140
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 86,
+          "rightPx": 173,
+          "topPx": 114,
+          "bottomPx": 139
+        }
+      ],
+      "B6": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 86,
+          "rightPx": 218,
+          "topPx": 144,
+          "bottomPx": 169
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 84,
+          "rightPx": 218,
+          "topPx": 142,
+          "bottomPx": 171
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 85,
+          "rightPx": 218,
+          "topPx": 143,
+          "bottomPx": 170
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 86,
+          "rightPx": 217,
+          "topPx": 144,
+          "bottomPx": 169
+        }
+      ],
+      "C4": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 266,
+          "rightPx": 332,
+          "topPx": 84,
+          "bottomPx": 109
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 264,
+          "rightPx": 331,
+          "topPx": 82,
+          "bottomPx": 111
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 265,
+          "rightPx": 331,
+          "topPx": 83,
+          "bottomPx": 110
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 266,
+          "rightPx": 332,
+          "topPx": 84,
+          "bottomPx": 109
+        }
+      ],
+      "C5": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 266,
+          "rightPx": 399,
+          "topPx": 114,
+          "bottomPx": 139
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 264,
+          "rightPx": 398,
+          "topPx": 112,
+          "bottomPx": 141
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 265,
+          "rightPx": 398,
+          "topPx": 113,
+          "bottomPx": 140
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 266,
+          "rightPx": 398,
+          "topPx": 114,
+          "bottomPx": 139
+        }
+      ],
+      "C6": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 266,
+          "rightPx": 465,
+          "topPx": 144,
+          "bottomPx": 169
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 264,
+          "rightPx": 466,
+          "topPx": 142,
+          "bottomPx": 171
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 265,
+          "rightPx": 465,
+          "topPx": 143,
+          "bottomPx": 170
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 266,
+          "rightPx": 465,
+          "topPx": 144,
+          "bottomPx": 169
+        }
+      ],
+      "D4": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 536,
+          "rightPx": 624,
+          "topPx": 84,
+          "bottomPx": 109
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 534,
+          "rightPx": 623,
+          "topPx": 82,
+          "bottomPx": 111
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 535,
+          "rightPx": 624,
+          "topPx": 83,
+          "bottomPx": 110
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 536,
+          "rightPx": 624,
+          "topPx": 84,
+          "bottomPx": 109
+        }
+      ],
+      "D5": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 536,
+          "rightPx": 714,
+          "topPx": 114,
+          "bottomPx": 139
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 534,
+          "rightPx": 713,
+          "topPx": 112,
+          "bottomPx": 141
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 535,
+          "rightPx": 713,
+          "topPx": 113,
+          "bottomPx": 140
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 536,
+          "rightPx": 713,
+          "topPx": 114,
+          "bottomPx": 139
+        }
+      ],
+      "D6": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 536,
+          "rightPx": 803,
+          "topPx": 144,
+          "bottomPx": 169
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 534,
+          "rightPx": 803,
+          "topPx": 142,
+          "bottomPx": 171
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 535,
+          "rightPx": 803,
+          "topPx": 143,
+          "bottomPx": 170
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 536,
+          "rightPx": 802,
+          "topPx": 144,
+          "bottomPx": 169
+        }
+      ],
+      "I2": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 1471,
+          "rightPx": 1647,
+          "topPx": 32,
+          "bottomPx": 39
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 1469,
+          "rightPx": 1648,
+          "topPx": 30,
+          "bottomPx": 41
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 1470,
+          "rightPx": 1647,
+          "topPx": 31,
+          "bottomPx": 40
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 1471,
+          "rightPx": 1646,
+          "topPx": 32,
+          "bottomPx": 39
+        }
+      ],
+      "I3": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 1471,
+          "rightPx": 1647,
+          "topPx": 44,
+          "bottomPx": 79
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 1469,
+          "rightPx": 1648,
+          "topPx": 42,
+          "bottomPx": 81
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 1470,
+          "rightPx": 1647,
+          "topPx": 43,
+          "bottomPx": 80
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 1471,
+          "rightPx": 1646,
+          "topPx": 44,
+          "bottomPx": 79
+        }
+      ],
+      "I4": [
+        {
+          "id": "excel",
+          "question": "excel",
+          "leftPx": 1471,
+          "rightPx": 1647,
+          "topPx": 84,
+          "bottomPx": 109
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 1469,
+          "rightPx": 1648,
+          "topPx": 82,
+          "bottomPx": 111
+        },
+        {
+          "id": "one",
+          "question": "one",
+          "leftPx": 1470,
+          "rightPx": 1647,
+          "topPx": 83,
+          "bottomPx": 110
+        },
+        {
+          "id": "two",
+          "question": "two",
+          "leftPx": 1471,
+          "rightPx": 1646,
+          "topPx": 84,
+          "bottomPx": 109
+        }
+      ]
+    },
+    "bar:geometry-snapping": {
+      "E4": [
+        {
+          "id": "half-up",
+          "question": "half-up",
+          "leftPx": 896,
+          "rightPx": 941
+        },
+        {
+          "id": "floor",
+          "question": "floor",
+          "leftPx": 896,
+          "rightPx": 941
+        },
+        {
+          "id": "ceil",
+          "question": "ceil",
+          "leftPx": 896,
+          "rightPx": 942
+        },
+        {
+          "id": "half-even",
+          "question": "half-even",
+          "leftPx": 896,
+          "rightPx": 941
+        }
+      ],
+      "E5": [
+        {
+          "id": "half-up",
+          "question": "half-up",
+          "leftPx": 896,
+          "rightPx": 988
+        },
+        {
+          "id": "floor",
+          "question": "floor",
+          "leftPx": 896,
+          "rightPx": 987
+        },
+        {
+          "id": "ceil",
+          "question": "ceil",
+          "leftPx": 896,
+          "rightPx": 988
+        },
+        {
+          "id": "half-even",
+          "question": "half-even",
+          "leftPx": 896,
+          "rightPx": 987
+        }
+      ],
+      "E6": [
+        {
+          "id": "half-up",
+          "question": "half-up",
+          "leftPx": 896,
+          "rightPx": 1034
+        },
+        {
+          "id": "floor",
+          "question": "floor",
+          "leftPx": 896,
+          "rightPx": 1033
+        },
+        {
+          "id": "ceil",
+          "question": "ceil",
+          "leftPx": 896,
+          "rightPx": 1034
+        },
+        {
+          "id": "half-even",
+          "question": "half-even",
+          "leftPx": 896,
+          "rightPx": 1034
+        }
+      ],
+      "F4": [
+        {
+          "id": "half-up",
+          "question": "half-up",
+          "leftPx": 1084,
+          "rightPx": 1131
+        },
+        {
+          "id": "floor",
+          "question": "floor",
+          "leftPx": 1084,
+          "rightPx": 1131
+        },
+        {
+          "id": "ceil",
+          "question": "ceil",
+          "leftPx": 1084,
+          "rightPx": 1131
+        },
+        {
+          "id": "half-even",
+          "question": "half-even",
+          "leftPx": 1084,
+          "rightPx": 1131
+        }
+      ],
+      "F5": [
+        {
+          "id": "half-up",
+          "question": "half-up",
+          "leftPx": 1084,
+          "rightPx": 1179
+        },
+        {
+          "id": "floor",
+          "question": "floor",
+          "leftPx": 1084,
+          "rightPx": 1179
+        },
+        {
+          "id": "ceil",
+          "question": "ceil",
+          "leftPx": 1084,
+          "rightPx": 1179
+        },
+        {
+          "id": "half-even",
+          "question": "half-even",
+          "leftPx": 1084,
+          "rightPx": 1179
+        }
+      ],
+      "F6": [
+        {
+          "id": "half-up",
+          "question": "half-up",
+          "leftPx": 1084,
+          "rightPx": 1227
+        },
+        {
+          "id": "floor",
+          "question": "floor",
+          "leftPx": 1084,
+          "rightPx": 1227
+        },
+        {
+          "id": "ceil",
+          "question": "ceil",
+          "leftPx": 1084,
+          "rightPx": 1227
+        },
+        {
+          "id": "half-even",
+          "question": "half-even",
+          "leftPx": 1084,
+          "rightPx": 1227
+        }
+      ]
+    },
+    "bar:geometry-min-visible-width": {
+      "G2": [
+        {
+          "id": "0",
+          "question": "0",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "1",
+          "question": "1",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "2",
+          "question": "2",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "3",
+          "question": "3",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "G3": [
+        {
+          "id": "0",
+          "question": "0",
+          "leftPx": 1279,
+          "rightPx": 1280
+        },
+        {
+          "id": "1",
+          "question": "1",
+          "leftPx": 1279,
+          "rightPx": 1280
+        },
+        {
+          "id": "2",
+          "question": "2",
+          "leftPx": 1279,
+          "rightPx": 1280
+        },
+        {
+          "id": "3",
+          "question": "3",
+          "leftPx": 1279,
+          "rightPx": 1281
+        }
+      ],
+      "G6": [
+        {
+          "id": "0",
+          "question": "0",
+          "leftPx": 1279,
+          "rightPx": 1279
+        },
+        {
+          "id": "1",
+          "question": "1",
+          "leftPx": 1279,
+          "rightPx": 1279
+        },
+        {
+          "id": "2",
+          "question": "2",
+          "leftPx": 1279,
+          "rightPx": 1280
+        },
+        {
+          "id": "3",
+          "question": "3",
+          "leftPx": 1279,
+          "rightPx": 1281
+        }
+      ]
+    },
+    "bar:geometry-narrow-clip": {
+      "H4": [
+        {
+          "id": "clip",
+          "question": "clip",
+          "leftPx": 1459,
+          "rightPx": 1467
+        },
+        {
+          "id": "no-bar",
+          "question": "no-bar",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "no-inset",
+          "question": "no-inset",
+          "leftPx": 1457,
+          "rightPx": 1468
+        }
+      ],
+      "H5": [
+        {
+          "id": "clip",
+          "question": "clip",
+          "leftPx": 1459,
+          "rightPx": 1467
+        },
+        {
+          "id": "no-bar",
+          "question": "no-bar",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "no-inset",
+          "question": "no-inset",
+          "leftPx": 1457,
+          "rightPx": 1468
+        }
+      ]
+    }
+  }
 }

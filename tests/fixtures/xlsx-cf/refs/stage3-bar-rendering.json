@@ -447,5 +447,635 @@
       }
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:render-solid": {
+      "B2": [
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "gradient",
+          "question": "gradient",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "B3": [
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 86,
+          "rightPx": 103,
+          "rgb": "FF0000FF",
+          "traits": {
+            "fill": "solid"
+          }
+        },
+        {
+          "id": "gradient",
+          "question": "gradient",
+          "leftPx": 86,
+          "rightPx": 103,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B4": [
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 86,
+          "rightPx": 174,
+          "rgb": "FF0000FF",
+          "traits": {
+            "fill": "solid"
+          }
+        },
+        {
+          "id": "gradient",
+          "question": "gradient",
+          "leftPx": 86,
+          "rightPx": 174,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B5": [
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 86,
+          "rightPx": 244,
+          "rgb": "FF0000FF",
+          "traits": {
+            "fill": "solid"
+          }
+        },
+        {
+          "id": "gradient",
+          "question": "gradient",
+          "leftPx": 86,
+          "rightPx": 244,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B6": [
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 86,
+          "rightPx": 262,
+          "rgb": "FF0000FF",
+          "traits": {
+            "fill": "solid"
+          }
+        },
+        {
+          "id": "gradient",
+          "question": "gradient",
+          "leftPx": 86,
+          "rightPx": 262,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ]
+    },
+    "bar:render-border": {
+      "D2": [
+        {
+          "id": "present",
+          "question": "present",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "absent",
+          "question": "absent",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "D3": [
+        {
+          "id": "present",
+          "question": "present",
+          "leftPx": 446,
+          "rightPx": 463,
+          "borderRgb": "FF00B050",
+          "traits": {
+            "border": "present"
+          }
+        },
+        {
+          "id": "absent",
+          "question": "absent",
+          "leftPx": 446,
+          "rightPx": 463,
+          "traits": {
+            "border": "absent"
+          }
+        }
+      ],
+      "D4": [
+        {
+          "id": "present",
+          "question": "present",
+          "leftPx": 446,
+          "rightPx": 534,
+          "borderRgb": "FF00B050",
+          "traits": {
+            "border": "present"
+          }
+        },
+        {
+          "id": "absent",
+          "question": "absent",
+          "leftPx": 446,
+          "rightPx": 534,
+          "traits": {
+            "border": "absent"
+          }
+        }
+      ],
+      "D5": [
+        {
+          "id": "present",
+          "question": "present",
+          "leftPx": 446,
+          "rightPx": 604,
+          "borderRgb": "FF00B050",
+          "traits": {
+            "border": "present"
+          }
+        },
+        {
+          "id": "absent",
+          "question": "absent",
+          "leftPx": 446,
+          "rightPx": 604,
+          "traits": {
+            "border": "absent"
+          }
+        }
+      ],
+      "D6": [
+        {
+          "id": "present",
+          "question": "present",
+          "leftPx": 446,
+          "rightPx": 622,
+          "borderRgb": "FF00B050",
+          "traits": {
+            "border": "present"
+          }
+        },
+        {
+          "id": "absent",
+          "question": "absent",
+          "leftPx": 446,
+          "rightPx": 622,
+          "traits": {
+            "border": "absent"
+          }
+        }
+      ]
+    },
+    "bar:direction-ltr": {
+      "E2": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E3": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 626,
+          "rightPx": 643
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 785,
+          "rightPx": 802
+        }
+      ],
+      "E4": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 626,
+          "rightPx": 714
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 714,
+          "rightPx": 802
+        }
+      ],
+      "E5": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 626,
+          "rightPx": 784
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 644,
+          "rightPx": 802
+        }
+      ],
+      "E6": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 626,
+          "rightPx": 802
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 626,
+          "rightPx": 802
+        }
+      ]
+    },
+    "bar:direction-rtl": {
+      "F2": [
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F3": [
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 965,
+          "rightPx": 982
+        },
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 806,
+          "rightPx": 823
+        }
+      ],
+      "F4": [
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 894,
+          "rightPx": 982
+        },
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 806,
+          "rightPx": 894
+        }
+      ],
+      "F5": [
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 824,
+          "rightPx": 982
+        },
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 806,
+          "rightPx": 964
+        }
+      ],
+      "F6": [
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 806,
+          "rightPx": 982
+        },
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 806,
+          "rightPx": 982
+        }
+      ]
+    },
+    "bar:direction-context-ltr-sheet": {
+      "G2": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "G3": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 986,
+          "rightPx": 1003
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 1145,
+          "rightPx": 1162
+        }
+      ],
+      "G4": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 986,
+          "rightPx": 1074
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 1074,
+          "rightPx": 1162
+        }
+      ],
+      "G5": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 986,
+          "rightPx": 1144
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 1004,
+          "rightPx": 1162
+        }
+      ],
+      "G6": [
+        {
+          "id": "ltr",
+          "question": "ltr",
+          "leftPx": 986,
+          "rightPx": 1162
+        },
+        {
+          "id": "rtl",
+          "question": "rtl",
+          "leftPx": 986,
+          "rightPx": 1162
+        }
+      ]
+    },
+    "bar:colors-theme-tint": {
+      "H2": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "untinted",
+          "question": "untinted",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "H3": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1166,
+          "rightPx": 1183,
+          "rgb": "FF104862"
+        },
+        {
+          "id": "untinted",
+          "question": "untinted",
+          "leftPx": 1166,
+          "rightPx": 1183,
+          "rgb": "FF156082"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1166,
+          "rightPx": 1183,
+          "rgb": "FF638EC6"
+        }
+      ],
+      "H4": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1166,
+          "rightPx": 1254,
+          "rgb": "FF104862"
+        },
+        {
+          "id": "untinted",
+          "question": "untinted",
+          "leftPx": 1166,
+          "rightPx": 1254,
+          "rgb": "FF156082"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1166,
+          "rightPx": 1254,
+          "rgb": "FF638EC6"
+        }
+      ],
+      "H5": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1166,
+          "rightPx": 1324,
+          "rgb": "FF104862"
+        },
+        {
+          "id": "untinted",
+          "question": "untinted",
+          "leftPx": 1166,
+          "rightPx": 1324,
+          "rgb": "FF156082"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1166,
+          "rightPx": 1324,
+          "rgb": "FF638EC6"
+        }
+      ],
+      "H6": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1166,
+          "rightPx": 1342,
+          "rgb": "FF104862"
+        },
+        {
+          "id": "untinted",
+          "question": "untinted",
+          "leftPx": 1166,
+          "rightPx": 1342,
+          "rgb": "FF156082"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1166,
+          "rightPx": 1342,
+          "rgb": "FF638EC6"
+        }
+      ]
+    },
+    "bar:colors-indexed": {
+      "I2": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "I3": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1346,
+          "rightPx": 1363,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1346,
+          "rightPx": 1363,
+          "rgb": "FF638EC6"
+        }
+      ],
+      "I4": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1346,
+          "rightPx": 1434,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1346,
+          "rightPx": 1434,
+          "rgb": "FF638EC6"
+        }
+      ],
+      "I5": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1346,
+          "rightPx": 1504,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1346,
+          "rightPx": 1504,
+          "rgb": "FF638EC6"
+        }
+      ],
+      "I6": [
+        {
+          "id": "resolved",
+          "question": "resolved",
+          "leftPx": 1346,
+          "rightPx": 1522,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "default",
+          "question": "default",
+          "leftPx": 1346,
+          "rightPx": 1522,
+          "rgb": "FF638EC6"
+        }
+      ]
+    }
+  }
 }

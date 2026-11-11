@@ -207,5 +207,356 @@
       }
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:scope-disjoint": {
+      "B2": [
+        {
+          "id": "union",
+          "question": "union",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "per-range",
+          "question": "per-range",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "B3": [
+        {
+          "id": "union",
+          "question": "union",
+          "leftPx": 86,
+          "rightPx": 105
+        },
+        {
+          "id": "per-range",
+          "question": "per-range",
+          "leftPx": 86,
+          "rightPx": 174
+        }
+      ],
+      "B4": [
+        {
+          "id": "union",
+          "question": "union",
+          "leftPx": 86,
+          "rightPx": 124
+        },
+        {
+          "id": "per-range",
+          "question": "per-range",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ],
+      "D2": [
+        {
+          "id": "union",
+          "question": "union",
+          "leftPx": 446,
+          "rightPx": 583
+        },
+        {
+          "id": "per-range",
+          "question": "per-range",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "D3": [
+        {
+          "id": "union",
+          "question": "union",
+          "leftPx": 446,
+          "rightPx": 602
+        },
+        {
+          "id": "per-range",
+          "question": "per-range",
+          "leftPx": 446,
+          "rightPx": 534
+        }
+      ],
+      "D4": [
+        {
+          "id": "union",
+          "question": "union",
+          "leftPx": 446,
+          "rightPx": 622
+        },
+        {
+          "id": "per-range",
+          "question": "per-range",
+          "leftPx": 446,
+          "rightPx": 622
+        }
+      ]
+    },
+    "bar:scope-duplicate-blocks": {
+      "E2": [
+        {
+          "id": "first",
+          "question": "first",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "second",
+          "question": "second",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E3": [
+        {
+          "id": "first",
+          "question": "first",
+          "leftPx": 626,
+          "rightPx": 714,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "second",
+          "question": "second",
+          "leftPx": 626,
+          "rightPx": 714,
+          "rgb": "FFFFA500"
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E4": [
+        {
+          "id": "first",
+          "question": "first",
+          "leftPx": 626,
+          "rightPx": 802,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "second",
+          "question": "second",
+          "leftPx": 626,
+          "rightPx": 802,
+          "rgb": "FFFFA500"
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ]
+    },
+    "bar:scope-hidden-row": {
+      "F2": [
+        {
+          "id": "include|filtered=include",
+          "question": "include",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "include|filtered=exclude",
+          "question": "include",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exclude|filtered=include",
+          "question": "exclude",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exclude|filtered=exclude",
+          "question": "exclude",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F3": [
+        {
+          "id": "include|filtered=include",
+          "question": "include",
+          "leftPx": 806,
+          "rightPx": 825
+        },
+        {
+          "id": "include|filtered=exclude",
+          "question": "include",
+          "leftPx": 806,
+          "rightPx": 894
+        },
+        {
+          "id": "exclude|filtered=include",
+          "question": "exclude",
+          "leftPx": 806,
+          "rightPx": 894
+        },
+        {
+          "id": "exclude|filtered=exclude",
+          "question": "exclude",
+          "leftPx": 806,
+          "rightPx": 894
+        }
+      ],
+      "F4": [
+        {
+          "id": "include|filtered=include",
+          "question": "include",
+          "leftPx": 806,
+          "rightPx": 844
+        },
+        {
+          "id": "include|filtered=exclude",
+          "question": "include",
+          "leftPx": 806,
+          "rightPx": 982
+        },
+        {
+          "id": "exclude|filtered=include",
+          "question": "exclude",
+          "leftPx": 806,
+          "rightPx": 982
+        },
+        {
+          "id": "exclude|filtered=exclude",
+          "question": "exclude",
+          "leftPx": 806,
+          "rightPx": 982
+        }
+      ]
+    },
+    "bar:scope-autofilter-hidden-row": {
+      "G2": [
+        {
+          "id": "include|hidden=include",
+          "question": "include",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "include|hidden=exclude",
+          "question": "include",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exclude|hidden=include",
+          "question": "exclude",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "exclude|hidden=exclude",
+          "question": "exclude",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "G3": [
+        {
+          "id": "include|hidden=include",
+          "question": "include",
+          "leftPx": 986,
+          "rightPx": 1005
+        },
+        {
+          "id": "include|hidden=exclude",
+          "question": "include",
+          "leftPx": 986,
+          "rightPx": 1074
+        },
+        {
+          "id": "exclude|hidden=include",
+          "question": "exclude",
+          "leftPx": 986,
+          "rightPx": 1074
+        },
+        {
+          "id": "exclude|hidden=exclude",
+          "question": "exclude",
+          "leftPx": 986,
+          "rightPx": 1074
+        }
+      ],
+      "G4": [
+        {
+          "id": "include|hidden=include",
+          "question": "include",
+          "leftPx": 986,
+          "rightPx": 1024
+        },
+        {
+          "id": "include|hidden=exclude",
+          "question": "include",
+          "leftPx": 986,
+          "rightPx": 1162
+        },
+        {
+          "id": "exclude|hidden=include",
+          "question": "exclude",
+          "leftPx": 986,
+          "rightPx": 1162
+        },
+        {
+          "id": "exclude|hidden=exclude",
+          "question": "exclude",
+          "leftPx": 986,
+          "rightPx": 1162
+        }
+      ]
+    },
+    "bar:scope-merged-cell": {
+      "B8": [
+        {
+          "id": "merged-host",
+          "question": "merged-host",
+          "leftPx": 86,
+          "rightPx": 264
+        },
+        {
+          "id": "merged-all",
+          "question": "merged-all",
+          "leftPx": 86,
+          "rightPx": 442
+        },
+        {
+          "id": "host-column-all",
+          "question": "host-column-all",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ]
+    }
+  }
 }

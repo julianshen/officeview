@@ -207,5 +207,208 @@
       }
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:showvalue-canvas-suppression": {
+      "B2": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 86,
+          "rightPx": 120,
+          "traits": {
+            "text": "hidden"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 86,
+          "rightPx": 120,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "B3": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 86,
+          "rightPx": 156,
+          "traits": {
+            "text": "hidden"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 86,
+          "rightPx": 156,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "B4": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 86,
+          "rightPx": 191,
+          "traits": {
+            "text": "hidden"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 86,
+          "rightPx": 191,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "B5": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 86,
+          "rightPx": 227,
+          "traits": {
+            "text": "hidden"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 86,
+          "rightPx": 227,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "B6": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 86,
+          "rightPx": 262,
+          "traits": {
+            "text": "hidden"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 86,
+          "rightPx": 262,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "D2": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 446,
+          "rightPx": 480,
+          "traits": {
+            "text": "shown"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 446,
+          "rightPx": 480,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "D3": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 446,
+          "rightPx": 516,
+          "traits": {
+            "text": "shown"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 446,
+          "rightPx": 516,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "D4": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 446,
+          "rightPx": 551,
+          "traits": {
+            "text": "shown"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 446,
+          "rightPx": 551,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "D5": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 446,
+          "rightPx": 587,
+          "traits": {
+            "text": "shown"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 446,
+          "rightPx": 587,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ],
+      "D6": [
+        {
+          "id": "honoured",
+          "question": "honoured",
+          "leftPx": 446,
+          "rightPx": 622,
+          "traits": {
+            "text": "shown"
+          }
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 446,
+          "rightPx": 622,
+          "traits": {
+            "text": "shown"
+          }
+        }
+      ]
+    }
+  }
 }

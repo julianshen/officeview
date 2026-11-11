@@ -226,5 +226,436 @@
       }
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:pairing-paired": {
+      "B2": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 103,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B3": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 138,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B4": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 174,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B5": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 218
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 209,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B6": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 262
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 244,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ]
+    },
+    "bar:settings-paired-precedence": {
+      "B2": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 103,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B3": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 138,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B4": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 174,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B5": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 218
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 209,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ],
+      "B6": [
+        {
+          "id": "x14",
+          "question": "x14",
+          "leftPx": 86,
+          "rightPx": 262
+        },
+        {
+          "id": "base",
+          "question": "base",
+          "leftPx": 86,
+          "rightPx": 244,
+          "traits": {
+            "fill": "gradient"
+          },
+          "anyExtent": true
+        }
+      ]
+    },
+    "bar:pairing-standalone": {
+      "C2": [
+        {
+          "id": "drawn",
+          "question": "drawn",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "C3": [
+        {
+          "id": "drawn",
+          "question": "drawn",
+          "leftPx": 266,
+          "rightPx": 309,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "C4": [
+        {
+          "id": "drawn",
+          "question": "drawn",
+          "leftPx": 266,
+          "rightPx": 354,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "C5": [
+        {
+          "id": "drawn",
+          "question": "drawn",
+          "leftPx": 266,
+          "rightPx": 398,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "C6": [
+        {
+          "id": "drawn",
+          "question": "drawn",
+          "leftPx": 266,
+          "rightPx": 442,
+          "rgb": "FF0000FF"
+        },
+        {
+          "id": "ignored",
+          "question": "ignored",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ]
+    },
+    "bar:pairing-base-only": {
+      "D2": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 463,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 463,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D3": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 498,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 498,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D4": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 534,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 534,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D5": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 569,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 569,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ],
+      "D6": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 446,
+          "rightPx": 604,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 446,
+          "rightPx": 604,
+          "traits": {
+            "fill": "solid",
+            "border": "absent"
+          }
+        }
+      ]
+    },
+    "bar:scope-whole-column": {
+      "E2": [
+        {
+          "id": "skip",
+          "question": "skip",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "zero",
+          "question": "zero",
+          "leftPx": 626,
+          "rightPx": 645
+        }
+      ],
+      "E3": [
+        {
+          "id": "skip",
+          "question": "skip",
+          "leftPx": 626,
+          "rightPx": 714
+        },
+        {
+          "id": "zero",
+          "question": "zero",
+          "leftPx": 626,
+          "rightPx": 723
+        }
+      ],
+      "E4": [
+        {
+          "id": "skip",
+          "question": "skip",
+          "leftPx": 626,
+          "rightPx": 802
+        },
+        {
+          "id": "zero",
+          "question": "zero",
+          "leftPx": 626,
+          "rightPx": 802
+        }
+      ]
+    }
+  }
 }

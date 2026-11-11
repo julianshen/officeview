@@ -372,5 +372,530 @@
       }
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:degenerate-equal-values": {
+      "B2": [
+        {
+          "id": "half",
+          "question": "half",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ],
+      "B3": [
+        {
+          "id": "half",
+          "question": "half",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ],
+      "B4": [
+        {
+          "id": "half",
+          "question": "half",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ],
+      "B5": [
+        {
+          "id": "half",
+          "question": "half",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ],
+      "B6": [
+        {
+          "id": "half",
+          "question": "half",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "full",
+          "question": "full",
+          "leftPx": 86,
+          "rightPx": 262
+        }
+      ]
+    },
+    "bar:degenerate-single-cell": {
+      "C2": [
+        {
+          "id": "half",
+          "question": "half",
+          "leftPx": 266,
+          "rightPx": 354
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "full",
+          "question": "full",
+          "leftPx": 266,
+          "rightPx": 442
+        }
+      ]
+    },
+    "bar:degenerate-inverted": {
+      "D2": [
+        {
+          "id": "swap|beyond=clamp",
+          "question": "swap",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "swap|beyond=none",
+          "question": "swap",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "literal|beyond=clamp",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 622
+        },
+        {
+          "id": "literal|beyond=none",
+          "question": "literal",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=clamp",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "D3": [
+        {
+          "id": "swap|beyond=clamp",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 475
+        },
+        {
+          "id": "swap|beyond=none",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 475
+        },
+        {
+          "id": "literal|beyond=clamp",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 593
+        },
+        {
+          "id": "literal|beyond=none",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 593
+        },
+        {
+          "id": "none|beyond=clamp",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "D4": [
+        {
+          "id": "swap|beyond=clamp",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 534
+        },
+        {
+          "id": "swap|beyond=none",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 534
+        },
+        {
+          "id": "literal|beyond=clamp",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 534
+        },
+        {
+          "id": "literal|beyond=none",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 534
+        },
+        {
+          "id": "none|beyond=clamp",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "D5": [
+        {
+          "id": "swap|beyond=clamp",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 593
+        },
+        {
+          "id": "swap|beyond=none",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 593
+        },
+        {
+          "id": "literal|beyond=clamp",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 475
+        },
+        {
+          "id": "literal|beyond=none",
+          "question": "literal",
+          "leftPx": 446,
+          "rightPx": 475
+        },
+        {
+          "id": "none|beyond=clamp",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "D6": [
+        {
+          "id": "swap|beyond=clamp",
+          "question": "swap",
+          "leftPx": 446,
+          "rightPx": 622
+        },
+        {
+          "id": "swap|beyond=none",
+          "question": "swap",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "literal|beyond=clamp",
+          "question": "literal",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "literal|beyond=none",
+          "question": "literal",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=clamp",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none|beyond=none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ]
+    },
+    "bar:degenerate-beyond-bounds": {
+      "E2": [
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E3": [
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E4": [
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 626,
+          "rightPx": 714
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 626,
+          "rightPx": 714
+        }
+      ],
+      "E5": [
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 626,
+          "rightPx": 802
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "E6": [
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 626,
+          "rightPx": 802
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ]
+    },
+    "bar:bounds-out-of-domain": {
+      "F2": [
+        {
+          "id": "literal",
+          "question": "literal",
+          "leftPx": 806,
+          "rightPx": 816
+        },
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F3": [
+        {
+          "id": "literal",
+          "question": "literal",
+          "leftPx": 806,
+          "rightPx": 844
+        },
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 806,
+          "rightPx": 849
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F4": [
+        {
+          "id": "literal",
+          "question": "literal",
+          "leftPx": 806,
+          "rightPx": 871
+        },
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 806,
+          "rightPx": 894
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F5": [
+        {
+          "id": "literal",
+          "question": "literal",
+          "leftPx": 806,
+          "rightPx": 899
+        },
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 806,
+          "rightPx": 938
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ],
+      "F6": [
+        {
+          "id": "literal",
+          "question": "literal",
+          "leftPx": 806,
+          "rightPx": 927
+        },
+        {
+          "id": "clamp",
+          "question": "clamp",
+          "leftPx": 806,
+          "rightPx": 982
+        },
+        {
+          "id": "none",
+          "question": "none",
+          "leftPx": 0,
+          "rightPx": 0,
+          "noBar": true
+        }
+      ]
+    }
+  }
 }

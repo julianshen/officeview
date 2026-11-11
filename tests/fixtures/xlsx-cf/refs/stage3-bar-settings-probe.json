@@ -161,5 +161,133 @@
       "bar": null
     }
   ],
-  "barHypotheses": {}
+  "barHypotheses": {
+    "bar:settings-schema-defaults": {
+      "C2": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 266,
+          "rightPx": 283,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent",
+            "text": "shown"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 266,
+          "rightPx": 283,
+          "traits": {
+            "fill": "solid",
+            "border": "absent",
+            "text": "shown"
+          }
+        }
+      ],
+      "C3": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 266,
+          "rightPx": 318,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent",
+            "text": "shown"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 266,
+          "rightPx": 318,
+          "traits": {
+            "fill": "solid",
+            "border": "absent",
+            "text": "shown"
+          }
+        }
+      ],
+      "C4": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 266,
+          "rightPx": 354,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent",
+            "text": "shown"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 266,
+          "rightPx": 354,
+          "traits": {
+            "fill": "solid",
+            "border": "absent",
+            "text": "shown"
+          }
+        }
+      ],
+      "C5": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 266,
+          "rightPx": 389,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent",
+            "text": "shown"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 266,
+          "rightPx": 389,
+          "traits": {
+            "fill": "solid",
+            "border": "absent",
+            "text": "shown"
+          }
+        }
+      ],
+      "C6": [
+        {
+          "id": "authored",
+          "question": "authored",
+          "leftPx": 266,
+          "rightPx": 424,
+          "traits": {
+            "fill": "gradient",
+            "border": "absent",
+            "text": "shown"
+          },
+          "anyExtent": true
+        },
+        {
+          "id": "solid",
+          "question": "solid",
+          "leftPx": 266,
+          "rightPx": 424,
+          "traits": {
+            "fill": "solid",
+            "border": "absent",
+            "text": "shown"
+          }
+        }
+      ]
+    }
+  }
 }
