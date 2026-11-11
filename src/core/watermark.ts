@@ -269,7 +269,8 @@ function markTextWidth(mark: ResolvedWatermark, fontPx: number): number {
   // fontPx must be the size the CALLER is using: measuring with a different one
   // (a placeholder page) silently under-estimates the width and the tiles overlap.
   const pt = mark.fontSizePt ?? fontPxToPt(fontPx)
-  const key = `${pt}|${mark.fontFamily}|${mark.text}`
+  // Key on the size the width is computed from (the fallback uses px).
+  const key = `${measurerCtx ? pt : fontPx + 'px'}|${mark.fontFamily}|${mark.text}`
   const hit = textWidthCache.get(key)
   if (hit !== undefined) return hit
   let w = mark.text.length * fontPx * 0.6 // reasonable fallback without a ctx
