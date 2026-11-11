@@ -135,6 +135,45 @@ describe('the paint pass that serves a unit records evidence', () => {
   })
 })
 
+describe('runDetails (S3a Task 2)', () => {
+  function details(paint: (ctx: CanvasRenderingContext2D) => void, w = 200, h = 100) {
+    const ctx = createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(w, h)
+    paint(o.wrap(ctx))
+    return { details: o.runDetails(), evidence: o.evidence() }
+  }
+  it('one entry per inked fillText, with device-px ink and the run text', () => {
+    const { details: d } = details((c) => { text(c, 'Hello', 20, 50); text(c, 'World', 20, 80) })
+    expect(d.map((r) => r.text)).toEqual(['Hello', 'World'])
+    for (const r of d) expect(r).toMatchObject({ servable: true })
+    expect(d[0]!.reason).toBeUndefined()
+    expect(d[0]!.ink.x).toBeGreaterThanOrEqual(19)
+    expect(d[0]!.ink.y + d[0]!.ink.height).toBeLessThanOrEqual(56)
+    expect(d[0]!.ink.width).toBeGreaterThan(0)
+    expect(d[0]!.ink.height).toBeGreaterThan(0)
+  })
+  it("an opaque fillRect over the text ⇒ servable:false, reason:'covered'", () => {
+    const { details: d } = details((c) => { text(c); c.fillStyle = '#fff'; c.fillRect(10, 20, 120, 50) })
+    expect(d).toHaveLength(1)
+    expect(d[0]).toMatchObject({ text: 'Hello', servable: false, reason: 'covered' })
+  })
+  it('ink is in device px (a scale-2 transform doubles it)', () => {
+    const a = details((c) => text(c)).details[0]!
+    const b = details((c) => { c.scale(2, 2); text(c) }, 400, 200).details[0]!
+    expect(b.ink.x).toBeCloseTo(a.ink.x * 2, 0)
+    expect(b.ink.width).toBeCloseTo(a.ink.width * 2, 0)
+  })
+  it('agrees with evidence() run for run', () => {
+    const { details: d, evidence: e } = details((c) => {
+      text(c, 'Kept', 20, 30); text(c, 'Gone', 20, 70); c.fillStyle = '#000'; c.fillRect(0, 50, 200, 30)
+      c.globalAlpha = 0; text(c, 'Ghost', 120, 30)
+    })
+    expect(d).toHaveLength(e.runs)
+    expect(d.filter((r) => r.servable).map((r) => r.text)).toEqual(e.servableText)
+    expect(d.filter((r) => !r.servable).map((r) => ({ text: r.text, reason: r.reason }))).toEqual(e.withheldRuns)
+  })
+})
+
 describe('stroke bounds', () => {
   it('a 1 px gridline 4 px below the ink does not cover it (miter allowance only at joins)', () => {
     const e = run((c) => { text(c, 'Hi', 30, 50); c.lineWidth = 1; c.beginPath(); c.moveTo(0, 54.5); c.lineTo(200, 54.5); c.stroke() })

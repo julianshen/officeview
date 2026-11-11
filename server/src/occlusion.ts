@@ -29,6 +29,14 @@ export interface OcclusionEvidence {
   /** Withheld runs and why (server-side only — for audits and tests). */
   withheldRuns: Array<{ text: string; reason: OcclusionReason }>
 }
+/** One recorded text run with its verdict (server-side only — the visible-text join's input). */
+export interface RunDetail {
+  text: string
+  /** Ink hull in device px (the scale bucket applied). */
+  ink: { x: number; y: number; width: number; height: number }
+  servable: boolean
+  reason?: OcclusionReason
+}
 
 type Rect = [x0: number, y0: number, x1: number, y1: number]
 type Clip = Rect | 'nonrect' | undefined
@@ -60,7 +68,7 @@ function colorAlpha(style: unknown): number | undefined {
 }
 
 type Grid = 'cover' | 'erase' | 'filter'
-export function occlusionObserver(width: number, height: number): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence } {
+export function occlusionObserver(width: number, height: number): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[] } {
   /** The coverage "grid" at full precision: every painting op's device box, in
    * sequence order (a 4 px cell grid withheld every spreadsheet cell next to a
    * gridline; a 1 px grid costs ~40 MB per page). */
@@ -151,6 +159,14 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
     draw(ctx, ink, style)
   }
 
+  /** A run's withholding reason, or undefined when it is servable (the one verdict for evidence() and runDetails()). */
+  function verdict(r: Run): OcclusionReason | undefined {
+    if (r.reason) return r.reason
+    const later = new Set<Grid>()
+    for (const m of marks) if (m.seq > r.seq && overlaps(m.box, r.ink)) later.add(m.grid)
+    return later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
+  }
+
   function imageRect(args: unknown[]): [number, number, number, number] {
     const img = args[0] as { width?: number; height?: number }
     if (args.length >= 9) return [args[5], args[6], args[7], args[8]] as number[] as [number, number, number, number]
@@ -225,16 +241,18 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
       const reasons: OcclusionEvidence['reasons'] = {}
       const servableText: string[] = [], withheldRuns: OcclusionEvidence['withheldRuns'] = []
       for (const r of runs) {
-        let reason = r.reason
-        if (!reason) {
-          const later = new Set<Grid>()
-          for (const m of marks) if (m.seq > r.seq && overlaps(m.box, r.ink)) later.add(m.grid)
-          reason = later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
-        }
+        const reason = verdict(r)
         if (reason) { reasons[reason] = (reasons[reason] ?? 0) + 1; withheldRuns.push({ text: r.text, reason }) }
         else servableText.push(r.text)
       }
       return { runs: runs.length, servable: servableText.length, withheld: runs.length - servableText.length, reasons, servableText, withheldRuns }
+    },
+    runDetails() {
+      return runs.map((r) => {
+        const reason = verdict(r)
+        const ink = { x: r.ink[0], y: r.ink[1], width: r.ink[2] - r.ink[0], height: r.ink[3] - r.ink[1] }
+        return reason ? { text: r.text, ink, servable: false, reason } : { text: r.text, ink, servable: true }
+      })
     },
   }
 }
