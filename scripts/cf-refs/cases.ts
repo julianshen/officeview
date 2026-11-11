@@ -4359,9 +4359,14 @@ function s3Case(fx: S3Fixture): CfOracleCase {
   const hidden = new Set(fx.hiddenRows ?? [])
   const rowOf = (ref: string): number => Number(/\d+/.exec(ref)![0])
   const designated = new Map<string, true>()
+  // Only cells under a bar rule are seeded `barApplied: true`; a DXF/scale-only cell (the calibration cell) never is.
+  const underBar = new Set<string>()
   for (const r of fx.rules) {
     const refs = r.cells ?? expandSqref(r.sqref, maxRow).filter(ref => stored.has(ref) && !hidden.has(rowOf(ref)))
-    for (const ref of refs) designated.set(ref, true)
+    for (const ref of refs) {
+      designated.set(ref, true)
+      if (r.kind === 'bar') underBar.add(ref)
+    }
   }
   const positive = [...designated.keys()]
   const controlOf = (ref: string): string => fx.controlCells?.[ref] ?? s3ControlRef(fx, ref)
@@ -4371,7 +4376,7 @@ function s3Case(fx: S3Fixture): CfOracleCase {
       ref,
       controlRef: controlOf(ref),
       matched: true,
-      barApplied: true,
+      barApplied: underBar.has(ref),
       fillSource: 'unverified',
       barEvidence: { settings: 'unverified', geometry: 'unverified' },
     })

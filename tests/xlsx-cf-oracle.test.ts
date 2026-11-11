@@ -41,6 +41,7 @@ import {
   parseDataBarSettingsReadback,
   parseExcelColorToArgb,
   readNumericCellValues,
+  verifyOnlyCaptureState,
 } from '../scripts/cf-refs/capture'
 import { hasEvidence, VERIFIED_CAPABILITIES, VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { CF_MANIFEST_PATH, generateAllStage1 } from '../scripts/cf-refs/generate'
@@ -3441,6 +3442,26 @@ describe('CF oracle verifier', () => {
     expect((clear as ReadonlyMap<string, CfObservedBar>).get('B1')!.bar).toMatchObject({ leftPx: 40, rightPx: 119 })
   })
 
+  it('a near-full bar in a filled cell refuses instead of measuring an inverted sliver', () => {
+    // 98 percent bar (40..237) over a light fill: the fill gap at 238..239 must not read as a bar.
+    const png = decodePngSync(paintBarPng(ctx => {
+      ctx.fillStyle = '#e0a0a0'; ctx.fillRect(40, 0, 200, 30)
+      ctx.fillStyle = '#0000ff'; ctx.fillRect(40, 0, 198, 30)
+    }))!
+    expect(measureBarGeometry(png, barGeom, ['B1'], measureOpts)).toMatchObject({ kind: 'refusal', code: 'bar-background-unresolved' })
+  })
+
+  it('--verify-only skips a case with no capture on disk and fails loudly when a claimed capture is missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-verify-only-'))
+    dirs.push(dir)
+    const cap = { appearance: 'screen' as const, pngPath: 'x.png', sidecarPath: 'x.json' }
+    const c = { ...CF_STAGE3_CASES[1]!, captures: [cap] }
+    expect(verifyOnlyCaptureState(c, dir)).toBe('skip')
+    expect(() => verifyOnlyCaptureState({ ...c, captures: [{ ...cap, pngSha256: 'a'.repeat(64) }] }, dir)).toThrow(/x\.png/)
+    writeFileSync(join(dir, 'x.png'), 'p'); writeFileSync(join(dir, 'x.json'), '{}')
+    expect(verifyOnlyCaptureState(c, dir)).toBe('verify')
+  })
+
   it('non-discriminating bar variant keeps its gate closed (Lesson 3)', () => {
     const measured = { B2: { leftPx: 84, rightPx: 143 }, B4: { leftPx: 84, rightPx: 190 } }
     // Two hypotheses 2 px apart at every designated cell cannot be told apart.
@@ -3769,8 +3790,15 @@ describe('CF oracle verifier', () => {
     }
     expect(listed('VERIFIED_STAGE1_CAPABILITIES')).toEqual([...VERIFIED_STAGE1_CAPABILITIES].sort())
     expect(listed('VERIFIED_STAGE2_CAPABILITIES')).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
-    expect(listed('VERIFIED_STAGE3_CAPABILITIES')).toEqual([])
-    expect(listed('VERIFIED_CAPABILITIES')).toEqual([...VERIFIED_CAPABILITIES].sort())
+    const reported = auditStage3Manifest(manifest, { rootDir: REPO_ROOT }).perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+    expect(listed('VERIFIED_STAGE3_CAPABILITIES')).toEqual(reported)
+    expect(listed('VERIFIED_CAPABILITIES')).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...reported])].sort())
+    // Idempotence is about rendering, not the committed file: the test never writes verifiedCapabilities.ts.
+    const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
+    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES']) {
+      const block = (text: string): string => new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[[\\s\\S]*?\\]\\)`).exec(text)![0]
+      expect(block(first), name).toBe(block(committed))
+    }
     // Stage 2's own rendering is unchanged by the Stage 3 work (no VERIFIED_STAGE3 export).
     expect(renderVerifiedCapabilitiesSource(manifest, 2, REPO_ROOT)).not.toContain('VERIFIED_STAGE3_CAPABILITIES')
 
@@ -3779,7 +3807,7 @@ describe('CF oracle verifier', () => {
     expect(report.stageComplete).toBe(false)
     expect(report.summary.cases).toBe(12)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
-    expect(report.perCapability.filter(p => p.disposition === 'verified')).toEqual([])
+    expect(report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(reported)
     expect(report.blockedCapabilities.length).toBeGreaterThan(0)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-'))).toBe(true)
   })

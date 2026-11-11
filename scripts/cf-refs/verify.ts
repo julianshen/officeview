@@ -1694,7 +1694,7 @@ export function measureBarGeometry(
     const corners = cx.flatMap(x => cyy.map(y => pixelAt(png, Math.max(0, Math.min(png.width - 1, x)), Math.max(0, Math.min(png.height - 1, y)))))
     const differing = corners.filter(c => rgbMaxDelta(c, ctrlBg) >= BAR_STRONG_DELTA)
     const ownDiffers = differing.length >= 3
-    const ownBg = differing[0] ?? ctrlBg
+    const ownBg = ownDiffers ? sampleCellBackgroundRgb(png, box) : ctrlBg
     if (ownDiffers) {
       for (const a of differing) {
         for (const b of differing) {
@@ -1725,7 +1725,17 @@ export function measureBarGeometry(
       return { lines, isInk }
     }
     let scanned = scan(ownDiffers ? ownBg : ctrlBg)
-    if (ownDiffers && scanned.lines.every(e => e === null)) scanned = scan(ctrlBg)
+    let usedOwn = ownDiffers
+    if (ownDiffers && scanned.lines.every(e => e === null)) {
+      scanned = scan(ctrlBg)
+      usedOwn = false
+    }
+    if (usedOwn) {
+      // A near-full bar makes the corners agree on the bar colour, so the fill gap would read as a sliver of ink at the
+      // cell edge. Fill and bar cannot be told apart there: refuse instead of guessing.
+      const sliver = scanned.lines.some(e => e !== null && e.right - e.left + 1 < 4 && (e.left <= box.x0 + 1 || e.right >= box.x1 - 2))
+      if (sliver) return refuse('bar-background-unresolved', `Bar cell ${ref}: the only ink is narrower than 4 px and touches the cell edge, so the cell fill and the bar cannot be told apart`)
+    }
     const edges = scanned.lines
     const delta = (dx: number, y: number): number => (scanned.isInk(dx, y) ? BAR_STRONG_DELTA : 0)
     const found = edges.filter((e): e is { left: number; right: number } => e !== null)

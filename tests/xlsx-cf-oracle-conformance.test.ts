@@ -15,6 +15,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
+import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
 import type { CfCellState, CfOutcome } from '../src/xlsx/cf/model'
@@ -123,6 +124,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
   it('runs production pipeline on all measured cases with zero unexpected mismatches', async () => {
     let checkedCells = 0
+    let stage3Checked = 0
+    let stage3BarWithheld = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -156,6 +159,18 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           if (STAGE5_OR_DEFERRED_WITHHELD.has(cellKey)) {
             expect(gotMatched, `${cellKey} should be withheld in Stage 1`).toBe(false)
             continue
+          }
+          if (c.stage === 3) {
+            stage3Checked++
+            // Ruling S3-A / OD-7: a bar cell whose bar:* capabilities are not verified in production is WITHHELD,
+            // measured case or not. Non-bar rules in the case (DXF, scale) keep following the normal path below.
+            const barCaps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+            if (barCaps.length > 0 && !barCaps.every(id => VERIFIED_CAPABILITIES.has(id))) {
+              expect(gotMatched, `${cellKey} bar must be withheld until ${barCaps.join(', ')} is verified`).toBe(false)
+              expect(st?.fillColor, `${cellKey} fill`).toBeUndefined()
+              stage3BarWithheld++
+              continue
+            }
           }
           if (cellKey === 'stage1-priority-composition:F2') {
             // Stage 3 dataBar blue fill is withheld, but Stage 1 bold font matches
@@ -193,6 +208,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     // Ensures we audited the full Stage 1 cell corpus (220+ cells)
     expect(checkedCells).toBeGreaterThan(200)
+    // Stage 3 (reported separately from the 398/364/34 Stage 1/2 totals): every measured bar cell was withheld.
+    expect(stage3BarWithheld).toBeGreaterThan(0)
+    expect(stage3BarWithheld).toBeLessThanOrEqual(stage3Checked)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {

@@ -300,6 +300,20 @@ export function parseDataBarSettingsReadback(out: string): BarSettingsRow[] {
   return rows
 }
 
+/**
+ * `--verify-only` precondition per case: `skip` when no capture exists yet (nothing claimed, nothing on disk), `verify`
+ * when every capture has its PNG and sidecar, and a loud error when a capture claims a `pngSha256` whose files are gone.
+ */
+export function verifyOnlyCaptureState(c: CfOracleCase, rootDir: string): 'skip' | 'verify' {
+  let onDisk = 0
+  for (const cap of c.captures) {
+    const have = existsSync(resolve(rootDir, cap.pngPath)) && existsSync(resolve(rootDir, cap.sidecarPath))
+    if (have) onDisk++
+    else if (cap.pngSha256 !== undefined) throw new Error(`${c.id}: capture ${cap.pngPath} claims pngSha256 ${cap.pngSha256} but its PNG or sidecar is missing`)
+  }
+  return onDisk === 0 ? 'skip' : 'verify'
+}
+
 export type LockGuardResult =
   | { kind: 'captured' }
   | { kind: 'refused'; code: 'display-locked'; phase: 'before' | 'after'; reason: string }
@@ -665,6 +679,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (let i = 0; i < manifest.cases.length; i++) {
     const c = manifest.cases[i]
     if (c.stage !== stage || (only && c.id !== only) || c.status === 'unsupported') continue
+    if (verifyOnly && verifyOnlyCaptureState(c, REPO_ROOT) === 'skip') {
+      console.log(`[cf-refs/capture] ${c.id}: no capture yet, skipped (stays ${c.status})`)
+      continue
+    }
     const savedAbs = resolve(REPO_ROOT, c.saved)
     const savedBytes = new Uint8Array(readFileSync(savedAbs))
     const savedSha256 = sha256Hex(savedBytes)
