@@ -459,3 +459,20 @@ With the round-1 measurer (f2cddb4c) the probe capture verified: `status: measur
 One earlier attempt in this run returned `geometrySource: "unverified"` (model widths 73.5/157.5/… pt): the live geometry read from Excel failed transiently and the harness refused promotion ("Excel-measured range geometry required"); the identical rerun measured. Treat that refusal as "rerun the same case once", like `display-locked`.
 
 Two tests fail on this commit by design and are fixed in Task 18 fix round 3: the conformance test expects production to match `stage3-bar-settings-probe:B2` rather than withhold it (no `bar:*` capability is verified in production), and the `audit --stage 3 --write` idempotence test expects an empty verified list. Both assumed no Stage 3 case would be measured.
+
+### Stage 3 capture run 4 (2026-11-12): all cases attempted
+
+All eleven other Stage 3 inputs were first regenerated with the corrected x14 URI (729aae69; only the probe had been regenerated before, so an earlier batch of this run was discarded unrecorded). Each case was then built and captured once, measurer at fec1f88d, zoom 100 / dpr 1, display unlocked.
+
+| Case | Outcome |
+|---|---|
+| `stage3-bar-settings-probe`, `-lengths`, `-degenerate`, `-rendering`, `-geometry`, `-showvalue`, `-scope` | `measured` (repair-free resave, Excel-measured geometry, raw px in the sidecars) |
+| `stage3-bar-participation` | capture kept, not promoted: `bar-edge-under-text` (D5, edge 446–577 within 1 px of the control's value text) |
+| `stage3-bar-composition` | capture kept, not promoted: `bar-background-unresolved` (D3 perimeter 0,0,255 / 0,0,255 / 159,156,116 / 159,156,116) |
+| `stage3-bar-axis-negative` | Excel's resave rejected by our verifier (`.rejected.xlsx` preserved); capture kept, not promoted: `bar-edge-unstable` (B4, one of three scanlines found no edge) |
+| `stage3-bar-pairing` | Excel's resave rejected by our verifier (`.rejected.xlsx` preserved); no resave provenance, not promoted |
+| `stage3-bar-unresolved-shapes` | unsupported; Excel's output preserved as `.rejected.xlsx` (per-shape outcome still to be written up) |
+
+`audit.ts --stage 3`: `ok=true`, 7 measured, 4 pending, 1 unsupported; verified capabilities: `bar:pixel-calibration` only; 1 unverified-nondiscriminating; 56 blocked. Measured captures do not yet verify their capabilities because only the length family has hypotheses and settings cannot be labelled from pixels (OD-7 as amended); that is Task 18b. `tests/xlsx-cf`: 637 pass. No `--write` was run.
+
+Harness observations: `capture.ts` leaves the saved workbook open in Excel (the orchestrator closed them by name); during an earlier batch the manifest entries and PNGs of already-verified cases were reset by a later step that could not be reproduced in isolation (suspect: a capture process killed by a timeout), so each capture was committed individually.
