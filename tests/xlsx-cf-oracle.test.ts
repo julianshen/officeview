@@ -38,6 +38,7 @@ import {
   buildTextProbeScript,
   captureAndCloseOwned,
   captureUnderLockGuard,
+  staleCaptureSidecar,
   classifyBarCapture,
   parseDataBarSettingsReadback,
   parseExcelColorToArgb,
@@ -3909,6 +3910,16 @@ describe('CF oracle verifier', () => {
     writeFileSync(join(dir, 'broken.xlsx'), broken)
     const hb = sha256(broken)
     expect(verifyCfCase({ ...c, input: 'broken.xlsx', saved: 'broken.xlsx', expected: { ...c.expected, inputSha256: hb, savedSha256: hb } }, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'stripped-rule' })
+  })
+
+  it('--verify-only never rebinds a kept capture to a regenerated saved workbook', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-stale-'))
+    dirs.push(dir)
+    const c = { ...CF_STAGE3_CASES[1]!, captures: [{ appearance: 'screen' as const, pngPath: 'x.png', sidecarPath: 'x.json' }] }
+    expect(staleCaptureSidecar(c, dir, 'b'.repeat(64))).toBe(false)
+    writeFileSync(join(dir, 'x.json'), JSON.stringify({ savedSha256: 'a'.repeat(64) }))
+    expect(staleCaptureSidecar(c, dir, 'a'.repeat(64))).toBe(false)
+    expect(staleCaptureSidecar(c, dir, 'b'.repeat(64))).toBe(true)
   })
 
   it('capture closes the workbook it opened, never a pre-existing one, even when the capture throws', () => {

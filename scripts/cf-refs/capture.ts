@@ -332,6 +332,18 @@ export function captureAndCloseOwned(
   }
 }
 
+/** `--verify-only`: whether the case's kept sidecar records a different saved workbook than the one on disk. */
+export function staleCaptureSidecar(c: CfOracleCase, rootDir: string, savedSha256: string): boolean {
+  const cap = c.captures[0]
+  if (!cap || !existsSync(resolve(rootDir, cap.sidecarPath))) return false
+  try {
+    const sc = JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown>
+    return typeof sc.savedSha256 === 'string' && sc.savedSha256 !== savedSha256
+  } catch {
+    return false
+  }
+}
+
 export type LockGuardResult =
   | { kind: 'captured' }
   | { kind: 'refused'; code: 'display-locked'; phase: 'before' | 'after'; reason: string }
@@ -615,6 +627,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const savedAbs = resolve(REPO_ROOT, c.saved)
     const savedBytes = new Uint8Array(readFileSync(savedAbs))
     const savedSha256 = sha256Hex(savedBytes)
+    if (verifyOnly && staleCaptureSidecar(c, REPO_ROOT, savedSha256)) {
+      // The kept PNG shows an older saved workbook (the case was regenerated since): re-verifying would bind that
+      // picture to the new workbook. Leave sidecar and manifest entry alone; the case needs build + capture.
+      console.warn(`[cf-refs/capture] ${c.id}: the kept capture predates the current saved workbook; skipped (rebuild and recapture it)`)
+      continue
+    }
     const parts = readZipPartsSync(savedBytes)
     const geom = parts ? computeWorksheetRangeGeometry(parts, c.range) : null
 
