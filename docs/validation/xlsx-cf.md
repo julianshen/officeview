@@ -532,3 +532,40 @@ No Excel, `osascript` or `osacompile` was run. The manifest changed only through
 | `stage3-bar-pairing` | The verifier now accepts Excel's canonical resave |
 
 The commands are `build.ts --stage 3 --case <id>` then `capture.ts --stage 3 --case <id>`. The probe should not be recaptured unless a ruling extends it.
+
+### Stage 3 recapture and Task 18b fix round 1 (2026-11-12)
+
+The orchestrator rebuilt and recaptured axis-negative, participation, composition and pairing in Excel 16.114 (bd7da7a2, a5cd7b46, 5f566baf, 3f8ddbfb). All 11 supported Stage 3 cases are now `measured`. Fix round 1 ran no Excel. The manifest changed only through `capture.ts --stage 3 --verify-only`, and `audit.ts --write` was not run.
+
+**Ruling S3-PROBE5 (owner).** The pixel precondition probe gates on the five settings its capture shows: fill, border, direction, axis anchoring and value text. minLength/maxLength and the negative colour type are verified by their own cases (`bar:lengths-*`, `bar:negative-*`), so `BAR_PIXEL_PROBE_UNOBSERVABLE` is now empty. The probe still refuses if any one of the five is not observed consistently or equals the default control's observation (tests on the real probe PNG). Passing the gate only removes the block: each settings capability still verifies only on its own discriminating pixel evidence.
+
+**Conformance failure `stage3-bar-composition:B2`: root cause.** B2 carries two rules: priority 1 is `cellIs > 10` with the red DXF, and priority 2 is the bar. Production paints the DXF fill FFFFC7CE and withholds the bar. The per-style check counted any CF style on a bar cell as a painted bar. Ruling S3-I allows the fill: "a bar never changes the fill slot … A scale or DXF fill therefore keeps painting, but the bar itself paints over a fill only with `bar:composition-with-scale` or `bar:composition-dxf-fill`". The check was too coarse, case (b).
+
+The test now asserts:
+
+- the bar on its descriptor (the existing "stage 3 bar cells are withheld" test);
+- no style on a bar cell that only bar rules cover;
+- any fill painted on a bar cell equals Excel's captured background (±8 per channel). B, C and D of composition match Excel.
+
+**Production gap, Ruling S3-J (pending, Task 20).** The ruling reads: "until `bar:composition-bar-stopIfTrue` is verified, the rule is unresolved, so §5.7.1 withholds every later rule on its cells (`tainted.add('ALL')`)". Production still paints the priority-14 DXF fill under the priority-13 bar with `stopIfTrue="1"` on composition H2:H4.
+
+- Excel's capture shows that same fill (Excel ignores the bar's `stopIfTrue`, the hypothesis of S3-J), so the paint is not a wrong colour. It is painted without the evidence the ruling requires.
+- The suite pins it twice:
+  - an `it.fails` assertion named "PENDING S3-J" that turns red once production honours the ruling;
+  - an exact pin of the gap (H2:H4, Excel's fill there).
+- `src/` is unchanged.
+
+**Review Minors.**
+
+- Sidecar `observedBars` are compared on top, bottom and axis too.
+- Each non-discriminating reason prints the largest separation between its hypotheses, and the registry wording matches it. `bar:scope-merged-cell` is 2 px apart, not 1. `bar:negative-border-same-as-positive` is now registered at 0 px.
+- The recipes state that no same-named workbook may be open before a run, because workbooks are matched by name.
+- `generate.ts` keeps a recipe-pending case's kept captures unless `--force` is passed.
+
+**Final capability table (after `--verify-only`): 45 verified, 8 unverified-nondiscriminating, 5 blocked, 12 refused-unsupported.**
+
+| Disposition | Capabilities |
+|---|---|
+| verified (45) | Probe and settings: `bar:settings-precondition-probe`, `bar:settings-schema-defaults`, `bar:pairing-paired`, `bar:settings-paired-precedence` (the x14 companion wins), `bar:pairing-base-only`. Calibration: `bar:pixel-calibration`. Lengths and bounds: `bar:lengths-explicit-0-100`, `bar:bounds-min-max`, `bar:bounds-percentile` (INC), `bar:bounds-automin`, `bar:lengths-all-negative`, the five `bar:degenerate-*`/`bar:bounds-out-of-domain` answers of Task 18b. Axis and negatives: `bar:axis-automatic`, `bar:axis-middle`, `bar:axis-none`, `bar:negative-fill-color`, `bar:negative-fill-same-as-positive`, `bar:negative-border-color`. Rendering: `bar:render-solid`, `bar:render-border`, the three `bar:direction-*`, `bar:colors-theme-tint`, `bar:colors-indexed`. Geometry: `bar:geometry-insets`, `bar:geometry-snapping`, `bar:geometry-narrow-clip`. Value text: `bar:showvalue-canvas-suppression`. Participation: `bar:participation-types` (non-numeric cells skipped), `bar:participation-error-presence` (other cells keep their bars), `bar:participation-dateserial` (evaluated as a number). Scope: `bar:scope-disjoint`, `bar:scope-duplicate-blocks`, `bar:scope-hidden-row`, `bar:scope-autofilter-hidden-row`, `bar:scope-whole-column`. Composition: `bar:composition-dxf-fill` and `bar:composition-with-scale` (the bar is drawn over the fill), `bar:composition-overlapping-bars` (the first rule's bar), `bar:composition-matching-stopIfTrue-ahead` (halted) |
+| unverified-nondiscriminating (8) | `bar:bounds-automax` (0 px), `bar:bounds-num` (0 px), `bar:bounds-percent` (0 px), `bar:geometry-min-visible-width` (0 px), `bar:negative-border-same-as-positive` (0 px: no negative border colour to predict), `bar:scope-merged-cell` (2 px, under the 3 px needed), `bar:bounds-positional` (gradient extents), `bar:showvalue-copy-text` (not a pixel observation) |
+| blocked (5) | `bar:lengths-default-10-90`: refused `bar-hypothesis-none` (S3-18B-B); a measured model of Excel's default-length curve would unblock it. `bar:render-gradient-stops`: needs a gradient-stop model. `bar:composition-bar-stopIfTrue`: needs a cell-background observation of the later DXF; the capture already shows Excel ignores the flag (H2:H4 fill). `bar:composition-unresolved-stub`: needs an expression predictor, or stays withheld until Stage 5. `bar:pairing-standalone`: Excel resaves the shape as paired, so it needs a ruling on input-file provenance |
