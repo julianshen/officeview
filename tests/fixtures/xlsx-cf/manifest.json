@@ -12173,8 +12173,7 @@
               "negativeBarColorSameAsPositive": "0"
             },
             "colors": {
-              "negativeFill": "FFFF0000",
-              "axis": "FF000000"
+              "negativeFill": "FFFF0000"
             }
           }
         },
@@ -12279,7 +12278,6 @@
               "negativeBarColorSameAsPositive": "1"
             },
             "colors": {
-              "negativeFill": "FFFF0000",
               "axis": "FF000000"
             }
           }
@@ -12393,7 +12391,6 @@
             "colors": {
               "negativeFill": "FFFF0000",
               "border": "FF00B050",
-              "negativeBorder": "FFFFA500",
               "axis": "FF000000"
             }
           }
@@ -12453,8 +12450,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "11c5c475e9550261383eef42cc900cdffd748a13ee316e640d109b10f45320e0",
-        "savedSha256": "11c5c475e9550261383eef42cc900cdffd748a13ee316e640d109b10f45320e0",
+        "inputSha256": "42ee0a3a67eb7b5baf38c83bf4fceff5f00f9fd9fa1f1a108784f282fda5ea21",
+        "savedSha256": "42ee0a3a67eb7b5baf38c83bf4fceff5f00f9fd9fa1f1a108784f282fda5ea21",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -13307,12 +13304,11 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-axis-negative.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-axis-negative.json",
-          "pngSha256": "b6c6f4f2367acf1e4ed9cae85c0a4433a5e0a3c1bbc757e6252e28839481ad2f"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-axis-negative.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture kept but not promoted: bar measurement refused (bar-edge-unstable: Bar cell B4: 1 of 3 scanlines found no bar edge while the others did)",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
@@ -16279,8 +16275,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "b1205b492a961abdfda5ec53bda80764af7b59a9560f20e8a7938f7c384352fc",
-        "savedSha256": "5b7ff8220960e1ed196065fec1c2ef5c47d5183839a4c6c86c1d4dce432d724a",
+        "inputSha256": "c6b25d2a23519facc10ebef62b10b056549db474ab1f29698cedf6fbd8fc8819",
+        "savedSha256": "c6b25d2a23519facc10ebef62b10b056549db474ab1f29698cedf6fbd8fc8819",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
@@ -16734,25 +16730,17 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-participation.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-participation.json",
-          "pngSha256": "c6fe4ad773c5c6a12e3977d165d477ae324a4f9212a41c5506506411d3ef2b22"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-participation.json"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Capture kept but not promoted: bar measurement refused (bar-edge-under-text: Bar cell D5: a measured edge (left 446, right 577) lies within 1 px of the control's value text, so the true edge is unknown)",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": true,
-      "resaveReceipt": {
-        "resavedAt": "2026-11-11T16:34:37.286Z",
-        "excelVersion": "16.114",
-        "inputSha256": "b1205b492a961abdfda5ec53bda80764af7b59a9560f20e8a7938f7c384352fc",
-        "savedSha256": "5b7ff8220960e1ed196065fec1c2ef5c47d5183839a4c6c86c1d4dce432d724a",
-        "openedRepairFree": true
-      }
+      "resavedByExcel": false
     },
     {
       "id": "stage3-bar-scope",
