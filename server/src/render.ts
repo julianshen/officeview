@@ -20,7 +20,7 @@ import { UNIT_RASTER_DECODED_CAP } from '../../src/stream/raster'
 import { serverBackend } from './backend'
 import { facesUsed, loadPack, pinFonts } from './fonts'
 import { admit, projectPackage, type PolicyDiagnostic } from './policy'
-import { answerText, buildServedUnit, recordSpans, ServedCache, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
+import { answerText, buildServedUnit, prepareWorkspace, recordSpans, ServedCache, spansBytes, TEXT_PREPARE_ALLOWANCE, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
 export const SCALE_BUCKETS = [1, 2] as const
@@ -47,7 +47,7 @@ export type RenderedUnit = (
 ) & { evidence?: OcclusionEvidence }
 /** `wrap` may interpose on the context the painter receives (the visible mark is painted outside it). */
 export interface PaintObserver { beforeUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; afterUnit(ctx: CanvasRenderingContext2D, unitIndex: number): void; wrap?(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D }
-export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
+export class RenderRefusal extends Error { constructor(readonly code: 'unsupported-format' | 'unit-range' | 'scale' | 'oversize' | 'unknown-doc' | 'bad-job' | 'grant', m?: string) { super(m ?? code); this.name = 'RenderRefusal' } }
 
 /** §7.7: every paint pass that serves a unit records occlusion evidence. */
 function observe(ctx: CanvasRenderingContext2D, w: number, h: number, observers: readonly PaintObserver[]) {
@@ -178,14 +178,16 @@ export class DocumentHost {
    * served unit. Other ops answer from the cache or `{ missing }`.
    * Notes are never indexed: units are the document's paintables only.
    */
-  text(docKey: string, job: TextJob): TextReply {
+  /** `grant`: the admission bytes the pool reserved for a prepare; a prepare
+   * whose workspace exceeds it is refused before any canvas is created. */
+  text(docKey: string, job: TextJob, grant = Number.POSITIVE_INFINITY): TextReply {
     const doc = this.docs.get(docKey)
     if (!doc) throw new RenderRefusal('unknown-doc')
     if (!job || typeof job !== 'object') throw new RenderRefusal('bad-job')
     if (job.op === 'prepare') {
       const u = job.unit
       if (!Number.isInteger(u) || u < 0 || u >= doc.paintables.length) throw new RenderRefusal('unit-range')
-      const unit = this.served.get(docKey, u) ?? this.prepare(doc, u)
+      const unit = this.served.get(docKey, u) ?? this.prepare(doc, u, grant)
       this.served.put(docKey, u, unit)
       return { op: 'prepare', served: unit.served, withheld: unit.withheld, bytes: unit.bytes }
     }
@@ -201,12 +203,17 @@ export class DocumentHost {
   /** Test/ops: the cached served unit, without touching LRU order. */
   servedUnit(docKey: string, unit: number): ServedUnit | undefined { return this.served.peek(docKey, unit) }
   servedBytes(docKey: string): number { return this.served.bytesOf(docKey) }
+  /** The served-index cache bound per document (R6 default). */
+  setServedCacheBytes(limit: number): void { this.served.limit = limit }
 
-  private prepare(doc: OpenDoc, index: number): ServedUnit {
+  private prepare(doc: OpenDoc, index: number, grant: number): ServedUnit {
     const r = doc.raw[index]!, paintable = doc.paintables[index]!
     const w = sizeCeil(Math.max(1, r.widthPx)), h = sizeCeil(Math.max(1, r.heightPx))
     if (!unitSurfaceAllowed(w, h)) throw new RenderRefusal('oversize')
+    if (!(prepareWorkspace(w, h) <= grant)) throw new RenderRefusal('grant', `prepare needs ${prepareWorkspace(w, h)} bytes, granted ${grant}`)
     const spans = recordSpans((ctx) => paintable.paint(ctx), this.backend.createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D)
+    // Bounded text work: recorded spans, run details, sanitised copies and lines must fit the allowance.
+    if (!(4 * spansBytes(spans) <= TEXT_PREPARE_ALLOWANCE)) throw new RenderRefusal('grant', 'unit text exceeds the prepare allowance')
     this.pages++
     const { runDetails } = this.paintPass(paintable, index, w, h, 1, [])
     return buildServedUnit(spans, runDetails(), 1)

@@ -38,6 +38,12 @@ export interface ServedUnit { lines: IndexLine[]; served: number; withheld: numb
 
 /** R6: served-index cache bound per document per worker. */
 export const SERVED_CACHE_BYTES = 32 * 1024 * 1024
+/** Fixed allowance for one prepare's text structures (recorded spans, run
+ * details, sanitised copies, lines). The worker refuses a unit whose recorded
+ * spans estimate above a quarter of it (those four copies). */
+export const TEXT_PREPARE_ALLOWANCE = 16 * 1024 * 1024
+/** Workspace one prepare needs: the scale-1 RGBA visual canvas plus the allowance. */
+export const prepareWorkspace = (w: number, h: number) => 4 * w * h + TEXT_PREPARE_ALLOWANCE
 
 /** Records one unit's text spans in paint order (the `buildTextIndex` setup:
  * a tiny context, the watermark muted, the caller's state restored). */
@@ -104,22 +110,28 @@ export function sanitizeSpans(served: TextSpan[]): TextSpan[] {
   return out
 }
 
-/** Rough retained size of a served unit, for the R6 cache bound. */
-export function servedBytes(lines: IndexLine[]): number {
+/** Rough retained size of one span (its source text not included). */
+function spanBytes(s: TextSpan): number {
+  let n = 256 + s.text.length * 2
+  const v = s.placement?.visual
+  if (v) n += 16 * (v.polygon.length + (v.clusters?.length ?? 0) + (v.bands?.length ?? 0) * 2 + (v.cells?.length ?? 0) * 4 + (v.tris?.length ?? 0) * 3)
+  if (s.placement?.clip) n += 16 * s.placement.clip.length
+  if (s.logical) n += 8 * (s.logical.graphemeBoundaries?.length ?? 0)
+  return n
+}
+
+/** Rough size of recorded spans, sources counted once. */
+export function spansBytes(spans: TextSpan[]): number {
   const sources = new Set<LogicalTextSource>()
   let n = 0
-  for (const line of lines) {
-    n += 64 + line.text.length * 2
-    for (const s of line.spans) {
-      n += 256 + s.text.length * 2
-      const v = s.placement?.visual
-      if (v) n += 16 * (v.polygon.length + (v.clusters?.length ?? 0) + (v.bands?.length ?? 0) * 2 + (v.cells?.length ?? 0) * 4 + (v.tris?.length ?? 0) * 3)
-      if (s.placement?.clip) n += 16 * s.placement.clip.length
-      if (s.logical) { sources.add(s.logical.source); n += 8 * (s.logical.graphemeBoundaries?.length ?? 0) }
-    }
-  }
+  for (const s of spans) { n += spanBytes(s); if (s.logical) sources.add(s.logical.source) }
   for (const s of sources) n += 64 + s.text.length * 2
   return n
+}
+
+/** Rough retained size of a served unit, for the R6 cache bound. */
+export function servedBytes(lines: IndexLine[]): number {
+  return lines.reduce((n, line) => n + 64 + line.text.length * 2, 0) + spansBytes(lines.flatMap((l) => l.spans))
 }
 
 /** Join + sanitise + line building for one unit. */
@@ -132,7 +144,7 @@ export function buildServedUnit(spans: TextSpan[], runs: RunDetail[], scale = 1)
 /** Per-document LRU of served units (R6 bound per document). */
 export class ServedCache {
   private docs = new Map<string, { units: Map<number, ServedUnit>; bytes: number }>()
-  constructor(readonly limit = SERVED_CACHE_BYTES) {}
+  constructor(public limit = SERVED_CACHE_BYTES) {}
   get(docKey: string, unit: number): ServedUnit | undefined {
     const d = this.docs.get(docKey), u = d?.units.get(unit)
     if (d && u) { d.units.delete(unit); d.units.set(unit, u) }

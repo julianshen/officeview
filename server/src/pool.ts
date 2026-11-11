@@ -14,7 +14,7 @@ import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
 import type { MarkRasterResult } from './mark/mark-raster'
 import type { MarkSpec, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
-import type { TextJob, TextReply } from './text/served'
+import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 
 export class AdmissionRefused extends Error { constructor(readonly reason: 'session-queue' | 'process-queue' | 'too-large') { super(`admission refused: ${reason}`); this.name = 'AdmissionRefused' } }
 export class RenderTimeout extends Error { constructor() { super('render deadline exceeded'); this.name = 'RenderTimeout' } }
@@ -26,9 +26,11 @@ export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'fu
 /** A per-session Layer-1 encode (§9.4); no document affinity. */
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
 export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & TextJob
-/** Admission charge of one text op (a prepare paints one unit surface). */
-export const TEXT_JOB_BYTES = 8 * 1024 * 1024
-export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number }
+/** Admission charge of one text op itself (index assembly, answer text);
+ * every prepare it needs is charged separately (`prepareWorkspace`). */
+export const TEXT_JOB_BYTES = TEXT_PREPARE_ALLOWANCE
+/** `servedCacheBytes`: the worker's served-index bound per document (R6 default 32 MiB). */
+export interface PoolOptions { workers?: number; caps?: Caps; recyclePages?: number; now?: () => number; testHooks?: boolean; openDeadlineMs?: number; servedCacheBytes?: number }
 
 const WORKER_URL = resolve(import.meta.dir, 'worker/render-worker.ts')
 const PRELOAD = resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts')
@@ -63,6 +65,9 @@ export class Pool {
   private readonly openDeadlineMs: number
   private readonly now: () => number
   private readonly testHooks: boolean
+  private readonly servedCacheBytes?: number
+  /** `${docRef}|${policy}` → unit sizes from the last parse (prepare charges). */
+  private unitSizes = new Map<string, OpenResult['units']>()
   private disposed = false
   /** Queued admission jobs waiting to start: resolve(true) = started, resolve(false) = cancelled. */
   private waiters = new Map<number, (started: boolean) => void>()
@@ -73,6 +78,7 @@ export class Pool {
     this.openDeadlineMs = opts.openDeadlineMs ?? 30_000
     this.now = opts.now ?? (() => performance.now())
     this.testHooks = opts.testHooks ?? false
+    this.servedCacheBytes = opts.servedCacheBytes
     for (let i = 0; i < (opts.workers ?? defaultWorkers()); i++) {
       const slot = { index: i, busy: false, queue: [], pending: new Map(), docs: new Map(), pages: 0, parses: 0, generation: 0, closed: false } as unknown as Slot
       this.attach(slot)
@@ -152,11 +158,12 @@ export class Pool {
     if (docKey && !force) return { docKey }
     const bytes = this.sources.get(docRef)
     if (!bytes) throw new RenderFailed('document not registered')
-    const reply = await this.post(slot, { type: 'open', id: this.nextId++, docRef, bytes, contentPolicy: policy }, this.openDeadlineMs)
+    const reply = await this.post(slot, { type: 'open', id: this.nextId++, docRef, bytes, contentPolicy: policy, ...(this.servedCacheBytes !== undefined ? { servedCacheBytes: this.servedCacheBytes } : {}) }, this.openDeadlineMs)
     if (reply === 'timeout') { await this.replace(slot); this.retired++; throw new RenderTimeout() }
     if (!reply.ok) throw new RenderFailed(reply.error, reply.refusal)
     const open = reply.result as OpenResult
     slot.docs.set(k, open.docKey)
+    this.unitSizes.set(k, open.units)
     return { docKey: open.docKey, open }
   }
 
@@ -209,10 +216,13 @@ export class Pool {
   }
 
   /** A text op on the docRef's worker (affinity, admission, deadline as
-   * `render`). A `{ missing }` answer prepares each missing unit (one job
-   * each, render deadline) and retries the op once; still missing ⇒
-   * TextTooLarge. All of it runs in one exclusive turn of the slot, and the
-   * recycle check comes only after the op is answered. */
+   * `render`). The op is charged `bytesEstimate`; every prepare (explicit or
+   * for a `{ missing }` answer) is charged `prepareWorkspace(w, h)` from the
+   * unit's parsed size through the same admission, and the worker is sent
+   * that grant to enforce. A missing answer prepares each missing unit (one
+   * job each, render deadline) and retries once; still missing ⇒
+   * TextTooLarge. Everything runs in one exclusive turn of the slot, and the
+   * recycle threshold is checked on every exit, success or not. */
   async text(sessionId: string, job: PoolTextJob, bytesEstimate = TEXT_JOB_BYTES): Promise<TextReply> {
     if (this.disposed) throw new RenderFailed('pool disposed')
     const res = this.admission.request(sessionId, bytesEstimate, this.now())
@@ -220,22 +230,48 @@ export class Pool {
     const admitted = res.job
     if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
     const slot = this.pick(job.docRef)
-    const { docRef: _d, contentPolicy: _c, ...op } = job
+    const { docRef: _d, contentPolicy: _c, ...rest } = job
+    const op = rest as TextJob
+    const k = `${job.docRef}|${job.contentPolicy}`
     try {
       return await this.exclusive(slot, async () => {
-        const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
-        const run = (j: TextJob) => this.runJob(slot, admitted, { type: 'text', id: this.nextId++, docKey, job: j }) as Promise<TextReply>
-        let r = await run(op as TextJob)
-        if ('missing' in r) {
-          for (const unit of r.missing) await run({ op: 'prepare', unit })
-          r = await run(op as TextJob)
-          if ('missing' in r) throw new TextTooLarge(r.missing)
+        const generation = slot.generation
+        try {
+          const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+          const post = (j: TextJob, owner: Job, grant?: number) => this.runJob(slot, owner, { type: 'text', id: this.nextId++, docKey, job: j, ...(grant !== undefined ? { grant } : {}) }) as Promise<TextReply>
+          const prepare = (unit: number) => this.prepareOn(sessionId, k, unit, (owner, grant) => post({ op: 'prepare', unit }, owner, grant))
+          if (op.op === 'prepare') return await prepare(op.unit)
+          let r = await post(op, admitted)
+          if ('missing' in r) {
+            for (const unit of r.missing) await prepare(unit)
+            r = await post(op, admitted)
+            if ('missing' in r) throw new TextTooLarge(r.missing)
+          }
+          return r
+        } finally {
+          // Only the worker these jobs ran on; a timeout/death already retired it.
+          if (slot.generation === generation && !slot.closed && slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
         }
-        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
-        return r
       })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** One prepare under its own admission charge, sized from the unit. Inside
+   * the slot's exclusive turn a queued charge could wait on work that waits
+   * for this slot, so a charge that cannot start at once is refused. */
+  private async prepareOn(sessionId: string, k: string, unit: number, run: (owner: Job, grant: number) => Promise<TextReply>): Promise<TextReply> {
+    const size = this.unitSizes.get(k)?.[unit]
+    if (!size) throw new RenderFailed('unit-range', 'unit-range')
+    const grant = prepareWorkspace(size.w, size.h)
+    const res = this.admission.request(sessionId, grant, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    if (res.status === 'queued') { this.admission.cancel(res.job.id); throw new AdmissionRefused('session-queue') }
+    try {
+      return await run(res.job, grant)
+    } finally {
+      if (res.job.state === 'running') this.finish(res.job)
     }
   }
 

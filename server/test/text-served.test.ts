@@ -6,9 +6,11 @@ import { textForRange } from '../../src/core/selection'
 import type { LogicalTextSource } from '../../src/core/text-recording'
 import { occlusionObserver, type RunDetail } from '../src/occlusion'
 import { joinSpans } from '../src/text/join'
-import { Pool, type PoolTextJob } from '../src/pool'
+import { DEFAULT_CAPS } from '../src/admission'
+import { serverBackend } from '../src/backend'
+import { AdmissionRefused, Pool, TEXT_JOB_BYTES, TextTooLarge, type PoolTextJob } from '../src/pool'
 import { DocumentHost, FIXED_MARK_TEXT } from '../src/render'
-import { answerText, buildServedUnit, recordSpans, type ServedUnit, type TextReply } from '../src/text/served'
+import { answerText, buildServedUnit, prepareWorkspace, recordSpans, TEXT_PREPARE_ALLOWANCE, type ServedUnit, type TextReply } from '../src/text/served'
 import { augmentedFixtures } from './fixtures'
 import { corpus, disposePool, pool } from './harness'
 
@@ -331,4 +333,63 @@ describe('sanitised served units', () => {
     }
     console.log(`[served] ${counts.join('; ')}`)
   }, 120_000)
+})
+
+describe('fix round 1: prepare admission and recycle on refusal', () => {
+  test('a prepare under an insufficient grant is refused before any canvas or index is built', async () => {
+    const base = serverBackend()
+    const sizes: Array<[number, number]> = []
+    const counting = { ...base, createCanvas: (w: number, h: number) => { sizes.push([w, h]); return base.createCanvas(w, h) } }
+    const host = new DocumentHost(counting)
+    const o = await host.open('g', deck, 'visible-only')
+    const { w, h } = o.units[0]!
+    const need = prepareWorkspace(w, h)
+    expect(need).toBe(4 * w * h + TEXT_PREPARE_ALLOWANCE)
+    sizes.length = 0
+    expect(() => host.text(o.docKey, { op: 'prepare', unit: 0 }, need - 1)).toThrow(expect.objectContaining({ name: 'RenderRefusal', code: 'grant' }))
+    expect(sizes).toEqual([])
+    expect(host.pages).toBe(0)
+    expect(host.servedUnit(o.docKey, 0)).toBeUndefined()
+    expect(host.text(o.docKey, { op: 'prepare', unit: 0 }, need)).toMatchObject({ op: 'prepare', served: 2 })
+    expect(sizes).toContainEqual([w, h])
+    host.drop(o.docKey)
+  }, 60_000)
+
+  test('the pool charges each prepare 4·w·h + allowance; a grant the session cannot hold is refused before the worker paints', async () => {
+    const probe = new Pool({ workers: 1 }); pools.push(probe)
+    const { w, h } = (await probe.open('p', deck, 'visible-only')).units[0]!
+    const p = new Pool({ workers: 1, caps: { ...DEFAULT_CAPS, sessionTransientBytes: TEXT_JOB_BYTES + prepareWorkspace(w, h) - 1 } }); pools.push(p)
+    const d = await opened(deck, 'visible-only', p)
+    await expect(d.text(copyAll)).rejects.toBeInstanceOf(AdmissionRefused)
+    await expect(d.text({ op: 'prepare', unit: 0 })).rejects.toBeInstanceOf(AdmissionRefused)
+    expect(p.stats().workers[0]!.pages).toBe(0)
+    expect(p.stats()).toMatchObject({ reserved: 0, running: 0, queued: 0 })
+    const ok = new Pool({ workers: 1, caps: { ...DEFAULT_CAPS, sessionTransientBytes: TEXT_JOB_BYTES + prepareWorkspace(w, h) } }); pools.push(ok)
+    const e = await opened(deck, 'visible-only', ok)
+    expect(await e.text(copyAll)).toMatchObject({ op: 'copy', paragraphs: 2 })
+    expect(ok.stats()).toMatchObject({ reserved: 0, running: 0 })
+  }, 60_000)
+
+  test('a range beyond the served cache is refused with TextTooLarge, the worker still recycles, charges end once', async () => {
+    const name = 'lo-tdf115394.pptx', bytes = corpus(name)
+    const probe = new Pool({ workers: 1 }); pools.push(probe)
+    const pd = await opened(bytes, 'visible-only', probe)
+    const sizes: number[] = []
+    for (const u of units(pd.open.units.length)) sizes.push((await pd.text({ op: 'prepare', unit: u }) as { bytes: number }).bytes)
+    expect(Math.min(...sizes)).toBeGreaterThan(0)
+    // Room for the largest single unit, never for two.
+    const p = new Pool({ workers: 1, recyclePages: 3, servedCacheBytes: Math.max(...sizes) }); pools.push(p)
+    const d = await opened(bytes, 'visible-only', p)
+    const before = p.stats()
+    const err = await d.text(copyAll).catch((e) => e)
+    expect(err).toBeInstanceOf(TextTooLarge)
+    expect((err as TextTooLarge).missing.length).toBeGreaterThan(0)
+    const after = p.stats()
+    expect(after.recycled).toBe(before.recycled + 1)
+    expect(after.workers[0]!.generation).toBe(before.workers[0]!.generation + 1)
+    expect(after).toMatchObject({ reserved: 0, running: 0, queued: 0 })
+    // The pool still answers afterwards.
+    expect(await d.text({ op: 'a11y', unit: 0 })).toMatchObject({ op: 'a11y' })
+    expect(p.stats()).toMatchObject({ reserved: 0, running: 0 })
+  }, 60_000)
 })
