@@ -52,7 +52,7 @@ describe('joinSpans (R1)', () => {
     expect(joinSpans([stop, post], [r], 1)).toEqual({ served: [post], withheld: 1 })
     expect(joinSpans([post, stop], [r], 1)).toEqual({ served: [post], withheld: 1 })
   })
-  test('two identical spans over one run: the first is served, the second withheld (budget)', () => {
+  test('two identical spans over one run: the first is served, the second withheld (consumed)', () => {
     const a = span('POST', 20, 50, 50), b = span('POST', 20, 50, 50)
     expect(joinSpans([a, b], [run('POST', 20, 35, 50, 20)], 1)).toEqual({ served: [a], withheld: 1 })
   })
@@ -68,7 +68,21 @@ describe('joinSpans (R1)', () => {
     expect(joinSpans([s], [run('hello world', 20, 35, 110, 20)], 1).served).toEqual([s])
     expect(joinSpans([span('hw', 40, 50, 50)], [run('hello world', 20, 35, 110, 20)], 1).withheld).toBe(1)
   })
-  test('one long run serves its consecutive spans until its budget is spent', () => {
+  test('consumption is positional: consumed code points never authorise another span', () => {
+    const box = () => span('B', 20, 50, 50)
+    const ab = () => run('AB', 20, 35, 50, 20)
+    const b1 = box(), b2 = box()
+    expect(joinSpans([b1, b2], [ab()], 1)).toEqual({ served: [b1], withheld: 1 })
+    const a = span('A', 20, 50, 50), b = box()
+    expect(joinSpans([a, b], [ab()], 1)).toEqual({ served: [a, b], withheld: 0 })
+    const whole = span('AB', 20, 50, 50), tail = box()
+    expect(joinSpans([whole, tail], [ab()], 1)).toEqual({ served: [whole], withheld: 1 })
+  })
+  test('repeated text in one run serves exactly as many spans as it painted', () => {
+    const x = span('AB', 20, 50, 50), y = span('AB', 20, 50, 50), z = span('AB', 20, 50, 50)
+    expect(joinSpans([x, y, z], [run('ABAB', 20, 35, 50, 20)], 1)).toEqual({ served: [x, y], withheld: 1 })
+  })
+  test('one long run serves its consecutive spans until its code points are consumed', () => {
     const hello = span('hello', 20, 50, 50), world = span('world', 75, 50, 50), again = span('hello', 20, 50, 50)
     const long = run('hello world', 20, 35, 110, 20)
     expect(joinSpans([hello, world], [long], 1)).toEqual({ served: [hello, world], withheld: 0 })

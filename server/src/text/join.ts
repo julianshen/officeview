@@ -11,13 +11,13 @@
  * - Run ink (device px) is divided by `scale`. A run is a candidate when its ink
  *   centre lies in the span box inflated by 2 px, or the span box centre lies in
  *   the run ink.
- * - Served iff ≥ 1 candidate, every candidate servable, and ordered
- *   correspondence: with whitespace removed, the span's code points T are a
- *   contiguous substring of the candidates' texts concatenated in paint (`seq`)
- *   order, and the candidates' unconsumed budget is ≥ |T|. A run's budget starts
- *   at its stripped code-point length; a served span consumes |T| from its
- *   candidates in seq order. Spans are processed in input order, so one painted
- *   run never authorises more text than it painted (no anagrams, no reuse).
+ * - Served iff ≥ 1 candidate, every candidate servable, and positional
+ *   correspondence: with whitespace removed, the span's code points T occur
+ *   contiguously in the candidates' code points concatenated in paint (`seq`)
+ *   order, at an occurrence whose positions are all unconsumed (the first such,
+ *   left to right). Serving marks exactly those positions consumed. Spans are
+ *   processed in input order, so each painted code point authorises at most one
+ *   span's code point (no anagrams, no reuse).
  * - A whitespace-only span is served iff at least one nearest same-line
  *   (baselines within 1 px) non-whitespace neighbour exists, before or after it
  *   in list order, and every such neighbour is served.
@@ -54,18 +54,22 @@ const isWhitespace = (s: string) => s.trim() === ''
 /** Code points with whitespace removed (no normalisation). */
 const stripped = (s: string) => Array.from(s).filter((cp) => !isWhitespace(cp))
 
-/** Contiguous code-point substring test. */
-function containsRun(hay: string[], needle: string[]): boolean {
+/** First start of `needle` in `hay` whose positions are all unconsumed, or -1. */
+function freeOccurrence(hay: Array<{ cp: string; run: number; at: number }>, needle: string[], consumed: boolean[][]): number {
   outer: for (let i = 0; i + needle.length <= hay.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer
-    return true
+    for (let j = 0; j < needle.length; j++) {
+      const h = hay[i + j]!
+      if (h.cp !== needle[j] || consumed[h.run]![h.at]) continue outer
+    }
+    return i
   }
-  return false
+  return -1
 }
 
 export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): JoinResult {
   if (!(Number.isFinite(scale) && scale > 0)) return { served: [], withheld: spans.length }
-  const budget = runs.map((r) => stripped(r.text).length)
+  const runCps = runs.map((r) => stripped(r.text))
+  const consumed = runCps.map((cps) => cps.map(() => false))
   const inks: Box[] = runs.map(({ ink }) => ({ x0: ink.x / scale, y0: ink.y / scale, x1: (ink.x + ink.width) / scale, y1: (ink.y + ink.height) / scale }))
 
   const verdict: Array<boolean | undefined> = spans.map((span) => {
@@ -79,10 +83,10 @@ export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): 
     }).sort((a, b) => runs[a]!.seq - runs[b]!.seq)
     if (!candidates.length || !candidates.every((i) => runs[i]!.servable)) return false
     const t = stripped(span.text)
-    const left = candidates.reduce((n, i) => n + budget[i]!, 0)
-    if (left < t.length || !containsRun(candidates.flatMap((i) => stripped(runs[i]!.text)), t)) return false
-    let need = t.length
-    for (const i of candidates) { const take = Math.min(need, budget[i]!); budget[i] = budget[i]! - take; need -= take }
+    const hay = candidates.flatMap((run) => runCps[run]!.map((cp, at) => ({ cp, run, at })))
+    const start = freeOccurrence(hay, t, consumed)
+    if (start < 0) return false
+    for (const h of hay.slice(start, start + t.length)) consumed[h.run]![h.at] = true
     return true
   })
 
