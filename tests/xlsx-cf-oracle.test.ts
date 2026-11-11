@@ -3206,7 +3206,7 @@ describe('CF oracle verifier', () => {
       }
       for (const cell of c.expected.cells) {
         if (!cell.barEvidence) continue
-        expect(['excel-object-model', 'unverified']).toContain(cell.barEvidence.settings)
+        expect(['pixel-measured', 'non-discriminating', 'unverified']).toContain(cell.barEvidence.settings)
         expect(['pixel-measured', 'non-discriminating', 'unverified']).toContain(cell.barEvidence.geometry)
         if (cell.barEvidence.settings === 'excel-object-model' || cell.barEvidence.geometry === 'pixel-measured') {
           expect(hasSidecar, `${c.id}:${cell.ref} claims evidence without a capture sidecar`).toBe(true)

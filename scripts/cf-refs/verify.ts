@@ -4110,6 +4110,8 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
   }
 }
 
+const verifyCaseCache = new WeakMap<CfManifest, Map<string, VerifiedEvidence | Refusal>>()
+
 /** Returns true only when the capability's owning oracle case is fully `verified` (`status: 'measured'`). */
 export function isCapabilityVerified(
   capabilityId: string,
@@ -4118,7 +4120,12 @@ export function isCapabilityVerified(
 ): boolean {
   const owningCase = manifest.cases.find(c => c.markers.some(m => m.capabilityId === capabilityId))
   if (!owningCase) return false
-  const res = verifyCfCase(owningCase, options)
+  // The cross-case gates ask for the same few cases again and again; one manifest object's cases are verified once.
+  const key = `${options.rootDir ?? process.cwd()}\u0000${owningCase.id}`
+  let cache = verifyCaseCache.get(manifest)
+  if (!cache) verifyCaseCache.set(manifest, (cache = new Map()))
+  let res = cache.get(key)
+  if (!res) cache.set(key, (res = verifyCfCase(owningCase, options)))
   if (res.kind !== 'verified' || !res.verifiedCapabilities.includes(capabilityId)) return false
 
   // Stage 3: a registry-flagged non-discriminating capability is never verified, whatever a capture shows (Lesson 3).
