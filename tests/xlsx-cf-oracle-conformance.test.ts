@@ -20,7 +20,7 @@ import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
 import type { CfCellState, CfOutcome } from '../src/xlsx/cf/model'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
-import { isCellInSqref } from '../scripts/cf-refs/verify'
+import { decodePngSync, isCellInSqref, type DecodedPng } from '../scripts/cf-refs/verify'
 import type { CfManifest } from '../scripts/cf-refs/cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -44,6 +44,38 @@ function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } })
   // `evaluation` is spread into evaluateWorkbookFormulas at runtime, which honours timeZone; the public type only
   // advertises the array caps, hence the cast.
   return (c.clockRequirement ? { evaluation: { timeZone: c.clockRequirement.requiredTimeZone } } : {}) as ParseXlsxOptions
+}
+
+
+/**
+ * Stage 3: Excel's own cell background in the committed capture (the pixel 1 px inside the cell's top-left corner, which
+ * a bar never covers: bars keep a 2 px inset, bar:geometry-insets). Used to check that a fill production paints on a bar
+ * cell is the fill Excel paints there (Ruling S3-I coexistence), never a guess.
+ */
+const stage3Pngs = new Map<string, { png: DecodedPng; cols: number[]; rows: number[] }>()
+function excelCellBackground(c: { id: string; captures: ReadonlyArray<{ pngPath: string; sidecarPath: string }> }, ref: string): string {
+  let cap = stage3Pngs.get(c.id)
+  if (!cap) {
+    const sc = JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { colWidthsPt: number[]; rowHeightsPt: number[] }
+    cap = { png: decodePngSync(new Uint8Array(readFileSync(join(REPO_ROOT, c.captures[0]!.pngPath))))!, cols: sc.colWidthsPt, rows: sc.rowHeightsPt }
+    stage3Pngs.set(c.id, cap)
+  }
+  const { row, col } = refToRowCol(ref)
+  const x = Math.round(cap.cols.slice(0, col).reduce((a, b) => a + b, 0)) + 1
+  const y = Math.round(cap.rows.slice(0, row).reduce((a, b) => a + b, 0)) + 1
+  const i = (y * cap.png.width + x) * 4
+  return `FF${[0, 1, 2].map(k => cap!.png.data[i + k]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+}
+const argbDelta = (a: string, b: string): number => Math.max(...[2, 4, 6].map(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16))))
+
+/**
+ * Ruling S3-J: a bar carrying stopIfTrue="1" is unresolved until bar:composition-bar-stopIfTrue is verified, so every
+ * LATER rule on its cells is withheld. These are the cells where such a bar sits ahead of a non-bar rule.
+ */
+function underUnevidencedBarStop(c: { markers: ReadonlyArray<{ ruleType: string; sqref: string; priority?: number; stopIfTrue?: boolean; capabilityId: string }> }, ref: string): boolean {
+  return c.markers.some(bar => bar.ruleType === 'dataBar' && bar.stopIfTrue && bar.priority !== undefined && isCellInSqref(ref, bar.sqref) &&
+    !VERIFIED_CAPABILITIES.has('bar:composition-bar-stopIfTrue') &&
+    c.markers.some(m => m.ruleType !== 'dataBar' && m.priority !== undefined && m.priority > bar.priority! && isCellInSqref(ref, m.sqref)))
 }
 
 describe('production viewer conditional formatting oracle conformance (C1 & C3)', () => {
@@ -166,9 +198,22 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
             // measured case or not. Non-bar rules in the case (DXF, scale) keep following the normal path below.
             const barCaps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
             if (barCaps.length > 0 && !barCaps.every(id => VERIFIED_CAPABILITIES.has(id))) {
-              expect(gotMatched, `${cellKey} bar must be withheld until ${barCaps.join(', ')} is verified`).toBe(false)
-              expect(st?.fillColor, `${cellKey} fill`).toBeUndefined()
+              // The BAR is withheld (asserted per cell, on the bar descriptor itself, in "stage 3 bar cells are withheld
+              // until their evidence lands"). The cell style here may only come from the case's non-bar rules: Ruling
+              // S3-I "a bar never changes the fill slot ... A scale or DXF fill therefore keeps painting, but the bar
+              // itself paints over a fill only with bar:composition-with-scale or bar:composition-dxf-fill".
               stage3BarWithheld++
+              const nonBar = c.markers.filter(m => m.ruleType !== 'dataBar' && isCellInSqref(exp.ref, m.sqref))
+              if (nonBar.length === 0) {
+                expect(gotMatched, `${cellKey}: only bar rules cover it, so no style may paint until ${barCaps.join(', ')} is verified`).toBe(false)
+                continue
+              }
+              if (underUnevidencedBarStop(c, exp.ref)) continue // Ruling S3-J: asserted in the pending S3-J test below
+              if (st?.fillColor) {
+                // A fill that paints is exactly Excel's fill for that cell (the capture's background, +-8 per channel).
+                const excel = excelCellBackground(c, exp.ref)
+                expect(argbDelta(st.fillColor, excel), `${cellKey} fill ${st.fillColor} vs Excel ${excel}`).toBeLessThanOrEqual(8)
+              }
               continue
             }
           }
@@ -461,6 +506,40 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(exactCount).toBe(364)
     expect(withheldCount).toBe(34)
     expect(exactCount + withheldCount).toBe(grandTotalChecked)
+  })
+
+
+  // PENDING (Needs ruling / Task 20): Ruling S3-J reads "until bar:composition-bar-stopIfTrue is verified, the rule is
+  // unresolved, so §5.7.1 withholds every later rule on its cells (tainted.add('ALL'))". Production today still paints
+  // the later DXF fill on stage3-bar-composition H2:H4 (it does not yet treat the bar as a stopIfTrue rule). Excel's
+  // capture shows that same DXF fill (Excel ignores the bar's stopIfTrue), so the paint is not a wrong colour, but it is
+  // painted without the evidence the ruling requires. `it.fails` keeps the suite green while the gap exists and turns
+  // red the moment production honours S3-J, so the pin can then be flipped to `it`.
+  const s3jViolations = async (): Promise<string[]> => {
+    const violations: string[] = []
+    for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
+      const cells = c.expected.cells.filter(e => underUnevidencedBarStop(c, e.ref))
+      if (cells.length === 0) continue
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const doc = await parseXlsx(await OfficePackage.load(bytes))
+      const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
+      const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
+      for (const e of cells) {
+        const { row, col } = refToRowCol(e.ref)
+        const st = paint?.layer.styleAt(row, col, undefined)
+        if (st && (st.fillColor || st.color || st.bold !== undefined)) violations.push(`${c.id}:${e.ref}`)
+      }
+      paint?.dispose()
+    }
+    return violations
+  }
+  it.fails('PENDING S3-J: a later rule under an unevidenced bar stopIfTrue is withheld (production gap, Task 20)', async () => {
+    expect(await s3jViolations()).toEqual([])
+  })
+  it('the S3-J gap is exactly the later DXF fill on composition H2:H4, and it is Excel\'s fill there', async () => {
+    expect(await s3jViolations()).toEqual(['stage3-bar-composition:H2', 'stage3-bar-composition:H3', 'stage3-bar-composition:H4'])
+    const c = manifest.cases.find(x => x.id === 'stage3-bar-composition')!
+    for (const ref of ['H2', 'H3', 'H4']) expect(argbDelta(excelCellBackground(c, ref), 'FFFFC7CE'), ref).toBeLessThanOrEqual(8)
   })
 
   /** A bar is withheld when the cell is not `ready` or its visual slot carries no data bar descriptor. */
