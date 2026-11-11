@@ -13307,11 +13307,12 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-axis-negative.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-axis-negative.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-axis-negative.json",
+          "pngSha256": "b6c6f4f2367acf1e4ed9cae85c0a4433a5e0a3c1bbc757e6252e28839481ad2f"
         }
       ],
       "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "reason": "Capture kept but not promoted: bar measurement refused (bar-edge-unstable: Bar cell B4: 1 of 3 scanlines found no bar edge while the others did)",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
