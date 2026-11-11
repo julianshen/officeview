@@ -538,3 +538,18 @@ describe('watermark contrast on dark backgrounds', () => {
     expect(defaultMarkColor('not-a-colour')).toBe('#000000')
   })
 })
+
+describe('mark text width cache', () => {
+  test('a page laid out after another page of a nearby width gets its own tile spacing', () => {
+    // 960 and 955 px pages both round to the same point size (sizeRatio of page width);
+    // without a measurer the fallback width depends on the unrounded px, so a shared
+    // cache entry would leak the first page's spacing into the second.
+    setWatermarkMeasurer(null)
+    const mark = normalizeWatermark({ text: 'CONFIDENTIAL' })!
+    const small = { widthPx: 955, heightPx: 540 }, large = { widthPx: 960, heightPx: 540 }
+    const alone = watermarkStamps(small, mark)
+    setWatermarkMeasurer(null)
+    watermarkStamps(large, mark)
+    expect(watermarkStamps(small, mark)).toEqual(alone)
+  })
+})
