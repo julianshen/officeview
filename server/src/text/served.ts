@@ -322,12 +322,13 @@ export function answerText(job: Exclude<TextJob, { op: 'prepare' }>, unitCount: 
   }
 
   if (job.op === 'a11y') {
-    // A group (paragraph or cell) is one paragraph: its served spans' text per
-    // line, lines joined as textForRange joins source-less lines. Its blank
+    // A group (paragraph or cell) is one paragraph: the text textForRange
+    // gives for its served spans, line by line (a source-backed group slices
+    // its source; a source-less one joins lines with newlines). Its blank
     // spans join it, but a group with no ink is no paragraph.
     const order: object[] = []
-    const paras = new Map<object, { rects: HighlightRect[]; text: string; ink: boolean; pieces?: Array<{ line: number; text: string }> }>()
-    units.get(job.unit)!.lines.forEach((line, li) => {
+    const paras = new Map<object, { rects: HighlightRect[]; text: string; ink: boolean; pieces?: Array<{ line: IndexLine; spans: TextSpan[] }> }>()
+    for (const line of units.get(job.unit)!.lines) {
       let off = 0
       for (const span of line.spans) {
         const a = off; off += span.text.length
@@ -341,16 +342,18 @@ export function answerText(job: Exclude<TextJob, { op: 'prepare' }>, unitCount: 
         }
         if (p.pieces) {
           const last = p.pieces[p.pieces.length - 1]
-          if (last?.line === li) last.text += span.text
-          else p.pieces.push({ line: li, text: span.text })
+          if (last?.line === line) last.spans.push(span)
+          else p.pieces.push({ line, spans: [span] })
           if (!isBlank(span.text)) p.ink = true
         }
         p.rects.push(...rectsForRange(line, a, off))
       }
-    })
+    }
     for (const p of paras.values()) {
-      const pieces = p.pieces
-      if (pieces) p.text = pieces.map((x, i) => i === pieces.length - 1 ? x.text : x.text.replace(/\s+$/, '')).join('\n')
+      if (!p.pieces?.length) continue
+      const lines = p.pieces.map(({ line, spans }) => ({ ...line, spans, text: spans.map((s) => s.text).join('') }))
+      const last = lines[lines.length - 1]!
+      p.text = textForRange({ pages: [{ index: 0, lines }] }, { start: startOf(0), end: { pageIndex: 0, lineIndex: lines.length - 1, charIndex: last.text.length } })
     }
     return {
       op: 'a11y',

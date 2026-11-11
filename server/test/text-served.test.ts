@@ -558,6 +558,8 @@ describe('task 3b: paragraph and cell identity (RECORD_GROUP)', () => {
     const one = await prepared(await xlsx([]))
     expect(one.lineCount).toBeGreaterThan(1)
     expect(one.ask(copyAll)).toMatchObject({ op: 'copy', paragraphs: 1 })
+    const cellA11y = one.ask({ op: 'a11y', unit: 0 }) as Extract<TextReply, { op: 'a11y' }>
+    expect(cellA11y.paragraphs.map((p) => p.text)).toEqual([(one.ask(copyAll) as { text: string }).text])
     const three = await prepared(await xlsx(['bee', 'sea']))
     expect(three.ask(copyAll)).toMatchObject({ op: 'copy', paragraphs: 3 })
   }, 60_000)

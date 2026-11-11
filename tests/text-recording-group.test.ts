@@ -26,6 +26,7 @@ async function docxPaintables(): Promise<Paintable[]> {
       { cells: [{ paragraphs: [{ runs: [{ text: 'c11' }] }] }, { paragraphs: [{ runs: [{ text: 'c12' }] }] }] },
       { cells: [{ paragraphs: [{ runs: [{ text: 'c21' }] }] }, { paragraphs: [{ runs: [{ text: 'c22' }] }] }] },
     ] }],
+    { header: [{ runs: [{ text: 'Header line.' }] }] },
   )
   return [...await getPaintables(await parseDocx(await OfficePackage.load(bytes)) as never)] as Paintable[]
 }
@@ -88,18 +89,18 @@ describe('RECORD_GROUP', () => {
     }
   })
 
-  test('docx: one key per paragraph (wrapped body, body, each table cell); the group ends', async () => {
+  test('docx: one key per paragraph (wrapped body, body, each table cell, header); the group ends', async () => {
     const [page] = await docxPaintables()
     const { spans, keys, calls } = grouped(page!)
     const ink = spans.map((s, i) => ({ s, k: keys[i] })).filter(({ s }) => s.text.trim() !== '')
     for (const { k } of ink) expect(k).toBeDefined()
     const distinct = [...new Set(ink.map(({ k }) => k!))]
-    expect(distinct.length).toBe(6)
+    expect(distinct.length).toBe(7)
     const texts = distinct.map((k) => textOf(spans, keys, k))
     expect(texts[0]!.replace(/\s+/g, '')).toBe(LONG.replace(/\s+/g, ''))
     // The long paragraph really wraps: its spans lie on more than one baseline.
     expect(new Set(spans.filter((_, i) => keys[i] === distinct[0]).map((s) => Math.round(s.y))).size).toBeGreaterThan(1)
-    expect(texts.slice(1).sort()).toEqual(['Second paragraph.', 'c11', 'c12', 'c21', 'c22'].sort())
+    expect(texts.slice(1).sort()).toEqual(['Second paragraph.', 'c11', 'c12', 'c21', 'c22', 'Header line.'].sort())
     expect(calls[calls.length - 1]).toBeUndefined()
   })
 
