@@ -327,3 +327,44 @@ Client: each unit wrapper gets a visually-hidden `role="group" aria-label="Page 
 - [ ] **Step 3:** `server/README.md`: document `copy`, `textA11y`, the caps, the refusal codes, that session totals reset when the document is opened again, and that search is rate-limited only.
 - [ ] **Step 4:** Spec amendments: design §4.1 gains R2 (XLSX wrapped cells count per painted line; paragraphs count per page) and R3; parent §14 gains the `'text'` rate class and the 48 KiB chunk rule; parent §6.2 resume rule notes the `copy`/`textA11y` exception.
 - [ ] **Step 5:** Full gates: `bun run test && bun run test:server && bun run test:browser:stream && bun run lint && bun run gates:core`; commit `docs(stream): Stage 3a validation, README and spec amendments`.
+
+## Execution notes (2026-11-12)
+
+Decisions taken during execution. They are recorded where they now live:
+Stage 3 design §4.1 "Amendment (2026-11-12, Stage 3a as built)"; parent
+§6.2 rules 7 and 8, §7.7, §11, §14 and §19 item 10; the developer guide
+`server/README.md` ("Text services"); measurements in
+`docs/validation/streaming-s3a.md`.
+
+- **Task 3b (added): paragraph and cell identity.** An optional recording
+  hook `RECORD_GROUP` (`src/core/text-recording.ts`) is called by the DOCX
+  and XLSX painters. One Word paragraph, spreadsheet cell or shape
+  paragraph counts as one paragraph. This **supersedes R2**: no
+  per-painted-line count for wrapped cells, and no per-line count for DOCX
+  body text.
+- **Task 3c (added): text decorations.** Underline and strike no longer
+  withhold the text they decorate when the painter announces them through
+  the ownership scope `PAINT_DECORATION`. This is the one exemption to
+  parent §7.7's 100 %-ink rule. One review residual is parked (parent §19
+  item 10b).
+- **R1(c) superseded.** The multiset coverage test became positional,
+  consuming correspondence: the span's whitespace-stripped text must occur
+  contiguously at unconsumed positions of the candidates' text in paint
+  order. Task 3 added a sanitise step: the served index keeps only served
+  ranges.
+- **R2 superseded** by Task 3b (above).
+- **R3 as planned**, plus: the viewer follows a resumed services change
+  (Task 8).
+- **Task 8 markup superseded.** A focused-mode paragraph is a native
+  `<button>` whose text is "Paragraph k of n. Press Enter to read.", not a
+  `<p tabindex="0" aria-label=…>`. After reading, it becomes a focusable
+  `<p>` holding the text. Initial-fetch failures show 'Text unavailable.'
+  and retry when the page next comes into view (and once after 5 s while
+  it stays in view).
+- **Limits fixed during execution:** select ≤ 20,000 rects, a11y ≤ 4 MiB
+  and ≤ 20,000 paragraphs per request, and ≤ 4,096 messages per request
+  (client). One wire entry per search match (an oversized one is omitted
+  and the answer is `truncated`). A unit recording > 3 MiB of spans is
+  refused.
+- **Task 9:** the join's withheld-cause tally (diagnostic, counts only) and
+  `server/scripts/text-yield.ts`.

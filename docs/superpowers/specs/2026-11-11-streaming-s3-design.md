@@ -152,6 +152,97 @@ copied — the 13 Stage-0 hidden constructs from parent T2); caps refuse at
 n+1 and allow at n, per copy and per session; XLSX copies display text;
 audit rows carry the counts.
 
+> **Amendment (2026-11-12, Stage 3a as built).** Decisions taken while
+> building piece 1 (plan `docs/superpowers/plans/2026-11-11-streaming-s3a-text-services.md`,
+> "Execution notes"). Validation: `docs/validation/streaming-s3a.md`.
+>
+> 1. **Paragraph counting (supersedes the plan's R2).** One Word paragraph
+>    counts 1, whether in the body, a table cell, a header or footer, or a
+>    footnote. One spreadsheet cell counts 1, wrapped or merged. One
+>    paragraph of a text box or shape counts 1. A paragraph that crosses a
+>    page break counts once on each page. Empty paragraphs count 0. Painters
+>    announce the paragraph or cell they draw through an optional recording
+>    hook, `RECORD_GROUP` (`src/core/text-recording.ts`), which local
+>    viewing does not define. The plan's per-painted-line count for wrapped
+>    cells and per-line count for DOCX body text are gone.
+> 2. **Resume (R3).** `copy` and `textA11y` may change on resume; they are
+>    excluded from the policy-equality check, and every other field keeps
+>    the exact-match rule (parent §6.2 rule 7). The new values replace the
+>    old ones, the totals already used are kept and measured against the new
+>    caps, and the resumed manifest carries the new caps. The viewer follows
+>    the change: a11y turned off removes its text layer, and copy turned off
+>    clears the selection and its handlers. The change is audited (item 8).
+> 3. **The served index holds only characters proven visible.** After the
+>    join, each paragraph's stored text is cut down to its served ranges
+>    (the sanitise step, `server/src/text/served.ts`). Pieces are merged only
+>    across whitespace. A copy can therefore contain an extra line break
+>    where something in the paragraph was withheld, or at a page break.
+> 4. **The join as built** (`server/src/text/join.ts`). A run is a
+>    candidate for a span by geometry: its ink centre lies in the span box
+>    inflated by 2 px, or the span box centre lies in its ink. A span is
+>    served iff it has ≥ 1 candidate, every candidate is servable, and the
+>    span's whitespace-stripped text occurs contiguously, at wholly
+>    unconsumed positions, in the candidates' text in paint order. Each
+>    painted character vouches for one span only. A whitespace-only span is
+>    served iff its nearest same-line neighbours with ink exist and are all
+>    served.
+> 5. **Limits.**
+>    - A query is ≤ 256 UTF-16 units.
+>    - A search sends ≤ 5,000 matches. A single match that cannot fit one
+>      message is omitted, and the answer says `truncated: true`.
+>    - One copy is ≤ 4 MiB of UTF-8 (`copy-too-large` beyond, even under
+>      `'full'`).
+>    - Every text answer message is ≤ 48 KiB of UTF-8.
+>    - The client accepts ≤ 4,096 messages per request, a select of
+>      ≤ 20,000 rects, and an a11y answer of ≤ 4 MiB and ≤ 20,000
+>      paragraphs. A single a11y paragraph over 48 KiB refuses the request.
+>    - A unit recording more than 3 MiB of text spans (about 12k spans) is
+>      refused for text services.
+>    - The served-index cache is 32 MiB per document per worker.
+> 6. **Rates.** A new rate class `'text'`: 60 requests per minute per sid,
+>    covering search, copy and a11y (refused off-mode a11y requests
+>    included). An overflow is refused `rate-limited` and does not count
+>    toward the breach window that closes the socket. Select uses only the
+>    message budget, and the client sends at most 5 selects per second (one
+>    per 200 ms). This settles "a new rate class … the builder's to size"
+>    above.
+> 7. **A11y.** The modes are `off`, `unit` and `focused`:
+>    - `unit` (per-unit text, uncounted, audited): `copy: 'full'`, or
+>      `textA11y: true` with copy off;
+>    - `focused`: copy is capped;
+>    - `off`: otherwise, and always for `textA11y: false`.
+>
+>    In `focused` mode each paragraph is a native button whose text is
+>    "Paragraph k of n. Press Enter to read." One paragraph is fetched per
+>    request; it counts 1 against `maxSessionParagraphs` (shared with copy)
+>    and is audited. `textA11y: true` with copy off puts page text in the
+>    DOM for assistive technology. That is the developer's choice.
+> 8. **Audit.** New `copies` table: kind `copy` or `a11y`, paragraph count,
+>    unit range and time, and no text. New `services` table: one row per
+>    resume that changes the services. The open row records the services at
+>    open (`AuditRow.services`). `AuditRow.copied` holds the copy events and
+>    their paragraph total.
+> 9. **Wire.** Requests `search {query, caseSensitive?}`, `select {range}`,
+>    `copy {range}` and `a11y {unit, paragraph?}` carry `reqId` and `token`.
+>    Answers are `search-result`/`search-done`, `select-result` (`last` on
+>    the final chunk), `copy-result {seq, text, last}` and
+>    `a11y-result {seq, paragraphs:[{rect, text?}], last}`. New refusal
+>    codes are `text-unavailable`, `copy-too-large` and
+>    `copy-quota-exhausted`; the last two carry `limit` and `requested`
+>    (parent §6.2 rule 8 amendment).
+> 10. **UI strings (exact).** 'Selection too large to copy (limit: N
+>     paragraphs).', 'Copy limit for this session reached (N paragraphs).',
+>     'Selection too large to copy.', 'Too many requests. Try again
+>     shortly.', 'Copy failed.', 'Text unavailable.'; search failures 'too
+>     many requests', 'search unavailable', 'search failed', 'query too
+>     long'. "text unavailable in this viewing mode" is shown once when
+>     both copy and a11y are off.
+> 11. **A copy whose answer is lost** to a dropped connection still counts
+>     toward the session cap. It is never re-issued.
+> 12. **Text decorations.** Underlined or struck text is served under a
+>     narrow exemption to the parent's 100 %-ink rule (parent §7.7
+>     amendment). Its residuals are listed in parent §19.
+
 ### 4.2 Piece 2 — print (parent §2 item 9)
 
 **Policy surface:** `print?: boolean | { maxPages: number; maxSessionPages?: number }`
