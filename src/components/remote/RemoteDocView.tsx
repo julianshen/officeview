@@ -70,15 +70,15 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
     const beforePrint = () => { void paintAll.current() }
     window.addEventListener('beforeprint', beforePrint)
     ac.signal.addEventListener('abort', () => window.removeEventListener('beforeprint', beforePrint))
-    if (typeof IntersectionObserver !== 'function') { units.forEach((_, i) => { paint(i); a11yVisible.current(i) }); return () => ac.abort() }
+    if (typeof IntersectionObserver !== 'function') { units.forEach((_, i) => { paint(i); a11yVisible.current(i, true) }); return () => ac.abort() }
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
-        if (!e.isIntersecting) continue
         const i = Number((e.target as HTMLElement).dataset.unit)
+        // Screen-reader text follows only the units actually in view (each 'unit'-mode answer is audited).
+        a11yVisible.current(i, e.isIntersecting)
+        if (!e.isIntersecting) continue
         // The unit entering view and its neighbours.
         for (const j of [i - 1, i, i + 1]) if (j >= 0 && j < units.length) paint(j)
-        // Screen-reader text: only the unit actually in view (each 'unit'-mode answer is audited).
-        a11yVisible.current(i)
       }
     }, { rootMargin: '200px' })
     for (const c of canvases.current) if (c) io.observe(c)

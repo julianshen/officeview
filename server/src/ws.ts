@@ -472,17 +472,18 @@ export function createStreamServer(o: StreamServerOptions) {
     })
   }
 
-  /** §4.1 a11y text: 'off' ⇒ text-unavailable; charged the R5 'text' rate;
+  /** §4.1 a11y text: charged the R5 'text' rate (before the 'off' ⇒ text-unavailable refusal);
    * `runA11y` applies the mode, the shared session quota ('focused' k) and
    * the audit record, on the sid's copy queue. */
   async function onA11y(ws: WS, msg: Record<string, unknown>) {
     const a = await textOp(ws, msg)
     if (!a) return
     const { reqId, s, sd } = a
-    if (sd.policy.textA11y === 'off') return refuse(ws, reqId, 'text-unavailable')
     const args = a11yArgs(msg, sd.doc.units.length)
     if (!args) return refuse(ws, reqId, 'policy-refused')
+    // Every valid authenticated a11y request is charged, 'off' sessions included.
     if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (sd.policy.textA11y === 'off') return refuse(ws, reqId, 'text-unavailable')
     if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
     await runA11y({
       slot: sd, reqId, ...args,

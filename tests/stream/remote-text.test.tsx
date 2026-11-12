@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { StrictMode } from 'react'
 import RemoteDocView, { TEXT_UNAVAILABLE } from '../../src/components/remote/RemoteDocView'
+import { A11Y_RETRY_MS } from '../../src/components/remote/RemoteText'
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import type { RemoteOfficeDoc, RemoteRange, RemoteSearchHit } from '../../src/stream/remote/remote-doc'
 
@@ -15,8 +16,16 @@ function fakeDoc(can: Can = {}, caps: RemoteOfficeDoc['manifest']['caps'] = { co
     can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false, ...can },
     caps, recorder: { scalesBuckets: [1, 2] }, notices: [],
   }
+  const listeners = new Set<() => void>()
   const doc = {
     kind: 'remote', manifest,
+    onManifestChange: vi.fn((cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb) } }),
+    /** A resume replacing the manifest (R3): new `can`/`caps`, then the listeners. */
+    resume(can: Can, caps: RemoteOfficeDoc['manifest']['caps']) {
+      doc.manifest = { ...doc.manifest, can: { ...doc.manifest.can, ...can }, caps }
+      act(() => { for (const l of [...listeners]) l() })
+    },
+    listeners,
     units: async () => manifest.units.list.map((u) => ({ widthPx: u.w, heightPx: u.h })),
     paint: vi.fn(async () => {}),
     search: vi.fn(async (_q: string, _o?: { signal?: AbortSignal; onHits?: (h: RemoteSearchHit[]) => void }) => ({ total: 0, truncated: false })),
@@ -428,7 +437,7 @@ describe('remote view: a11y text layer (Task 8)', () => {
     expect(status(v).textContent).toBe('')
   })
 
-  it("'unit': requested when the unit first becomes visible; a failure leaves the layer empty and silent and retries on the next visibility", async () => {
+  it("'unit': requested when the unit first becomes visible; a failure says 'Text unavailable.', leaves the layer empty and retries on the next visibility", async () => {
     const show = fakeIO()
     const doc = unitDoc()
     doc.a11y.mockRejectedValueOnce(new StreamSessionError('rate-limited'))
@@ -442,7 +451,7 @@ describe('remote view: a11y text layer (Task 8)', () => {
     // Painting reaches the neighbours; text only the unit in view.
     expect(doc.a11y.mock.calls).toEqual([[0]])
     expect(layer(v, 0)!.childElementCount).toBe(0)
-    expect(status(v).textContent).toBe('')
+    expect(status(v).textContent).toBe('Text unavailable.')
     await show(0, false)
     await show(0)
     await waitFor(() => expect(layer(v, 0)!.textContent).toBe('hello'))
@@ -451,30 +460,78 @@ describe('remote view: a11y text layer (Task 8)', () => {
     expect(doc.a11y.mock.calls).toEqual([[0], [0]])
   })
 
-  it("'focused': n focusable paragraphs; Enter reads one once and caches it; Space reads another", async () => {
+  it('an initial failure on a unit that stays visible is retried once after 5 s (not in a loop); a visibility loss cancels the retry', async () => {
+    vi.useFakeTimers()
+    const show = fakeIO()
+    const doc = unitDoc()
+    doc.a11y.mockRejectedValue(new StreamSessionError('policy-refused'))
+    const v = view(doc)
+    await show(0)
+    await act(async () => {})
+    expect(doc.a11y).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(A11Y_RETRY_MS - 1) })
+    expect(doc.a11y).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(1) })
+    expect(doc.a11y).toHaveBeenCalledTimes(2)
+    await act(async () => { vi.advanceTimersByTime(4 * A11Y_RETRY_MS) })
+    expect(doc.a11y).toHaveBeenCalledTimes(2)
+    expect(status(v).textContent).toBe('Text unavailable.')
+    // Leaving view before the timer fires cancels it; coming back retries (and re-arms one timer).
+    await show(0, false)
+    await show(0)
+    await act(async () => {})
+    expect(doc.a11y).toHaveBeenCalledTimes(3)
+    await show(0, false)
+    await act(async () => { vi.advanceTimersByTime(2 * A11Y_RETRY_MS) })
+    expect(doc.a11y).toHaveBeenCalledTimes(3)
+    // Unmount clears a pending timer.
+    await show(0)
+    await act(async () => {})
+    expect(doc.a11y).toHaveBeenCalledTimes(4)
+    v.unmount()
+    await act(async () => { vi.advanceTimersByTime(2 * A11Y_RETRY_MS) })
+    expect(doc.a11y).toHaveBeenCalledTimes(4)
+  })
+
+  it("'focused': an initial (rects) failure is reported too; copy-quota-exhausted states the quota", async () => {
+    for (const [e, msg] of [[new StreamSessionError('rate-limited'), 'Text unavailable.'], [new StreamSessionError('copy-quota-exhausted', 'x', { limit: 5, requested: 1 }), 'Copy limit for this session reached (5 paragraphs).']] as const) {
+      const doc = focusedDoc()
+      doc.a11y.mockRejectedValue(e)
+      const v = view(doc)
+      await waitFor(() => expect(status(v).textContent).toBe(msg))
+      expect(layer(v, 0)!.childElementCount).toBe(0)
+      v.unmount()
+    }
+  })
+
+  it("'focused': n unread paragraphs are named buttons; activating one reads it once, replaces it by a focused <p> and caches it", async () => {
     const doc = focusedDoc()
     doc.a11y.mockImplementation(async (_u: number, k?: number) => [0, 1, 2].map((j) => (k === j ? { rect: r0, text: `text ${j}` } : { rect: r0 })) as P[])
     const v = view(doc)
-    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('p').length).toBe(3))
-    const ps = () => [...layer(v, 0)!.querySelectorAll('p')]
-    expect(ps().map((p) => [p.getAttribute('tabindex'), p.getAttribute('aria-label'), p.textContent])).toEqual([1, 2, 3].map((k) => ['0', `Paragraph ${k} of 3. Press Enter to read.`, '']))
+    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('button').length).toBe(3))
+    const buttons = () => [...layer(v, 0)!.querySelectorAll('button')]
+    expect(buttons().map((b) => [b.getAttribute('type'), b.textContent, b.hasAttribute('aria-label')])).toEqual([1, 2, 3].map((k) => ['button', `Paragraph ${k} of 3. Press Enter to read.`, false]))
+    expect(layer(v, 0)!.querySelectorAll('p').length).toBe(0)
     expect(doc.a11y.mock.calls).toEqual([[0], [1]])
-    ps()[1]!.focus()
-    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
-    fireEvent.keyDown(ps()[1]!, { key: 'Enter' }) // a second press before the answer sends nothing
-    await waitFor(() => expect(ps()[1]!.textContent).toBe('text 1'))
-    expect(ps()[1]!.hasAttribute('aria-label')).toBe(false)
-    expect(ps()[0]!.getAttribute('aria-label')).toBe('Paragraph 1 of 3. Press Enter to read.')
-    fireEvent.blur(ps()[1]!); ps()[1]!.focus()
-    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
-    const space = fireEvent.keyDown(ps()[2]!, { key: ' ' })
-    expect(space).toBe(false) // preventDefault: Space does not scroll
-    await waitFor(() => expect(ps()[2]!.textContent).toBe('text 2'))
+    const second = buttons()[1]!
+    second.focus()
+    fireEvent.click(second)
+    fireEvent.click(second) // a second activation before the answer sends nothing
+    await waitFor(() => expect(layer(v, 0)!.querySelector('p')?.textContent).toBe('text 1'))
+    const p = layer(v, 0)!.querySelector('p')!
+    expect(p.getAttribute('tabindex')).toBe('0')
+    expect(p.hasAttribute('aria-label')).toBe(false)
+    expect(document.activeElement).toBe(p)
+    // Order kept: button, p, button.
+    expect([...layer(v, 0)!.children].map((c) => c.tagName)).toEqual(['BUTTON', 'P', 'BUTTON'])
+    fireEvent.keyDown(p, { key: 'Enter' })
+    fireEvent.click(buttons()[1]!)
+    await waitFor(() => expect(layer(v, 0)!.querySelectorAll('p').length).toBe(2))
     expect(doc.a11y.mock.calls).toEqual([[0], [1], [0, 1], [0, 2]])
     expect(status(v).textContent).toBe('')
   })
 
-  it("'focused': quota exhaustion shows the copy-limit message; other failures 'Text unavailable.'; a failed read may be retried", async () => {
+  it("'focused': a read refused for the quota shows the copy-limit message; other failures 'Text unavailable.'; a failed read may be retried", async () => {
     const doc = focusedDoc()
     doc.a11y.mockImplementation(async (_u: number, k?: number) => {
       if (k === 0) throw new StreamSessionError('copy-quota-exhausted', 'x', { limit: 5, requested: 1 })
@@ -482,15 +539,76 @@ describe('remote view: a11y text layer (Task 8)', () => {
       return [{ rect: r0 }, { rect: r0 }] as P[]
     })
     const v = view(doc)
-    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('p').length).toBe(2))
-    const ps = () => [...layer(v, 0)!.querySelectorAll('p')]
-    fireEvent.keyDown(ps()[0]!, { key: 'Enter' })
+    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('button').length).toBe(2))
+    const buttons = () => [...layer(v, 0)!.querySelectorAll('button')]
+    fireEvent.click(buttons()[0]!)
     await waitFor(() => expect(status(v).textContent).toBe('Copy limit for this session reached (5 paragraphs).'))
-    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
+    fireEvent.click(buttons()[1]!)
     await waitFor(() => expect(status(v).textContent).toBe('Text unavailable.'))
-    expect(ps().map((p) => p.textContent)).toEqual(['', ''])
-    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
+    expect(buttons().length).toBe(2)
+    fireEvent.click(buttons()[1]!)
     await waitFor(() => expect(doc.a11y.mock.calls.filter((c) => c[1] === 1).length).toBe(2))
+  })
+
+  it('a resume that turns a11y off removes the layer and its text at once; a late answer is dropped', async () => {
+    const doc = unitDoc()
+    let late!: (p: P[]) => void
+    doc.a11y.mockImplementationOnce(async () => [{ rect: r0, text: 'secret 0' }] as P[])
+    doc.a11y.mockImplementationOnce(() => new Promise<P[]>((r) => { late = r }))
+    const v = view(doc)
+    await waitFor(() => expect(layer(v, 0)?.textContent).toBe('secret 0'))
+    doc.resume({ textA11y: false, copy: false }, { copy: null, a11y: 'off' })
+    expect(v.container.querySelector('[data-a11y-layer]')).toBeNull()
+    expect(v.container.textContent).not.toContain('secret')
+    await act(async () => { late([{ rect: r0, text: 'secret 1' }]) })
+    expect(v.container.textContent).not.toContain('secret')
+    expect(v.getAllByText(TEXT_UNAVAILABLE).length).toBe(1)
+  })
+
+  it('unit → focused → unit on the same document: the layer is rebuilt in the new mode and cached texts are dropped', async () => {
+    const doc = unitDoc()
+    doc.a11y.mockImplementation(async (_u: number, k?: number) => {
+      const mode = doc.manifest.caps.a11y
+      return [0, 1].map((j) => (mode === 'unit' || k === j ? { rect: r0, text: `${mode} ${j}` } : { rect: r0 })) as P[]
+    })
+    const v = view(doc)
+    await waitFor(() => expect(layer(v, 0)?.textContent).toBe('unit 0unit 1'))
+    doc.resume({}, { copy: { maxParagraphs: 3, maxSessionParagraphs: 5 }, a11y: 'focused' })
+    expect(layer(v, 0)!.textContent).not.toContain('unit')
+    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('button').length).toBe(2))
+    fireEvent.click(layer(v, 0)!.querySelector('button')!)
+    await waitFor(() => expect(layer(v, 0)!.querySelector('p')?.textContent).toBe('focused 0'))
+    doc.resume({}, { copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit' })
+    expect(layer(v, 0)!.textContent).not.toContain('focused')
+    await waitFor(() => expect(layer(v, 0)?.textContent).toBe('unit 0unit 1'))
+    doc.resume({}, { copy: { maxParagraphs: 3, maxSessionParagraphs: 5 }, a11y: 'focused' })
+    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('button').length).toBe(2))
+    // The paragraph read in the earlier focused period is not served from a stale cache.
+    expect(layer(v, 0)!.querySelector('p')).toBeNull()
+  })
+
+  it('a resume that turns copy off clears the selection and detaches selection and copy; turning it on re-attaches', async () => {
+    const writeText = vi.fn(async (_t: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const doc = fakeDoc({ copy: true }, { copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'off' })
+    doc.select.mockResolvedValue({ units: [{ unit: 0, rects: [rect(0, 0, 200, 10)] }], paragraphs: 1 })
+    doc.copy.mockResolvedValue('x')
+    const v = view(doc)
+    key(scroller(v), 'a')
+    await waitFor(() => expect(v.container.querySelectorAll('[data-sel]').length).toBe(1))
+    doc.resume({ copy: false }, { copy: null, a11y: 'off' })
+    expect(v.container.querySelectorAll('[data-sel]').length).toBe(0)
+    key(scroller(v), 'c'); key(scroller(v), 'a')
+    fireEvent.pointerDown(v.container.querySelector('[data-unit-wrap="0"]')!, { button: 0, clientX: 1, clientY: 1 })
+    await act(async () => {})
+    expect(doc.copy).not.toHaveBeenCalled()
+    expect(doc.select).toHaveBeenCalledTimes(1)
+    expect(v.getAllByText(TEXT_UNAVAILABLE).length).toBe(1)
+    doc.resume({ copy: true }, { copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'off' })
+    key(scroller(v), 'a')
+    await waitFor(() => expect(v.container.querySelectorAll('[data-sel]').length).toBe(1))
+    key(scroller(v), 'c')
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('x'))
   })
 
   it('stale answers are dropped: unmount, and a document change', async () => {

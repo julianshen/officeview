@@ -114,9 +114,16 @@ export class StreamSession {
   /** Received messages are processed strictly in order (an ASSET_DEFINE's
    * hashing must finish before the UNIT_COMMANDS that references it). */
   private inbox: Promise<void> = Promise.resolve()
+  private readonly manifestListeners = new Set<() => void>()
 
   private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {
     this.ended = new Promise((r) => { this.settleEnded = r })
+  }
+
+  /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
+  onManifestChange(cb: () => void): () => void {
+    this.manifestListeners.add(cb)
+    return () => { this.manifestListeners.delete(cb) }
   }
 
   static async open(source: StreamSource, o: SessionOptions = {}): Promise<StreamSession> {
@@ -430,6 +437,8 @@ export class StreamSession {
     this.ready()
     this.setState('open')
     this.o.onNotice?.({ code: 'resumed' })
+    // R3: a resume may change copy and text a11y; viewers re-derive what they gate on the manifest.
+    for (const l of [...this.manifestListeners]) { try { l() } catch { /* a listener never breaks the resume */ } }
     for (const req of [...this.units.values()]) this.issue(req)
     // In issue order, so the newest search is the one the server keeps.
     for (const req of [...this.texts.values()]) this.reissueText(req)

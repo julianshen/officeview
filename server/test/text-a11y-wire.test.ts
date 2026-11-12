@@ -169,6 +169,16 @@ describe('a11y over the wire', () => {
     expect(c.ws.readyState).toBe(WebSocket.OPEN)
     stop()
   }, 120_000)
+
+  test("R5: an 'off' a11y request is charged the text rate before it is refused", async () => {
+    let t = Date.now()
+    const { c, stop } = await session({ doc: await paragraphsDoc(), now: () => t })
+    for (let i = 0; i < 60; i++) { t += 200; expect((await a11y(c, 100 + i, 0)).refused).toEqual({ reqId: 100 + i, type: 'refused', code: 'text-unavailable' }) }
+    t += 200; expect((await a11y(c, 10, 0)).refused).toEqual({ reqId: 10, type: 'refused', code: 'rate-limited' })
+    t += 200; expect((await c.text({ reqId: 11, type: 'search', query: 'Item' })).end).toEqual({ reqId: 11, type: 'refused', code: 'rate-limited' })
+    expect(c.ws.readyState).toBe(WebSocket.OPEN)
+    stop()
+  }, 120_000)
 })
 
 describe('T2 over the wire: marker never in any a11y answer for the 13 constructs', async () => {

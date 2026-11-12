@@ -195,6 +195,26 @@ describe('RemoteOfficeDoc text API', () => {
     stop()
   }, 60_000)
 
+  test('onManifestChange fires after a resume replaces the manifest (R3: copy and a11y may change); unsubscribe stops it', async () => {
+    let policy: AuthDecision['policy'] = { copy: 'full' }
+    const { doc, t, notices, stop } = await open({ doc: await paragraphsDoc(), authorize: async () => ({ viewerId: 'alice', policy }) })
+    expect(doc.manifest.caps.a11y).toBe('unit')
+    const seen: Array<[boolean, string]> = []
+    const off = doc.onManifestChange(() => seen.push([doc.manifest.can.copy, doc.manifest.caps.a11y]))
+    policy = {}
+    t.sockets[0]!.terminate!()
+    for (let i = 0; i < 100 && !seen.length; i++) await Bun.sleep(50)
+    expect(seen).toEqual([[false, 'off']])
+    expect(notices.some((n) => n.code === 'resumed')).toBe(true)
+    off()
+    policy = { copy: 'full' }
+    t.sockets[1]!.terminate!()
+    for (let i = 0; i < 100 && doc.manifest.caps.a11y !== 'unit'; i++) await Bun.sleep(50)
+    expect(doc.manifest.caps.a11y).toBe('unit')
+    expect(seen.length).toBe(1)
+    stop()
+  }, 60_000)
+
   test('aborting a search rejects it and stops onHits', async () => {
     const { doc, stop } = await open({ doc: await lines(900, 'alpha beta gamma delta') })
     const ac = new AbortController()

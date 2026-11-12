@@ -21,6 +21,8 @@ export interface SessionLike {
   text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void>
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
+  /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
+  onManifestChange?(cb: () => void): () => void
 }
 
 export interface RemoteOfficeDoc {
@@ -43,6 +45,9 @@ export interface RemoteOfficeDoc {
   copy(range: RemoteRange): Promise<string>
   /** Accessible paragraphs of a unit (one paragraph in 'focused' mode). */
   a11y(unit: number, paragraph?: number): Promise<Array<{ rect: HighlightRect; text?: string }>>
+  /** Calls `cb` after a resume has replaced `manifest` (R3: `can.copy`, `caps` and
+   * `can.textA11y` may change); returns the unsubscribe. */
+  onManifestChange(cb: () => void): () => void
   close(): void
   /** Settles once when the session ends: its typed error, or undefined after close(). */
   readonly ended: Promise<StreamSessionError | undefined>
@@ -146,6 +151,7 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       })
       return out
     },
+    onManifestChange(cb) { return session.onManifestChange?.(cb) ?? (() => {}) },
     close() { if (closed) return; closed = true; session.close() },
     ended: session.ended ?? new Promise(() => {}),
   }

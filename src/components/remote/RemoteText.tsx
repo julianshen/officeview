@@ -37,10 +37,13 @@ export function copyFailure(e: unknown, caps: Manifest['caps']['copy']): string 
   return 'Copy failed.'
 }
 
-/** The status-region message for a refused or failed a11y paragraph read ('focused'). */
+const A11Y_UNAVAILABLE = 'Text unavailable.'
+/** A unit whose a11y fetch failed while it stays in view is retried once after this long. */
+export const A11Y_RETRY_MS = 5000
+/** The status-region message for a refused or failed a11y request. */
 export function a11yFailure(e: unknown): string {
   const { code, limit } = (e ?? {}) as { code?: unknown; limit?: unknown }
-  return code === 'copy-quota-exhausted' && typeof limit === 'number' ? `Copy limit for this session reached (${limit} paragraphs).` : 'Text unavailable.'
+  return code === 'copy-quota-exhausted' && typeof limit === 'number' ? `Copy limit for this session reached (${limit} paragraphs).` : A11Y_UNAVAILABLE
 }
 
 const searchFailure = (e: unknown): string => {
@@ -64,8 +67,9 @@ export interface RemoteText {
   /** Starts a selection drag on unit `i`; undefined when copy is off (no handler is attached). */
   onPointerDown: ((i: number, e: ReactPointerEvent<HTMLElement>) => void) | undefined
   boxes(i: number): UnitBoxes
-  /** Unit `i` entered the viewport: requests its a11y text once (again after a failure). No-op when a11y is off. */
-  a11yVisible(i: number): void
+  /** Unit `i` entered (`true`) or left the viewport. Entering requests its a11y
+   * text once per mode (again after a failure); a no-op request when a11y is off. */
+  a11yVisible(i: number, visible: boolean): void
   /** Unit `i`'s screen-reader layer, or null when a11y is off. */
   layer(i: number): ReactElement | null
 }
@@ -73,12 +77,32 @@ export interface RemoteText {
 /** Visually hidden, still in the accessibility tree (never display:none or aria-hidden). */
 const SR_ONLY: CSSProperties = { position: 'absolute', top: 0, left: 0, width: 1, height: 1, margin: -1, padding: 0, border: 0, overflow: 'hidden', clip: 'rect(0 0 0 0)', clipPath: 'inset(50%)', whiteSpace: 'nowrap' }
 
+type A11yMode = Manifest['caps']['a11y']
+/** One a11y period: a view lifetime in one mode. It ends on unmount, a document
+ * change or a mode change (a resume, R3); nothing it started lands after that. */
+interface A11yPeriod {
+  mode: A11yMode
+  signal: AbortSignal
+  /** Units asked for (in flight or answered). */
+  asked: Set<number>
+  /** 'focused' `unit:k` reads in flight or done. */
+  reading: Set<string>
+  /** The one pending delayed retry per unit, and the units that already used it since entering view. */
+  timers: Map<number, ReturnType<typeof setTimeout>>
+  retried: Set<number>
+}
+/** What the layer shows, tagged with the mode it was fetched in. */
+interface A11yState { mode: A11yMode; units: ReadonlyMap<number, ReadonlyArray<string | undefined>>; texts: ReadonlyMap<string, string> }
+
 /**
  * Search, selection and copy state for one remote document. `root` is the
  * scroller: it takes focus on a drag and when the search bar closes, and the
  * unit wrappers (`[data-unit-wrap]`) are found inside it.
  */
 export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement | null>): RemoteText {
+  // A resume may replace the manifest (R3: copy and a11y may change): re-render and re-derive.
+  const [, setManifestRev] = useState(0)
+  useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
   const can = doc.manifest.can
   const units = doc.manifest.units.list
 
@@ -147,15 +171,16 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
   const limiter = useRef<{ last: number; timer?: ReturnType<typeof setTimeout> }>({ last: -Infinity })
   const copying = useRef(false)
   // ── a11y text (Task 8) ──
-  const a11yMode = can.textA11y ? doc.manifest.caps.a11y : 'off'
-  /** Per unit: its paragraphs ('unit': their text; 'focused': placeholders to read). */
-  const [a11yUnits, setA11yUnits] = useState<ReadonlyMap<number, ReadonlyArray<string | undefined>>>(() => new Map())
-  /** 'focused': paragraph texts read so far, by `unit:k` (cached for the document's lifetime). */
-  const [a11yTexts, setA11yTexts] = useState<ReadonlyMap<string, string>>(() => new Map())
-  /** Units asked for (in flight or answered) and `unit:k` reads in flight or done, this
-   * lifetime. Replaced, not cleared, when a lifetime ends: a stale failure cannot re-arm the new one. */
-  const a11yAsked = useRef(new Set<number>())
-  const a11yReading = useRef(new Set<string>())
+  const a11yMode: A11yMode = can.textA11y ? doc.manifest.caps.a11y : 'off'
+  /** Per unit: its paragraphs ('unit': their text; 'focused': placeholders to read) and
+   * the 'focused' texts read so far by `unit:k` (cached for the period). */
+  const [a11yState, setA11yState] = useState<A11yState>(() => ({ mode: a11yMode, units: new Map(), texts: new Map() }))
+  const a11y = useRef<A11yPeriod | undefined>(undefined)
+  /** The units in view now, for the current document. */
+  const shown = useRef<{ doc: RemoteOfficeDoc; units: Set<number> }>({ doc, units: new Set() })
+  const shownUnits = () => { if (shown.current.doc !== doc) shown.current = { doc, units: new Set() }; return shown.current.units }
+  /** The `unit:k` whose <p> takes focus when it mounts (its button had focus when activated). */
+  const focusAfter = useRef<string | undefined>(undefined)
   const drag = useRef<{ anchor: { unit: number; x: number; y: number }; unit: number; sx: number; sy: number; moved: boolean; detach(): void } | undefined>(undefined)
   const sendSelect = () => {
     const r = range.current, ac = selAc.current
@@ -192,10 +217,15 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
       range.current = undefined
       searchAc.current?.abort(); searchAc.current = undefined
       setSel([]); setMessage(undefined); setHits([]); setDone(undefined)
-      a11yAsked.current = new Set(); a11yReading.current = new Set()
-      setA11yUnits(new Map()); setA11yTexts(new Map())
     }
   }, [doc])
+  // Copy turned off by a resume: the selection goes and nothing in flight may copy.
+  const canCopy = can.copy
+  useEffect(() => {
+    if (canCopy) return
+    drag.current?.detach(); drag.current = undefined
+    clearSelection()
+  }, [canCopy])
   /** Client px → page px of unit `i` at scale 1 (`x * unit.w / rect.width`), clamped to the unit. */
   const pointIn = (i: number, cx: number, cy: number) => {
     const wrap = root.current?.querySelector(`[data-unit-wrap="${i}"]`)
@@ -265,42 +295,80 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
     ).finally(settle)
   }
 
-  const a11yVisible = (i: number) => {
-    const lifetime = life.current, asked = a11yAsked.current, mode = a11yMode
-    if (mode === 'off' || !lifetime || asked.has(i)) return
-    asked.add(i)
-    // A failure leaves the layer empty and silent; the unit's next visibility retries.
+  const a11yRequest = (p: A11yPeriod, i: number) => {
+    if (p.mode === 'off' || p.signal.aborted || p.asked.has(i)) return
+    p.asked.add(i)
     Promise.resolve().then(() => doc.a11y(i)).then(
-      (ps) => { if (!lifetime.signal.aborted) setA11yUnits((m) => new Map(m).set(i, ps.map((p) => (mode === 'unit' ? p.text ?? '' : undefined)))) },
-      () => { if (!lifetime.signal.aborted) asked.delete(i) },
+      (ps) => {
+        if (p.signal.aborted) return
+        setA11yState((s) => (s.mode !== p.mode ? s : { ...s, units: new Map(s.units).set(i, ps.map((x) => (p.mode === 'unit' ? x.text ?? '' : undefined))) }))
+        setMessage((m) => (m === A11Y_UNAVAILABLE ? undefined : m))
+      },
+      (e) => {
+        if (p.signal.aborted) return
+        // The layer stays empty; the next visibility retries, and a unit that stays in view once more after A11Y_RETRY_MS.
+        p.asked.delete(i)
+        setMessage(a11yFailure(e))
+        if (!shownUnits().has(i) || p.retried.has(i) || p.timers.has(i)) return
+        p.retried.add(i)
+        p.timers.set(i, setTimeout(() => { p.timers.delete(i); if (shownUnits().has(i)) a11yRequest(p, i) }, A11Y_RETRY_MS))
+      },
     )
   }
-  const a11yRead = (i: number, k: number) => {
-    const lifetime = life.current, reading = a11yReading.current, key = `${i}:${k}`
-    // Once per paragraph: a press while the read is in flight, or after it landed, sends nothing.
-    if (!lifetime || reading.has(key)) return
-    reading.add(key)
-    const failed = (e: unknown) => { if (lifetime.signal.aborted) return; reading.delete(key); setMessage(a11yFailure(e)) }
+  useEffect(() => {
+    // A new period per document and mode: the previous layer contents and cached texts are dropped,
+    // its answers and timers die with it, and the units in view are fetched again in the new mode.
+    const ac = new AbortController()
+    const p: A11yPeriod = { mode: a11yMode, signal: ac.signal, asked: new Set(), reading: new Set(), timers: new Map(), retried: new Set() }
+    a11y.current = p
+    focusAfter.current = undefined
+    setA11yState({ mode: a11yMode, units: new Map(), texts: new Map() })
+    for (const i of shownUnits()) a11yRequest(p, i)
+    return () => {
+      ac.abort()
+      for (const t of p.timers.values()) clearTimeout(t)
+      if (a11y.current === p) a11y.current = undefined
+    }
+  }, [doc, a11yMode])
+  const a11yVisible = (i: number, visible: boolean) => {
+    const units = shownUnits(), p = a11y.current
+    if (!visible) {
+      units.delete(i)
+      if (p) { const t = p.timers.get(i); if (t) { clearTimeout(t); p.timers.delete(i) } }
+      return
+    }
+    if (units.has(i)) return
+    units.add(i)
+    if (!p) return
+    p.retried.delete(i)
+    a11yRequest(p, i)
+  }
+  const a11yRead = (i: number, k: number, button: HTMLElement) => {
+    const p = a11y.current, key = `${i}:${k}`
+    // Once per paragraph: an activation while the read is in flight, or after it landed, sends nothing.
+    if (!p || p.mode !== 'focused' || p.signal.aborted || p.reading.has(key)) return
+    p.reading.add(key)
+    const failed = (e: unknown) => { if (p.signal.aborted) return; p.reading.delete(key); setMessage(a11yFailure(e)) }
     Promise.resolve().then(() => doc.a11y(i, k)).then((ps) => {
-      if (lifetime.signal.aborted) return
+      if (p.signal.aborted) return
       const text = ps[k]?.text
       if (text === undefined) return failed(undefined)
-      setA11yTexts((m) => new Map(m).set(key, text))
+      if (typeof document !== 'undefined' && document.activeElement === button) focusAfter.current = key
+      setA11yState((s) => (s.mode !== p.mode ? s : { ...s, texts: new Map(s.texts).set(key, text) }))
     }, failed)
   }
   const layer = (i: number): ReactElement | null => {
     if (a11yMode === 'off') return null
-    const ps = a11yUnits.get(i) ?? []
+    // Contents fetched in another mode never render (a resume changed it; the new period refetches).
+    const current = a11yState.mode === a11yMode
+    const ps = current ? a11yState.units.get(i) ?? [] : []
     return (
       <div data-a11y-layer="" data-ov-remote-chrome="" role="group" aria-label={`Page ${i + 1}`} style={SR_ONLY}>
         {a11yMode === 'unit' ? ps.map((t, k) => <p key={k}>{t}</p>) : ps.map((_, k) => {
-          const text = a11yTexts.get(`${i}:${k}`)
-          return (
-            <p key={k} tabIndex={0} {...(text === undefined ? { 'aria-label': `Paragraph ${k + 1} of ${ps.length}. Press Enter to read.` } : {})}
-              onKeyDown={(e) => { if (e.key !== 'Enter' && e.key !== ' ') return; e.preventDefault(); if (text === undefined) a11yRead(i, k) }}>
-              {text ?? ''}
-            </p>
-          )
+          const key = `${i}:${k}`, text = a11yState.texts.get(key)
+          return text === undefined
+            ? <button key={k} type="button" onClick={(e) => a11yRead(i, k, e.currentTarget)}>{`Paragraph ${k + 1} of ${ps.length}. Press Enter to read.`}</button>
+            : <p key={k} tabIndex={0} ref={(el) => { if (el && focusAfter.current === key) { focusAfter.current = undefined; el.focus() } }}>{text}</p>
         })}
       </div>
     )

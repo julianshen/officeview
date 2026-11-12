@@ -184,26 +184,33 @@ test("a11y=unit: page 1's accessibility tree holds the document text; the canvas
   expect(sent.map((m) => [m.unit, m.paragraph])).toEqual([[0, undefined]])
 })
 
-test("a11y=focused: page 1's accessibility tree holds no document text until Enter; a re-press does not re-request", async ({ page }) => {
+test("a11y=focused: page 1's accessibility tree offers named read buttons and no document text until one is activated; a re-press does not re-request", async ({ page }) => {
   const sent = a11ySent(page)
   await open(page, 'doc=pypptx-test.pptx&a11y=focused')
   await expect(painted(page)).toHaveCount(1)
-  const ps = page.locator('[data-a11y-layer] p[tabindex="0"]')
-  await expect(ps).toHaveCount(2)
-  await expect(ps.first()).toHaveAttribute('aria-label', 'Paragraph 1 of 2. Press Enter to read.')
-  const before = `${await pageGroup(page).ariaSnapshot()}\n${await page.evaluate(() => document.body.textContent)}`
+  const group = pageGroup(page)
+  const first = group.getByRole('button', { name: 'Paragraph 1 of 2. Press Enter to read.', exact: true })
+  await expect(first).toHaveCount(1)
+  await expect(group.getByRole('button', { name: 'Paragraph 2 of 2. Press Enter to read.', exact: true })).toHaveCount(1)
+  const before = `${await group.ariaSnapshot()}\n${await page.evaluate(() => document.body.textContent)}`
+  expect(before).toContain('button "Paragraph 1 of 2. Press Enter to read."')
   for (const w of DOC_WORDS) expect(before).not.toContain(w)
-  // Keyboard: from the document, Tab reaches the first paragraph.
+  // Keyboard: from the document, Tab reaches the first button; Enter reads it and focus moves to the text.
   await viewer(page).focus()
   await page.keyboard.press('Tab')
-  await expect(ps.first()).toBeFocused()
+  await expect(first).toBeFocused()
   await page.keyboard.press('Enter')
-  await expect(ps.first()).toHaveText('Presentation Title Text')
-  await expect(ps.first()).not.toHaveAttribute('aria-label', /.*/)
-  expect(await pageGroup(page).ariaSnapshot()).toContain('Presentation Title Text')
-  expect(await pageGroup(page).ariaSnapshot()).not.toContain('Subtitle')
+  const read = page.locator('[data-a11y-layer] p[tabindex="0"]')
+  await expect(read).toHaveText('Presentation Title Text')
+  await expect(read).toBeFocused()
+  const after = await group.ariaSnapshot()
+  expect(after).toContain('Presentation Title Text')
+  expect(after).not.toContain('Subtitle')
+  expect(after).toContain('button "Paragraph 2 of 2. Press Enter to read."')
+  // Re-focus and Enter on the read paragraph: cached, no request.
   await page.keyboard.press('Tab')
   await page.keyboard.press('Shift+Tab')
+  await expect(read).toBeFocused()
   await page.keyboard.press('Enter')
   await page.waitForTimeout(300)
   expect(sent.map((m) => [m.unit, m.paragraph])).toEqual([[0, undefined], [0, 0]])
