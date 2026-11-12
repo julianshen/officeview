@@ -15,7 +15,11 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
+import { layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
+import { auditStage3Manifest } from '../scripts/cf-refs/audit'
+import { stage3ObservedBars } from '../scripts/cf-compare'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
 import type { CfCellState, CfOutcome } from '../src/xlsx/cf/model'
@@ -48,9 +52,11 @@ function parseOptionsFor(c: { clockRequirement?: { requiredTimeZone: string } })
 
 
 /**
- * Stage 3: Excel's own cell background in the committed capture (the pixel 1 px inside the cell's top-left corner, which
- * a bar never covers: bars keep a 2 px inset, bar:geometry-insets). Used to check that a fill production paints on a bar
- * cell is the fill Excel paints there (Ruling S3-I coexistence), never a guess.
+ * Stage 3: Excel's own cell background in the committed capture, as the majority colour of the cell's first inner row
+ * (1 px below the top gridline, from 1 px right of the left gridline to 1 px before the next). A bar never covers that
+ * row (bars keep a 2 px top inset, bar:geometry-insets); a 1 px axis column or stray ink cannot outvote the fill. Used to
+ * check that a fill production paints on a bar cell is the fill Excel paints there (Ruling S3-I coexistence), never a
+ * guess, and that production paints no fill where Excel shows none.
  */
 const stage3Pngs = new Map<string, { png: DecodedPng; cols: number[]; rows: number[] }>()
 function excelCellBackground(c: { id: string; captures: ReadonlyArray<{ pngPath: string; sidecarPath: string }> }, ref: string): string {
@@ -61,10 +67,15 @@ function excelCellBackground(c: { id: string; captures: ReadonlyArray<{ pngPath:
     stage3Pngs.set(c.id, cap)
   }
   const { row, col } = refToRowCol(ref)
-  const x = Math.round(cap.cols.slice(0, col).reduce((a, b) => a + b, 0)) + 1
+  const x0 = Math.round(cap.cols.slice(0, col).reduce((a, b) => a + b, 0)), w = Math.round(cap.cols[col]!)
   const y = Math.round(cap.rows.slice(0, row).reduce((a, b) => a + b, 0)) + 1
-  const i = (y * cap.png.width + x) * 4
-  return `FF${[0, 1, 2].map(k => cap!.png.data[i + k]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+  const votes = new Map<string, number>()
+  for (let x = x0 + 1; x <= x0 + w - 2; x++) {
+    const i = (y * cap.png.width + x) * 4
+    const argb = `FF${[0, 1, 2].map(k => cap!.png.data[i + k]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+    votes.set(argb, (votes.get(argb) ?? 0) + 1)
+  }
+  return [...votes].sort((a, b) => b[1] - a[1])[0]![0]
 }
 const argbDelta = (a: string, b: string): number => Math.max(...[2, 4, 6].map(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16))))
 
@@ -144,6 +155,10 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     'stage2-scale-composition:L5': { outcome: 'withheld', reason: 'Stage 5 expression rule with stopIfTrue withholds lower scale' },
   }
 
+  // Stage 3 bar cells whose NON-bar rule production withholds although Excel paints its fill (withheld-only).
+  const STAGE3_NONBAR_WITHHELD: Record<string, Finding> = Object.fromEntries(['I2', 'I3', 'I4'].map(ref => [`stage3-bar-composition:${ref}`,
+    { outcome: 'withheld', reason: 'Stage 5 expression rule (priority 15, stopIfTrue) is unresolved and taints ALL; Excel paints its fill' } as Finding]))
+
   const STAGE2_MEASURED_CASES = [
     'stage2-scale-interpolation',
     'stage2-scale-thresholds',
@@ -158,6 +173,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let checkedCells = 0
     let stage3Checked = 0
     let stage3BarWithheld = 0
+    let stage3NonBarChecked = 0
+    let stage3NonBarWithheld = 0
 
     for (const c of manifest.cases) {
       if (c.status !== 'measured' || c.stage === 2) continue
@@ -209,11 +226,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
                 continue
               }
               if (underUnevidencedBarStop(c, exp.ref)) continue // Ruling S3-J: asserted in the S3-J tests below
-              if (st?.fillColor) {
-                // A fill that paints is exactly Excel's fill for that cell (the capture's background, +-8 per channel).
-                const excel = excelCellBackground(c, exp.ref)
-                expect(argbDelta(st.fillColor, excel), `${cellKey} fill ${st.fillColor} vs Excel ${excel}`).toBeLessThanOrEqual(8)
+              // The non-bar rules of the Stage 3 cases write a fill or nothing, so their outcome is visible in Excel's
+              // background: production matches (paints) exactly where Excel shows a fill, with Excel's colour (+-8).
+              expect(nonBar.every(m => Object.keys(m.dxf ?? {}).every(k => k === 'fillRgb')), `${cellKey}: fill-only non-bar rules`).toBe(true)
+              const excel = excelCellBackground(c, exp.ref)
+              const excelFilled = argbDelta(excel, 'FFFFFFFF') > 8
+              if (STAGE3_NONBAR_WITHHELD[cellKey]) {
+                expect(STAGE3_NONBAR_WITHHELD[cellKey]!.outcome).toBe('withheld')
+                expect(gotMatched, `${cellKey} is withheld (${STAGE3_NONBAR_WITHHELD[cellKey]!.reason})`).toBe(false)
+                stage3NonBarWithheld++
+                continue
               }
+              expect(gotMatched, `${cellKey}: non-bar rules match where Excel paints a fill (Excel ${excel})`).toBe(excelFilled)
+              if (excelFilled) expect(argbDelta(st!.fillColor!, excel), `${cellKey} fill ${st?.fillColor} vs Excel ${excel}`).toBeLessThanOrEqual(8)
+              stage3NonBarChecked++
               continue
             }
           }
@@ -265,6 +291,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(expectedStage3Withheld).toBeGreaterThan(0)
     expect(stage3BarWithheld).toBe(expectedStage3Withheld)
     expect(stage3BarWithheld).toBeLessThanOrEqual(stage3Checked)
+    // Non-vacuous (Task 18b review): the non-bar outcomes on bar cells were compared with Excel's background.
+    expect(stage3NonBarChecked).toBeGreaterThan(10)
+    expect(stage3NonBarWithheld).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
   })
 
   it('proves all 53 previously withheld cells now paint under production evidence (C1)', async () => {
@@ -637,6 +666,118 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(() => validateBarFinding({ outcome: 'painted' as any, reason: 'bar painted before evidence' })).toThrow(/Non-withheld bar outcome/)
     expect(() => validateBarFinding({ outcome: 'withheld', reason: 'valid' })).not.toThrow()
   })
+
+  /**
+   * Lesson 1: every bar production paints reproduces Excel's measured px, and every bar it cannot reproduce is withheld.
+   *
+   * Evidence is the audit's OWN result (auditStage3Manifest: the verified set, the selected layout and the measured
+   * automatic colours), injected exactly on top of production's Stage 1/2 set before parsing (parse-time gates read it).
+   * Nothing Stage 3 is published yet; once Task 23 publishes, the published export must equal that same result (asserted
+   * below), so the injection is a no-op and this test runs against production evidence unchanged.
+   *
+   * Geometry: layoutDataBar at the capture scale (1 device px per pt: zoom x DPR = 3/4 in viewer units, a pure unit
+   * conversion of the sidecar's cellLeftPx/cellWidthPx and row heights) against the sidecar's raw px. Edges and the axis
+   * within +-1 px, the vertical insets exactly (Ruling S3-A step 6). No expected px is computed by the painter.
+   */
+  it('bar geometry conformance (Lesson 1)', async () => {
+    const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+    expect(audit.ok).toBe(true)
+    const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+    expect(verified.length).toBeGreaterThan(40)
+    const published = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string> | undefined
+    if (published) {
+      expect([...published].sort(), 'the published Stage 3 set is the audit result').toEqual(verified)
+      expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LAYOUT'), 'the published layout is the audit result').toEqual(audit.barLayout.layout)
+      expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_AUTO_BAR_COLORS'), 'the published colours are the audit result').toEqual(audit.autoBarColours)
+    }
+
+    // A pixel-measured bar production withholds, by case column, with why (withheld-only, like FINDINGS).
+    const BAR_FINDINGS: Record<string, Finding> = {
+      'stage3-bar-lengths:G': { outcome: 'withheld', reason: 'percentile 10/90 leaves values beyond the bounds: S3-E keeps the rule unresolved (Excel clamps; bar:degenerate-beyond-bounds lifts nothing in the evaluator yet)' },
+      'stage3-bar-degenerate:B': { outcome: 'withheld', reason: 'all values equal: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
+      'stage3-bar-degenerate:C': { outcome: 'withheld', reason: 'single numeric cell: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
+      ...Object.fromEntries(['stage3-bar-degenerate:D', 'stage3-bar-degenerate:E',
+        ...['B', 'D', 'E', 'F', 'G', 'H', 'I'].map(col => `stage3-bar-rendering:${col}`),
+        ...['B', 'C', 'D', 'E', 'F', 'H', 'I'].map(col => `stage3-bar-geometry:${col}`),
+        'stage3-bar-showvalue:B', 'stage3-bar-showvalue:D',
+      ].map(key => [key, { outcome: 'withheld', reason: 'num bounds: bar:bounds-num is non-discriminating (num 20/80 equals the data min/max), so unverified' } as Finding])),
+      'stage3-bar-degenerate:F': { outcome: 'withheld', reason: 'percent bounds: bar:bounds-percent is non-discriminating, so unverified' },
+    }
+    // Bars production paints on cells the capture designated for no geometry capability (settings or another
+    // capability's controls). They must still reproduce Excel's px; listed so the brief's "pending or
+    // non-discriminating cells withhold" stays visible as an exception, not a silent pass.
+    const PAINTED_UNDESIGNATED: Record<string, string> = {
+      'stage3-bar-settings-probe:B': 'the probe bar (middle axis, right-to-left, border) designates settings capabilities only; every capability it needs is verified',
+      'stage3-bar-pairing:C': 'the base-only bar designates settings capabilities only; every capability it needs is verified',
+      'stage3-bar-composition:H': 'the bar ahead of a DXF fill designates bar:composition-bar-stopIfTrue (blocked); Excel dropped the flag on resave, so the saved bar needs only verified capabilities',
+      'stage3-bar-axis-negative:H': 'positive cells of the negative-border-same-as-positive bar: that non-discriminating capability applies to negative cells only, which stay withheld',
+    }
+    for (const f of Object.values(BAR_FINDINGS)) expect(f.outcome).toBe('withheld')
+
+    const usedFindings = new Set<string>(), usedPainted = new Set<string>()
+    let painted = 0, withheldFound = 0, measuredPainted = 0, axes = 0
+    injectCfBarLayout(audit.barLayout.layout)
+    injectCfAutoBarColours(audit.autoBarColours)
+    try {
+      await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
+        for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
+          const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+          const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
+          const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+          const sc = JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { rowHeightsPt: number[]; pxPerPt: number; zoom: number; dpr: number }
+          expect([sc.pxPerPt, sc.zoom, sc.dpr], c.id).toEqual([1, 100, 1])
+          const observed = stage3ObservedBars(c, REPO_ROOT)!
+          for (const exp of c.expected.cells) {
+            const geometry = exp.barEvidence?.geometry
+            if (!geometry) continue
+            const key = `${c.id}:${exp.ref.replace(/\d+/, '')}`, cellKey = `${c.id}:${exp.ref}`
+            const { row, col } = refToRowCol(exp.ref)
+            const bar = batch.barAt(row, col)
+            const o = observed.get(exp.ref)
+            if (bar) {
+              expect(o, `${cellKey} has an Excel observation`).toBeDefined()
+              if (geometry !== 'pixel-measured') { expect(PAINTED_UNDESIGNATED[key], `${cellKey} (${geometry}) paints`).toBeDefined(); usedPainted.add(key) } else measuredPainted++
+              const top = sc.rowHeightsPt.slice(0, row).reduce((a, b) => a + b, 0), height = sc.rowHeightsPt[row]!
+              const host = { x: o!.cellLeftPx * 4 / 3, y: top * 4 / 3, width: o!.cellWidthPx * 4 / 3, height: height * 4 / 3 }
+              const p = layoutDataBar(bar, host, { zoom: 0.75, dpr: 1, output: 'device' })
+              expect(p, `${cellKey} lays out`).toBeDefined()
+              if (o!.bar === null) expect(p!.fill, `${cellKey}: Excel draws no bar`).toBeUndefined()
+              else {
+                expect(p!.fill, `${cellKey}: Excel draws a bar`).toBeDefined()
+                const f = p!.fill!
+                expect(Math.abs(f.x - o!.bar.leftPx), `${cellKey} left ${f.x} vs ${o!.bar.leftPx}`).toBeLessThanOrEqual(1)
+                expect(Math.abs(f.x + f.w - 1 - o!.bar.rightPx), `${cellKey} right ${f.x + f.w - 1} vs ${o!.bar.rightPx}`).toBeLessThanOrEqual(1)
+                expect([f.y, f.y + f.h - 1], `${cellKey} top/bottom`).toEqual([o!.bar.topPx, o!.bar.bottomPx])
+              }
+              if (o!.axisPx !== undefined) {
+                expect(p!.axis, `${cellKey}: Excel draws an axis`).toBeDefined()
+                expect(Math.abs(p!.axis!.x - o!.axisPx), `${cellKey} axis ${p!.axis!.x} vs ${o!.axisPx}`).toBeLessThanOrEqual(1)
+                expect(p!.axis!.w).toBe(1)
+                axes++
+              } else if (p!.axis) {
+                // Only an axis the capture cannot see: the measured automatic white (S3-AUTO-BG) on Excel's white cell.
+                expect(p!.axis.argb, `${cellKey}: an axis Excel shows none of`).toBe(0xffffffff)
+                expect(argbDelta(excelCellBackground(c, exp.ref), 'FFFFFFFF'), `${cellKey} white cell`).toBeLessThanOrEqual(8)
+              }
+              painted++
+            } else if (geometry === 'pixel-measured' && o && (o.bar !== null || o.axisPx !== undefined)) {
+              expect(BAR_FINDINGS[key], `${cellKey}: Excel draws a bar production withholds, with no finding`).toBeDefined()
+              usedFindings.add(key)
+              withheldFound++
+            }
+          }
+          batch.dispose()
+        }
+      })
+    } finally {
+      injectCfBarLayout(null)
+      injectCfAutoBarColours(null)
+    }
+    // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
+    expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
+    expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
+    expect({ painted, measuredPainted, withheldFound, axes }).toEqual({ painted: 140, measuredPainted: 123, withheldFound: 80, axes: 38 })
+  }, 60_000)
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
     // Type definition allows only { outcome: 'withheld', reason: string }

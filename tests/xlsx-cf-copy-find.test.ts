@@ -28,6 +28,7 @@ import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { drain } from './helpers/xlsx-find'
+import { BAR_SHOWVALUE_EVIDENCE, barRule, withBars } from './helpers/cf-bars'
 
 function trackingBudget(refuse = false): { budget: FormatBudget; net: () => number; retained: () => number } {
   let held = 0
@@ -525,5 +526,125 @@ describe('paged copy/find follow the CF number format outside the viewport', () 
     } finally {
       await session.release()
     }
+  })
+})
+
+/**
+ * Task 22, Ruling S3-P: `showValue="0"` hides only the canvas text. Copy, find and the accessible name keep the formatted
+ * value. These pass on the base too (nothing there reads `showValue`): they are characterization, each with a positive
+ * control that the cells really are painted `showValue="0"` bars, and a mutant formatter that honours the canvas
+ * suppression and must fail. Bars come from injected evidence only (tests/helpers/cf-bars.ts).
+ */
+describe('showValue=0 value still copies and finds (S3-P)', () => {
+  // A1 = 1.25 and A501 = 3.75 under a '0.0' format ("1.3", "3.8"), one showValue="0" min/max bar over A1:A501.
+  const barRows = (sheet: XlsxSheet): void => {
+    sheet.conditionalFormatting = { diagnostics: [], rules: [barRule({ firstRow: 0, lastRow: 500, firstCol: 0, lastCol: 0 }, { showValue: false })] }
+  }
+  function barDoc(): XlsxDocument {
+    const doc = cfDoc()
+    const sheet = doc.sheets[0]! as unknown as XlsxSheet
+    sheet.rows = [{ index: 0, cells: [{ ...sheet.rows[0]!.cells[0]!, value: 1.25 }] }, { index: 500, cells: [{ ...sheet.rows[1]!.cells[0]!, value: 3.75 }] }]
+    barRows(sheet)
+    return doc
+  }
+  const BAR_XML = '<conditionalFormatting sqref="A1:A501"><cfRule type="dataBar" priority="1"><dataBar showValue="0"><cfvo type="min"/><cfvo type="max"/><color rgb="FF0000FF"/></dataBar>'
+    + '<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{3B3B0022-0000-4000-8000-000000000001}</x14:id></ext></extLst></cfRule></conditionalFormatting>'
+    + '<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">'
+    + '<x14:cfRule type="dataBar" id="{3B3B0022-0000-4000-8000-000000000001}"><x14:dataBar minLength="0" maxLength="100" gradient="0" direction="leftToRight"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:negativeFillColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule>'
+    + '<xm:sqref>A1:A501</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'
+  const barBytes = (): Uint8Array => xlsxBytes({
+    sheetData: '<row r="1"><c r="A1" s="0"><v>1.25</v></c></row><row r="501"><c r="A501" s="0"><v>3.75</v></c></row>',
+    styles: '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs>',
+    afterSheetData: BAR_XML,
+  })
+  const SUPPRESS = { extra: [BAR_SHOWVALUE_EVIDENCE, 'bar:bounds-automin', 'bar:bounds-automax', 'bar:participation-dateserial'] }
+
+  it('resident find and copy return the formatted value of a showValue="0" bar cell in near and far rows', async () => {
+    await withBars(async () => {
+      const { budget } = trackingBudget()
+      const doc = barDoc()
+      const source = createObjectWorkbookSource(doc, 'cf-bar-find')
+      const owner = initialWorkbookOwner('cf-bar-find', source.sheets)
+      const sheet = doc.sheets[0]! as unknown as XlsxSheet
+      // Positive control: both cells are painted bars whose canvas text is hidden.
+      const scope = (await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 500, c0: 0, c1: 0 }].flatMap(r => [{ ...r, r1: 0 }, { ...r, r0: 500 }]), signal: new AbortController().signal, budget }))!
+      for (const row of [0, 500]) {
+        expect(scope.barAt?.(row, 0)?.showValue, `row ${row}`).toBe(false)
+        expect(scope.hidesTextAt?.(row, 0), `row ${row}`).toBe(true)
+      }
+      scope.dispose()
+      for (const [text, want] of [['1.3', [[0, 0, '1.3']]], ['3.8', [[500, 0, '3.8']]]] as const) {
+        const session = new WorkbookFind({ owner, sheets: residentSheets('cf-bar-find', source, owner) }, { text, caseSensitive: false },
+          { textOf: residentTextOf(sheet), prepareScope: residentPrepare(sheet, budget), formatBudget: budget })
+        expect((await drain(session)).map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual(want)
+      }
+      const store = source.store('cf'), entry = owner.sheetVector[0]!
+      const format: CopyInput['format'] = (cell, allocation, scope) => {
+        const baseStyle = docCell(sheet, cell.row, cell.col)?.style
+        return cellDisplayText(sheet, { value: cell.value, style: scope?.effectiveStyle(cell.row, cell.col, baseStyle) ?? baseStyle }, allocation)
+      }
+      const input = (r0: number, fmt: CopyInput['format'] = format): CopyInput => ({
+        store, owner: { ...store.stamp, fontGen: 0, viewGen: entry.revision }, currentOwner: () => ({ ...store.stamp, fontGen: 0, viewGen: entry.revision }),
+        selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0, r1: r0 }] }, cols: [{ c0: 0, c1: 0 }] }] },
+        order: createIdentityOrder(), visibility: visibilityFromHidden(createIntervalSet([])), columns: visibilityFromHidden(createIntervalSet([]), MAX_COLS),
+        allowed: () => true, signal: new AbortController().signal, format: fmt,
+        prepareScope: (rects, signal) => residentPrepare(sheet, budget)('cf', rects, signal),
+      })
+      for (const [row, want] of [[0, '1.3'], [500, '3.8']] as const) {
+        const copied = await serializeSelection(input(row))
+        expect(copied.kind === 'ready' ? copied.text : copied.kind, `row ${row}`).toBe(want)
+        // Mutant: a formatter that applies the canvas suppression to copy fails this test.
+        const mutant = await serializeSelection(input(row, (cell, allocation, scope) => scope?.hidesTextAt?.(cell.row, cell.col) ? '' : format(cell, allocation, scope)))
+        expect(mutant.kind === 'ready' ? mutant.text : mutant.kind, `mutant row ${row}`).not.toBe(want)
+      }
+    }, SUPPRESS)
+  })
+
+  it('worker find and main-thread paged copy return the formatted value of a showValue="0" bar cell in near and far rows', async () => {
+    await withBars(async () => {
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(barBytes()).buffer]) }, { docId: 'cf-bar-paged', profile: 'D' })
+      try {
+        await session.done
+        const source = createPagedWorkbookSource(session)
+        const sheetId = source.sheets[0]!.sheetId
+        const store = source.store(sheetId)
+        const read = async (rects: readonly SourceRect[], signal: AbortSignal) => store.readConditionalFormatting!({
+          rects, stamp: { owner: 'cf-bar-paged', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: CF_TEXT_SCOPE_GRANT_BYTES,
+        }, undefined, { signal })
+        // Positive control: the worker's wire states carry the showValue="0" bar on both rows.
+        const wire = await read([{ r0: 0, r1: 0, c0: 0, c1: 0 }, { r0: 500, r1: 500, c0: 0, c1: 0 }], new AbortController().signal)
+        expect(wire?.kind).toBe('ready')
+        expect(wire!.states.filter(s => s.bar?.showValue === false).map(s => s.row).sort((a, b) => a - b)).toEqual([0, 500])
+        const { budget } = trackingBudget()
+        const prepareScope = (rects: readonly SourceRect[], signal: AbortSignal) =>
+          prepareCfWireScope(async chunk => ({ result: await read(chunk, signal), release: () => {} }), rects, { budget })
+        const format: CopyInput['format'] = (cell, allocation, scope) => source.displayText!(cell, sheetId, allocation, undefined, scope)
+        const identity = { docId: 'cf-bar-paged', sheetId, valueGen: store.stamp.valueGen, fontGen: 0, viewGen: 0 }
+        for (const [row, want] of [[0, '1.3'], [500, '3.8']] as const) {
+          const input: CopyInput = {
+            store, owner: identity, currentOwner: () => identity,
+            selection: { active: null, anchor: null, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: row, r1: row }] }, cols: [{ c0: 0, c1: 0 }] }] },
+            order: createIdentityOrder(), visibility: visibilityFromHidden(createIntervalSet([])), columns: visibilityFromHidden(createIntervalSet([]), MAX_COLS),
+            allowed: () => true, signal: new AbortController().signal, format, prepareScope,
+          }
+          const copied = await serializeSelection(input)
+          expect(copied.kind === 'ready' ? copied.text : JSON.stringify(copied), `row ${row}`).toBe(want)
+          const scope = (await prepareScope([{ r0: row, r1: row, c0: 0, c1: 0 }], new AbortController().signal))!
+          expect(scope.hidesTextAt?.(row, 0), `paged scope hides the canvas text at row ${row}`).toBe(true)
+          scope.dispose()
+          const mutant = await serializeSelection({ ...input, format: (cell, allocation, s) => s?.hidesTextAt?.(cell.row, cell.col) ? '' : format(cell, allocation, s) })
+          expect(mutant.kind === 'ready' ? mutant.text : mutant.kind, `mutant row ${row}`).not.toBe(want)
+        }
+        // Last: the worker session releases the source it searches.
+        const worker = new DocumentSession('cf-bar-paged', source)
+        try {
+          for (const [text, want] of [['1.3', [[0, 0, '1.3']]], ['3.8', [[500, 0, '3.8']]]] as const) {
+            const found = await worker.search(worker.workbookOwner(), { text, caseSensitive: false }, undefined, new AbortController().signal)
+            if (!('hits' in found)) throw new Error('search did not complete')
+            expect(found.hits.map(hit => [hit.source.row, hit.source.col, hit.text])).toEqual(want)
+          }
+        } finally { await worker.release() }
+      } finally { await session.release() }
+    }, SUPPRESS)
   })
 })

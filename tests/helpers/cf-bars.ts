@@ -14,6 +14,8 @@ export const BAR_EVAL_EVIDENCE = [
   'bar:negative-fill-color', 'bar:negative-fill-same-as-positive', 'bar:negative-border-color', 'bar:negative-border-same-as-positive',
   'bar:participation-types', 'bar:scope-whole-column',
 ]
+/** Parse gates of a workbook bar in Excel's paired x14 form (stubs only). */
+export const BAR_PARSE_EVIDENCE = ['bar:settings-precondition-probe', 'bar:settings-schema-defaults', 'bar:settings-paired-precedence', 'bar:pairing-paired']
 export const BAR_PAINT_EVIDENCE = ['bar:geometry-insets', 'bar:geometry-snapping', 'bar:geometry-narrow-clip']
 export const BAR_SHOWVALUE_EVIDENCE = 'bar:showvalue-canvas-suppression'
 
@@ -26,7 +28,7 @@ export const BAR_LAYOUT = {
 /** Runs `fn` with injected bar evidence (joined to production evidence) and the injected layout; both are cleared after. */
 export async function withBars<T>(fn: () => Promise<T> | T, options: { paint?: boolean; extra?: readonly string[]; omit?: readonly string[] } = {}): Promise<T> {
   injectCfBarLayout(BAR_LAYOUT)
-  const caps = [...BAR_EVAL_EVIDENCE, ...(options.paint === false ? [] : BAR_PAINT_EVIDENCE), ...(options.extra ?? [])].filter(c => !options.omit?.includes(c))
+  const caps = [...BAR_EVAL_EVIDENCE, ...BAR_PARSE_EVIDENCE, ...(options.paint === false ? [] : BAR_PAINT_EVIDENCE), ...(options.extra ?? [])].filter(c => !options.omit?.includes(c))
   try { return await withInjectedCfEvidence(caps, async () => fn()) } finally { injectCfBarLayout(null) }
 }
 
