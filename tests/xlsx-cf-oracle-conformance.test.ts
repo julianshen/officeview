@@ -21,7 +21,7 @@ import { createCfService } from '../src/xlsx/cf/service'
 import type { CfCellState, CfOutcome } from '../src/xlsx/cf/model'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { decodePngSync, isCellInSqref, type DecodedPng } from '../scripts/cf-refs/verify'
-import type { CfManifest } from '../scripts/cf-refs/cases'
+import { CF_CASES, type CfManifest } from '../scripts/cf-refs/cases'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST_PATH = join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json')
@@ -371,15 +371,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
   })
 
-  it('proves all 7 previously wrong cells correctly do not match (C3)', async () => {
+  it('proves the 5 absent-formula cells correctly do not match (C3)', async () => {
+    // Task 18c: the x14 canonical K2 (text) and O6 (notContainsErrors) left this list. Their old "no match" came from
+    // captures in which Excel had discarded the x14 block (misspelled URI); with the block live Excel matches them as
+    // their legacy twins ("production renders the x14 form ... as Excel did").
     const wrongCells = [
       { caseId: 'stage1-text-predicates', ref: 'I2' }, // absent-formula containsText
-      { caseId: 'stage1-text-predicates', ref: 'K2' }, // x14 canonical containsText
       { caseId: 'stage1-blanks-errors', ref: 'C2' },   // absent-formula containsBlanks
       { caseId: 'stage1-blanks-errors', ref: 'F6' },   // absent-formula notContainsBlanks
       { caseId: 'stage1-blanks-errors', ref: 'I8' },   // absent-formula containsErrors
       { caseId: 'stage1-blanks-errors', ref: 'L6' },   // absent-formula notContainsErrors
-      { caseId: 'stage1-blanks-errors', ref: 'O6' },   // x14 notContainsErrors
     ]
 
     for (const { caseId, ref } of wrongCells) {
@@ -540,6 +541,36 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(await s3jViolations()).toEqual(['stage3-bar-composition:H2', 'stage3-bar-composition:H3', 'stage3-bar-composition:H4'])
     const c = manifest.cases.find(x => x.id === 'stage3-bar-composition')!
     for (const ref of ['H2', 'H3', 'H4']) expect(argbDelta(excelCellBackground(c, ref), 'FFFFC7CE'), ref).toBeLessThanOrEqual(8)
+  })
+
+  // Task 18c: Excel resaves the x14 text/blank/error rules as legacy <cfRule>s, so the saved workbooks the main loop
+  // runs no longer hold the x14 form. Production's x14 path is held to the same Excel evidence on the INPUT workbook:
+  // every cell under an x14 marker must render what the recaptured PNG observed (sidecar observedCells, the capture of
+  // the input with the x14 block live) and what the case expects.
+  it('production renders the x14 form of the Stage 1 x14 rules as Excel did (Task 18c, input workbooks)', async () => {
+    let checked = 0
+    for (const id of ['stage1-text-predicates', 'stage1-blanks-errors']) {
+      // Expectations from the oracle catalogue (the manifest entry refreshes them at the next capture/verify-only).
+      const c = CF_CASES.find(x => x.id === id)!
+      const sc = JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { observedCells: Array<{ ref: string; fillRgb?: string }> }
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.input)))))
+      const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
+      const paint = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      for (const exp of c.expected.cells) {
+        if (!c.markers.some(m => m.extension === 'x14' && isCellInSqref(exp.ref, m.sqref))) continue
+        const { row, col } = refToRowCol(exp.ref)
+        const st = paint.layer.styleAt(row, col, undefined)
+        const excelFill = sc.observedCells.find(o => o.ref === exp.ref)?.fillRgb
+        expect(excelFill, `${id}:${exp.ref} observed in the capture`).toBeDefined()
+        const excelPainted = excelFill !== 'FFFFFFFF'
+        expect(excelPainted, `${id}:${exp.ref} expectation agrees with the capture`).toBe(exp.matched)
+        if (exp.matched) expect(st?.fillColor, `${id}:${exp.ref}`).toBe(excelFill)
+        else expect(st?.fillColor, `${id}:${exp.ref}`).toBeUndefined()
+        checked++
+      }
+      paint.dispose()
+    }
+    expect(checked).toBe(8)
   })
 
   /** A bar is withheld when the cell is not `ready` or its visual slot carries no data bar descriptor. */
