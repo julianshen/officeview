@@ -19,7 +19,7 @@
  */
 import { attrs, elementNamespaceUri, getChildren, iterateChildren, textOf, type XmlNode } from '../../core/xml'
 import { resolveSheetColor, type SheetColorContext } from '../sheetColors'
-import { hasEvidence } from './evidence'
+import { autoBarColourEvidence, hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
 import {
@@ -913,6 +913,8 @@ export function barRequiredCapabilities(
   options: { readonly defaultedAttributes?: boolean; readonly legacyBoundValue?: boolean } = {},
 ): Set<string> {
   const req = new Set<string>()
+  // S3-F amended: each automatic colour the bar draws needs its measured capability.
+  for (const slot of def.autoColors ?? []) req.add(slot === 'axis' ? 'bar:color-auto-axis' : 'bar:color-auto-negative-fill')
   // S3-Q pairing shape. A base-only bar takes every x14 attribute from the schema defaults.
   if (def.dialect === 'x14') req.add('bar:pairing-standalone')
   else if (def.guid !== undefined) req.add('bar:pairing-paired').add('bar:settings-paired-precedence')
@@ -992,6 +994,9 @@ function barBound(
 }
 
 type BarColorSlot = 'fill' | 'border' | 'negativeFill' | 'negativeBorder' | 'axis'
+/** Automatic colours a measured capability can settle (S3-F amended); any other automatic colour withholds. */
+const BAR_AUTO_COLOUR_CAPABILITY: Partial<Record<BarColorSlot, string>> = { negativeFill: 'bar:color-auto-negative-fill', axis: 'bar:color-auto-axis' }
+
 const X14_BAR_COLORS: ReadonlyArray<readonly [BarColorSlot, string]> = [
   ['border', 'borderColor'], ['negativeFill', 'negativeFillColor'], ['negativeBorder', 'negativeBorderColor'], ['axis', 'axisColor'],
 ]
@@ -1094,6 +1099,7 @@ function parseDataBarRule(
   const officeTheme = isMeasuredOfficeTheme(fin.styles.colors.theme)
   const colourInputs: CfScaleColorInput[] = []
   const argb: Partial<Record<BarColorSlot, number>> = {}
+  const autoColors: Array<'negativeFill' | 'axis'> = []
   for (const slotName of ['fill', 'border', 'negativeFill', 'negativeBorder', 'axis'] as const) {
     if (drawn[slotName] === 'unused') continue
     const node = elements[slotName]
@@ -1104,9 +1110,18 @@ function parseDataBarRule(
       continue
     }
     const ca = attrs(node)
-    // auto/system colours and alpha other than FF are unresolved, never a #000000 fallback.
+    // An automatic colour is Excel's own drawing: it resolves only to the colour its capability measured (S3-F as
+    // amended, 2026-11-12), never to a guessed system colour. Alpha other than FF stays unresolved.
     const auto = parseBoolAttr(ca['auto'], false)
-    if (auto !== false) return finishUnresolved('cf-unsupported-rule', slot)
+    if (auto === undefined) return finishUnresolved('cf-unsupported-rule', slot)
+    if (auto) {
+      const cap = BAR_AUTO_COLOUR_CAPABILITY[slotName]
+      const measured = cap === undefined ? undefined : autoBarColourEvidence(cap)
+      if (measured === undefined) return finishUnresolved('cf-unsupported-rule', slot)
+      argb[slotName] = measured
+      autoColors.push(slotName as 'negativeFill' | 'axis')
+      continue
+    }
     const hex = resolveSheetColor(ca, fin.styles.colors)?.toUpperCase()
     const full = hex === undefined ? undefined : hex.length === 6 ? `FF${hex}` : hex
     if (full === undefined || !/^FF[0-9A-F]{6}$/.test(full)) return finishUnresolved('cf-unsupported-rule', slot)
@@ -1133,6 +1148,7 @@ function parseDataBarRule(
     direction: directionText as CfDataBarDefinition['direction'],
     showValue,
     ...(sheetRightToLeft !== undefined ? { sheetRightToLeft } : {}),
+    ...(autoColors.length > 0 ? { autoColors } : {}),
   }
   const required = barRequiredCapabilities({ ...inputs.origin, ...definition }, colourInputs, {
     defaultedAttributes: defaulted,

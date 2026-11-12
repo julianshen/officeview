@@ -8,7 +8,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { CF_BAR_DEFINITION_BYTES, createCfMemory } from '../src/xlsx/cf/limits'
 import { measurePayloadBytes } from '../src/xlsx/view/payloadBytes'
 import { createCfStreamEvents } from '../src/xlsx/cf/capture'
-import { injectExactCfEvidence, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { autoBarColourEvidence, injectCfAutoBarColours, injectExactCfEvidence, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { MEASURED_CF_OFFICE_THEME, barRequiredCapabilities, parseCfSheet, type CfParseMeta, type CfStylesSource } from '../src/xlsx/cf/parse'
 import { DATA_BAR_WRITES, type CfDefinition, type CfRule, type CfSheetRules } from '../src/xlsx/cf/model'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
@@ -76,7 +76,11 @@ const companion = (sqref: string, guid: string, attrs: string, body: string, rul
 const MINMAX = '<cfvo type="min"/><cfvo type="max"/>'
 const BLUE = '<color rgb="FF638EC6"/>'
 
-afterEach(() => injectExactCfEvidence(null))
+afterEach(() => {
+  injectExactCfEvidence(null)
+  injectCfAutoBarColours(null)
+})
+const AUTO_CAPS = ['bar:color-auto-axis', 'bar:color-auto-negative-fill']
 
 describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
   it('canonical data-bar write mask is [\'dataBar\'] for both resolved and unresolved bars', () => {
@@ -186,6 +190,54 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     expect(bars.length).toBeGreaterThan(0)
     for (const r of bars) expect(r.definition, `composition p${r.priority}`).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     expect(byPriority(composition.rules, 1).definition.kind).toBe('cellIs')
+  })
+
+  it('automatic colours resolve only through their capability and the measured colour it carries (S3-F amended)', async () => {
+    const G = '{00000000-0000-4000-8000-0000000000AC}'
+    const xml = baseBar('B2:B6', 1, MINMAX + BLUE, G) +
+      x14Block(companion('B2:B6', G, ' minLength="0" maxLength="100" gradient="0"', '<x14:cfvo type="min"/><x14:cfvo type="max"/><x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>'))
+    const measured = { 'bar:color-auto-axis': 'FF404040', 'bar:color-auto-negative-fill': 'FFC00000' }
+    // Production: no automatic colour is published, so Excel's resave shape withholds exactly as before.
+    expect(autoBarColourEvidence('bar:color-auto-axis')).toBeUndefined()
+    expect(only(withExactCfEvidence(BAR_PARSE_CAPS, () => parse(xml)).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    // The capability without a measured colour, or a measured colour without the capability, never resolves.
+    expect(only(withExactCfEvidence([...BAR_PARSE_CAPS, ...AUTO_CAPS], () => parse(xml)).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    injectCfAutoBarColours(measured)
+    expect(only(withExactCfEvidence(BAR_PARSE_CAPS, () => parse(xml)).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    for (const missing of AUTO_CAPS) {
+      expect(only(withExactCfEvidence([...BAR_PARSE_CAPS, ...AUTO_CAPS.filter(c => c !== missing)], () => parse(xml)).value.rules).definition, missing)
+        .toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    }
+    // Both: the automatic colours are represented and carry the measured ARGB, on both paths.
+    await withExactCfEvidence([...BAR_PARSE_CAPS, ...AUTO_CAPS], async () => {
+      const resident = parse(xml)
+      expect(bar(only(resident.value.rules).definition)).toMatchObject({ axisArgb: 0xff404040, negativeFillArgb: 0xffc00000, autoColors: ['negativeFill', 'axis'] })
+      expect(barRequiredCapabilities(bar(only(resident.value.rules).definition), [])).toEqual(expect.any(Set))
+      expect([...barRequiredCapabilities(bar(only(resident.value.rules).definition), [])]).toEqual(expect.arrayContaining(AUTO_CAPS))
+      const streamed = await stream(xml)
+      expect(streamed.value).toEqual(resident.value)
+      streamed.release()
+      // An explicit colour is never marked automatic; an unused automatic colour is ignored.
+      const explicit = bar(only(parse(xml.replace('<x14:negativeFillColor auto="1"/>', '<x14:negativeFillColor rgb="FFFF0000"/>')).value.rules).definition)
+      expect(explicit).toMatchObject({ negativeFillArgb: 0xffff0000, autoColors: ['axis'] })
+      const noAxis = bar(only(parse(xml.replace('gradient="0"', 'gradient="0" axisPosition="none" negativeBarColorSameAsPositive="1"')).value.rules).definition)
+      expect(noAxis).not.toHaveProperty('autoColors')
+      // An automatic positive fill, border or negative border has no capability, and alpha 00 never resolves.
+      expect(only(parse(baseBar('B2:B6', 1, MINMAX + '<color auto="1"/>')).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+      const B = '{00000000-0000-4000-8000-0000000000AD}'
+      const bordered = (colours: string) => baseBar('C2:C6', 2, MINMAX + BLUE, B) +
+        x14Block(companion('C2:C6', B, ' gradient="0" border="1" negativeBarBorderColorSameAsPositive="0"', `<x14:cfvo type="min"/><x14:cfvo type="max"/>${colours}`))
+      expect(only(parse(bordered('<x14:borderColor auto="1"/><x14:negativeFillColor rgb="FFFF0000"/>')).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+      expect(only(parse(bordered('<x14:borderColor rgb="FF00B050"/><x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor auto="1"/>')).value.rules).definition)
+        .toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+      expect(only(parse(xml.replace('<x14:negativeFillColor auto="1"/>', '<x14:negativeFillColor rgb="00FF0000"/>')).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+    })
+    // A measured colour that is not opaque ARGB is never consumed.
+    injectCfAutoBarColours({ 'bar:color-auto-axis': '00404040', 'bar:color-auto-negative-fill': 'zz' })
+    withExactCfEvidence(AUTO_CAPS, () => {
+      expect(autoBarColourEvidence('bar:color-auto-axis')).toBeUndefined()
+      expect(autoBarColourEvidence('bar:color-auto-negative-fill')).toBeUndefined()
+    })
   })
 
   it('schema defaults apply to omitted attributes', () => {
@@ -434,11 +486,12 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     const G = '{00000000-0000-4000-8000-0000000000BB}'
     const xml = baseBar('B2:B6', 1, MINMAX + BLUE, G) + x14Block(companion('B2:B6', G, ' border="1" negativeBarBorderColorSameAsPositive="0" direction="rightToLeft" axisPosition="automatic"',
       '<x14:cfvo type="percentile"><xm:f>10</xm:f></x14:cfvo><x14:cfvo type="percentile"><xm:f>90</xm:f></x14:cfvo><x14:borderColor rgb="FF000000"/>' +
-      '<x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/>'))
-    const def = bar(only(withExactCfEvidence(BAR_PARSE_CAPS, () => parse(xml)).value.rules).definition)
+      '<x14:negativeFillColor auto="1"/><x14:negativeBorderColor rgb="FFFF0000"/><x14:axisColor auto="1"/>'))
+    injectCfAutoBarColours({ 'bar:color-auto-axis': 'FF000000', 'bar:color-auto-negative-fill': 'FFFF0000' })
+    const def = bar(only(withExactCfEvidence([...BAR_PARSE_CAPS, ...AUTO_CAPS], () => parse(xml)).value.rules).definition)
     // The bar's own fields, every optional one present, fit the derived constant (the origin is priced separately).
     const { dialect: _d, guid: _g, formulas: _f, ...own } = def
-    expect(Object.keys(own)).toHaveLength(17)
+    expect(Object.keys(own)).toHaveLength(18)
     expect(measurePayloadBytes(own)).toBeLessThanOrEqual(CF_BAR_DEFINITION_BYTES)
   })
 

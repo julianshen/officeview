@@ -48,7 +48,7 @@ function withSheet(parts: Map<string, Uint8Array>, edit: (xml: string) => string
 const autoAll = (xml: string) =>
   xml.replace(/<x14:axisColor rgb="FF000000"\/>/g, '<x14:axisColor auto="1"/>').replace(/<x14:negativeFillColor rgb="FFFF0000"\/>/g, '<x14:negativeFillColor auto="1"/>')
 
-const clonePng = (png: DecodedPng): DecodedPng => ({ ...png, data: new Uint8Array(png.data) })
+const clonePng = (png: DecodedPng): DecodedPng => ({ ...png, data: new Uint8ClampedArray(png.data) })
 
 describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () => {
   it('only the automatic axis and negative fill occur, and no kept capture draws either', () => {

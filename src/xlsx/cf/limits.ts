@@ -14,7 +14,7 @@ export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
   kind: 'dataBar', bounds: [{ type: 'percentile', value: 0 }, { type: 'percentile', value: 0 }],
   fillArgb: 0, negativeFillArgb: 0, borderArgb: 0, negativeBorderArgb: 0, axisArgb: 0, minLength: 0, maxLength: 0,
   gradient: false, border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: false,
-  axisPosition: 'automatic', direction: 'rightToLeft', showValue: false, sheetRightToLeft: false,
+  axisPosition: 'automatic', direction: 'rightToLeft', showValue: false, sheetRightToLeft: false, autoColors: ['negativeFill', 'axis'],
 })!
 
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,

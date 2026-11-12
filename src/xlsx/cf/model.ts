@@ -41,7 +41,9 @@ export type CfDefinition = (CfRuleOrigin & (
       borderArgb?: number; negativeBorderArgb?: number; axisArgb?: number; minLength: number; maxLength: number; gradient: boolean
       border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
       axisPosition: 'automatic' | 'middle' | 'none'; direction: 'context' | 'leftToRight' | 'rightToLeft'; showValue: boolean
-      sheetRightToLeft?: boolean }
+      sheetRightToLeft?: boolean
+      /** Colours Excel draws as automatic (`auto="1"`), resolved to the measured ARGB of their capability (S3-F amended). */
+      autoColors?: readonly ('negativeFill' | 'axis')[] }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }
 /** Presence means a winning override; null explicitly clears a property. */
 export interface CfCellState {
