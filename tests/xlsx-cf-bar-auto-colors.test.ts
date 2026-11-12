@@ -10,11 +10,13 @@ import {
 } from '../scripts/cf-refs/audit'
 import { CF_STAGE3_CAPABILITIES, CF_STAGE3_CASES, type CfManifest, type CfOracleCase } from '../scripts/cf-refs/cases'
 import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
+import { autoBarColourEvidence, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import {
   BAR_AUTO_COLOUR_CAPABILITIES,
   computeWorksheetRangeGeometry,
   decodePngSync,
   judgeBarAutoColour,
+  measureBarGeometry,
   measureCaseBars,
   readZipPartsSync,
   sampleBarAutoColours,
@@ -24,6 +26,20 @@ import {
 
 const REPO_ROOT = resolve(__dirname, '..')
 const manifest = (): CfManifest => JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+/** The manifest as it stood before run 6 captured the grey-cell case: that case recipe-pending, its capture spec not
+ * yet taken (no recorded hashes). */
+const precapture = (): CfManifest => {
+  const m = manifest()
+  return {
+    ...m,
+    cases: m.cases.map(c => (c.id === 'stage3-bar-auto-colors'
+      ? { ...c, status: 'recipe-pending' as const, captures: c.captures.map(x => ({ appearance: x.appearance, pngPath: x.pngPath, sidecarPath: x.sidecarPath })) }
+      : c)),
+  }
+}
+/** These tests run whole-manifest audits (every Stage 3 PNG re-decoded and re-measured), several per test. */
+const AUDIT_TIMEOUT_MS = 30_000
+const WHITE = { 'bar:color-auto-axis': 'FFFFFFFF', 'bar:color-auto-negative-fill': 'FFFFFFFF' }
 
 /** A measured case with its saved parts, its screen PNG and the Excel-measured geometry. */
 function load(id: string) {
@@ -48,19 +64,46 @@ function withSheet(parts: Map<string, Uint8Array>, edit: (xml: string) => string
 const autoAll = (xml: string) =>
   xml.replace(/<x14:axisColor rgb="FF000000"\/>/g, '<x14:axisColor auto="1"/>').replace(/<x14:negativeFillColor rgb="FFFF0000"\/>/g, '<x14:negativeFillColor auto="1"/>')
 
+/**
+ * The real axis-negative capture repainted the way run 5 shows Excel draws automatic colours: red negative bars and
+ * the black axis become opaque white; with `grey`, neutral pixels (background and antialiased text, composited over
+ * white) are re-composited over the FFA6A6A6 cell fill: v * A6 / FF.
+ */
+function paintExcelWhite(png: DecodedPng, original: ReadonlyMap<string, CfObservedBar>, grey: boolean): DecodedPng {
+  const out = clonePng(png)
+  const d = out.data
+  const axisCols = new Set([...original.values()].map(o => o.axisPx).filter((x): x is number => x !== undefined))
+  for (let i = 0; i < d.length; i += 4) {
+    const x = (i / 4) % out.width
+    const [r, g, b] = [d[i]!, d[i + 1]!, d[i + 2]!]
+    if (r === 255 && g === 0 && b === 0) d.set([255, 255, 255], i)
+    else if (r === 0 && g === 0 && b === 0 && axisCols.has(x)) d.set([255, 255, 255], i)
+    else if (grey && r === g && g === b) d.set([0, 0, 0].map(() => Math.round((r * 0xa6) / 0xff)), i)
+  }
+  return out
+}
+
 const clonePng = (png: DecodedPng): DecodedPng => ({ ...png, data: new Uint8ClampedArray(png.data) })
 
 describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () => {
-  it('only the automatic axis and negative fill occur, and no kept capture draws either', () => {
+  it('only the automatic axis and negative fill occur, and only the grey-cell capture draws them (white)', () => {
     expect(Object.keys(BAR_AUTO_COLOUR_CAPABILITIES).sort()).toEqual(['bar:color-auto-axis', 'bar:color-auto-negative-fill'])
     expect(CF_STAGE3_CAPABILITIES.filter(e => e.capabilityId.startsWith('bar:color-auto-')).map(e => e.caseId))
       .toEqual(['stage3-bar-auto-colors', 'stage3-bar-auto-colors'])
+    // Run 6 (50292100): every sample comes from the grey-cell case, and all of them are white.
     const across = barAutoColoursAcrossCases(manifest(), REPO_ROOT)
     for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) {
-      expect(across[cap]?.samples ?? [], cap).toEqual([])
-      expect(judgeBarAutoColour(across[cap]).status, cap).toBe('no-hypotheses')
+      expect(across[cap]!.samples.length, cap).toBeGreaterThan(0)
+      expect(across[cap]!.samples.every(x => x.ref.startsWith('stage3-bar-auto-colors:') && x.argb === 'FFFFFFFF'), cap).toBe(true)
+      expect(judgeBarAutoColour(across[cap]), cap).toMatchObject({ status: 'discriminating', matched: 'FFFFFFFF' })
     }
-  })
+    // Before that capture no kept capture drew either colour (every other resave is all-positive or explicit).
+    const before = barAutoColoursAcrossCases(precapture(), REPO_ROOT)
+    for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) {
+      expect(before[cap]?.samples ?? [], cap).toEqual([])
+      expect(judgeBarAutoColour(before[cap]).status, cap).toBe('no-hypotheses')
+    }
+  }, AUDIT_TIMEOUT_MS)
 
   it('the sampler recovers the known colours of real pixels when their elements read as automatic', () => {
     // axis-negative draws an explicit black axis and red negative fill: relabelled auto in memory, the sampler must
@@ -110,19 +153,7 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     // Run 5: Excel paints the automatic negative fill and axis opaque white. Paint the real capture that way, first on
     // the grey cell fill the case now carries, then on white. The capture's neutral pixels (background and antialiased
     // black text, composited over white) are re-composited over the grey: v * A6 / FF.
-    const paint = (grey: boolean): DecodedPng => {
-      const out = clonePng(png)
-      const d = out.data
-      const axisCols = new Set([...original.values()].map(o => o.axisPx).filter((x): x is number => x !== undefined))
-      for (let i = 0; i < d.length; i += 4) {
-        const x = (i / 4) % out.width
-        const [r, g, b] = [d[i]!, d[i + 1]!, d[i + 2]!]
-        if (r === 255 && g === 0 && b === 0) d.set([255, 255, 255], i)
-        else if (r === 0 && g === 0 && b === 0 && axisCols.has(x)) d.set([255, 255, 255], i)
-        else if (grey && r === g && g === b) d.set([0, 0, 0].map(() => Math.round((r * 0xa6) / 0xff)), i)
-      }
-      return out
-    }
+    const paint = (grey: boolean): DecodedPng => paintExcelWhite(png, original, grey)
     const onGrey = paint(true)
     const measured = measureCaseBars(c, onGrey, geom, auto)
     expect(measured).toBeInstanceOf(Map)
@@ -146,6 +177,37 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     const white = sampleBarAutoColours(c, auto, onWhite, geom, whiteBars instanceof Map ? whiteBars : undefined)
     expect(judgeBarAutoColour(white['bar:color-auto-axis']).status).not.toBe('discriminating')
     expect(judgeBarAutoColour(white['bar:color-auto-negative-fill']).status).not.toBe('discriminating')
+  })
+
+  it('a white bar beside a white axis measures from the evidenced axis position, and refuses without it', () => {
+    const { c, parts, geom, png } = load('stage3-bar-axis-negative')
+    const original = measureCaseBars(c, png, geom, parts) as ReadonlyMap<string, CfObservedBar>
+    const auto = withSheet(parts, autoAll)
+    const axis = original.get('B4')!.axisPx!
+    const b2 = original.get('B2')!.bar!
+    expect(b2.rightPx).toBe(axis - 1)
+    for (const width of [1, 2]) {
+      // Shorten B2's white negative bar to `width` px ending beside the white axis (the rest back to the grey fill).
+      const narrow = paintExcelWhite(png, original, true)
+      for (let y = b2.topPx; y <= b2.bottomPx; y++) for (let x = b2.leftPx; x <= axis - 1 - width; x++) narrow.data.set([0xa6, 0xa6, 0xa6], (y * narrow.width + x) * 4)
+      // Evidence: B4's zero cell puts the axis at its column, so the run splits into axis + bar with exact edges.
+      const measured = measureCaseBars(c, narrow, geom, auto)
+      expect(measured, `${width} px`).toBeInstanceOf(Map)
+      expect((measured as ReadonlyMap<string, CfObservedBar>).get('B2'), `${width} px`).toMatchObject({ bar: { leftPx: axis - width, rightPx: axis - 1 }, axisPx: axis })
+      // No position evidence, an unknown position, or a position elsewhere: refuse, never a silently wrong edge.
+      const refs = c.expected.cells.filter(x => x.matched).map(x => x.ref)
+      const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
+      for (const axisAt of [undefined, () => undefined, () => axis - 40]) {
+        expect(measureBarGeometry(narrow, geom, refs, { controlOf, axisArgb: 'FFFFFFFF', tolerancePx: 1, ...(axisAt ? { axisAt } : {}) }), `${width} px`)
+          // (A wrong position refuses at the first cell it contradicts, B2 or the zero cell B4.)
+          .toMatchObject({ kind: 'refusal', code: 'bar-edge-unstable', reason: expect.stringMatching(/^Bar cell B[24]: /) })
+      }
+    }
+    // A wide axis-coloured run is refused too when nothing places the axis.
+    const refs = c.expected.cells.filter(x => x.matched).map(x => x.ref)
+    const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
+    expect(measureBarGeometry(paintExcelWhite(png, original, true), geom, refs, { controlOf, axisArgb: 'FFFFFFFF', tolerancePx: 1 }))
+      .toMatchObject({ kind: 'refusal', code: 'bar-edge-unstable' })
   })
 
   it('the automatic-colours case puts a static grey fill under every bar and control cell', () => {
@@ -176,15 +238,27 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     expect(judgeBarAutoColour(undefined)).toMatchObject({ status: 'no-hypotheses' })
   })
 
-  it('the audit blocks both capabilities and exports no colour until a verified capture lands', () => {
+  it('the audit verifies both colours as white from the grey-cell capture, and production still withholds', () => {
     const report = auditStage3Manifest(manifest(), { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) {
-      expect(report.perCapability.find(p => p.capabilityId === cap)?.disposition, cap).toBe('supported-structural')
-      expect(report.blockedCapabilities).toContain(cap)
+      expect(report.perCapability.find(p => p.capabilityId === cap)?.disposition, cap).toBe('verified')
+      expect(report.blockedCapabilities).not.toContain(cap)
     }
-    expect(report.autoBarColours).toEqual({})
-  })
+    expect(report.autoBarColours).toEqual(WHITE)
+    // Nothing is published (Task 23): production has no Stage 3 export, so no automatic colour resolves.
+    withExactCfEvidence(Object.keys(BAR_AUTO_COLOUR_CAPABILITIES), () => {
+      for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) expect(autoBarColourEvidence(cap), cap).toBeUndefined()
+    })
+    // Without a verified capture the audit blocks both and exports no colour.
+    const before = auditStage3Manifest(precapture(), { rootDir: REPO_ROOT })
+    expect(before.ok).toBe(true)
+    for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) {
+      expect(before.perCapability.find(p => p.capabilityId === cap)?.disposition, cap).toBe('supported-structural')
+      expect(before.blockedCapabilities).toContain(cap)
+    }
+    expect(before.autoBarColours).toEqual({})
+  }, AUDIT_TIMEOUT_MS)
 
   it('a colour is exported only for a verified capability whose captures agree', () => {
     const verified = [{ capabilityId: 'bar:color-auto-axis', caseId: 'x', disposition: 'verified' as const }, { capabilityId: 'bar:color-auto-negative-fill', caseId: 'x', disposition: 'supported-structural' as const }]
@@ -203,10 +277,15 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed })).toBe(committed)
     expect(committed).not.toContain('VERIFIED_STAGE3_AUTO_BAR_COLORS')
+    // Publishing (Task 23 only) would carry both measured colours.
     const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { publishStage3: true })
-    expect(published).toContain('export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n}\n')
+    expect(published).toContain(renderAutoBarColoursBlock(WHITE))
+    // Before the capture, publishing carries an empty colour block.
+    expect(renderVerifiedCapabilitiesSource(precapture(), REPO_ROOT, { publishStage3: true }))
+      .toContain('export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n}\n')
     // A published colour block is carried over verbatim by a later --write without --publish-stage3.
-    const withColour = published.replace('VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n}', "VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n  'bar:color-auto-axis': 'FF000000',\n}")
+    const withColour = published.replace(renderAutoBarColoursBlock(WHITE), renderAutoBarColoursBlock({ 'bar:color-auto-axis': 'FF000000' }))
+    expect(withColour).not.toBe(published)
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: withColour })).toBe(withColour)
-  })
+  }, AUDIT_TIMEOUT_MS)
 })

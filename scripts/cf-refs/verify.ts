@@ -1707,7 +1707,18 @@ export function measureBarGeometry(
   png: DecodedPng,
   geom: WorksheetRangeGeometry,
   refs: readonly string[],
-  opts: { controlOf: (ref: string) => string; axisArgb?: string; tolerancePx: number; caseId?: string },
+  opts: {
+    controlOf: (ref: string) => string
+    axisArgb?: string
+    tolerancePx: number
+    caseId?: string
+    /**
+     * Where the evidence puts each cell's axis: an absolute px column (measured on a zero cell of the same scope),
+     * `null` when the cell's bar draws no axis (`axisPosition="none"`), `undefined` when nothing settles it. Without this
+     * option only a 1 px axis-coloured run is read as the axis (the explicit-axis fixtures); anything else refuses.
+     */
+    axisAt?: (ref: string) => number | null | undefined
+  },
 ): ReadonlyMap<string, CfObservedBar> | Refusal {
   const refuse = (code: CfRefusalCode, reason: string): Refusal => ({
     kind: 'refusal',
@@ -1782,16 +1793,36 @@ export function measureBarGeometry(
         }
         if (hits * 2 >= rows && ctrlHits * 2 < rows) axisCols.add(dx)
       }
-      // Excel's axis is one line (at most 2 columns): a wider run in the axis colour is a bar painted in that colour
-      // (Excel paints its automatic axis and automatic negative fill both white, Ruling S3-AUTO-GREY), never an axis.
-      const wide = [...axisCols].filter(dx => {
-        let lo = dx
-        let hi = dx
-        while (axisCols.has(lo - 1)) lo--
-        while (axisCols.has(hi + 1)) hi++
-        return hi - lo + 1 > 2
-      })
-      for (const dx of wide) axisCols.delete(dx)
+      // Excel's axis is one 1 px line, but a bar can be painted in the axis colour too (Excel paints its automatic axis
+      // and automatic negative fill both white, Ruling S3-AUTO-GREY), so an axis-coloured run is the axis, bar ink, or
+      // both. Fail closed: only evidence decides (`opts.axisAt`), and an undecidable run refuses, never guessed.
+      const runs: Array<[number, number]> = []
+      for (const dx of [...axisCols].sort((a, b) => a - b)) {
+        const last = runs[runs.length - 1]
+        if (last && dx === last[1] + 1) last[1] = dx
+        else runs.push([dx, dx])
+      }
+      axisCols.clear()
+      const at = opts.axisAt?.(ref)
+      for (const [lo, hi] of runs) {
+        const width = hi - lo + 1
+        const where = `columns ${box.x0 + lo}-${box.x0 + hi}`
+        if (opts.axisAt === undefined) {
+          // No evidence of the axis position: only the plain 1 px axis line is unambiguous.
+          if (width === 1) axisCols.add(lo)
+          else return refuse('bar-edge-unstable', `Bar cell ${ref}: an axis-coloured run at ${where} is ${width} px wide, so the axis and a bar in the axis colour cannot be told apart`)
+        } else if (at === null) {
+          // The bar draws no axis: an axis-coloured run is bar ink.
+        } else if (at === undefined) {
+          return refuse('bar-edge-unstable', `Bar cell ${ref}: an axis-coloured run at ${where} and no measured axis position for its scope, so the axis and a bar in the axis colour cannot be told apart`)
+        } else if (at - box.x0 >= lo && at - box.x0 <= hi) {
+          // The measured axis column is the axis; the rest of the run is a bar painted in the axis colour beside it.
+          axisCols.add(at - box.x0)
+        } else if (width <= 2) {
+          return refuse('bar-edge-unstable', `Bar cell ${ref}: a ${width} px axis-coloured run at ${where} away from the measured axis at ${at} could be an axis or a bar`)
+        }
+        // A run of 3 px or more away from the measured axis is bar ink.
+      }
       if (axisCols.size > 0) axisPx = box.x0 + Math.min(...axisCols)
     }
     const scan = (background: [number, number, number]) => {
@@ -2018,7 +2049,17 @@ export interface BarSheetFacts {
 
 const DATE_NUMFMT_IDS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47])
 
+const barSheetFactsCache = new WeakMap<Map<string, Uint8Array>, BarSheetFacts>()
+/** Facts of the saved worksheet, read once per parts map (the measurer, samplers and hypotheses share them). */
 export function readBarSheetFacts(parts: Map<string, Uint8Array>): BarSheetFacts {
+  const hit = barSheetFactsCache.get(parts)
+  if (hit) return hit
+  const facts = readBarSheetFactsUncached(parts)
+  barSheetFactsCache.set(parts, facts)
+  return facts
+}
+
+function readBarSheetFactsUncached(parts: Map<string, Uint8Array>): BarSheetFacts {
   const dec = new TextDecoder()
   const facts: BarSheetFacts = { values: new Map(), hiddenRows: new Set(), filteredRows: new Set(), merges: [], theme: [], maxRow: 1, rightToLeft: false }
   const sheetRaw = parts.get('xl/worksheets/sheet1.xml')
@@ -2839,7 +2880,7 @@ export function measureCaseBars(c: CfOracleCase, png: DecodedPng, geom: Workshee
   const refs = c.expected.cells.filter(cell => cell.matched).map(cell => cell.ref)
   const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
   const axisArgb = parts ? measurementAxisArgb(c, parts, png, geom) : 'FF000000'
-  return measureBarGeometry(png, geom, refs, { controlOf, axisArgb, tolerancePx: 1, caseId: c.id })
+  return measureBarGeometry(png, geom, refs, { controlOf, axisArgb, tolerancePx: 1, caseId: c.id, ...(parts ? { axisAt: measuredAxisPositions(c, parts, png, geom) } : {}) })
 }
 
 /**
@@ -2910,6 +2951,8 @@ interface SavedBarColours {
   sqref: string
   axisAuto: boolean
   axisExplicit: boolean
+  /** `axisPosition="none"`: the bar draws no axis. */
+  axisNone: boolean
   negativeFillAuto: boolean
   negativeSameAsPositive: boolean
   solid: boolean
@@ -2917,7 +2960,33 @@ interface SavedBarColours {
   others: string[] | undefined
 }
 
+/** One parse per saved workbook: the measurer, the samplers and the audit all read the same parts. */
+const savedBarColoursCache = new WeakMap<Map<string, Uint8Array>, SavedBarColours[]>()
 function savedBarColours(parts: Map<string, Uint8Array>): SavedBarColours[] {
+  const hit = savedBarColoursCache.get(parts)
+  if (hit) return hit
+  const out = readSavedBarColours(parts)
+  savedBarColoursCache.set(parts, out)
+  return out
+}
+
+/**
+ * Whether this capture can draw an automatic colour at all: a cell that the samplers would read (a zero cell of a
+ * mixed-sign bar with an automatic axis, or a negative cell of a solid bar with an automatic negative fill). The audit
+ * measures only such captures.
+ */
+export function drawsBarAutoColour(c: CfOracleCase, parts: Map<string, Uint8Array>): boolean {
+  const bars = savedBarColours(parts).filter(b => b.axisAuto || (b.negativeFillAuto && b.solid))
+  if (bars.length === 0) return false
+  const facts = readBarSheetFacts(parts)
+  return c.expected.cells.some(cell => {
+    const v = facts.values.get(cell.ref.toUpperCase())
+    if (v?.kind !== 'num') return false
+    return bars.some(b => isCellInSqref(cell.ref, b.sqref) && ((b.axisAuto && v.v === 0 && scopeHasMixedSigns(b.sqref, facts)) || (b.negativeFillAuto && b.solid && v.v < 0)))
+  })
+}
+
+function readSavedBarColours(parts: Map<string, Uint8Array>): SavedBarColours[] {
   const raw = parts.get('xl/worksheets/sheet1.xml')
   if (!raw) return []
   const root = parseXml(new TextDecoder().decode(raw)) as XmlNode
@@ -2963,6 +3032,7 @@ function savedBarColours(parts: Map<string, Uint8Array>): SavedBarColours[] {
       sqref: x14Sqref.get(rule) ?? '',
       axisAuto: isAuto(axisNode) && attr(bar, 'axisPosition') !== 'none',
       axisExplicit: axisNode !== undefined && !isAuto(axisNode) && attr(bar, 'axisPosition') !== 'none',
+      axisNone: attr(bar, 'axisPosition') === 'none',
       negativeFillAuto: isAuto(negNode) && !negSame,
       negativeSameAsPositive: negSame,
       solid: flag('gradient', true) === false,
@@ -3105,6 +3175,45 @@ export function judgeBarAutoColour(o: BarAutoColourObservation | undefined, othe
 }
 
 /**
+ * Where each designated cell's axis is, from evidence only: `null` when every bar covering it draws no axis
+ * (`axisPosition="none"`); otherwise the px column every zero cell of the covering bars' scopes shows the axis at
+ * (`sampleZeroCellAxis`; zero cells that disagree, or none at all, leave it undefined, and the measurer then refuses
+ * any axis-coloured run there).
+ */
+export function measuredAxisPositions(c: CfOracleCase, parts: Map<string, Uint8Array>, png: DecodedPng, geom: WorksheetRangeGeometry): (ref: string) => number | null | undefined {
+  const facts = readBarSheetFacts(parts)
+  const bars = savedBarColours(parts)
+  // Per bar and column: the axis sits at the same x in every cell of one column of one scope.
+  const colOf = (ref: string): string => ref.toUpperCase().replace(/\d+/g, '')
+  const zeroAxis = new Map<SavedBarColours, Map<string, Set<number>>>()
+  for (const b of bars) {
+    if (b.axisNone) continue
+    const byCol = new Map<string, Set<number>>()
+    for (const cell of c.expected.cells) {
+      const v = facts.values.get(cell.ref.toUpperCase())
+      if (v?.kind !== 'num' || v.v !== 0 || !isCellInSqref(cell.ref, b.sqref)) continue
+      const s = sampleZeroCellAxis(png, geom, cell.ref, cell.controlRef)
+      if (!('axisPx' in s)) continue
+      const set = byCol.get(colOf(cell.ref)) ?? new Set<number>()
+      set.add(s.axisPx)
+      byCol.set(colOf(cell.ref), set)
+    }
+    zeroAxis.set(b, byCol)
+  }
+  return (ref: string) => {
+    const covering = bars.filter(b => isCellInSqref(ref, b.sqref))
+    if (covering.length === 0) return undefined
+    if (covering.every(b => b.axisNone)) return null
+    const xs = new Set<number | undefined>()
+    for (const b of covering.filter(x => !x.axisNone)) {
+      const set = zeroAxis.get(b)?.get(colOf(ref))
+      xs.add(set?.size === 1 ? [...set][0] : undefined)
+    }
+    return xs.size === 1 ? [...xs][0] : undefined
+  }
+}
+
+/**
  * The axis colour the measurer must look for: Excel's automatic axis colour as the zero-valued cells of this capture
  * show it, when every axis the capture draws is automatic; otherwise the fixtures' explicit black.
  */
@@ -3120,11 +3229,17 @@ export function measurementAxisArgb(c: CfOracleCase, parts: Map<string, Uint8Arr
  * geometry from the sidecar's Excel-measured widths. Undefined when any of them is missing (the case's own verification
  * reports why); never a fallback geometry.
  */
-export function loadBarScreenCapture(c: CfOracleCase, rootDir: string): { parts: Map<string, Uint8Array>; png: DecodedPng; geom: WorksheetRangeGeometry } | undefined {
+export function loadBarScreenCapture(
+  c: CfOracleCase,
+  rootDir: string,
+  wanted: (parts: Map<string, Uint8Array>) => boolean = () => true,
+): { parts: Map<string, Uint8Array>; png: DecodedPng; geom: WorksheetRangeGeometry } | undefined {
   const cap = c.captures.find(x => x.appearance === 'screen')
   const saved = resolve(rootDir, c.saved)
   if (!cap || !existsSync(saved) || !existsSync(resolve(rootDir, cap.pngPath)) || !existsSync(resolve(rootDir, cap.sidecarPath))) return undefined
   const parts = readZipPartsSync(new Uint8Array(readFileSync(saved)))
+  // The PNG is decoded only for a workbook the caller wants (decoding dominates the audit's cost).
+  if (parts && !wanted(parts)) return undefined
   const png = decodePngSync(new Uint8Array(readFileSync(resolve(rootDir, cap.pngPath))))
   const sidecar = JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown>
   if (!parts || !png || !Array.isArray(sidecar.colWidthsPt) || !Array.isArray(sidecar.rowHeightsPt)) return undefined

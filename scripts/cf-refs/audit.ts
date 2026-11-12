@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BAR_AUTO_COLOUR_CAPABILITIES,
+  drawsBarAutoColour,
   isBarAutoColourCapability,
   isCapabilityVerified,
   judgeBarAutoColour,
@@ -287,7 +288,7 @@ export interface Stage3AuditReport extends Stage1AuditReport {
 export function barAutoColoursAcrossCases(manifest: CfManifest, rootDir: string = REPO_ROOT): Record<string, BarAutoColourObservation> {
   const pooled: Record<string, BarAutoColourObservation> = {}
   for (const c of manifest.cases.filter(x => (x.stage === 3 || x.id.startsWith('stage3')) && x.status === 'measured')) {
-    const capture = loadBarScreenCapture(c, rootDir)
+    const capture = loadBarScreenCapture(c, rootDir, parts => drawsBarAutoColour(c, parts))
     if (!capture) continue
     const measured = measureCaseBars(c, capture.png, capture.geom, capture.parts)
     const observed = sampleBarAutoColours(c, capture.parts, capture.png, capture.geom, measured instanceof Map ? measured : undefined)
