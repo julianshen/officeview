@@ -617,3 +617,40 @@ Both Stage 1 x14 cases are `measured` (a0671211): `audit.ts --stage 1` gives `st
   - `stage1-blanks-errors:O6`
 
   L2, K7, N6 and O8 remain exact no-matches. The pinned 398/364/34 equals the derived counts.
+
+### Task 19b (2026-11-12): owner amendments to S3-K and S3-F, automatic bar colours
+
+No Excel, `osascript` or `osacompile` was run. `audit.ts --write` was not run, and `verifiedCapabilities.ts` is unchanged. The manifest changed only through `generate.ts --stage 3 --case stage3-bar-auto-colors`, which added that case's entry and nothing else. `capture.ts --stage 3 --verify-only` relabelled nothing.
+
+**Owner amendment to Ruling S3-K.** A sheet with no `<sheetView>`, or one without `rightToLeft`, is left-to-right, the schema default. A `context` bar there resolves as on an explicit LTR sheet, still gated by `bar:direction-context-ltr-sheet`. An explicit `rightToLeft="1"` sheet stays unresolved through Stage 3, and a malformed flag stays an unknown reading order. The amendment applies on both parse paths (`sheetViewRightToLeft` states the contract), and resident and streamed results stay deep-equal.
+
+**Owner amendment to Ruling S3-F.** An `auto="1"` colour is a value Excel draws. It resolves only through a pixel-verified capability that records the colour Excel drew, and production consumes that colour only once Task 23 publishes it. No system colour is ever guessed. Alpha `00` stays unresolved.
+
+**Inventory of `auto="1"` in the Excel-resaved Stage 3 fixtures.**
+
+| Element | Cases that carry it | Drawn in the kept capture? |
+|---|---|---|
+| `<x14:axisColor auto="1"/>` | every bar of lengths, degenerate, rendering, geometry, showvalue, participation, scope, composition and pairing, plus the probe's configured bar (middle axis) | **No.** Every such bar's scope is all-positive, and Excel draws no axis line there: the probe's middle axis shows none, as the pixel dump of B2 confirms. The mixed-sign data of axis-negative carries an explicit `FF000000`. |
+| `<x14:negativeFillColor auto="1"/>` | the same bars except the probe | **No.** None of those bars has a negative cell. The only negative data (axis-negative, lengths J) carries an explicit `FFFF0000`. |
+| `<x14:negativeBorderColor auto="1"/>`, `<x14:borderColor auto="1"/>`, base `<color auto="1"/>` | none in any resave (base `<color auto="1"/>` only in the authored unresolved-shapes case) | — |
+
+**Harness.**
+
+- **Capabilities.** `bar:color-auto-axis` and `bar:color-auto-negative-fill`, the only automatic colours that occur. They are owned by the new case `stage3-bar-auto-colors` (recipe-pending): B uses an automatic axis, C a middle axis and D no axis, each with its fill only, on {-50,-25,0,50,100}.
+- **Sampling.** `sampleBarAutoColours` (verify.ts) samples only elements the resaved workbook carries as `auto="1"`:
+  - the axis on zero-valued cells of mixed-sign bars, where Excel draws the axis and no bar. It is one ink run at most 2 columns wide over at least half the rows.
+  - the negative fill on negative cells of solid bars that do not reuse the positive colour, as the measured bar's fill.
+- **Judgement.** `judgeBarAutoColour` refuses samples more than 8 per channel from their median (the calibration cell's tolerance, Ruling S3-A step 6). The colour is non-discriminating when it lies within 16 of another colour the bar draws (separation 17, twice the tolerance plus one), or when such a colour cannot be resolved. The background is excluded by construction: every sample is ink, at least 64 from it.
+- **Cross-case check.** The audit pools every measured capture and verifies a colour only when all captures agree with the owning case (`barAutoColoursAcrossCases`).
+- **Measuring around an automatic axis.** `measureCaseBars` locates an automatic axis in the colour Excel drew it, so a non-black automatic axis is never read as bar ink. The test recolours the real axis-negative axis to grey, and the measurement is unchanged.
+- **Validated on real pixels.** With axis-negative's explicit colours relabelled `auto="1"` in memory, the sampler returns exactly FF000000 (axis) and FFFF0000 (negative fill).
+- **Export.** `audit.ts --write --publish-stage3` renders `VERIFIED_STAGE3_AUTO_BAR_COLORS` (capability → ARGB, verified capabilities only) beside `VERIFIED_STAGE3_CAPABILITIES`. Without `--publish-stage3` a committed block is carried verbatim. Nothing is published now.
+- **`bar:unresolved-auto-color` is re-specified, not retired.** It means an automatic **positive** fill (base `<color auto="1"/>`), which has no capability and stays unresolved. The capability counts are unchanged apart from the two new ids: 45 verified, 8 non-discriminating, 12 refused-unsupported, and 7 blocked (the 5 earlier ones plus the two automatic colours).
+
+**Production.**
+
+- An automatic axis or negative fill is recorded in the bar definition (`autoColors`).
+- Its ARGB comes from `autoBarColourEvidence`, which needs both `hasEvidence(capability)` and a measured colour in the generated export. The export is read optionally, because it does not exist yet.
+- Without both, the bar withholds with the existing `cf-unsupported-rule`, so every production outcome is unchanged.
+
+**Pending, needs Excel.** The orchestrator runs `build.ts --stage 3 --case stage3-bar-auto-colors --refresh-clock-date`, then `capture.ts --stage 3 --case stage3-bar-auto-colors`, then `--verify-only` and `audit.ts --stage 3` (recipes, section 2b).
