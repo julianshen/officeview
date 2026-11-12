@@ -30,8 +30,9 @@
  *   two abutting strokes' boxes overlap by no more than their cap paddings).
  *   That is the same line carried on under a neighbouring segment; a
  *   collinear mark overlapping an own line further is ordinary cover. A mark
- *   whose box was cut by a clip or the surface, or grown by a shadow, has no
- *   cap allowance to discount (its whole box counts). Provenance and
+ *   whose box was cut by a clip or the surface, or grown by a shadow, and a
+ *   stroke with square or round caps, has no cap allowance to discount (its
+ *   whole box counts). Provenance and
  *   ownership — geometry alone never exempts a mark; any other mark of the
  *   scope, a decoration over any other run, and a run with no own lines get
  *   ordinary cover; malformed sequences record ordinary marks. Further, only
@@ -157,7 +158,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   /** `scope`/`piece`: set on a cover mark drawn in a decoration scope's 'line'
    * phase — the scope, and the 'text' phase that 'line' phase follows.
    * `cap`/`capAxis`: the cap allowance inside `box` at each end of a single
-   * straight axis-aligned stroke, and the device axis it lies along (0 = x);
+   * straight axis-aligned butt-capped stroke, and the device axis it lies along (0 = x);
    * absent for every other mark and for a box that is no longer the stroke's
    * own (cut by a clip or the surface, grown by a shadow). */
   type Mark = { seq: number; box: Rect; grid: Grid; scope?: number; piece?: number; cap?: number; capAxis?: 0 | 1 }
@@ -261,8 +262,10 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     const along = strokeHalf(ctx), across = (ctx.lineWidth * maxScale(ctx)) / 2
     if (segments.length === 1 && joins.length === 0) {
       const r = segments[0]!
-      if (Math.abs(r[3] - r[1]) < 1e-9) return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], cap: { px: along, axis: 0 } }
-      if (Math.abs(r[2] - r[0]) < 1e-9) return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], cap: { px: along, axis: 1 } }
+      // The end padding is pure allowance only under butt caps (square and round caps paint into it).
+      const butt = ctx.lineCap === 'butt'
+      if (Math.abs(r[3] - r[1]) < 1e-9) return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], ...(butt ? { cap: { px: along, axis: 0 as const } } : {}) }
+      if (Math.abs(r[2] - r[0]) < 1e-9) return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], ...(butt ? { cap: { px: along, axis: 1 as const } } : {}) }
     }
     return { boxes: [...segments.map((r) => pad(r, along)), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(ctx)))] }
   }

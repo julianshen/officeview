@@ -444,7 +444,7 @@ export function answerText(job: Exclude<TextJob, { op: 'prepare' }>, unitCount: 
       }
     }
     // A job that asked for more matches than the bound allows cannot tell whether the answer went on.
-    return matches.length >= limit && job.maxMatches > limit ? { op: 'search', matches, truncated: true } : { op: 'search', matches }
+    return matches.length >= limit && job.maxMatches > SEARCH_MAX_RECTS ? { op: 'search', matches, truncated: true } : { op: 'search', matches }
   }
 
   if (job.op === 'a11y') {

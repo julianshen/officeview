@@ -683,8 +683,9 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
   })
   it('stroked lines: two abutting strokes overlap only by their cap allowances and continue; a stroke reaching back over the own line covers', () => {
     const stroke = (c: CanvasRenderingContext2D, x0: number, x1: number, y: number) => { c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); c.stroke() }
-    const at = (back: number, clip = false) => probe((c, i) => {
+    const at = (back: number, clip = false, lineCap: CanvasLineCap = 'butt') => probe((c, i) => {
       const mid = i.x + i.width / 2, y = i.y + 3.5
+      c.lineCap = lineCap
       phase(c, 'line'); stroke(c, i.x - 2, mid, y)
       neighbour(c, () => {
         if (clip) { c.save(); c.beginPath(); c.rect(mid - 0.3, 0, 300, 100); c.clip() }
@@ -699,6 +700,8 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
     // A clip that cuts into the stroke's box (0.3 px before its true start, inside its 0.71 px cap allowance)
     // takes the allowance away: the whole clipped box counts, and that reaches back over the own line.
     expect(at(0, true)).toMatchObject({ servable: false, reason: 'covered' })
+    // Square and round caps paint past the stroke's ends: no allowance is discounted, so abutting strokes overlap.
+    for (const cap of ['square', 'round'] as const) expect(at(0, false, cap)).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('a run with no own lines gets no exemption from the scope\'s other lines', () => {
     expect(probe((c, i) => { neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
