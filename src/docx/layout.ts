@@ -16,7 +16,7 @@ import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { layoutTextBody } from '../drawing/text-layout'
 import { clusterOrientation } from '../drawing/vertical-orientation'
-import { graphemes, RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type TextRecordingContext } from '../core/text-recording'
+import { graphemes, PAINT_DECORATION, RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type TextRecordingContext } from '../core/text-recording'
 import type { DrawingTextParagraph, LocalAffine, TextDirection } from '../drawing/text'
 
 export interface RunStyle {
@@ -1137,13 +1137,17 @@ export function renderPages(
                 if (record && seg.logical) record(seg.text, 0, 0, seg.widthPx, seg.logical)
                 else ctx.fillText(seg.text, 0, 0)
                 if (seg.run.underline || seg.run.strike) {
-                  ctx.strokeStyle = ctx.fillStyle
-                  ctx.lineWidth = Math.max(1, size * 0.06)
-                  ctx.beginPath()
-                  const yy = seg.run.underline ? size * 0.15 : -size * 0.3
-                  ctx.moveTo(0, yy)
-                  ctx.lineTo(seg.widthPx, yy)
-                  ctx.stroke()
+                  const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
+                  decoration?.(true)
+                  try {
+                    ctx.strokeStyle = ctx.fillStyle
+                    ctx.lineWidth = Math.max(1, size * 0.06)
+                    ctx.beginPath()
+                    const yy = seg.run.underline ? size * 0.15 : -size * 0.3
+                    ctx.moveTo(0, yy)
+                    ctx.lineTo(seg.widthPx, yy)
+                    ctx.stroke()
+                  } finally { decoration?.(false) }
                 }
               } finally {
                 ctx.restore()
@@ -1165,13 +1169,17 @@ export function renderPages(
               : seg.run.vertAlign === 'subscript' ? seg.style.fontSizePt * 0.25 : 0
             ctx.fillText(seg.text, segX, baseline + vertDy)
             if (seg.run.underline || seg.run.strike) {
-              ctx.strokeStyle = ctx.fillStyle
-              ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
-              ctx.beginPath()
-              const yy = seg.run.underline ? baseline + vertDy + seg.style.fontSizePt * 0.15 : baseline + vertDy - seg.style.fontSizePt * 0.3
-              ctx.moveTo(segX, yy)
-              ctx.lineTo(segX + seg.widthPx, yy)
-              ctx.stroke()
+              const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
+              decoration?.(true)
+              try {
+                ctx.strokeStyle = ctx.fillStyle
+                ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
+                ctx.beginPath()
+                const yy = seg.run.underline ? baseline + vertDy + seg.style.fontSizePt * 0.15 : baseline + vertDy - seg.style.fontSizePt * 0.3
+                ctx.moveTo(segX, yy)
+                ctx.lineTo(segX + seg.widthPx, yy)
+                ctx.stroke()
+              } finally { decoration?.(false) }
             }
             x = segX + seg.widthPx
           }

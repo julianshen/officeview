@@ -15,7 +15,9 @@
  *   clip (tracked exactly only while every clip is an axis-aligned rect), is
  *   not fully transparent, and no ink cell was covered — or touched by a
  *   non-`source-over` op or a filter — after the run was drawn.
- * - Text decorations (S3a Task 3c): a later `cover` mark whose thickness
+ * - Text decorations (S3a Task 3c): a later `cover` mark recorded while the
+ *   painter announced a decoration (`ctx[PAINT_DECORATION]`, provenance —
+ *   geometry alone never exempts a mark) and whose thickness
  *   along its own thin axis (the smaller side of its box; a square box is
  *   never one) is at most max(1.5 × scale px, 12 % of the ink's extent on
  *   that axis) is a thin decoration — an underline, strike or overline that
@@ -26,6 +28,7 @@
  *   hull, so its decorations may not qualify (withheld).
  */
 import type { PaintObserver } from './render'
+import { PAINT_DECORATION } from '../../src/core/text-recording'
 
 export type OcclusionReason = 'covered' | 'clipped' | 'off-surface' | 'composite' | 'filter' | 'nonrect-clip' | 'transparent'
 export interface OcclusionEvidence {
@@ -112,7 +115,10 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   /** The coverage "grid" at full precision: every painting op's device box, in
    * sequence order (a 4 px cell grid withheld every spreadsheet cell next to a
    * gridline; a 1 px grid costs ~40 MB per page). */
-  const marks: Array<{ seq: number; box: Rect; grid: Grid }> = []
+  const marks: Array<{ seq: number; box: Rect; grid: Grid; decoration?: true }> = []
+  /** Set while the painter announces an underline/strike (PAINT_DECORATION). */
+  let decorating = false
+  const announce = (on: boolean) => { decorating = on === true }
   const surface: Rect = [0, 0, width, height]
   const runs: Run[] = []
   let seq = 0
@@ -127,7 +133,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
 
   const mark = (grid: Grid, r: Rect) => {
     const b = intersect(r, surface)
-    if (b[2] > b[0] && b[3] > b[1]) { charge(64); marks.push({ seq, box: b, grid }) }
+    if (b[2] > b[0] && b[3] > b[1]) { charge(64); marks.push(grid === 'cover' && decorating ? { seq, box: b, grid, decoration: true } : { seq, box: b, grid }) }
   }
   const overlaps = (a: Rect, b: Rect) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 
@@ -224,7 +230,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
       if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
       const w = m.box[2] - m.box[0], h = m.box[3] - m.box[1]
       const a = h < w ? 1 : 0, t = Math.min(w, h)
-      if (m.grid === 'cover' && w !== h && t <= Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (r.ink[a + 2]! - r.ink[a]!))) {
+      if (m.decoration && m.grid === 'cover' && w !== h && t <= Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (r.ink[a + 2]! - r.ink[a]!))) {
         bands[a].push([Math.max(m.box[a]!, r.ink[a]!), Math.min(m.box[a + 2]!, r.ink[a + 2]!)])
       } else later.add(m.grid)
     }
@@ -291,6 +297,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     wrap(ctx) {
       return new Proxy(ctx, {
         get(target, key) {
+          if (key === PAINT_DECORATION) return announce
           const v = Reflect.get(target, key, target)
           if (typeof v !== 'function') return v
           const hook = typeof key === 'string' ? hooks[key] : undefined

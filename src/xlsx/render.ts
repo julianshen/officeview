@@ -13,7 +13,7 @@ import { paintScene } from '../drawing/scene-paint'
 import { paintDrawingContent } from '../drawing/content-paint'
 import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
-import { graphemes, RECORD_GROUP, type TextRecordingContext } from '../core/text-recording'
+import { graphemes, PAINT_DECORATION, RECORD_GROUP, type TextRecordingContext } from '../core/text-recording'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
 import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
 import { BUILTIN_DATE_FORMATS, formatBuiltinDate } from './builtinDate'
@@ -1498,6 +1498,11 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
  * (tx, ty) and spans `width`, in the current transform. Accounting underlines
  * sit below the descenders and span the cell box [cellX, cellX + cellW]. */
 function paintDecoration(ctx: CanvasRenderingContext2D, d: CellTextDecoration, tx: number, ty: number, width: number, cellX?: number, cellW?: number): void {
+  const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
+  decoration?.(true)
+  try { paintDecorationLines(ctx, d, tx, ty, width, cellX, cellW) } finally { decoration?.(false) }
+}
+function paintDecorationLines(ctx: CanvasRenderingContext2D, d: CellTextDecoration, tx: number, ty: number, width: number, cellX?: number, cellW?: number): void {
   const t = Math.max(1, Math.round(d.sizePx / 16))
   const line = (x0: number, w: number, y: number) => ctx.fillRect(x0, Math.round(y), w, t)
   if (d.strike) line(tx, width, ty - d.sizePx * 0.27)

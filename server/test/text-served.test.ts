@@ -650,6 +650,23 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
     }
   }, 60_000)
 
+  test('XLSX: underlined and struck cells are served through the real painter', async () => {
+    const base = await buildXlsx([{ name: 'S', cols: '<col min="1" max="2" width="30" customWidth="1"/>', rows: [
+      { r: 1, cells: [{ ref: 'A1', t: 's', v: 0, style: 3 }, { ref: 'B1', t: 's', v: 1, style: 4 }] },
+    ] }], ['typing guide', 'some more'])
+    const zip = await JSZip.loadAsync(base)
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    zip.file('xl/styles.xml', styles
+      .replace('<fonts count="2">', '<fonts count="4">')
+      .replace('</fonts>', '<font><u/><sz val="11"/><name val="Calibri"/></font><font><strike/><sz val="11"/><name val="Calibri"/></font></fonts>')
+      .replace('<cellXfs count="3">', '<cellXfs count="5">')
+      .replace('</cellXfs>', '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'))
+    const r = await servedCopy(await zip.generateAsync({ type: 'uint8array' }))
+    expect(r.withheld).toBe(0)
+    expect(r.text).toContain('typing guide')
+    expect(r.text).toContain('some more')
+  }, 60_000)
+
   // The text-box painter (src/docx/drawing.ts) strokes decorations BEFORE the
   // glyphs, so they never cover them; this guards that path end to end.
   test('the DOCX text-box painter: struck and underlined words are served', async () => {

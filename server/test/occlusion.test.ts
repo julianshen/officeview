@@ -7,6 +7,14 @@ import { getPaintables } from '../../src/render/paint'
 import { hiddenFixtures } from '../../scripts/stream-s0/hidden-fixtures'
 import { projectPackage } from '../src/policy'
 import { occlusionObserver } from '../src/occlusion'
+import { PAINT_DECORATION } from '../../src/core/text-recording'
+
+/** Paint `f` as a painter-announced text decoration (the PAINT_DECORATION hook). */
+function deco(c: CanvasRenderingContext2D, f: () => void) {
+  const hook = (c as unknown as Record<symbol, ((on: boolean) => void) | undefined>)[PAINT_DECORATION]
+  hook?.(true)
+  try { f() } finally { hook?.(false) }
+}
 
 function run(paint: (ctx: CanvasRenderingContext2D) => void, w = 200, h = 100) {
   const ctx = createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D
@@ -197,7 +205,9 @@ describe('text decorations (S3a Task 3c)', () => {
     return { ...i, x1: i.x + i.width, y1: i.y + i.height }
   })()
   /** An opaque bar across the word, `t` px thick, starting `at` px below the ink top. */
-  const bar = (c: CanvasRenderingContext2D, at: number, t: number) => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, ink.y + at, ink.width + 4, t) }
+  const plainBar = (c: CanvasRenderingContext2D, at: number, t: number) => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, ink.y + at, ink.width + 4, t) }
+  /** The same bar announced by the painter as a text decoration. */
+  const bar = (c: CanvasRenderingContext2D, at: number, t: number) => deco(c, () => plainBar(c, at, t))
   const verdict = (paint: (c: CanvasRenderingContext2D) => void, scale?: number) => {
     const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
     const o = occlusionObserver(200, 100, undefined, scale)
@@ -212,14 +222,14 @@ describe('text decorations (S3a Task 3c)', () => {
   it('a 1 px underline fillRect below the baseline does not withhold the word', () => {
     // Baseline at y=50; the descender reaches below it.
     expect(ink.y1).toBeGreaterThan(52)
-    expect(verdict((c) => { word(c); c.fillStyle = '#000'; c.fillRect(20, 51, ink.width, 1) })).toMatchObject({ servable: true })
+    expect(verdict((c) => { word(c); deco(c, () => { c.fillStyle = '#000'; c.fillRect(20, 51, ink.width, 1) }) })).toMatchObject({ servable: true })
   })
   it('a 1 px strike through the middle does not withhold the word', () => {
     expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1) })).toMatchObject({ servable: true })
   })
   it('a stroke()d line path over the word (strokes are recorded as cover marks) does not withhold it', () => {
     // A single axis-aligned segment is recorded at its true width across the line: 1 px here.
-    expect(verdict((c) => { word(c); c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(ink.x, ink.y + ink.height / 2); c.lineTo(ink.x1, ink.y + ink.height / 2); c.stroke() })).toMatchObject({ servable: true })
+    expect(verdict((c) => { word(c); deco(c, () => { c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(ink.x, ink.y + ink.height / 2); c.lineTo(ink.x1, ink.y + ink.height / 2); c.stroke() }) })).toMatchObject({ servable: true })
   })
   it('underline + strike + overline together (≤ 25 % of ink height) still served', () => {
     expect(verdict((c) => { word(c); bar(c, 0, 1); bar(c, ink.height / 2, 1); bar(c, ink.height - 1, 1) })).toMatchObject({ servable: true })
@@ -256,9 +266,35 @@ describe('text decorations (S3a Task 3c)', () => {
   it('evidence() agrees: the decorated word is servable text', () => {
     expect(run((c) => { word(c); bar(c, ink.height / 2, 1) })).toMatchObject({ servable: 1, withheld: 0, servableText: ['Typing'] })
   })
+  // Fix round 1: only painter-announced decorations are eligible.
+  it('the observer\'s wrapped context defines PAINT_DECORATION', () => {
+    const o = occlusionObserver(10, 10)
+    const w = o.wrap(createCanvas(10, 10).getContext('2d') as unknown as CanvasRenderingContext2D) as unknown as Record<symbol, unknown>
+    expect(typeof w[PAINT_DECORATION]).toBe('function')
+  })
+  it('a thin plain (unannounced) fillRect over the word is covered', () => {
+    expect(verdict((c) => { word(c); plainBar(c, ink.height / 2, 1) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a thin plain stroke over the word is covered', () => {
+    expect(verdict((c) => { word(c); c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(ink.x, ink.y + ink.height / 2); c.lineTo(ink.x1, ink.y + ink.height / 2); c.stroke() })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('the flag ends with the hook: a plain bar after an announced one is covered', () => {
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1); plainBar(c, 2, 1) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('review counterexample: a sparse run whose glyphs are fully painted out by plain fillRects is withheld', () => {
+    const ctx = createCanvas(500, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(500, 100)
+    const c = o.wrap(ctx)
+    c.fillStyle = '#fff'; c.fillRect(0, 0, 500, 100)
+    c.font = '24px sans-serif'; c.fillStyle = '#000'; c.fillText('A' + ' '.repeat(30) + 'B', 20, 50)
+    c.fillStyle = '#fff'; c.fillRect(20, 0, 16, 100); c.fillRect(237, 0, 14, 100)
+    expect(o.runDetails()).toMatchObject([{ servable: false, reason: 'covered' }])
+    expect(o.evidence().servableText).toEqual([])
+  })
+
   // Ruling (a): exact stroke geometry for one straight axis-aligned segment.
   const thin = Math.max(1.5, 0.12 * ink.height)
-  const line = (c: CanvasRenderingContext2D, lw: number, path: (c: CanvasRenderingContext2D) => void) => { c.strokeStyle = '#000'; c.lineWidth = lw; c.beginPath(); path(c); c.stroke() }
+  const line = (c: CanvasRenderingContext2D, lw: number, path: (c: CanvasRenderingContext2D) => void) => deco(c, () => { c.strokeStyle = '#000'; c.lineWidth = lw; c.beginPath(); path(c); c.stroke() })
   const mid = ink.y + ink.height / 2
   it('one axis-aligned stroke segment is measured at its true width, not lineWidth·√2', () => {
     const lw = thin * 0.9 // ≤ the threshold; lw·√2 is above it
@@ -297,7 +333,7 @@ describe("text decorations measured along the mark's own thin axis (Task 3c ruli
     const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
     const o = occlusionObserver(200, 100)
     const w = o.wrap(ctx)
-    text(w, s, 20, 50); w.fillStyle = '#000'; paint(w)
+    text(w, s, 20, 50); w.fillStyle = '#000'; deco(w, () => paint(w))
     return o.runDetails()[0]!
   }
   const I = inkOf('I')

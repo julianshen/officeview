@@ -58,7 +58,14 @@ export type RecordText = (text: string, x: number, y: number, width: number, log
  * recording context does not define it. */
 export const RECORD_GROUP = Symbol('officeview.recordGroup')
 export type RecordGroup = (key: object | undefined) => void
-export type TextRecordingContext = CanvasRenderingContext2D & { [RECORD_TEXT]?: RecordText; [RECORD_GROUP]?: RecordGroup }
+/** Optional decoration hook: a painter about to draw an underline or
+ * strike-through for text it has just painted calls
+ * `ctx[PAINT_DECORATION]?.(true)` before and `(false)` after (in a finally).
+ * The server's occlusion observer uses it as decoration provenance; the
+ * library's own recording context does not define it. */
+export const PAINT_DECORATION = Symbol('officeview.paintDecoration')
+export type PaintDecoration = (on: boolean) => void
+export type TextRecordingContext = CanvasRenderingContext2D & { [RECORD_TEXT]?: RecordText; [RECORD_GROUP]?: RecordGroup; [PAINT_DECORATION]?: PaintDecoration }
 
 /** UTF-16 boundaries, shared by layout and public selection carets. */
 type GraphemeSegmenter = { segment(text: string): Iterable<{ segment: string; index: number }> }
