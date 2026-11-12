@@ -1,5 +1,5 @@
 import type { XlsxSheet } from '../types'
-import type { CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
+import type { CfBarDescriptor, CfLease, CfPrepared, CfStamp, SourceRect as ModelRect } from './model'
 import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
@@ -11,7 +11,7 @@ import type { EffectiveFormatScope, FormatBudget } from '../view/formatWorkspace
 import type { AllocationContext, AllocationReservation } from '../view/allocationAccount'
 import type { SheetColorContext } from '../sheetColors'
 import type { ValuePolicy } from '../view/values'
-import type { SourceStore, CfReadResult } from '../view/contracts'
+import type { CfCellStateWire, SourceStore, CfReadResult } from '../view/contracts'
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
@@ -104,7 +104,26 @@ interface CopiedState {
   readonly writes: readonly string[] | undefined
   readonly reason: string | undefined
   readonly scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }>
+  /** The resolved bar descriptor, identical on the resident and paged paths (Ruling S3-S). */
+  readonly bar?: CfBarDescriptor
 }
+
+type CfWireBar = NonNullable<CfCellStateWire['bar']>
+/** Wire form of a descriptor (`direction` as `rtl`), the shape every copy is priced in. */
+const wireBar = (d: CfBarDescriptor): CfWireBar => ({
+  ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor,
+  ...(d.borderColor !== undefined ? { borderColor: d.borderColor } : {}),
+  ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
+  isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
+})
+/** The descriptor a wire bar encodes: the copy owns plain fields only, never the received object. */
+const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
+  ruleId: w.ruleId, axisFraction: w.axisFraction, startFraction: w.startFraction, endFraction: w.endFraction, fillColor: w.fillColor,
+  ...(w.borderColor !== undefined ? { borderColor: w.borderColor } : {}),
+  isGradient: w.isGradient, isNegative: w.isNegative,
+  ...(w.axisColor !== undefined ? { axisColor: w.axisColor } : {}),
+  showValue: w.showValue, direction: w.rtl ? 'rightToLeft' : 'leftToRight',
+})
 
 /** Structural key for one cell's descriptor inputs: shared aspects share one charge. */
 const winKey = (
@@ -199,6 +218,10 @@ function assembleScope(
         properties: state.properties,
         ...(paintsScale ? { visual: { colorScale: { ruleId: scale!.ruleId ?? 0, argb: scale!.argb!, ...(scale!.fraction !== undefined ? { fraction: scale!.fraction } : {}) } } } : {}),
       }, colors)
+    },
+    barAt: (row, col) => {
+      if (disposed || !current()) return undefined
+      return states.get(row * 16384 + col)?.bar
     },
     describe: (row, col) => {
       if (disposed || !current()) return undefined
@@ -336,13 +359,14 @@ export async function prepareCfTextScope(
                 // ever exists uncharged (the spread below is transient scratch
                 // for measurement; the stored copy is built after admission).
                 const writes = outcome.value.unresolvedWrites ? [...outcome.value.unresolvedWrites] : undefined
-                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale })
+                const dataBar = outcome.value.visual?.dataBar
+                const occupied = measureCfCellBytes({ properties: outcome.value.properties, unresolvedWrites: writes, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: wireBar(dataBar) } : {}) })
                 if (!Number.isSafeInteger(bytes + occupied)) { service.dispose(); closeAccount(); throw refused('CF text preparation exceeds its admitted batch') }
                 admit(occupied)
                 bytes += occupied
                 const properties: Record<string, string | number | boolean | null> = {}
                 for (const key of Object.keys(outcome.value.properties)) properties[key] = outcome.value.properties[key]!
-                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale })
+                states.set(row * 16384 + col, { properties, writes, reason: undefined, scale: outcome.value.visual?.colorScale, ...(dataBar ? { bar: descriptorOf(wireBar(dataBar)) } : {}) })
               }
             }
           }
@@ -519,6 +543,7 @@ export async function prepareCfWireScope(
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,
             reason: state.unresolvedReason,
             scale: state.scale,
+            ...(state.bar ? { bar: descriptorOf(state.bar) } : {}),
           })
         }
       } finally {

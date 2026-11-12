@@ -1993,35 +1993,40 @@ async function prepareCfRemoteOnce(
   // plus 8 for the states-array element slot the walker charges per item.
   // Partial wins undershoot; taint-heavy outliers are caught post-build.
   const hasScale = rules.rules.some(r => r.definition.kind === 'colorScale')
+  // Ruling S3-S: a resolved bar rule prices one full bar descriptor per cell from the measurer-derived constant
+  // before anything is built; unresolved bar stubs never reach the wire, and a sheet without bars adds nothing.
+  const hasBar = rules.rules.some(r => r.definition.kind === 'dataBar')
   let perCell = 96
   for (const rule of rules.rules) perCell += measureCfPropertiesBytes((rule.dxf ?? {}) as Record<string, string | number | boolean | null>)
   const perCellScale = perCell + (hasScale ? limitsModule.CF_SCALE_CELL_BYTES : 0)
+  const perCellBar = perCellScale + (hasBar ? limitsModule.CF_BAR_CELL_BYTES : 0)
+  const hasVisual = hasScale || hasBar
   if (templateBytes === undefined || diagBytes === undefined || !Number.isSafeInteger(perCell)) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
   const estimate = estimateCfPreparationBytes(cells, perCell, 0, 0, 0)
-  const estimateWithScale = estimateCfPreparationBytes(cells, perCellScale, 0, 0, 0)
-  if (estimate === undefined || estimateWithScale === undefined) {
+  const estimateWithVisuals = estimateCfPreparationBytes(cells, perCellBar, 0, 0, 0)
+  if (estimate === undefined || estimateWithVisuals === undefined) {
     working.release()
     return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'), requiredBytes: undefined }
   }
   const boundedEstimate = templateBytes + estimate + envelopeBytes
-  const boundedEstimateWithScale = templateBytes + estimateWithScale + envelopeBytes
+  const boundedEstimateWithVisuals = templateBytes + estimateWithVisuals + envelopeBytes
   if (!Number.isSafeInteger(boundedEstimate) || boundedEstimate > grantBytes) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting exceeds the receiver grant; retry with at least the estimated size.'),
-      requiredBytes: hasScale ? boundedEstimateWithScale : boundedEstimate,
+      requiredBytes: hasVisual ? boundedEstimateWithVisuals : boundedEstimate,
     }
   }
-  const scaleGrantTarget = hasScale ? Math.min(grantBytes, boundedEstimateWithScale) : 0
-  const workingTarget = Math.max(boundedEstimate, scaleGrantTarget) + diagBytes
+  const visualGrantTarget = hasVisual ? Math.min(grantBytes, boundedEstimateWithVisuals) : 0
+  const workingTarget = Math.max(boundedEstimate, visualGrantTarget) + diagBytes
   if (!Number.isSafeInteger(workingTarget) || !working.grow(workingTarget)) {
     working.release()
     return {
       ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-budget-exceeded', 'Conditional formatting exceeds the admitted worker memory; retry when pressure drops.'),
-      requiredBytes: hasScale ? boundedEstimateWithScale : boundedEstimate,
+      requiredBytes: hasVisual ? boundedEstimateWithVisuals : boundedEstimate,
     }
   }
   // Service and its lease live inside the working hold: everything built
@@ -2098,11 +2103,20 @@ async function prepareCfRemoteOnce(
             argb: at.value.visual.colorScale.argb,
             ...(at.value.visual.colorScale.fraction !== undefined ? { fraction: at.value.visual.colorScale.fraction } : {}),
           } : undefined
+          // Ruling S3-S: numbers and booleans only, `direction` as `rtl`; optional colours only when present.
+          const d = at.value.visual?.dataBar
+          const bar = d ? {
+            ruleId: d.ruleId, axisFraction: d.axisFraction, startFraction: d.startFraction, endFraction: d.endFraction, fillColor: d.fillColor,
+            ...(d.borderColor !== undefined ? { borderColor: d.borderColor } : {}),
+            ...(d.axisColor !== undefined ? { axisColor: d.axisColor } : {}),
+            isGradient: d.isGradient, isNegative: d.isNegative, showValue: d.showValue, rtl: d.direction === 'rightToLeft',
+          } : undefined
           states.push({
             row, col,
             properties: { ...at.value.properties },
             ...(won === undefined ? {} : { unresolvedWrites: won }),
             ...(scale ? { scale } : {}),
+            ...(bar ? { bar } : {}),
           })
         }
       }
@@ -2127,7 +2141,7 @@ async function prepareCfRemoteOnce(
     }
     const fullBytes = measureBuilt(states, true)
     if (fullBytes === undefined) {
-      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: hasScale ? estimateWithScale : estimate }
+      return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-preparation-failed', 'Conditional formatting result could not be measured.'), requiredBytes: hasVisual ? estimateWithVisuals : estimate }
     }
     const fullWithEnvelope = fullBytes + envelopeBytes
 
@@ -2141,42 +2155,51 @@ async function prepareCfRemoteOnce(
       finalStates = states
       finalDiagnostics = diagnostics
     } else {
-      // Full payload exceeds grant. Check if states with scale fit without diagnostics
+      // Full payload exceeds grant. Check if states with their visuals fit without diagnostics
       const fullNoDiagBytes = measureBuilt(states, false)
       if (fullNoDiagBytes !== undefined && fullNoDiagBytes + envelopeBytes <= grantBytes) {
         finalStates = states
         finalDiagnostics = []
-      } else if (hasScale) {
-        // Scale payload exceeds grant: omit scale field from states
-        const statesWithoutScale = states.map(s => {
-          if (s.scale !== undefined) {
-            const { scale: _, ...rest } = s
-            return rest
-          }
-          return s
+      } else if (hasVisual) {
+        // A visual payload that exceeds the grant is omitted, never replaced (Ruling S3-S): bar fields go first,
+        // then scale fields, while every cell's base properties still return. Each step offers the bounded
+        // cf-grant-required diagnostics of the families omitted so far, and drops them when only the base fits.
+        const omit = (from: typeof states, field: 'bar' | 'scale'): typeof states => from.map(s => {
+          if (s[field] === undefined) return s
+          const { [field]: _, ...rest } = s
+          return rest
         })
-        const grantDiag: CfReadResult['diagnostics'][number] = {
-          kind: 'resource-limit',
-          feature: 'cf-grant-required',
-          message: 'Conditional formatting scale fill omitted due to receiver grant limit.',
-        }
-        const diagWithGrant = [...diagnostics, grantDiag]
-        const withGrantDiagBytes = limitsModule.measureCfWalkedBytes({
-          sheetId, stamp: liveStamp, kind: 'ready', states: statesWithoutScale, definitions,
-          definitionsVersion: version, diagnostics: diagWithGrant,
-        }, memory)
-
-        if (withGrantDiagBytes !== undefined && withGrantDiagBytes + envelopeBytes <= grantBytes) {
-          finalStates = statesWithoutScale
-          finalDiagnostics = diagWithGrant
-        } else {
-          const withoutGrantDiagBytes = measureBuilt(statesWithoutScale, false)
-          if (withoutGrantDiagBytes !== undefined && withoutGrantDiagBytes + envelopeBytes <= grantBytes) {
-            finalStates = statesWithoutScale
-            finalDiagnostics = []
-          } else {
-            return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
+        const families: { field: 'bar' | 'scale'; message: string }[] = [
+          ...(hasBar ? [{ field: 'bar' as const, message: 'Conditional formatting data bars omitted due to receiver grant limit.' }] : []),
+          ...(hasScale ? [{ field: 'scale' as const, message: 'Conditional formatting scale fill omitted due to receiver grant limit.' }] : []),
+        ]
+        let omitted = states
+        const grantDiags: CfReadResult['diagnostics'][number][] = []
+        let fitted = false
+        for (const family of families) {
+          omitted = omit(omitted, family.field)
+          grantDiags.push({ kind: 'resource-limit', feature: 'cf-grant-required', message: family.message })
+          const diagWithGrant = [...diagnostics, ...grantDiags]
+          const withGrantDiagBytes = limitsModule.measureCfWalkedBytes({
+            sheetId, stamp: liveStamp, kind: 'ready', states: omitted, definitions,
+            definitionsVersion: version, diagnostics: diagWithGrant,
+          }, memory)
+          if (withGrantDiagBytes !== undefined && withGrantDiagBytes + envelopeBytes <= grantBytes) {
+            finalStates = omitted
+            finalDiagnostics = diagWithGrant
+            fitted = true
+            break
           }
+          const withoutGrantDiagBytes = measureBuilt(omitted, false)
+          if (withoutGrantDiagBytes !== undefined && withoutGrantDiagBytes + envelopeBytes <= grantBytes) {
+            finalStates = omitted
+            finalDiagnostics = []
+            fitted = true
+            break
+          }
+        }
+        if (!fitted) {
+          return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }
         }
       } else {
         return { ...cfReadError(sheetId, request.stamp, 'cf-resource-limit', 'cf-grant-required', 'Conditional formatting result exceeds the receiver grant.'), requiredBytes: fullWithEnvelope }

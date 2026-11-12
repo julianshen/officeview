@@ -27,6 +27,8 @@ export interface EffectiveFormatScope {
   effectiveStyle(row: number, col: number, base: XlsxCellStyle | undefined): XlsxCellStyle | undefined
   /** Localized winning-state descriptor, or undefined when nothing applies. */
   describe(row: number, col: number): { key: string; text: string } | undefined
+  /** Current-generation data-bar descriptor (Ruling S3-S), or undefined when no bar paints the cell. */
+  barAt?(row: number, col: number): import('../cf/model').CfBarDescriptor | undefined
   dispose(): void
 }
 
