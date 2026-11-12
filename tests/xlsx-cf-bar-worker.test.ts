@@ -54,6 +54,8 @@ const BAR_EVIDENCE = [
   'bar:settings-precondition-probe', 'bar:settings-schema-defaults', 'bar:settings-paired-precedence',
   'bar:pairing-paired', 'bar:pairing-standalone', 'bar:pairing-base-only',
   'bar:colors-theme-tint', 'bar:colors-indexed', 'bar:bounds-positional', 'bar:bounds-out-of-domain', 'bar:degenerate-inverted',
+  // Task 22: a scope's `barAt` answers only for bars it paints, so the paint gates join the stubs.
+  'bar:geometry-insets', 'bar:geometry-snapping', 'bar:geometry-narrow-clip',
 ]
 const SCALE_EVIDENCE = ['scale:thresholds-min-max', 'scale:interpolation-color-space', 'scale:interpolation-rounding-ladder', 'scale:participation-types']
 

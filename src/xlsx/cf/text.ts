@@ -15,6 +15,7 @@ import type { CfCellStateWire, SourceStore, CfReadResult } from '../view/contrac
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
+import { barHidesText, barPaintable, paintDataBars } from './dataBarPaint'
 import { PackageError } from '../../core/package-error'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
@@ -125,18 +126,24 @@ const descriptorOf = (w: CfWireBar): CfBarDescriptor => ({
   showValue: w.showValue, direction: w.rtl ? 'rightToLeft' : 'leftToRight',
 })
 
-/** Structural key for one cell's descriptor inputs: shared aspects share one charge. */
+/** Structural key for one cell's descriptor inputs: shared aspects share one charge. A painted bar keys by its
+ * announced position, so the descriptor cache never hands one cell's bar text to another cell. */
 const winKey = (
   properties: Readonly<Record<string, string | number | boolean | null>>,
   unresolvedWrites: readonly string[] | undefined,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
+  bar?: CfBarDescriptor,
 ): string => {
   const paths = Object.keys(properties).sort().join(',')
   const writes = unresolvedWrites ? [...unresolvedWrites].sort().join(',') : ''
   const fraction = typeof scale === 'number' ? scale : scale?.fraction
   const scaleKey = fraction !== undefined ? `|scale:${Math.round(fraction * 100)}` : ''
-  return `${paths}|${writes}${scaleKey}`
+  const barKey = bar ? `|bar:${Math.round(barPosition(bar) * 100)}` : ''
+  return `${paths}|${writes}${scaleKey}${barKey}`
 }
+
+/** The value's position in the bar's range: the bar end away from its anchor (axis, leading or trailing edge). */
+const barPosition = (bar: CfBarDescriptor): number => bar.startFraction === bar.axisFraction ? bar.endFraction : bar.startFraction
 
 const winDescriptor = (
   properties: Readonly<Record<string, string | number | boolean | null>>,
@@ -145,13 +152,14 @@ const winDescriptor = (
   locale: string,
   cache: Map<string, CfDescriptor>,
   scale?: Readonly<{ fraction?: number; ruleId?: number; argb?: number }> | number,
+  bar?: CfBarDescriptor,
 ): CfDescriptor | undefined => {
-  const key = winKey(properties, unresolvedWrites, scale)
+  const key = winKey(properties, unresolvedWrites, scale, bar)
   const cached = cache.get(key)
   if (cached) return cached
   const descriptor = unresolvedReason !== undefined
     ? describeCfUnavailable(locale)
-    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale)
+    : describeCfWin(properties, unresolvedWrites, undefined, locale, scale, bar ? { fraction: barPosition(bar) } : undefined)
   if (descriptor && cache.size < DESCRIPTOR_CACHE_KEYS) cache.set(key, descriptor)
   return descriptor ?? undefined
 }
@@ -201,6 +209,14 @@ function assembleScope(
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
   let disposed = false
+  // The bar cells of the copied states (descriptors are shared, not copied again): the painter walks only these.
+  const bars = new Map<number, CfBarDescriptor>()
+  for (const [key, state] of states) if (state.bar) bars.set(key, state.bar)
+  const barAt = (row: number, col: number): CfBarDescriptor | undefined => {
+    if (disposed || !current()) return undefined
+    const bar = bars.get(row * 16384 + col)
+    return barPaintable(bar) ? bar : undefined
+  }
   return {
     gen,
     bytes,
@@ -219,21 +235,25 @@ function assembleScope(
         ...(paintsScale ? { visual: { colorScale: { ruleId: scale!.ruleId ?? 0, argb: scale!.argb!, ...(scale!.fraction !== undefined ? { fraction: scale!.fraction } : {}) } } } : {}),
       }, colors)
     },
-    barAt: (row, col) => {
-      if (disposed || !current()) return undefined
-      return states.get(row * 16384 + col)?.bar
-    },
+    barAt,
+    paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, barAt, cellRect, visible, scale),
+    hidesTextAt: (row, col) => barHidesText(barAt(row, col)),
     describe: (row, col) => {
       if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
       if (!state) return undefined
-      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale) return undefined
-      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale)
+      // A bar announces itself only where it paints; one the painter withholds is unavailable formatting, like a bar
+      // the evaluator left unresolved (that one reaches here through its writes or reason).
+      const bar = barAt(row, col)
+      if (state.bar && !bar) return describeCfUnavailable(locale)
+      if (Object.keys(state.properties).length === 0 && (state.writes?.length ?? 0) === 0 && state.reason === undefined && !state.scale && !bar) return undefined
+      return winDescriptor(state.properties, state.writes, state.reason, locale, cache, state.scale, bar)
     },
     dispose: () => {
       if (disposed) return
       disposed = true
       states.clear()
+      bars.clear()
       cache.clear()
       release()
     },
@@ -537,7 +557,7 @@ export async function prepareCfWireScope(
           bytes = next
           const properties: Record<string, string | number | boolean | null> = {}
           for (const key of Object.keys(state.properties)) properties[key] = state.properties[key]!
-          if (Object.keys(properties).length || state.scale?.argb !== undefined) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
+          if (Object.keys(properties).length || state.scale?.argb !== undefined || state.bar) regions.push({minRow:state.row,maxRow:state.row,minCol:state.col,maxCol:state.col})
           states.set(state.row * 16384 + state.col, {
             properties,
             writes: state.unresolvedWrites ? [...state.unresolvedWrites] : undefined,

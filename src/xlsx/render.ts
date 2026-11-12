@@ -905,7 +905,7 @@ export function renderSheet(
       const styledCell = regionStyledCell(regionStyles, cell)
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
-      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source))
+      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source), undefined, undefined, prepared?.conditionalFormatting?.hidesTextAt(cell.row, cell.col))
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }
@@ -919,6 +919,8 @@ export function renderSheet(
     return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
   }
   const grid = { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }
+  // Data bars paint over the fills and under the text (Task 22), through the lazy painter the batch carries.
+  prepared?.conditionalFormatting?.paintBars(ctx, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
   if (sheet.resolvedSparklines?.size) {
     const painted = paintSparklinesIn(ctx, sheet, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
     if (!painted) {
@@ -1268,6 +1270,8 @@ export function layoutCellBody(
   preformatted?: string,
   /** Allocation observer for any formatting this layout still does. */
   allocation?: FormatAllocation,
+  /** Ruling S3-O: lay the value out (formattedText stays) but draw no text, under a painted showValue="0" bar. */
+  suppressText?: boolean,
 ): CellBodyLayout {
   const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
   if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
@@ -1332,7 +1336,7 @@ export function layoutCellBody(
     }
   }
   out.formattedText = text
-  if (text !== '') {
+  if (text !== '' && !suppressText) {
     // A colour section ([Red], [Color n]) overrides the font colour.
     const code = displayFormatCode(cell.style)
     const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code, allocation) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')

@@ -444,7 +444,7 @@ it('a CF generation change with the lease kept invalidates every tile of THIS sh
     const cfPredicate = invalidateCalls[beforeCallsCount]!
 
     // (T15-A) Assertions:
-    // 1. Max edit invalidates ONLY the tiles of the scale scope (tile-level)
+    // 1. Max edit invalidates every tile of this sheet: the scale scope's tiles and, per the family ruling below, the rest
     expect(cfPredicate(tileInScope1), 'Tile in scope (rows 0..25) must be invalidated').toBe(true)
     expect(cfPredicate(tileInScope2), 'Tile in scope (rows 26..51) must be invalidated').toBe(true)
     // Family ruling (bot P2s): CF paint reaches beyond a rule's own cells (merged surfaces, overflowing text, sorted rows),
@@ -461,7 +461,7 @@ it('a CF generation change with the lease kept invalidates every tile of THIS sh
       expect(activeRenderer!.cache.get(tileOutOfScope), 'old-identity out-of-scope tile swept by identity, not by CF scope').toBeUndefined()
     })
 
-    // 2. Cache retention verification: invalidates ONLY the tiles of the scale scope
+    // 2. Cache retention verification: every tile of this sheet is dropped, in the scale scope or not
     const testCache = new TileCache(activeRenderer!.cache.pool)
     testCache.put(tileInScope1, dummySurface())
     testCache.put(tileInScope2, dummySurface())

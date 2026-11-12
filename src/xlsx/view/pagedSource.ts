@@ -1995,6 +1995,8 @@ async function prepareCfRemoteOnce(
   const hasScale = rules.rules.some(r => r.definition.kind === 'colorScale')
   // Ruling S3-S: a resolved bar rule prices one full bar descriptor per cell from the measurer-derived constant
   // before anything is built; unresolved bar stubs never reach the wire, and a sheet without bars adds nothing.
+  // Priced by definition kind, not by outcome: a resolved rule whose bars evaluation or the painter will still withhold
+  // (unverified layout, gradient, paint gates) is charged in full. That over-prices fail closed, never under-prices.
   const hasBar = rules.rules.some(r => r.definition.kind === 'dataBar')
   let perCell = 96
   for (const rule of rules.rules) perCell += measureCfPropertiesBytes((rule.dxf ?? {}) as Record<string, string | number | boolean | null>)

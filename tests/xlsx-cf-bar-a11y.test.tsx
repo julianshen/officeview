@@ -1,0 +1,131 @@
+/**
+ * Task 22, Ruling S3-P: a painted data bar announces a fixed localized label with the value's position in its range;
+ * the value text stays in the accessible name, and the bar adds no tab stop. Bars paint here under INJECTED evidence
+ * only (tests/helpers/cf-bars.ts); production withholds every bar until Task 23 publishes.
+ *
+ * The zh-TW term 「資料橫條」 is Excel's zh-TW name for data bars; it was not re-read from a live Excel UI in this task.
+ */
+import { describe, expect, it } from 'vitest'
+import { render } from '@testing-library/react'
+import { GridSemantics } from '../src/components/xlsx/GridSemantics'
+import { SemanticPresentationCache, withCfDescription } from '../src/components/xlsx/formatPresentation'
+import { prepareCfTextScope, prepareCfWireScope } from '../src/xlsx/cf/text'
+import { describeCfWin } from '../src/xlsx/cf/describe'
+import { CF_LIMITS, createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
+import { residentSource } from '../src/xlsx/cf/render'
+import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
+import type { CfStamp } from '../src/xlsx/cf/model'
+import type { XlsxSheet } from '../src/xlsx/types'
+import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
+import { gridFixture } from './helpers/xlsx-grid-fixture'
+import { barSheet, withBars } from './helpers/cf-bars'
+
+function trackingBudget(): { budget: FormatBudget; settled: object[] } {
+  const settled: object[] = []
+  const budget: FormatBudget = { reserve() {}, release() {}, retain: (_t, _b, commit) => commit(), settle: target => { settled.push(target) } }
+  return { budget, settled }
+}
+const scopeOf = (sheet: XlsxSheet, rows: number, locale = 'zh-TW') => prepareCfTextScope(sheet, {
+  rects: [{ r0: 0, r1: rows - 1, c0: 0, c1: 0 }], signal: new AbortController().signal, locale, budget: trackingBudget().budget,
+})
+const withLocale = (sheet: XlsxSheet, locale: string): XlsxSheet => ({ ...sheet, semantics: { locale, dateSystem: '1900' } } as unknown as XlsxSheet)
+
+describe('bar cell announces a bounded label with its position, without a tab stop', () => {
+  it('describeCfWin labels a 0.72 bar in zh-TW and en, bounded, with no colour and no thresholds', () => {
+    const zh = describeCfWin({}, undefined, undefined, 'zh-TW', undefined, { fraction: 0.72 })
+    expect(zh).toEqual({ key: 'cf:dataBar', text: '資料橫條 72%' })
+    const en = describeCfWin({}, undefined, undefined, 'en-US', undefined, { fraction: 0.72 })
+    expect(en).toEqual({ key: 'cf:dataBar', text: 'Data bar, 72% of range' })
+    for (const d of [zh!, en!]) {
+      expect(d.text.length).toBeLessThanOrEqual(CF_LIMITS.descriptorUnits)
+      expect(d.text.length).toBeLessThanOrEqual(128)
+      expect(d.text).not.toMatch(/#|FF0000FF|0000FF|rgb|min|max/i)
+    }
+    // Bounded to 0–100, and it precedes a scale and DXF aspects (one label per cell).
+    expect(describeCfWin({}, undefined, undefined, 'en-US', undefined, { fraction: 1.5 })?.text).toBe('Data bar, 100% of range')
+    expect(describeCfWin({ 'font.bold': true }, undefined, undefined, 'en-US', { fraction: 0.1 }, { fraction: 0.72 })?.key).toBe('cf:dataBar')
+    // An unresolved bar announces only the existing unavailable descriptor.
+    expect(describeCfWin({}, new Set(['dataBar']), undefined, 'zh-TW', undefined, { fraction: 0.72 })).toEqual({ key: 'cf-unavailable', text: '無法使用條件式格式設定' })
+  })
+
+  it('a prepared scope announces each bar at its own position: positive, negative and all-negative ranges', async () => {
+    await withBars(async () => {
+      const zh = (await scopeOf(withLocale(barSheet([0, 72, 100]), 'zh-TW'), 3, 'zh-TW'))!
+      expect(zh.describe(1, 0)).toEqual({ key: 'cf:dataBar', text: '資料橫條 72%' })
+      // The descriptor cache is keyed by the bar too: the next cell's identical (empty) properties get their own text.
+      expect(zh.describe(2, 0)).toEqual({ key: 'cf:dataBar', text: '資料橫條 100%' })
+      expect(zh.describe(0, 0)).toEqual({ key: 'cf:dataBar', text: '資料橫條 0%' })
+      zh.dispose()
+      // Mixed sign under an automatic axis: the value's position is the bar end away from the axis.
+      const mixed = (await scopeOf(barSheet([-50, 0, 50, 100]), 4, 'en-US'))!
+      expect([0, 1, 2, 3].map(r => mixed.describe(r, 0)?.text)).toEqual(['Data bar, 0% of range', 'Data bar, 33% of range', 'Data bar, 67% of range', 'Data bar, 100% of range'])
+      mixed.dispose()
+    })
+    await withBars(async () => {
+      const negative = (await scopeOf(barSheet([-100, -60, -20]), 3, 'en-US'))!
+      expect([0, 1, 2].map(r => negative.describe(r, 0)?.text)).toEqual(['Data bar, 0% of range', 'Data bar, 50% of range', 'Data bar, 100% of range'])
+      negative.dispose()
+    }, { extra: ['bar:lengths-all-negative'] })
+  })
+
+  it('the value text stays in the accessible name, the grid keeps one tab stop, and a bar win misses the presentation cache', async () => {
+    await withBars(async () => {
+      const sheet = withLocale(barSheet([0, 72, 100], { def: { showValue: false } }), 'zh-TW')
+      const scope = (await scopeOf(sheet, 3))!
+      const desc = scope.describe(1, 0)!
+      expect(desc.key).toBe('cf:dataBar')
+      // showValue="0" hides only canvas text: the accessible name still carries the value.
+      const name = withCfDescription('72', desc.text)
+      expect(name).toBe('72; 資料橫條 72%')
+      const ui = render(<GridSemantics {...gridFixture({ cellPresentation: () => ({ text: name }) })} />)
+      try {
+        const cells = ui.getAllByRole('gridcell', { name: /資料橫條 72%/ })
+        expect(cells.length).toBeGreaterThan(0)
+        expect(cells[0]!.textContent).toContain('72')
+        const tabbable = [...ui.container.querySelectorAll('[tabindex]')].filter(node => node.getAttribute('tabindex') !== '-1')
+        expect(tabbable).toHaveLength(1)
+        expect(tabbable[0]!.getAttribute('role')).toBe('grid')
+      } finally { ui.unmount() }
+      // The same generation and style with another descriptor key is a miss: the stale entry is settled and rebuilt.
+      const { budget, settled } = trackingBudget()
+      const cache = new SemanticPresentationCache(sheet, budget)
+      const cell = sheet.rows[1]!.cells[0]!
+      cache.get(cell, { gen: scope.gen, style: undefined, descriptorKey: 'cf:fill', description: 'fill' })
+      expect(settled).toHaveLength(0)
+      const hit = cache.get(cell, { gen: scope.gen, style: undefined, descriptorKey: desc.key, description: desc.text })
+      expect(settled).toHaveLength(1)
+      expect(hit).toEqual({ text: '72', description: '資料橫條 72%' })
+      cache.dispose(); scope.dispose()
+    }, { extra: ['bar:showvalue-canvas-suppression'] })
+  })
+
+  it('an unresolved or withheld bar announces only the unavailable descriptor', async () => {
+    // Production evidence: nothing Stage 3 is published, so the bar is unresolved.
+    const plain = (await scopeOf(barSheet([0, 72, 100]), 3))!
+    expect(plain.describe(1, 0)).toEqual({ key: 'cf-unavailable', text: '無法使用條件式格式設定' })
+    plain.dispose()
+    // Evaluated, but the painter withholds it (no paint gates): announced the same way, never as a bar.
+    await withBars(async () => {
+      const scope = (await scopeOf(barSheet([0, 72, 100]), 3, 'en-US'))!
+      expect(scope.barAt?.(1, 0)).toBeUndefined()
+      expect(scope.describe(1, 0)).toEqual({ key: 'cf-unavailable', text: 'Conditional formatting unavailable' })
+      scope.dispose()
+    }, { paint: false })
+  })
+
+  it('the paged wire scope describes and covers bar-only cells', async () => {
+    await withBars(async () => {
+      const sheet = barSheet([0, 72, 100])
+      const rules = sheet.conditionalFormatting!, sheetId = sheet.sheetId!
+      const st: CfStamp = { owner: 'paged', sheetId, workbookValueGen: 1, cfGen: cfRulesVersion(rules), viewGen: 1, structureGen: 1, clockGen: 1 }
+      const memory = createCfMemory({}), rects = [{ r0: 0, r1: 2, c0: 0, c1: 0 }]
+      const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
+      expect(wire.kind).toBe('ready')
+      const scope = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale: 'en-US' }))!
+      expect(scope.describe(1, 0)).toEqual({ key: 'cf:dataBar', text: 'Data bar, 72% of range' })
+      // The paged painter's coverage includes the cells whose only state is a bar.
+      expect(scope.regions).toEqual(expect.arrayContaining([{ minRow: 1, maxRow: 1, minCol: 0, maxCol: 0 }]))
+      scope.dispose()
+    })
+  })
+})

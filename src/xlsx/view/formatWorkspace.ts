@@ -29,6 +29,11 @@ export interface EffectiveFormatScope {
   describe(row: number, col: number): { key: string; text: string } | undefined
   /** Current-generation data-bar descriptor (Ruling S3-S), or undefined when no bar paints the cell. */
   barAt?(row: number, col: number): import('../cf/model').CfBarDescriptor | undefined
+  /** Paints the scope's bars (the paged painter's `CfPaintBatch.paintBars`, Task 22). */
+  paintBars?(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => { x: number; y: number; width: number; height: number } | undefined,
+    visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number; output?: 'logical' | 'device' }): boolean
+  /** Ruling S3-O: whether the canvas hides this cell's value text (`CfPaintBatch.hidesTextAt`). */
+  hidesTextAt?(row: number, col: number): boolean
   dispose(): void
 }
 

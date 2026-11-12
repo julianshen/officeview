@@ -5,7 +5,8 @@ import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
-import type { CfCellState, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
+import { barHidesText, barPaintable, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarScale } from './dataBarPaint'
+import type { CfBarDescriptor, CfCellState, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
 import type { XlsxSheet } from '../types'
 import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { regionStylesFor } from '../tableStyleLoader'
@@ -22,6 +23,13 @@ export interface CfPaintBatch {
   readonly stamp: CfStamp
   readonly key: string
   readonly layer: RegionStyleLayer
+  /** The bar this batch paints at a source cell (current generation, every paint gate held), else undefined. */
+  barAt(row: number, col: number): CfBarDescriptor | undefined
+  /** Paints the batch's bars of `visible` in the fill phase, each clipped to its `cellRect` host (Task 22). */
+  paintBars(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => import('../view/textLayout').Rect | undefined,
+    visible: { r0: number; c0: number; r1: number; c1: number }, scale: CfBarScale): boolean
+  /** Ruling S3-O: the canvas draws no value text here (a painted `showValue="0"` bar, under evidence). */
+  hidesTextAt(row: number, col: number): boolean
   dispose(): void
 }
 /** No inferred values: cached formula errors stay errors; missing formula
@@ -286,6 +294,8 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     const base = regionStylesFor(sheet)
     const colors = { theme: sheet.drawingTheme?.palette ?? sheet.tableStyleSource?.colors.theme, indexed: sheet.tableStyleSource?.colors.indexed }
     const states = new Map<number, CfCellState>()
+    // Bar cells index the same retained states (no second copy): the painter walks only these.
+    const bars = new Map<number, CfBarDescriptor>()
     // Split the union into disjoint row slabs and merged column intervals. No
     // full-sheet cell set, and overlapping rules never multiply cell admission.
     const edges = scoped ? [] : [...new Set(rects.flatMap(r => [r.firstRow, r.lastRow + 1]))].sort((a, b) => a - b)
@@ -315,12 +325,13 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
           try {
             for (let c = rect.firstCol; c <= rect.lastCol; c++) {
               const result = lease.value.at(row, c)
-              if (result.kind !== 'ready' || (!Object.keys(result.value.properties).length && !result.value.visual?.colorScale)) continue
+              if (result.kind !== 'ready' || (!Object.keys(result.value.properties).length && !result.value.visual?.colorScale && !result.value.visual?.dataBar)) continue
               const measured = measureCfPayload(result.value, memory)
               if (measured.kind !== 'ready' || !hold.grow(heldBytes + measured.value + 160)) throw new Error('CF retained paint admission')
               heldBytes += measured.value + 160
               // Ownership overlaps the service lease until the batch is drained.
               states.set(row * 16384 + c, result.value)
+              if (result.value.visual?.dataBar) bars.set(row * 16384 + c, result.value.visual.dataBar)
             }
           } finally { lease.release() }
           for (const [, outcome] of statistics.results) {
@@ -342,6 +353,14 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       }
     }
     let disposed = false
+    const allows = (cap: string): boolean => evidence.allows(cap)
+    // A bar paints only on its own unmerged host: merged hosts are unmeasured (bar:scope-merged-cell).
+    const barAt = (row: number, col: number): CfBarDescriptor | undefined => {
+      if (disposed || !sameCfStamp(source.stamp(stamp.sheetId), stamp)) return undefined
+      const bar = bars.get(row * 16384 + col)
+      if (!bar || sheet.mergeRanges?.some(m => row >= m.minRow && row <= m.maxRow && col >= m.minCol && col <= m.maxCol)) return undefined
+      return barPaintable(bar, CF_BAR_RENDER_MODEL, allows) ? bar : undefined
+    }
     const layer: RegionStyleLayer = {
       retainedBytes: hold.bytes,
       rects: [...base?.rects ?? [], ...rects.map(r => ({ minRow: r.firstRow, maxRow: r.lastRow, minCol: r.firstCol, maxCol: r.lastCol }))],
@@ -354,7 +373,10 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
       },
     }
     return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
-      dispose() { if (disposed) return; disposed = true; states.clear(); hold.release() } }
+      barAt,
+      paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, barAt, cellRect, visible, scale, allows),
+      hidesTextAt: (row, col) => barHidesText(barAt(row, col), allows),
+      dispose() { if (disposed) return; disposed = true; states.clear(); bars.clear(); hold.release() } }
   } catch (error) { hold.release(); return error instanceof CfPageFault && (error.fault === 'incomplete' || error.fault === 'stale') ? undefined : unavailable(sheet) } finally {
     for (const result of statistics.results.values()) if (result.kind === 'ready') result.value.release()
   }
