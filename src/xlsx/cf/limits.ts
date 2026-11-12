@@ -8,6 +8,13 @@ import type { CfDiagnostic, CfLease, CfOutcome } from './model'
  * estimate cannot drift from `measureCfCellBytes` (it includes the optional `fraction`). */
 export const CF_SCALE_CELL_BYTES: number = measureCfCellBytes({ properties: {}, scale: { ruleId: 0, argb: 0, fraction: 0 } }) - measureCfCellBytes({ properties: {} })
 
+/** Upper bound of the wire bytes one bar descriptor adds to a cell state (Ruling S3-S), DERIVED from the wire measurer
+ * with every optional field present, so the grant estimate cannot drift from `measureCfCellBytes` (Lesson 6). */
+export const CF_BAR_CELL_BYTES: number = measureCfCellBytes({ properties: {}, bar: {
+  ruleId: 0, axisFraction: 0, startFraction: 0, endFraction: 0, fillColor: 0, borderColor: 0, axisColor: 0,
+  isGradient: false, isNegative: false, showValue: false, rtl: false,
+} }) - measureCfCellBytes({ properties: {} })
+
 /** Upper bound of one normalized data-bar definition's own fields (the rule origin is priced by the rule bound),
  * DERIVED from the payload measurer with every optional field present and the longest enum spellings. */
 export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({

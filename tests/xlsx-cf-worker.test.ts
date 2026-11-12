@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
+import { CF_BAR_CELL_BYTES, createCfMemory, createCfWorkBudget, type CfWorkBudget } from '../src/xlsx/cf/limits'
 import type { CfSheetRules, CfStamp, CfLiteral, CfValueSource, CfValuePage, CfLease } from '../src/xlsx/cf/model'
 import type { SourceRect } from '../src/xlsx/view/coordinates'
 import {
@@ -43,6 +43,14 @@ function rule(order: number, props: Record<string, string | boolean | null>, wri
 }
 const oneRule: CfSheetRules = { diagnostics: [], rules: [rule(0, { 'fill.pattern': 'solid', 'fill.fg': 'FF00FF00' }, ['fill'])] }
 const nc = (value: number): CfLiteral => ({ kind: 'number', value })
+/** Wire bar descriptors (S3-S): every optional colour present, and none. */
+const BAR_FULL: NonNullable<CfCellStateWire['bar']> = {
+  ruleId: 3, axisFraction: 1 / 3, startFraction: 1 / 6, endFraction: 1 / 3, fillColor: 0xffff0000, borderColor: 0xff00b050, axisColor: 0xff000000,
+  isGradient: false, isNegative: true, showValue: false, rtl: true,
+}
+const BAR_MIN: NonNullable<CfCellStateWire['bar']> = {
+  ruleId: 3, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: 0xff0000ff, isGradient: true, isNegative: false, showValue: true, rtl: false,
+}
 
 /** Bare async CF source for provider tests: no admission of its own. */
 function fakeSource(
@@ -163,6 +171,8 @@ describe('CF reply estimator', () => {
       ['cell-tainted', { row: 2, col: 3, properties: { 'fill.pattern': 'solid' }, unresolvedWrites: ['fill', 'font.bold'], unresolvedReason: 'r' }, measureCfCellBytes as (v: never) => number],
       ['def', { id: 'rule-9', version: 3, properties: { a: 'b' }, writes: ['a', 'b'] }, measureCfDefinitionBytes as (v: never) => number],
       ['diag', { kind: 'unsupported', feature: 'cf-x', message: 'hello' }, (v: never) => measureCfDiagnosticBytes(v as never)],
+      ['cell-bar', { row: 4, col: 5, properties: {}, bar: BAR_FULL }, measureCfCellBytes as (v: never) => number],
+      ['cell-bar-min', { row: 4, col: 5, properties: {}, bar: BAR_MIN }, measureCfCellBytes as (v: never) => number],
     ]
     for (const [name, value, fn] of cases) {
       const mine = fn(value as never)
@@ -170,6 +180,9 @@ describe('CF reply estimator', () => {
       expect(mine, name).toBe(walked)
     }
     expect(measureCfPropertiesBytes({ a: 'x', bb: 1 })).toBe(measurePayloadBytes({ a: 'x', bb: 1 }, () => true))
+    // CF_BAR_CELL_BYTES is the full-minus-empty difference of the measurer (Ruling S3-S, Lesson 6).
+    expect(CF_BAR_CELL_BYTES).toBe(measureCfCellBytes({ properties: {}, bar: BAR_FULL }) - measureCfCellBytes({ properties: {} }))
+    expect(CF_BAR_CELL_BYTES).toBe(measurePayloadBytes({ row: 0, col: 0, properties: {}, bar: BAR_FULL }, () => true)! - measurePayloadBytes({ row: 0, col: 0, properties: {} }, () => true)!)
   })
 
   it('mirrors the service propertyBytes accounting for admission parity', () => {
