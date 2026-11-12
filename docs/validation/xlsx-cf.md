@@ -429,7 +429,7 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:unresolved-three-cfvo` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
 | `bar:unresolved-cfvo-no-type` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
 | `bar:unresolved-automin-base` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-C | unsupported (refused) |
-| `bar:unresolved-auto-color` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-F | unsupported (refused) |
+| `bar:unresolved-auto-color` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported, per S3-F as amended (an automatic positive fill has no capability) | unsupported (refused) |
 | `bar:unresolved-alpha-00-color` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-F | unsupported (refused) |
 
 ### Stage 3 capture run 1 (2026-11-11, Excel for Mac 16.114, zh-TW): stopped at the probe gate
