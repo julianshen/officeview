@@ -1744,7 +1744,10 @@ describe('CF oracle verifier', () => {
     // Counterexample 3a: Structural formula threshold changed from <formula>100</formula> to <formula>1000</formula>
     const z = await JSZip.loadAsync(savedBytes)
     const sheetXml = await z.file('xl/worksheets/sheet1.xml')!.async('string')
-    z.file('xl/worksheets/sheet1.xml', sheetXml.replace('<formula>100</formula>', '<formula>1000</formula>'))
+    const mutated1000Xml = sheetXml.replace('<formula>100</formula>', '<formula>1000</formula>')
+    // A counterexample must actually mutate the saved workbook (as 3c below asserts).
+    expect(mutated1000Xml).not.toBe(sheetXml)
+    z.file('xl/worksheets/sheet1.xml', mutated1000Xml)
     const mutatedBytes = await z.generateAsync({ type: 'uint8array' })
     const mutatedPath = join(dir, 'mutated-1000.xlsx')
     writeFileSync(mutatedPath, mutatedBytes)
@@ -1766,10 +1769,9 @@ describe('CF oracle verifier', () => {
 
     // Counterexample 3b: Mutating between's second operand <formula>3</formula><formula>1</formula> -> <formula>3</formula><formula>9</formula>
     const zBetween = await JSZip.loadAsync(savedBytes)
-    zBetween.file(
-      'xl/worksheets/sheet1.xml',
-      sheetXml.replace('<formula>3</formula><formula>1</formula>', '<formula>3</formula><formula>9</formula>'),
-    )
+    const mutatedBetweenXml = sheetXml.replace('<formula>3</formula><formula>1</formula>', '<formula>3</formula><formula>9</formula>')
+    expect(mutatedBetweenXml).not.toBe(sheetXml)
+    zBetween.file('xl/worksheets/sheet1.xml', mutatedBetweenXml)
     const mutatedBetweenBytes = await zBetween.generateAsync({ type: 'uint8array' })
     const mutatedBetweenPath = join(dir, 'mutated-between.xlsx')
     writeFileSync(mutatedBetweenPath, mutatedBetweenBytes)
@@ -3954,7 +3956,10 @@ describe('CF oracle verifier', () => {
     expect(verifyCfCase(c, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
     // The same file with the companion's link GUID broken is not the canonical form and refuses.
     const zip = await JSZip.loadAsync(rejected)
-    const xml = (await zip.file('xl/worksheets/sheet1.xml')!.async('string')).replace('<x14:id>{3B3B000B-0000-4000-8000-000000000002}</x14:id>', '<x14:id>{3B3B000B-0000-4000-8000-0000000000FF}</x14:id>')
+    const original = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    const xml = original.replace('<x14:id>{3B3B000B-0000-4000-8000-000000000002}</x14:id>', '<x14:id>{3B3B000B-0000-4000-8000-0000000000FF}</x14:id>')
+    // The GUID swap must actually change the workbook, or the refusal below proves nothing.
+    expect(xml).not.toBe(original)
     zip.file('xl/worksheets/sheet1.xml', xml)
     const broken = new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
     writeFileSync(join(dir, 'broken.xlsx'), broken)
