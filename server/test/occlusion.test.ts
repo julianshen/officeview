@@ -495,6 +495,72 @@ describe('text decorations judged across the run baseline (Task 3c ruling b, fix
   })
 })
 
+describe('decoration thresholds are bounded by the run font size (Task 3c fix round 4)', () => {
+  // R = min(ink extent across the baseline, font size in device px).
+  /** One scoped run `s` in `font`, then scoped bars `[offset below the ink top, thickness]`; `pre` sets the transform. */
+  const probe = (s: string, font: string, bars: (ink: { y: number; height: number }) => Array<[number, number]>, opts: { pre?: (c: CanvasRenderingContext2D) => void; scale?: number; setFont?: (c: CanvasRenderingContext2D) => void } = {}) => {
+    const ctx = createCanvas(400, 600).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(400, 600, undefined, opts.scale)
+    const c = o.wrap(ctx)
+    opts.pre?.(c)
+    phase(c, 'text'); c.font = font; opts.setFont?.(c); c.fillStyle = '#000'; c.fillText(s, 20, 250)
+    const i = o.runDetails()[0]!.ink
+    c.setTransform(1, 0, 0, 1, 0, 0)
+    phase(c, 'line')
+    for (const [at, t] of bars(i)) c.fillRect(i.x - 2, i.y + at, i.width + 4, t)
+    phase(c, false)
+    return { ink: i, ...o.runDetails()[0]! }
+  }
+  const tall = 'secret' + '̍'.repeat(40)
+  it('a font size smaller than the ink extent bounds the thickness limit', () => {
+    // 20 px font, ink > 150 px: the limit is 0.12 × 20 = 2.4 px, not 12 % of the ink.
+    const base = probe(tall, '20px sans-serif', () => [])
+    expect(base.ink.height).toBeGreaterThan(150)
+    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 8, 2.3]])).toMatchObject({ servable: true })
+    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 8, 2.5]])).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 12, 10]])).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a font size smaller than the ink extent bounds the union cap', () => {
+    // Cap 0.25 × 20 = 5 px: two 2.3 px bars pass, three (6.9 px) do not — though far under 25 % of the ink.
+    expect(probe(tall, '20px sans-serif', (i) => [[10, 2.3], [i.height - 8, 2.3]])).toMatchObject({ servable: true })
+    expect(probe(tall, '20px sans-serif', (i) => [[10, 2.3], [100, 2.3], [i.height - 8, 2.3]])).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('an ink extent smaller than the font size still bounds the limit (unchanged)', () => {
+    // 'a' in a 100 px font: ink ≈ 55 px, so 12 % of the ink (< 12 px), not of the font size.
+    const a = probe('a', '100px sans-serif', () => [])
+    expect(a.ink.height).toBeLessThan(80)
+    expect(probe('a', '100px sans-serif', (i) => [[i.height / 2, 0.11 * i.height]])).toMatchObject({ servable: true })
+    expect(probe('a', '100px sans-serif', (i) => [[i.height / 2, 0.13 * i.height]])).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a run whose font size cannot be determined gets no exemption', () => {
+    // The same 1 px strike is served with a readable font and covered when ctx.font does not yield a px size.
+    const unreadable = (value: unknown) => (c: CanvasRenderingContext2D) => Object.defineProperty(c, 'font', { get: () => value, configurable: true })
+    expect(probe('Typing', '20px sans-serif', (i) => [[i.height / 2, 1]])).toMatchObject({ servable: true })
+    for (const v of ['sans-serif', '', undefined, '0px sans-serif', 'NaNpx sans-serif', '12pt sans-serif', 20])
+      expect(probe('Typing', '20px sans-serif', (i) => [[i.height / 2, 1]], { setFont: unreadable(v) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a px-like token in the family name is not the font size', () => {
+    // The size is the first px token of the serialised font; the family follows it.
+    const font = '20px "x 9999px y", sans-serif'
+    expect(probe(tall, font, (i) => [[i.height - 8, 2.3]])).toMatchObject({ servable: true })
+    expect(probe(tall, font, (i) => [[i.height - 8, 2.5]])).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a scaled transform (scale 2) scales the font-size bound', () => {
+    // 20 px font under scale(2): 40 device px, limit 4.8 px, cap 10 px.
+    const at = (c: CanvasRenderingContext2D) => c.scale(2, 2)
+    expect(probe(tall, '20px sans-serif', () => [], { pre: at }).ink.height).toBeGreaterThan(300)
+    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: true })
+    expect(probe(tall, '20px sans-serif', (i) => [[i.height - 16, 4.9]], { pre: at })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe(tall, '20px sans-serif', (i) => [[10, 4.7], [i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: true })
+    expect(probe(tall, '20px sans-serif', (i) => [[10, 4.7], [100, 4.7], [i.height - 16, 4.7]], { pre: at })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('only the scale across the baseline counts: scale(3, 1) leaves the bound at the font size', () => {
+    const pre = (c: CanvasRenderingContext2D) => c.scale(3, 1)
+    expect(probe('secret̍̍̍̍̍̍̍̍', '20px sans-serif', (i) => [[i.height - 8, 2.3]], { pre })).toMatchObject({ servable: true })
+    expect(probe('secret̍̍̍̍̍̍̍̍', '20px sans-serif', (i) => [[i.height - 8, 2.5]], { pre })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+})
+
 describe('destructive composites (review 4)', () => {
   for (const op of ['copy', 'destination-in', 'source-in', 'source-out', 'destination-atop'] as const) it(`${op} far from the ink still withholds it (it clears outside its source)`, () => {
     const e = run((c) => { text(c); c.globalCompositeOperation = op; c.fillRect(170, 70, 20, 20) })

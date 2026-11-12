@@ -14,6 +14,7 @@ import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordS
 import { augmentedFixtures } from './fixtures'
 import { buildDocx, buildXlsx } from '../../src/testdata/ooxml-builders'
 import { corpus, disposePool, pool } from './harness'
+import { renderPages, type PageLayout, type Segment } from '../../src/docx/layout'
 
 afterAll(() => disposePool())
 const pools: Pool[] = []
@@ -703,4 +704,50 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
       expect({ deco, words, sz, served: r.served > 0, withheld: r.withheld, text: r.text }).toEqual({ deco, words, sz, served: true, withheld: 0, text: `x ${words} x` })
     }
   }, 60_000)
+
+  // Fix round 4: the thresholds are bounded by the run's font size, so ink
+  // inflated by stacked combining marks does not widen them.
+  describe('review probe through the real DOCX renderPages: a thick same-scope strike over a word with stacked combining marks', () => {
+    const W = 500, H = 600
+    const seg = (text: string, pt: number, color: string, deco: 'underline' | 'strike', e: number, f: number, widthPx: number): Segment =>
+      ({ text, run: { text, color, [deco]: true }, style: { fontFamily: 'sans-serif', fontSizePt: pt, bold: false, italic: false }, widthPx, transform: { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
+    /** Black underlined 18 pt `word` at (40, 500), then a white struck space at 1000/3 pt whose 20 px strike is centred on y = 490. */
+    const probe = (word: string, strike = true) => {
+      const canvas = serverBackend().createCanvas(W, H)
+      const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+      ctx.font = '18pt sans-serif'
+      const width = ctx.measureText(word).width
+      const segs = [seg(word, 18, '000000', 'underline', 40, 500, width), ...(strike ? [seg(' ', 1000 / 3, 'FFFFFF', 'strike', 20, 590, 150)] : [])]
+      const page = { widthPx: W, heightPx: H, tables: [], images: [], lines: [{ yPx: 0, xPx: 0, widthPx: W, align: 'left', isParagraphEnd: true, heightPx: H, contentWidthPx: W, segs }] } as unknown as PageLayout
+      const paint = (c: CanvasRenderingContext2D) => { c.fillStyle = '#fff'; c.fillRect(0, 0, W, H); renderPages([page], c) }
+      const o = occlusionObserver(W, H)
+      paint(o.wrap(ctx))
+      const spans = recordSpans(paint, serverBackend().createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D)
+      const unit = buildServedUnit(spans, o.runDetails(), 1)
+      const copy = answerText(copyAll, 1, () => unit) as Extract<TextReply, { op: 'copy'; text: string }>
+      // Non-white pixels in the base word's band (the ink of plain 'secret': y 482..500).
+      const px = ctx.getImageData(0, 482, W, 18).data
+      let dark = 0
+      for (let i = 0; i < px.length; i += 4) if (px[i]! < 250 || px[i + 1]! < 250 || px[i + 2]! < 250) dark++
+      return { run: o.runDetails().find((r) => r.text === word)!, copy, dark }
+    }
+    const stacked = 'secret' + '̍'.repeat(40)
+
+    test('the combining marks inflate the ink far past the font size, and the strike erases every base-letter pixel', () => {
+      const r = probe(stacked)
+      expect(r.run.ink.height).toBeGreaterThan(200)
+      expect(r.dark).toBe(0)
+      expect(probe(stacked, false).dark).toBeGreaterThan(100)
+    })
+    test('the hidden word is covered and copy returns nothing', () => {
+      const r = probe(stacked)
+      expect(r.run).toMatchObject({ servable: false, reason: 'covered' })
+      expect(r.copy).toMatchObject({ text: '', paragraphs: 0 })
+    })
+    test('control: without the combining marks it is covered too; without the strike both are served', () => {
+      expect(probe('secret')).toMatchObject({ run: { servable: false, reason: 'covered' }, copy: { text: '', paragraphs: 0 }, dark: 0 })
+      expect(probe(stacked, false)).toMatchObject({ run: { servable: true }, copy: { text: stacked, paragraphs: 1 } })
+      expect(probe('secret', false)).toMatchObject({ run: { servable: true }, copy: { text: 'secret', paragraphs: 1 } })
+    })
+  })
 })

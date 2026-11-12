@@ -24,13 +24,16 @@
  *   record ordinary marks), only for a run whose baseline is axis-aligned,
  *   only when the mark is a line along that baseline (its side along it
  *   ≥ 2 × its side across it), and only when its thickness across the
- *   baseline is at most max(1.5 × scale px, 12 % of the ink's extent across
- *   the baseline) — an underline, strike or overline that leaves the word
- *   legible. Decorations are ignored while their merged extent across the
- *   baseline, clipped to the ink, stays ≤ 25 % of that extent; past that the
- *   run is `covered`. Erase and filter marks, and every other cover, withhold
- *   as before. Text whose baseline is not axis-aligned in device space gets
- *   no exemption (withheld).
+ *   baseline is at most max(1.5 × scale px, 12 % of R) — an underline,
+ *   strike or overline that leaves the word legible. R is the smaller of the
+ *   ink's extent across the baseline and the run's font size in device px
+ *   (the px size of `ctx.font` × the transform's scale across the baseline,
+ *   read when the run is drawn), so ink inflated by stacked combining marks
+ *   does not widen the limits. Decorations are ignored while their merged
+ *   extent across the baseline, clipped to the ink, stays ≤ 25 % of R; past
+ *   that the run is `covered`. Erase and filter marks, and every other cover,
+ *   withhold as before. Text whose baseline is not axis-aligned in device
+ *   space, or whose font size cannot be read, gets no exemption (withheld).
  */
 import type { PaintObserver } from './render'
 import { PAINT_DECORATION } from '../../src/core/text-recording'
@@ -62,8 +65,9 @@ type Clip = Rect | 'nonrect' | undefined
 /** `scope`: the decoration scope (PAINT_DECORATION 'text' phase) that drew
  * this run. `across`: the device axis perpendicular to its baseline (1 = y for
  * horizontal text, 0 = x for vertical); absent when the baseline is not
- * axis-aligned. */
-interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason; scope?: number; across?: 0 | 1 }
+ * axis-aligned. `fontPx`: its font size in device px across the baseline;
+ * absent when `ctx.font` yields no px size. */
+interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason; scope?: number; across?: 0 | 1; fontPx?: number }
 
 /** Canvas composite modes whose effect is not bounded by the source shape. */
 const UNBOUNDED_COMPOSITES = new Set(['copy', 'source-in', 'source-out', 'destination-in', 'destination-atop'])
@@ -94,6 +98,12 @@ function colorAlpha(style: unknown): number | undefined {
 const DECORATION_FLOOR_PX = 1.5, DECORATION_RATIO = 0.12, DECORATION_UNION = 0.25
 /** A decoration's side along the run's baseline is at least this × its thickness across it. */
 const DECORATION_ELONGATION = 2
+/** The px size of a canvas font string (the getter serialises every size as px); undefined when it has none. */
+function fontSizePx(font: unknown): number | undefined {
+  const m = typeof font === 'string' ? /(?:^|\s)(\d+(?:\.\d+)?|\.\d+)px(?=[\s/]|$)/.exec(font) : null
+  const px = m ? Number(m[1]) : NaN
+  return px > 0 && Number.isFinite(px) ? px : undefined
+}
 /** Total length of the union of intervals (sorts `bands` in place). */
 function unionLength(bands: Array<[number, number]>): number {
   bands.sort((p, q) => p[0] - q[0])
@@ -241,7 +251,12 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     const alpha = ctx.globalAlpha * (colorAlpha(style) ?? 1)
     const run: Run = phase === 'text' ? { seq: seq + 1, ink, text: str, scope: scopeId } : { seq: seq + 1, ink, text: str }
     const across = baselineAcross(ctx)
-    if (across !== undefined) run.across = across
+    if (across !== undefined) {
+      run.across = across
+      // The glyphs' up direction is the text-space y axis: device length hypot(c, d) per px.
+      const t = ctx.getTransform(), px = fontSizePx(ctx.font), device = px === undefined ? NaN : px * Math.hypot(t.c, t.d)
+      if (device > 0 && Number.isFinite(device)) run.fontPx = device
+    }
     if (str.trim() === '' || !(ink[2] > ink[0])) { draw(ctx, ink, style); return }
     if (alpha <= 0.05) run.reason = 'transparent'
     else if (!inside(ink, surface)) run.reason = 'off-surface'
@@ -257,8 +272,10 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     if (r.reason) return r.reason
     const later = new Set<Grid>()
     // A decoration is judged on one axis: perpendicular to the run's baseline (a).
-    const a = r.across, b = a === 1 ? 0 : 1
-    const extent = a === undefined ? 0 : r.ink[a + 2]! - r.ink[a]!
+    // No orientation or no font size: no exemption. The reference extent is
+    // the smaller of the ink's extent on that axis and the font size.
+    const a = r.fontPx === undefined ? undefined : r.across, b = a === 1 ? 0 : 1
+    const extent = a === undefined ? 0 : Math.min(r.ink[a + 2]! - r.ink[a]!, r.fontPx!)
     const thin = Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * extent)
     const bands: Array<[number, number]> = []
     for (const m of marks) {
