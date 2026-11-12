@@ -67,11 +67,35 @@ export function barPaintable(bar: CfBarDescriptor | undefined, model: CfBarRende
   return !bar.isGradient || model.gradientStops !== undefined
 }
 
-/** S3-O: text is hidden only under a bar that paints in this host (laid out, not withheld) whose `showValue` is false,
- * and only with evidence. A zero-length bar paints nothing but is not withheld, so it hides its text as Excel does. */
+/**
+ * S3-O: text is hidden only under a bar that paints a fill in this host at this scale, whose `showValue` is false, and
+ * only with evidence. One explicit exception: a bar whose evaluated length is ZERO (the scope minimum, or zero on an
+ * axis) has no fill to paint, yet `showValue="0"` still hides its value, as Excel does for every cell of the rule. A
+ * non-zero share that rounds away (here, or withheld at the capture scale) never hides the text.
+ */
 export function barHidesText(bar: CfBarDescriptor | undefined, host: CfBarHost, scale: CfBarScale, check: (cap: string) => boolean = defaultHasEvidence): boolean {
-  return barPaintable(bar, CF_BAR_RENDER_MODEL, check) && bar.showValue === false && check('bar:showvalue-canvas-suppression')
-    && layoutDataBar(bar, host, scale, CF_BAR_RENDER_MODEL, check) !== undefined
+  if (!barPaintable(bar, CF_BAR_RENDER_MODEL, check) || bar.showValue !== false || !check('bar:showvalue-canvas-suppression')) return false
+  const laid = layoutDataBar(bar, host, scale, CF_BAR_RENDER_MODEL, check)
+  return laid !== undefined && (laid.fill !== undefined || bar.endFraction === bar.startFraction)
+}
+
+/** The capture scale: one device px per pt (Excel's copy picture). Withholding is decided here, for every view. */
+const CAPTURE_SCALE: CfBarScale = Object.freeze({ zoom: 3 / 4, dpr: 1, output: 'device' })
+
+/**
+ * The exact predicate painting withholds by (fix round 2): the bar does not lay out in this host. It does not depend
+ * on the render scale, so `barAt` and `describe` share it with painting. An unknown host withholds (fail closed).
+ */
+export function barWithheld(bar: CfBarDescriptor, host: CfBarHost | undefined, check: (cap: string) => boolean = defaultHasEvidence): boolean {
+  return host === undefined || layoutDataBar(bar, host, CAPTURE_SCALE, CF_BAR_RENDER_MODEL, check) === undefined
+}
+
+/** Whether a host fill, as the renderers resolve it (`spreadsheetColor`: CSS `#RRGGBB`), is opaque white. Anything it
+ * cannot parse as exactly six hex digits (alpha, a named or unknown colour) counts as a fill: fail closed. */
+export function isWhiteFill(fill: string | undefined): boolean {
+  if (fill === undefined) return true
+  const m = /^#([0-9a-f]{6})$/i.exec(fill)
+  return m !== null && parseInt(m[1]!, 16) === 0xffffff
 }
 
 /** A bar's host: its logical rect, and the fill painted under it (CSS `#RRGGBB`) when the renderer knows one. */
@@ -112,12 +136,12 @@ export function layoutDataBar(
   if (bar.borderColor !== undefined && !check('bar:render-border')) return undefined
   for (const n of [bar.axisFraction, bar.startFraction, bar.endFraction]) if (!Number.isFinite(n) || n < 0 || n > 1) return undefined
   // A non-white axis over a filled host: the dash gap colour there is unmeasured.
-  if (bar.axisColor !== undefined && (bar.axisColor & 0xffffff) !== (model.axisDash.gapArgb & 0xffffff) && cell.fill !== undefined && !/^#?ffffff$/i.test(cell.fill)) return undefined
+  if (bar.axisColor !== undefined && (bar.axisColor & 0xffffff) !== (model.axisDash.gapArgb & 0xffffff) && !isWhiteFill(cell.fill)) return undefined
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
   const devPerPx = zoom * dpr, devPerPt = devPerPx * PT_PX
   const atCapture = Math.abs(devPerPt - 1) < 1e-9
-  if (!atCapture && layoutDataBar(bar, cell, { zoom: 3 / 4, dpr: 1, output: 'device' }, model, check) === undefined) return undefined
+  if (!atCapture && layoutDataBar(bar, cell, CAPTURE_SCALE, model, check) === undefined) return undefined
   const dev = (pt: number): number => roundHalfUp(pt * devPerPt)
   // Host edges on the sheet-global device grid; the measured insets in whole device px.
   const X0 = roundHalfUp(cell.x * devPerPx), X1 = roundHalfUp((cell.x + cell.width) * devPerPx)
@@ -213,6 +237,8 @@ export function paintDataBars(
   visible: { r0: number; c0: number; r1: number; c1: number },
   scale: CfBarScale,
   check: (cap: string) => boolean = defaultHasEvidence,
+  /** Told, per host it lays out, whether the bar was withheld (the paged scope learns `barWithheld` here). */
+  onLayout?: (row: number, col: number, withheld: boolean) => void,
 ): boolean {
   if (bars.size === 0) return true
   const paintOne = (row: number, col: number): void => {
@@ -222,6 +248,7 @@ export function paintDataBars(
     if (!host || !(host.width > 0 && host.height > 0)) return
     const deviceSpace = scale.output === 'device'
     const primitives = layoutDataBar(bar, host, scale, CF_BAR_RENDER_MODEL, check)
+    onLayout?.(row, col, primitives === undefined)
     if (!primitives) return
     const transform = deviceSpace ? ctx.getTransform() : undefined
     ctx.save()

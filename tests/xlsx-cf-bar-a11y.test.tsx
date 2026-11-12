@@ -18,7 +18,7 @@ import type { CfStamp } from '../src/xlsx/cf/model'
 import type { XlsxSheet } from '../src/xlsx/types'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
-import { barSheet, withBars } from './helpers/cf-bars'
+import { barSheet, paintScopeBars, withBars } from './helpers/cf-bars'
 
 function trackingBudget(): { budget: FormatBudget; settled: object[] } {
   const settled: object[] = []
@@ -122,10 +122,76 @@ describe('bar cell announces a bounded label with its position, without a tab st
       const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
       expect(wire.kind).toBe('ready')
       const scope = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale: 'en-US' }))!
+      // Before any paint the paged scope cannot know whether painting withholds the bar: never announced as a bar.
+      expect(scope.describe(1, 0)).toEqual({ key: 'cf-unavailable', text: 'Conditional formatting unavailable' })
+      await paintScopeBars(scope, 3, 1)
       expect(scope.describe(1, 0)).toEqual({ key: 'cf:dataBar', text: 'Data bar, 72% of range' })
       // The paged painter's coverage includes the cells whose only state is a bar.
       expect(scope.regions).toEqual(expect.arrayContaining([{ minRow: 1, maxRow: 1, minCol: 0, maxCol: 0 }]))
       scope.dispose()
+    })
+  })
+})
+
+/**
+ * Fix round 2: a cell whose bar painting withholds announces no data bar and `barAt` does not report it, by the
+ * painter's own predicate (`barWithheld`). Two reasons: a non-white axis over a filled host (its dash gap is
+ * unmeasured), and a non-zero share with no visible pixel at Excel's capture scale (minimum visible width unmeasured).
+ */
+describe('announcement tracks paint withholding', () => {
+  const UNAVAILABLE = { key: 'cf-unavailable', text: 'Conditional formatting unavailable' }
+  // [-50, 50, 100] under an automatic black axis; the cells carry a yellow static fill.
+  const filledAxisSheet = (): XlsxSheet => {
+    const sheet = barSheet([-50, 50, 100])
+    for (const row of sheet.rows) for (const cell of row.cells) cell.style = { numFmtId: 0, fillColor: 'FFFFFF00' }
+    return sheet
+  }
+  // 0.001 of [0, 1000]: a share that rounds to no pixel at the capture scale.
+  const subPixelSheet = (): XlsxSheet => barSheet([0, 0.001, 1000])
+
+  it('resident: the text scope and the paint batch withhold both reasons', async () => {
+    const { prepareCfPaint } = await import('../src/xlsx/cf/render')
+    const { cfRuntimeEvidence } = await import('../src/xlsx/cf/predicates')
+    await withBars(async () => {
+      for (const [name, sheet, row] of [['filled axis', filledAxisSheet(), 1], ['sub-pixel', subPixelSheet(), 1]] as const) {
+        const scope = (await scopeOf(sheet, 3, 'en-US'))!
+        expect(scope.barAt?.(row, 0), name).toBeUndefined()
+        expect(scope.describe(row, 0), name).toEqual(UNAVAILABLE)
+        expect(scope.describe(2, 0)?.key, `${name}: the full bar of the same rule`).toBe(name === 'sub-pixel' ? 'cf:dataBar' : 'cf-unavailable')
+        scope.dispose()
+        const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+        expect(batch.barAt(row, 0), name).toBeUndefined()
+        batch.dispose()
+      }
+      // Positive control: the same axis bars on unfilled cells are announced and reported.
+      const plain = (await scopeOf(barSheet([-50, 50, 100]), 3, 'en-US'))!
+      expect(plain.describe(1, 0)).toEqual({ key: 'cf:dataBar', text: 'Data bar, 67% of range' })
+      expect(plain.barAt?.(1, 0)).toBeDefined()
+      plain.dispose()
+    })
+  })
+
+  it('paged: no bar is announced before it paints, nor after painting withholds it', async () => {
+    await withBars(async () => {
+      for (const [name, sheet, fill] of [['filled axis', barSheet([-50, 50, 100]), '#FFFF00'], ['sub-pixel', subPixelSheet(), undefined], ['control', barSheet([-50, 50, 100]), undefined]] as const) {
+        const rules = sheet.conditionalFormatting!, sheetId = sheet.sheetId!
+        const st: CfStamp = { owner: 'paged', sheetId, workbookValueGen: 1, cfGen: cfRulesVersion(rules), viewGen: 1, structureGen: 1, clockGen: 1 }
+        const memory = createCfMemory({}), rects = [{ r0: 0, r1: 2, c0: 0, c1: 0 }]
+        const wire = await prepareCfRemote({ rects, stamp: { ...st }, grantBytes: 1 << 22 }, sheetId, residentSource(sheet, st, memory, 'engine'), rules, memory, { budget: () => createCfWorkBudget({ now: () => 0 }) })
+        const scope = (await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), rects, { budget: { reserve() {}, release() {} }, locale: 'en-US' }))!
+        expect(scope.describe(1, 0), `${name} before paint`).toEqual(UNAVAILABLE)
+        const { createCanvas } = await import('canvas')
+        const ctx = createCanvas(200, 60).getContext('2d') as unknown as CanvasRenderingContext2D
+        scope.paintBars?.(ctx, (row, col) => ({ x: col * 200, y: row * 20, width: 200, height: 20, ...(fill ? { fill } : {}) }), { r0: 0, c0: 0, r1: 2, c1: 0 }, { zoom: 1, dpr: 1 })
+        if (name === 'control') {
+          expect(scope.describe(1, 0)).toEqual({ key: 'cf:dataBar', text: 'Data bar, 67% of range' })
+          expect(scope.barAt?.(1, 0)).toBeDefined()
+        } else {
+          expect(scope.describe(1, 0), `${name} after paint`).toEqual(UNAVAILABLE)
+          expect(scope.barAt?.(1, 0), name).toBeUndefined()
+        }
+        scope.dispose()
+      }
     })
   })
 })

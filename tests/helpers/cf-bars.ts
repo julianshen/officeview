@@ -67,3 +67,14 @@ export function barSheet(values: readonly number[], options: { col?: number; wid
     conditionalFormatting: { diagnostics: [], rules: [barRule({ firstRow: first, lastRow: first + values.length - 1, firstCol: col, lastCol: col }, options.def)] },
   } as XlsxSheet
 }
+
+/**
+ * Paints a paged (wire) scope's bars once on a throwaway canvas, every cell of `rows` × `cols` a 200 × 20 px unfilled
+ * host. A paged scope learns which bars painting withholds only by painting them (fix round 2), so its `barAt` reports
+ * a bar after this, as it does in the viewer once a tile has painted.
+ */
+export async function paintScopeBars(scope: { paintBars?: (ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => { x: number; y: number; width: number; height: number } | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number }) => boolean }, rows: number, cols: number): Promise<void> {
+  const { createCanvas } = await import('canvas')
+  const ctx = createCanvas(cols * 200, rows * 20).getContext('2d') as unknown as CanvasRenderingContext2D
+  scope.paintBars?.(ctx, (row, col) => ({ x: col * 200, y: row * 20, width: 200, height: 20 }), { r0: 0, c0: 0, r1: rows - 1, c1: cols - 1 }, { zoom: 1, dpr: 1 })
+}

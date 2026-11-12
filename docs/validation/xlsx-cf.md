@@ -717,3 +717,11 @@ Two values were never measured, so the model leaves them absent and the branch t
 - **Minimum visible width** (`bar:geometry-min-visible-width`). A non-zero share that rounds to no pixel at the capture scale is withheld at every zoom. A withheld bar never hides its cell's text (Ruling S3-O).
 
 Ruling S3-N withholds narrow cells only. No width threshold for "narrow" was measured: the capture has a single 12 pt column. `bar:geometry-narrow-clip` therefore gates every bar, which is deliberately over-broad and fail closed until a threshold is measured.
+
+**Fix round 2 (announcement and suppression).**
+
+- **Announcement follows painting.** A cell whose bar painting withholds announces no data bar, and `barAt` does not report it. Painting withholds in two cases: a non-white axis over a filled host, or a non-zero share with no pixel at the capture scale. The decision uses the painter's own predicate, `barWithheld`.
+  - Resident scopes compute each host from the sheet.
+  - The paged scope learns the outcome when it paints. Until then it announces nothing as a bar.
+- **Host fills are parsed strictly.** A host fill counts as white only as an exact opaque `#RRGGBB` = FFFFFF, as `spreadsheetColor` resolves it. Any other value withholds the axis bar.
+- **Text is hidden only in two cases.** It is hidden under a bar that paints a fill, or under a bar whose evaluated length is zero (the minimum, or zero on an axis). A non-zero share that rounds away keeps its text.

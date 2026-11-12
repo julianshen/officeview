@@ -182,11 +182,6 @@ describe('bars paint in the fill phase in all five views', () => {
       expect(cellW).toBe(200)
       const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
       const paged = await pagedBatch(sheet, 4, 1)
-      // The 50 of [-50, 100] under an automatic axis: the bar spans [1/3, 2/3] of the 200 px cell.
-      for (const b of [resident, paged]) {
-        const d = b.barAt(2, 0)!
-        expect(d.axisFraction).toBeCloseTo(1 / 3, 12); expect(d.startFraction).toBeCloseTo(1 / 3, 12); expect(d.endFraction).toBeCloseTo(2 / 3, 12)
-      }
       const S = 2 // device px per logical px in every view, so the source-space rects are comparable exactly
       const views: Record<string, ReturnType<typeof recorder>> = {}
       {
@@ -214,6 +209,12 @@ describe('bars paint in the fill phase in all five views', () => {
         pages[0]!.paint(r.ctx)
       } finally { pages.dispose() }
 
+      // The 50 of [-50, 100] under an automatic axis: the bar spans [1/3, 2/3] of the 200 px cell (the paged batch
+      // reports it once it has painted it).
+      for (const b of [resident, paged]) {
+        const d = b.barAt(2, 0)!
+        expect(d.axisFraction).toBeCloseTo(1 / 3, 12); expect(d.startFraction).toBeCloseTo(1 / 3, 12); expect(d.endFraction).toBeCloseTo(2 / 3, 12)
+      }
       const blue = '#0000ff', yellow = '#ffff00'
       const sourceRects: Record<string, { x: number; y: number; w: number; h: number }> = {}
       const axisRects: Record<string, string[]> = {}
@@ -502,6 +503,34 @@ describe('text is hidden only under a bar that paints (S3-O, fix round 1)', () =
       renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: batch })
       expect(r.ops.filter(o => o.op === 'rect' && (o.style === '#0000ff' || o.style === '#000000'))).toEqual([])
       expect(r.ops.filter(o => o.op === 'text').map(o => o.text)).toEqual(['-50', '50', '100'])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
+  })
+})
+
+describe('fix round 2: host fills parse strictly; text hides only under a painted fill or a zero-length bar', () => {
+  const axisBar = bar({ axisFraction: 1 / 3, startFraction: 1 / 3, endFraction: 2 / 3, axisColor: 0xff000000 })
+  it('any fill that is not exactly opaque #FFFFFF counts as filled, so a black axis over it withholds', () => {
+    const host = (fill?: string) => ({ ...ptCell(84, 30, 180, 30), ...(fill !== undefined ? { fill } : {}) })
+    for (const white of [undefined, '#FFFFFF', '#ffffff']) expect(layoutDataBar(axisBar, host(white), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL), String(white)).toBeDefined()
+    for (const other of ['ffffff', ' #FFFFFF', '#FFFFFF80', '#ffffff00', 'white', 'transparent', 'rgba(255,255,255,1)', '#fff', 'FFFFFFFF', 'not-a-colour', ''])
+      expect(layoutDataBar(axisBar, host(other), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL), other).toBeUndefined()
+  })
+  it('a non-zero share that rounds away at the render scale shows its text; a zero-length bar hides it at every scale', async () => {
+    await withBars(async () => {
+      // 5 of [0, 1000] in a 200 px column: about 0.7 pt at the capture scale (one pixel, painted), nothing at 1/4 zoom.
+      const sheet = barSheet([0, 5, 1000], { def: { showValue: false } })
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const metrics = computeMetrics(sheet)
+      const texts = (s: number) => {
+        const r = recorder(metrics.widthPx * s, metrics.heightPx * s)
+        r.ctx.scale(s, s)
+        renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: batch })
+        return r.ops.filter(o => o.op === 'text').map(o => o.text)
+      }
+      expect(texts(1)).toEqual([])
+      expect(texts(0.75)).toEqual([])
+      expect(texts(0.25)).toEqual(['5'])
       batch.dispose()
     }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
   })

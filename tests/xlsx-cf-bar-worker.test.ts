@@ -26,6 +26,7 @@ import { createCfService } from '../src/xlsx/cf/service'
 import { residentSource } from '../src/xlsx/cf/render'
 import { prepareCfTextScope, prepareCfWireScope } from '../src/xlsx/cf/text'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
+import { paintScopeBars } from './helpers/cf-bars'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
@@ -388,6 +389,8 @@ describe('CF Stage 3 Task 21 — bar wire under the receiver grant (S3-S)', () =
       // The paged main thread decodes a structured clone of the reply through the production scope.
       const budget = budgetOf()
       const paged = await prepareCfWireScope(async () => ({ result: structuredClone(wire), release() {} }), scope, { budget })
+      // A paged scope reports a bar once painting has laid it out (fix round 2).
+      await paintScopeBars(paged!, 6, 9)
       expect(paged).toBeDefined()
       let compared = 0, negative = 0
       for (let row = 1; row <= 5; row++) for (let col = 1; col <= 8; col++) {
@@ -435,6 +438,7 @@ describe('CF Stage 3 Task 21 — bar wire under the receiver grant (S3-S)', () =
       const read = (gen: number) => prepareCfRemote(cfRequest([rect(0, 3)], stamp(gen, { cfGen: version }), 1 << 20), SHEET, src, rules, createCfMemory({}), { budget: frozenBudget })
       const g1Wire = ready(await read(1))
       const w1 = (await prepareCfWireScope(async () => ({ result: g1Wire, release() {} }), [rect(0, 3)], { budget, current: () => liveGen === 1 }))!
+      await paintScopeBars(w1, 4, 1)
       expect(w1.barAt?.(2, 0)?.endFraction).toBe(1)
 
       // Commit 20 at g2 on both shells while the g2 preparation is pending.
@@ -454,6 +458,7 @@ describe('CF Stage 3 Task 21 — bar wire under the receiver grant (S3-S)', () =
       const g2Wire = ready(await pending)
       const r2 = (await residentPending)!
       const w2 = (await prepareCfWireScope(async () => ({ result: g2Wire, release() {} }), [rect(0, 3)], { budget, current: () => liveGen === 2 }))!
+      await paintScopeBars(w2, 4, 1)
       // Every scope cell gets its g2 bar: max is now 20.
       for (const [row, value] of [[0, 0], [1, 5], [2, 10], [3, 20]] as const) {
         expect(r2.barAt?.(row, 0)?.endFraction, `resident row ${row}`).toBe(value / 20)

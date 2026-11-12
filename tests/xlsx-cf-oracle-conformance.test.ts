@@ -17,12 +17,12 @@ import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
 import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
-import { layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
+import { CF_BAR_RENDER_MODEL, layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
 import { auditStage3Manifest } from '../scripts/cf-refs/audit'
 import { stage3ObservedBars } from '../scripts/cf-compare'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
-import type { CfCellState, CfOutcome } from '../src/xlsx/cf/model'
+import type { CfBarDescriptor, CfCellState, CfOutcome } from '../src/xlsx/cf/model'
 import { cfRulesVersion } from '../src/xlsx/view/pagedSource'
 import { decodePngSync, isCellInSqref, type DecodedPng } from '../scripts/cf-refs/verify'
 import { CF_CASES, type CfManifest } from '../scripts/cf-refs/cases'
@@ -697,6 +697,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
    * Axis (fix round 1): every measured axis column is compared pixel by pixel over its whole cell height (Excel's
    * dotted pattern: 3 on, 1 off, the gap at y = x (mod 4), white in the gap); a solid axis fails (mutant below).
    */
+  /** Every axis the Lesson 1 test compared, kept for the named solid-axis mutant below. */
+  const axisSamples: Array<{ cellKey: string; bar: CfBarDescriptor; host: { x: number; y: number; width: number; height: number }; axisPx: number; top: number; height: number; png: DecodedPng }> = []
+
   it('bar geometry conformance (Lesson 1)', async () => {
     const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(audit.ok).toBe(true)
@@ -784,6 +787,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
                   axisRows++
                 }
                 if (solidMismatch) solidMutantFails++
+                axisSamples.push({ cellKey, bar, host, axisPx: o!.axisPx, top, height, png })
                 axes++
               } else if (p!.axis) {
                 // Only an axis the capture cannot see: the measured automatic white (S3-AUTO-BG) on Excel's white cell.
@@ -811,6 +815,23 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(28)
   }, 60_000)
+
+  it('RED mutant: a solid axis fails the Lesson 1 axis rows on every explicit axis', () => {
+    // The production model with its dash removed (the axis colour on every row), against the same Excel pixels.
+    const solid = { ...CF_BAR_RENDER_MODEL, axisDash: { ...CF_BAR_RENDER_MODEL.axisDash, onPt: 4, offPt: 0 } }
+    expect(axisSamples.length, 'runs after the Lesson 1 test').toBe(38)
+    let explicit = 0, failed = 0
+    for (const s of axisSamples) {
+      const p = layoutDataBar(s.bar, s.host, { zoom: 0.75, dpr: 1, output: 'device' }, solid, () => true)!
+      const rows = new Map<number, number>()
+      for (const r of [p.axis!, ...(p.axisDashes ?? [])]) for (let y = r.y; y < r.y + r.h; y++) rows.set(y, r.argb)
+      let mismatch = false
+      for (let y = s.top; y < s.top + s.height; y++) if (argbDelta(argbHex(rows.get(y)!), pixelArgb(s.png, s.axisPx, y)) > 8) mismatch = true
+      if ((s.bar.axisColor! & 0xffffff) !== 0xffffff) { explicit++; if (mismatch) failed++ } else expect(mismatch, `${s.cellKey}: a white axis is solid either way`).toBe(false)
+    }
+    expect(explicit).toBe(28)
+    expect(failed, 'the solid mutant fails every explicit axis').toBe(28)
+  })
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
     // Type definition allows only { outcome: 'withheld', reason: string }

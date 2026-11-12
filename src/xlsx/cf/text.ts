@@ -4,7 +4,9 @@ import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { residentSource, storeCfSource } from './render'
+import { residentBarHosts, residentSource, storeCfSource } from './render'
+import { regionStylesFor } from '../tableStyleLoader'
+import type { XlsxCellStyle } from '../types'
 import { cfRuntimeEvidence } from './predicates'
 import { cfRulesVersion } from '../view/pagedSource'
 import type { EffectiveFormatScope, FormatBudget } from '../view/formatWorkspace'
@@ -15,7 +17,7 @@ import type { CfCellStateWire, SourceStore, CfReadResult } from '../view/contrac
 import { measureCfCellBytes, versionCfRules } from '../view/contracts'
 import type { SourceRect } from '../view/coordinates'
 import { describeCfUnavailable, describeCfWin, type CfDescriptor } from './describe'
-import { barHidesText, barPaintable, paintDataBars } from './dataBarPaint'
+import { barHidesText, barPaintable, barWithheld, paintDataBars, type CfBarHost } from './dataBarPaint'
 import { PackageError } from '../../core/package-error'
 
 const refused = (message: string): PackageError => new PackageError('resource-limit', message)
@@ -206,18 +208,31 @@ function assembleScope(
   release: () => void,
   current: () => boolean = () => true,
   regions?: EffectiveFormatScope['regions'],
+  /** Resident scopes: each bar's host from the sheet (given the scope's own effective style). Absent (paged), the
+   * scope learns withholding from its own paints and announces no bar it has not seen laid out. */
+  barHosts?: (styleAt: (row: number, col: number, base: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) => (row: number, col: number) => CfBarHost | undefined,
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
   let disposed = false
   // The bar cells of the copied states (descriptors are shared, not copied again): the painter walks only these.
   const bars = new Map<number, CfBarDescriptor>()
   for (const [key, state] of states) if (state.bar) bars.set(key, state.bar)
-  const barAt = (row: number, col: number): CfBarDescriptor | undefined => {
+  const paintableAt = (row: number, col: number): CfBarDescriptor | undefined => {
     if (disposed || !current()) return undefined
     const bar = bars.get(row * 16384 + col)
     return barPaintable(bar) ? bar : undefined
   }
-  return {
+  // Fix round 2: `barAt` (and so `describe`) reports a bar only where painting does not withhold it, by the painter's
+  // own predicate. Without hosts (paged) the outcome is learned at paint time; until then the bar counts as withheld.
+  let hostAt: ((row: number, col: number) => CfBarHost | undefined) | undefined
+  const laidOut = new Map<number, boolean>()
+  const barAt = (row: number, col: number): CfBarDescriptor | undefined => {
+    const bar = paintableAt(row, col)
+    if (!bar) return undefined
+    if (barHosts) return barWithheld(bar, (hostAt ??= barHosts(scope.effectiveStyle))(row, col)) ? undefined : bar
+    return laidOut.get(row * 16384 + col) === false ? bar : undefined
+  }
+  const scope: EffectiveFormatScope = {
     gen,
     bytes,
     regions,
@@ -236,8 +251,9 @@ function assembleScope(
       }, colors)
     },
     barAt,
-    paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, barAt, cellRect, visible, scale),
-    hidesTextAt: (row, col, host, scale) => barHidesText(barAt(row, col), host, scale),
+    paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, paintableAt, cellRect, visible, scale, undefined,
+      (row, col, withheld) => { if (bars.has(row * 16384 + col)) laidOut.set(row * 16384 + col, withheld) }),
+    hidesTextAt: (row, col, host, scale) => barHidesText(paintableAt(row, col), host, scale),
     describe: (row, col) => {
       if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
@@ -254,10 +270,12 @@ function assembleScope(
       disposed = true
       states.clear()
       bars.clear()
+      laidOut.clear()
       cache.clear()
       release()
     },
   }
+  return scope
 }
 
 /**
@@ -396,12 +414,17 @@ export async function prepareCfTextScope(
       }
     closeAccount()
     let disposed = false
+    // Bar hosts (fix round 2): their geometry is admitted in the same budget when first built, released with the scope.
+    let hostBytes = 0
+    const admitHosts = (n: number): boolean => { try { request.budget.reserve(n) } catch { return false } hostBytes += n; return true }
+    const base = regionStylesFor(sheet)
     const scope = assembleScope(gen, states, colors, locale, bytes, () => {
       if (!disposed) {
         disposed = true
-        request.budget.release(bytes)
+        request.budget.release(bytes + hostBytes)
       }
-    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen)
+    }, () => source.stamp(stamp.sheetId).workbookValueGen === stamp.workbookValueGen && source.stamp(stamp.sheetId).structureGen === stamp.structureGen,
+    undefined, styleAt => residentBarHosts(sheet, (row, col, own) => styleAt(row, col, base?.styleAt(row, col, own) ?? own), admitHosts))
     if (request.signal.aborted) {
       scope.dispose()
       return undefined
@@ -570,6 +593,10 @@ export async function prepareCfWireScope(
         release()
       }
     }
+    // The paint-time withholding record (fix round 2) holds at most one entry per bar cell: admitted up front.
+    let barCells = 0
+    for (const state of states.values()) if (state.bar) barCells++
+    if (barCells) { admitWire(barCells * 48); bytes += barCells * 48 }
     const colors = options.colors ?? {}
     const locale = options.locale ?? 'en-US'
     let disposed = false
