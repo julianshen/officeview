@@ -398,6 +398,74 @@ describe('text answers are bounded and checked (review round 1)', () => {
   }, 60_000)
 })
 
+describe('payload-free chunks and the message cap (review round 2)', () => {
+  test('copy: 100,000 empty non-final chunks are refused on the first; a later valid final cannot revive it', async () => {
+    const { doc, stop } = await stubbed('copy', (reqId) => [
+      ...Array.from({ length: 100_000 }, (_, seq) => ({ reqId, type: 'copy-result', seq, text: '', last: false })),
+      { reqId, type: 'copy-result', seq: 100_000, text: '', last: true },
+    ])
+    expect((await refusedPolicy(doc.copy({ all: true }))).message).toContain('empty non-final')
+    stop()
+  }, 120_000)
+
+  test('copy: an empty first chunk followed by valid text still refuses (refused on the first message)', async () => {
+    const { doc, stop } = await stubbed('copy', (reqId) => [
+      { reqId, type: 'copy-result', seq: 0, text: '', last: false },
+      { reqId, type: 'copy-result', seq: 1, text: 'ok', last: true },
+    ])
+    await refusedPolicy(doc.copy({ all: true }))
+    await Bun.sleep(100)
+    // The session survives the refusal.
+    expect((await doc.search('Item')).total).toBe(5)
+    stop()
+  }, 60_000)
+
+  test('select, a11y and search: payload-free non-final chunks refuse', async () => {
+    const a = await stubbed('select', (reqId) => [
+      { reqId, type: 'select-result', units: [{ unit: 0, rects: [] }], paragraphs: 1 },
+      { reqId, type: 'select-result', units: [{ unit: 0, rects: [1, 2, 3, 4] }], paragraphs: 1, last: true },
+    ])
+    await refusedPolicy(a.doc.select({ all: true }))
+    a.stop()
+    const b = await stubbed('a11y', (reqId) => [
+      { reqId, type: 'a11y-result', seq: 0, paragraphs: [], last: false },
+      { reqId, type: 'a11y-result', seq: 1, paragraphs: [{ rect: [1, 2, 3, 4] }], last: true },
+    ], { textA11y: true })
+    await refusedPolicy(b.doc.a11y(0))
+    b.stop()
+    const c = await stubbed('search', (reqId) => [
+      { reqId, type: 'search-result', matches: [] },
+      { reqId, type: 'search-done', total: 0, truncated: false },
+    ])
+    await refusedPolicy(c.doc.search('x'))
+    c.stop()
+  }, 60_000)
+
+  test('the single final empty answers stay valid', async () => {
+    const a = await stubbed('copy', (reqId) => [{ reqId, type: 'copy-result', seq: 0, text: '', last: true }])
+    expect(await a.doc.copy({ all: true })).toBe('')
+    a.stop()
+    const b = await stubbed('select', (reqId) => [{ reqId, type: 'select-result', units: [], paragraphs: 0, last: true }])
+    expect(await b.doc.select({ all: true })).toEqual({ units: [], paragraphs: 0 })
+    b.stop()
+    const c = await stubbed('a11y', (reqId) => [{ reqId, type: 'a11y-result', seq: 0, paragraphs: [], last: true }], { textA11y: true })
+    expect(await c.doc.a11y(0)).toEqual([])
+    c.stop()
+    const d = await stubbed('search', (reqId) => [{ reqId, type: 'search-done', total: 0, truncated: false }])
+    expect(await d.doc.search('x')).toEqual({ total: 0, truncated: false })
+    d.stop()
+  }, 60_000)
+
+  test('at most 4,096 messages per request: 4,096 resolve, 4,097 refuse', async () => {
+    let n = 4096
+    const { doc, stop } = await stubbed('copy', (reqId) => Array.from({ length: n }, (_, seq) => ({ reqId, type: 'copy-result', seq, text: 'a', last: seq === n - 1 })))
+    expect((await doc.copy({ all: true })).length).toBe(4096)
+    n = 4097
+    expect((await refusedPolicy(doc.copy({ all: true }))).message).toContain('4096')
+    stop()
+  }, 60_000)
+})
+
 describe('remote path purity', () => {
   test('src/stream/remote never reaches the local text index or selection modules', () => {
     const root = resolve(import.meta.dir, '../../src/stream/remote')

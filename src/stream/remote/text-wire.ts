@@ -32,12 +32,14 @@ export const TEXT_MESSAGE_BYTES = 48 * 1024
 /** Per-request totals a text answer may never exceed (the server's R6 caps, or
  * a fixed bound where the server has none). */
 export const TEXT_LIMITS = { copyBytes: 4 * 1024 * 1024, searchHits: 5000, selectRects: 20_000, a11yBytes: 4 * 1024 * 1024, a11yParagraphs: 20_000 } as const
+/** Backstop: no one text request is answered in more than this many messages. */
+export const TEXT_MAX_MESSAGES = 4096
 /** The wire types of text-service answers (the 48 KiB check applies to these only). */
 export const TEXT_ANSWER_TYPES = new Set(['search-result', 'search-done', 'select-result', 'copy-result', 'a11y-result'])
 
 /** What one request has received so far (reset when it is re-issued). */
-export interface TextTally { hits: number; rects: number; paragraphs: number; bytes: number }
-export const emptyTally = (): TextTally => ({ hits: 0, rects: 0, paragraphs: 0, bytes: 0 })
+export interface TextTally { messages: number; hits: number; rects: number; paragraphs: number; bytes: number }
+export const emptyTally = (): TextTally => ({ messages: 0, hits: 0, rects: 0, paragraphs: 0, bytes: 0 })
 
 /** UTF-8 byte length of `s` (lone surrogates count as U+FFFD, 3 bytes). */
 export function utf8Bytes(s: string): number {
@@ -58,6 +60,15 @@ export function utf8Bytes(s: string): number {
  * undefined. Called before the consumer sees `m`.
  */
 export function admit(t: TextTally, m: TextMessage): string | undefined {
+  if (++t.messages > TEXT_MAX_MESSAGES) return `answer over ${TEXT_MAX_MESSAGES} messages`
+  // A non-final chunk always carries payload (the server never sends an empty
+  // one); only a single final answer may be empty.
+  const empty = m.type === 'search-result' ? !m.matches.length
+    : m.type === 'select-result' ? !m.last && m.units.every((u) => !u.rects.length)
+    : m.type === 'copy-result' ? !m.last && m.text === ''
+    : m.type === 'a11y-result' ? !m.last && !m.paragraphs.length
+    : false
+  if (empty) return `empty non-final ${m.type} chunk`
   switch (m.type) {
     case 'search-result':
       t.hits += m.matches.length
