@@ -21,11 +21,22 @@
  * - A whitespace-only span is served iff at least one nearest same-line
  *   (baselines within 1 px) non-whitespace neighbour exists, before or after it
  *   in list order, and every such neighbour is served.
+ *
+ * Diagnostic (Task 9, counts only, never sent on the wire): an optional
+ * `causes` tally receives one count per withheld span — `noCandidate` (no run
+ * in reach: e.g. glyph-path text), `occluded[reason]` (a candidate run is not
+ * servable; the first such in paint order names the reason), `mismatch`
+ * (candidates found, characters do not correspond), `whitespace` (a blank span
+ * whose neighbours are missing or withheld), `badScale` (all spans, scale
+ * not finite and positive). It does not change any verdict.
  */
 import { projectTextPoint, type TextSpan } from '../../../src/core/search'
-import type { RunDetail } from '../occlusion'
+import type { OcclusionReason, RunDetail } from '../occlusion'
 
 export interface JoinResult { served: TextSpan[]; withheld: number }
+/** Withheld spans by cause (see the module comment); sums to `withheld`. */
+export interface WithheldCauses { noCandidate: number; occluded: Partial<Record<OcclusionReason | 'unspecified', number>>; mismatch: number; whitespace: number; badScale: number }
+export const emptyCauses = (): WithheldCauses => ({ noCandidate: 0, occluded: {}, mismatch: 0, whitespace: 0, badScale: 0 })
 
 interface Box { x0: number; y0: number; x1: number; y1: number }
 const INFLATE = 2
@@ -66,8 +77,8 @@ function freeOccurrence(hay: Array<{ cp: string; run: number; at: number }>, nee
   return -1
 }
 
-export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): JoinResult {
-  if (!(Number.isFinite(scale) && scale > 0)) return { served: [], withheld: spans.length }
+export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number, causes?: WithheldCauses): JoinResult {
+  if (!(Number.isFinite(scale) && scale > 0)) { if (causes) causes.badScale += spans.length; return { served: [], withheld: spans.length } }
   const runCps = runs.map((r) => stripped(r.text))
   const consumed = runCps.map((cps) => cps.map(() => false))
   const inks: Box[] = runs.map(({ ink }) => ({ x0: ink.x / scale, y0: ink.y / scale, x1: (ink.x + ink.width) / scale, y1: (ink.y + ink.height) / scale }))
@@ -81,11 +92,16 @@ export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): 
       const k = inks[i]!
       return contains(grown, (k.x0 + k.x1) / 2, (k.y0 + k.y1) / 2) || contains(k, cx, cy) ? [i] : []
     }).sort((a, b) => runs[a]!.seq - runs[b]!.seq)
-    if (!candidates.length || !candidates.every((i) => runs[i]!.servable)) return false
+    if (!candidates.length) { if (causes) causes.noCandidate++; return false }
+    const hidden = candidates.find((i) => !runs[i]!.servable)
+    if (hidden !== undefined) {
+      if (causes) { const why = runs[hidden]!.reason ?? 'unspecified'; causes.occluded[why] = (causes.occluded[why] ?? 0) + 1 }
+      return false
+    }
     const t = stripped(span.text)
     const hay = candidates.flatMap((run) => runCps[run]!.map((cp, at) => ({ cp, run, at })))
     const start = freeOccurrence(hay, t, consumed)
-    if (start < 0) return false
+    if (start < 0) { if (causes) causes.mismatch++; return false }
     for (const h of hay.slice(start, start + t.length)) consumed[h.run]![h.at] = true
     return true
   })
@@ -104,6 +120,7 @@ export function joinSpans(spans: TextSpan[], runs: RunDetail[], scale: number): 
       ok = found.length > 0 && found.every((j) => verdict[j] === true)
     }
     if (ok) served.push(span)
+    else if (causes && verdict[i] === undefined) causes.whitespace++
   })
   return { served, withheld: spans.length - served.length }
 }

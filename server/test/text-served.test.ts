@@ -11,6 +11,7 @@ import { serverBackend } from '../src/backend'
 import { AdmissionRefused, Pool, TEXT_JOB_BYTES, TextTooLarge, type PoolTextJob } from '../src/pool'
 import { DocumentHost, FIXED_MARK_TEXT } from '../src/render'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, TEXT_PREPARE_ALLOWANCE, TEXT_RECORD_BUDGET, type ServedUnit, type TextReply } from '../src/text/served'
+import type { WithheldCauses } from '../src/text/join'
 import { augmentedFixtures } from './fixtures'
 import { buildDocx, buildXlsx } from '../../src/testdata/ooxml-builders'
 import { corpus, disposePool, pool } from './harness'
@@ -334,6 +335,26 @@ describe('sanitised served units', () => {
       host.drop(o.docKey)
     }
     console.log(`[served] ${counts.join('; ')}`)
+  }, 120_000)
+})
+
+describe('prepare withheld causes (Task 9 diagnostic)', () => {
+  const sum = (c: WithheldCauses) => c.noCandidate + c.mismatch + c.whitespace + c.badScale + Object.values(c.occluded).reduce((a, b) => a + (b ?? 0), 0)
+  test('a prepare reply counts every withheld span under one cause, numbers only, also when answered from the cache', async () => {
+    const host = new DocumentHost()
+    let withheld = 0
+    for (const name of ['lo-tdf104788.pptx', 'poi-56295.xlsx', 'poi-rtl.docx']) {
+      const o = await host.open(name, corpus(name), 'visible-only')
+      for (const u of units(o.units.length)) {
+        const r = host.text(o.docKey, { op: 'prepare', unit: u }) as Extract<TextReply, { op: 'prepare' }>
+        expect(sum(r.causes)).toBe(r.withheld)
+        for (const v of [r.causes.noCandidate, r.causes.mismatch, r.causes.whitespace, r.causes.badScale, ...Object.values(r.causes.occluded)]) expect(typeof v).toBe('number')
+        expect(host.text(o.docKey, { op: 'prepare', unit: u })).toEqual(r)
+        withheld += r.withheld
+      }
+      host.drop(o.docKey)
+    }
+    expect(withheld).toBeGreaterThan(0)
   }, 120_000)
 })
 

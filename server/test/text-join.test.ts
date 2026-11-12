@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { TextPlacement, TextSpan } from '../../src/core/search'
 import type { RunDetail } from '../src/occlusion'
-import { joinSpans } from '../src/text/join'
+import { emptyCauses, joinSpans } from '../src/text/join'
 
 const IDENTITY = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }
 /** A span drawn at local (x, baseline) under `transform`, band top/bottom = baseline -15 / +5. */
@@ -166,5 +166,39 @@ describe('joinSpans — whitespace-only spans', () => {
     const g1 = span(' ', 70, 50, 3), g2 = span(' ', 73, 50, 2)
     const r = joinSpans([left, g1, other, g2, right], [lr, rr, run('Elsewhere', 20, 138, 90, 14, false)], 1)
     expect(r.served).toEqual([left, g1, g2, right])
+  })
+})
+
+describe('joinSpans withheld causes (Task 9 diagnostic, counts only)', () => {
+  test('every withheld span is counted under exactly one cause; verdicts unchanged', () => {
+    const hello = span('Hello', 20, 50, 50)                       // served
+    const lost = span('Lost', 400, 400, 40)                       // no candidate run
+    const hid = span('Hid', 20, 150, 30)                          // candidate withheld (clipped)
+    const typo = span('Help', 20, 250, 40)                        // candidate, wrong characters
+    const gap = span(' ', 420, 400, 4)                            // whitespace: its neighbour is withheld
+    const runs: RunDetail[] = [
+      run('Hello', 20, 36, 50, 18),
+      { seq: nextSeq++, text: 'Hid', ink: { x: 20, y: 136, width: 30, height: 18 }, servable: false, reason: 'clipped' },
+      run('Hold', 20, 236, 40, 18),
+    ]
+    const causes = emptyCauses()
+    const r = joinSpans([hello, lost, hid, typo, gap], runs, 1, causes)
+    expect(r).toEqual(joinSpans([hello, lost, hid, typo, gap], runs, 1))
+    expect(r).toEqual({ served: [hello], withheld: 4 })
+    expect(causes).toEqual({ noCandidate: 1, occluded: { clipped: 1 }, mismatch: 1, whitespace: 1, badScale: 0 })
+  })
+  test('several withheld candidates: the first in paint order names the reason', () => {
+    const s = span('Hello world', 20, 50, 110)
+    const causes = emptyCauses()
+    joinSpans([s], [
+      { seq: 9, text: ' world', ink: { x: 75, y: 36, width: 55, height: 18 }, servable: false, reason: 'covered' },
+      { seq: 3, text: 'Hello', ink: { x: 20, y: 36, width: 50, height: 18 }, servable: false, reason: 'transparent' },
+    ], 1, causes)
+    expect(causes.occluded).toEqual({ transparent: 1 })
+  })
+  test('a bad scale withholds every span under badScale', () => {
+    const causes = emptyCauses()
+    expect(joinSpans([span('a', 0, 20, 10), span('b', 20, 20, 10)], [], 0, causes).withheld).toBe(2)
+    expect(causes).toEqual({ noCandidate: 0, occluded: {}, mismatch: 0, whitespace: 0, badScale: 2 })
   })
 })

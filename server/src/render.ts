@@ -189,7 +189,7 @@ export class DocumentHost {
       if (!Number.isInteger(u) || u < 0 || u >= doc.paintables.length) throw new RenderRefusal('unit-range')
       const unit = this.served.get(docKey, u) ?? this.prepare(doc, u, grant)
       this.served.put(docKey, u, unit)
-      return { op: 'prepare', served: unit.served, withheld: unit.withheld, bytes: unit.bytes }
+      return { op: 'prepare', served: unit.served, withheld: unit.withheld, bytes: unit.bytes, causes: { ...unit.causes, occluded: { ...unit.causes.occluded } } }
     }
     if (!['search', 'select', 'copy', 'a11y'].includes(job.op)) throw new RenderRefusal('bad-job')
     try {

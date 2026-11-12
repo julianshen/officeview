@@ -16,7 +16,7 @@ import type { HighlightRect } from '../../../src/core/overlay'
 import { RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from '../../../src/core/text-recording'
 import { setWatermarkMuted } from '../../../src/core/watermark'
 import type { RunDetail } from '../occlusion'
-import { joinSpans } from './join'
+import { emptyCauses, joinSpans, type WithheldCauses } from './join'
 
 export interface UnitPoint { unit: number; x: number; y: number }                 // page px, scale 1
 export type TextRange = { all: true } | { anchor: UnitPoint; focus: UnitPoint }
@@ -27,14 +27,14 @@ export type TextJob =
   | { op: 'copy'; range: TextRange; maxParagraphs: number | null; maxBytes: number }
   | { op: 'a11y'; unit: number; paragraph?: number }
 export type TextReply =
-  | { op: 'prepare'; served: number; withheld: number; bytes: number }
+  | { op: 'prepare'; served: number; withheld: number; bytes: number; /** Diagnostic counts only (yield script); never sent on the wire. */ causes: WithheldCauses }
   | { op: 'search'; matches: Array<{ unit: number; rects: number[] /* x,y,w,h … */ }> }
   | { op: 'select'; units: Array<{ unit: number; rects: number[] }>; paragraphs: number }
   | { op: 'copy'; text: string; paragraphs: number } | { op: 'copy'; refused: 'too-large'; paragraphs: number; bytes: number }
   | { op: 'a11y'; paragraphs: Array<{ rect: number[]; text?: string }> }
   | { missing: number[] }                                                         // units not prepared in this worker
 
-export interface ServedUnit { lines: IndexLine[]; served: number; withheld: number; bytes: number }
+export interface ServedUnit { lines: IndexLine[]; served: number; withheld: number; bytes: number; causes: WithheldCauses }
 
 /** R6: served-index cache bound per document per worker. */
 export const SERVED_CACHE_BYTES = 32 * 1024 * 1024
@@ -221,9 +221,10 @@ export function servedBytes(lines: IndexLine[]): number {
 
 /** Join + sanitise + line building for one unit. */
 export function buildServedUnit(spans: TextSpan[], runs: RunDetail[], scale = 1): ServedUnit {
-  const { served, withheld } = joinSpans(spans, runs, scale)
+  const causes = emptyCauses()
+  const { served, withheld } = joinSpans(spans, runs, scale, causes)
   const lines = spansToLines(sanitizeSpans(served))
-  return { lines, served: served.length, withheld, bytes: servedBytes(lines) }
+  return { lines, served: served.length, withheld, bytes: servedBytes(lines), causes }
 }
 
 /** Per-document LRU of served units (R6 bound per document). */
