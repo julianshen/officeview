@@ -656,8 +656,9 @@ function hasStandaloneX14Bar(parts: Map<string, Uint8Array>, sqref: string): boo
 
 function verifyMarkerInArchive(
   parts: Map<string, Uint8Array>,
-  marker: CfPartMarker,
-): { ok: true } | { ok: false; code: CfRefusalCode; reason: string } {
+  authoredMarker: CfPartMarker,
+): { ok: true; canonicalised?: 'x14-as-legacy' } | { ok: false; code: CfRefusalCode; reason: string } {
+  let marker = authoredMarker
   const decoder = new TextDecoder()
   const rawPart = parts.get(marker.part)
   if (!rawPart) {
@@ -669,7 +670,21 @@ function verifyMarkerInArchive(
   } catch (e) {
     return { ok: false, code: 'missing-part', reason: `Invalid XML in ${marker.part}: ${(e as Error).message}` }
   }
-  const matchedRule = findMatchedRuleInRoot(xmlRoot, marker)
+  let matchedRule = findMatchedRuleInRoot(xmlRoot, marker)
+  let canonicalised: 'x14-as-legacy' | undefined
+  if (!matchedRule && marker.extension === 'x14' && !marker.bar && !marker.scale) {
+    // Excel 16.114 reads an x14 (Excel 2010) rule it can express in the 2007 schema and resaves it as a LEGACY
+    // <cfRule>: same type, priority, operator, @text and formula (<xm:f> becomes <formula>), its inline <x14:dxf>
+    // moved into styles.xml (dxfId), the x14 block dropped (stage1-text-predicates.rejected.xlsx,
+    // stage1-blanks-errors.rejected.xlsx). The legacy twin must match exactly, including the DXF it points at.
+    const twin: CfPartMarker = { ...marker, extension: 'legacy' }
+    const legacyRule = findMatchedRuleInRoot(xmlRoot, twin)
+    if (legacyRule) {
+      marker = twin
+      matchedRule = legacyRule
+      canonicalised = 'x14-as-legacy'
+    }
+  }
   if (!matchedRule && marker.bar?.pairing === 'standalone') {
     // Excel 16.114 resaves a standalone x14 bar in its canonical paired form: a base <cfRule> carrying the priority
     // and the fill as <color> plus an <x14:id> link, and a companion with the attributes, cfvo and other colours but
@@ -778,7 +793,7 @@ function verifyMarkerInArchive(
       }
     }
   }
-  return { ok: true }
+  return canonicalised ? { ok: true, canonicalised } : { ok: true }
 }
 
 export interface DecodedPng {

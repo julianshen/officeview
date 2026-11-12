@@ -3908,6 +3908,37 @@ describe('CF oracle verifier', () => {
     expect(evaluateBarPixelProbe(c, png, geom, empty)).toMatchObject({ status: 'unobserved' })
   })
 
+  it('Excel\'s legacy resave of the Stage 1 x14 rules is accepted and a stripped or altered twin refuses (Task 18c)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-cf-x14-legacy-'))
+    dirs.push(dir)
+    for (const id of ['stage1-text-predicates', 'stage1-blanks-errors']) {
+      const rejected = new Uint8Array(readFileSync(resolve(REPO_ROOT, `tests/fixtures/xlsx-cf/${id}.rejected.xlsx`)))
+      const tpl = CF_CASES.find(x => x.id === id)!
+      const run = (bytes: Uint8Array, name: string) => {
+        writeFileSync(join(dir, name), bytes)
+        const h = sha256(bytes)
+        return verifyCfCase({ ...tpl, input: name, saved: name, captures: [], expected: { ...tpl.expected, inputSha256: h, savedSha256: h } }, { rootDir: dir })
+      }
+      // The real resave: every marker, the x14 ones included, is found as Excel's legacy rule.
+      expect(run(rejected, `${id}.xlsx`), id).toMatchObject({ kind: 'refusal', code: 'semantic-evidence-pending', structuralValid: true })
+      const zip = await JSZip.loadAsync(rejected)
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      const mutate = async (from: string, to: string, label: string) => {
+        expect(sheet.includes(from), `${id} fixture has ${from}`).toBe(true)
+        zip.file('xl/worksheets/sheet1.xml', sheet.replace(from, to))
+        return run(new Uint8Array(await zip.generateAsync({ type: 'uint8array' })), `${id}-${label}.xlsx`)
+      }
+      if (id === 'stage1-text-predicates') {
+        // The x14 canonical twin's formula altered, its rule stripped, and its DXF swapped all refuse.
+        expect(await mutate('<formula>NOT(ISERROR(SEARCH("ab",K2)))</formula>', '<formula>NOT(ISERROR(SEARCH("ac",K2)))</formula>', 'formula')).toMatchObject({ kind: 'refusal', code: 'stripped-rule' })
+        expect(await mutate(/<conditionalFormatting sqref="K2:K9">.*?<\/conditionalFormatting>/.exec(sheet)![0], '', 'stripped')).toMatchObject({ kind: 'refusal', code: 'stripped-rule' })
+        expect(await mutate('<cfRule type="containsText" dxfId="1" priority="10"', '<cfRule type="containsText" dxfId="0" priority="10"', 'dxf')).toMatchObject({ kind: 'refusal', code: 'dxf-pairing-failed' })
+      } else {
+        expect(await mutate('<cfRule type="notContainsErrors" dxfId="0" priority="14">', '<cfRule type="notContainsErrors" dxfId="0" priority="15">', 'priority')).toMatchObject({ kind: 'refusal', code: 'stripped-rule' })
+      }
+    }
+  })
+
   it('Excel\'s canonical resave of a standalone x14 bar (paired base + companion) is structurally accepted (stage3-bar-pairing.rejected.xlsx)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-standalone-'))
     dirs.push(dir)
