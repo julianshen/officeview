@@ -30,9 +30,11 @@
  *   two abutting strokes' boxes overlap by no more than their cap paddings).
  *   That is the same line carried on under a neighbouring segment; a
  *   collinear mark overlapping an own line further is ordinary cover. A mark
- *   whose box was cut by a clip or the surface, or grown by a shadow, and a
- *   stroke with square or round caps, has no cap allowance to discount (its
- *   whole box counts). Provenance and
+ *   whose box was cut by a clip or the surface, or grown by a shadow, a
+ *   stroke with square or round caps, and a stroke whose transform at stroke
+ *   time is sheared or rotated by other than a multiple of 90° (b and c, or
+ *   a and d, not within 1e-6 of zero relative to the matrix scale), has no
+ *   cap allowance to discount (its whole box counts as painted). Provenance and
  *   ownership — geometry alone never exempts a mark; any other mark of the
  *   scope, a decoration over any other run, and a run with no own lines get
  *   ordinary cover; malformed sequences record ordinary marks. Further, only
@@ -158,7 +160,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   /** `scope`/`piece`: set on a cover mark drawn in a decoration scope's 'line'
    * phase — the scope, and the 'text' phase that 'line' phase follows.
    * `cap`/`capAxis`: the cap allowance inside `box` at each end of a single
-   * straight axis-aligned butt-capped stroke, and the device axis it lies along (0 = x);
+   * straight axis-aligned butt-capped stroke drawn under an unsheared, right-angle transform, and the device axis it lies along (0 = x);
    * absent for every other mark and for a box that is no longer the stroke's
    * own (cut by a clip or the surface, grown by a shadow). */
   type Mark = { seq: number; box: Rect; grid: Grid; scope?: number; piece?: number; cap?: number; capAxis?: 0 | 1 }
@@ -205,7 +207,8 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     for (const [x, y] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) r = grow(r, t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f)
     return r
   }
-  /** The device axis perpendicular to the text baseline under the current transform, if axis-aligned. */
+  /** The device axis perpendicular to the text baseline under the current transform, if axis-aligned
+   * (a scale/translate, or a rotation by a multiple of 90°: b, c — or a, d — within 1e-6 of zero relative to the others). */
   const baselineAcross = (ctx: CanvasRenderingContext2D): 0 | 1 | undefined => {
     const t = ctx.getTransform()
     const ad = Math.max(Math.abs(t.a), Math.abs(t.d)), bc = Math.max(Math.abs(t.b), Math.abs(t.c))
@@ -262,8 +265,11 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     const along = strokeHalf(ctx), across = (ctx.lineWidth * maxScale(ctx)) / 2
     if (segments.length === 1 && joins.length === 0) {
       const r = segments[0]!
-      // The end padding is pure allowance only under butt caps (square and round caps paint into it).
-      const butt = ctx.lineCap === 'butt'
+      // The end padding is pure allowance only under butt caps (square and round caps paint into it)
+      // and only when the transform at stroke time is an axis-aligned scale/translate or a rotation by a
+      // multiple of 90°: under shear or any other rotation the pen's cross-section leans along the line,
+      // so a butt end paints past the centreline's endpoint. Otherwise the whole box counts as painted.
+      const butt = ctx.lineCap === 'butt' && baselineAcross(ctx) !== undefined
       if (Math.abs(r[3] - r[1]) < 1e-9) return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], ...(butt ? { cap: { px: along, axis: 0 as const } } : {}) }
       if (Math.abs(r[2] - r[0]) < 1e-9) return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], ...(butt ? { cap: { px: along, axis: 1 as const } } : {}) }
     }

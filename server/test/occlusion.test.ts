@@ -718,6 +718,74 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
   })
 })
 
+describe('a stroke under shear or a non-right-angle rotation has no cap allowance to discount (re-review N1)', () => {
+  // A 40 px run with its own line over the first half, then a same-scope line of another segment whose
+  // centreline starts exactly where the own line ends, collinear with it. Drawn under a shear of `k`, a
+  // butt-capped stroke's cross-section leans along the baseline: its paint reaches k × lineWidth / 2 back over the own line.
+  const sheared = (vertical: boolean, k: number, lineCap: CanvasLineCap = 'butt') => {
+    const ctx = createCanvas(500, 400).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(500, 400)
+    const c = o.wrap(ctx)
+    c.font = '40px sans-serif'; c.fillStyle = '#000'
+    phase(c, 'text')
+    if (vertical) { c.save(); c.translate(100, 20); c.rotate(Math.PI / 2); c.fillText('Typing', 0, 0); c.restore() } else c.fillText('Typing', 20, 100)
+    const i = o.runDetails()[0]!.ink
+    // Along the baseline: [a0, a1], split at mid; across it: the line sits 6 px inside the ink.
+    const a0 = vertical ? i.y : i.x, a1 = vertical ? i.y + i.height : i.x + i.width, mid = (a0 + a1) / 2, at = (vertical ? i.x : i.y) + 6
+    const wide = Math.hypot(k, 1) // the observer's device width of a 1-unit line under the shear
+    const stroke = (from: number, to: number, shear: number) => {
+      c.save(); c.lineCap = lineCap; c.strokeStyle = '#000'
+      // Device = (x + shear·y, y) for horizontal text, (x, shear·x + y) for vertical: the segment stays axis-aligned in device space.
+      if (vertical) c.setTransform(1, shear, 0, 1, 0, 0); else c.setTransform(1, 0, shear, 1, 0, 0)
+      c.lineWidth = shear ? 1 : wide
+      c.beginPath()
+      if (vertical) { c.moveTo(at, from - shear * at); c.lineTo(at, to - shear * at) } else { c.moveTo(from - shear * at, at); c.lineTo(to - shear * at, at) }
+      c.stroke(); c.restore()
+    }
+    phase(c, 'line'); stroke(a0 - 2, mid, 0)
+    phase(c, 'text'); c.fillText('next', 300, 350)
+    phase(c, 'line'); stroke(mid, a1 + 2, k)
+    phase(c, false)
+    expect(vertical ? i.height > i.width : i.width > i.height).toBe(true)
+    return o.runDetails()[0]!
+  }
+  for (const vertical of [false, true]) {
+    const name = vertical ? 'vertical text' : 'horizontal text'
+    it(`${name}: an unsheared abutting line of the same width is a continuation (control)`, () => {
+      expect(sheared(vertical, 0)).toMatchObject({ text: 'Typing', servable: true })
+    })
+    it(`${name}: the re-review probe — the same line drawn under a shear of 4 paints 2 px over the own line and is cover`, () => {
+      expect(sheared(vertical, 4)).toMatchObject({ text: 'Typing', servable: false, reason: 'covered' })
+      expect(sheared(vertical, 4, 'square')).toMatchObject({ servable: false, reason: 'covered' })
+    })
+    it(`${name}: a slight shear is cover too`, () => {
+      expect(sheared(vertical, 0.01)).toMatchObject({ servable: false, reason: 'covered' })
+      expect(sheared(vertical, -1)).toMatchObject({ servable: false, reason: 'covered' })
+    })
+  }
+  it('a line stroked under a 90° rotation or a plain scale keeps its allowance; a 45° rotation of the pen does not', () => {
+    const turned = (set: (c: CanvasRenderingContext2D) => void) => {
+      const ctx = createCanvas(500, 400).getContext('2d') as unknown as CanvasRenderingContext2D
+      const o = occlusionObserver(500, 400)
+      const c = o.wrap(ctx)
+      c.font = '40px sans-serif'; c.fillStyle = '#000'
+      phase(c, 'text'); c.fillText('Typing', 20, 100)
+      const i = o.runDetails()[0]!.ink, mid = i.x + i.width / 2, y = i.y + 6
+      // Paths are laid in device space under the identity; the pen (width, caps) takes the transform at stroke time.
+      const stroke = (x0: number, x1: number) => { c.save(); c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); set(c); c.stroke(); c.restore() }
+      phase(c, 'line'); stroke(i.x - 2, mid)
+      phase(c, 'text'); c.fillText('next', 300, 350)
+      phase(c, 'line'); stroke(mid, i.x + i.width + 2)
+      phase(c, false)
+      return o.runDetails()[0]!
+    }
+    expect(turned(() => {})).toMatchObject({ servable: true })
+    expect(turned((c) => c.setTransform(0, 1, -1, 0, 0, 0))).toMatchObject({ servable: true })
+    expect(turned((c) => c.setTransform(1.5, 0, 0, 1.5, 3, 4))).toMatchObject({ servable: true })
+    expect(turned((c) => c.setTransform(Math.SQRT1_2, Math.SQRT1_2, -Math.SQRT1_2, Math.SQRT1_2, 0, 0))).toMatchObject({ servable: false, reason: 'covered' })
+  })
+})
+
 describe('destructive composites (review 4)', () => {
   for (const op of ['copy', 'destination-in', 'source-in', 'source-out', 'destination-atop'] as const) it(`${op} far from the ink still withholds it (it clears outside its source)`, () => {
     const e = run((c) => { text(c); c.globalCompositeOperation = op; c.fillRect(170, 70, 20, 20) })

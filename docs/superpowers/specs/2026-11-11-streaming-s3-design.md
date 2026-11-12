@@ -191,8 +191,10 @@ audit rows carry the counts.
 >    - A search sends ≤ 5,000 matches. A single match that cannot fit one
 >      message is omitted, and the answer says `truncated: true`. A worker
 >      search job (8 units) stops matching at the matches still wanted and
->      builds ≤ 100,000 highlight rects; past that the search ends with
->      what it has, `truncated: true` (2026-11-12).
+>      stops building highlight rects once 100,000 are reached (it may
+>      overshoot by the rects of the one match that passes the bound,
+>      which is dropped); the search then ends with what it has,
+>      `truncated: true` (2026-11-12).
 >    - An a11y answer over 20,000 paragraphs is refused `copy-too-large`
 >      with `limit` 20000; over 4 MiB of text, with `limit` 4194304.
 >    - One copy is ≤ 4 MiB of UTF-8 (`copy-too-large` beyond, even under
@@ -253,8 +255,11 @@ audit rows carry the counts.
 >     a line of a neighbouring segment counts as the run's own line carried
 >     on only when it is exactly collinear with it (both edges within
 >     0.01 device px) and lies beside it, not on it (the two lines overlap
->     along the baseline by no more than their stroke-cap allowances); the
->     review's residual A is closed.
+>     along the baseline by no more than their stroke-cap allowances). A
+>     stroke has such an allowance only with butt caps and only when it is
+>     drawn under an unsheared transform (an axis-aligned scale/translate
+>     or a rotation by a multiple of 90°); otherwise its whole box counts
+>     as painted. The review's residual A is closed.
 
 ### 4.2 Piece 2 — print (parent §2 item 9)
 

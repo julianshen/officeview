@@ -756,6 +756,30 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
     expect(struck['more']).toMatchObject({ servable: true })
   }, 60_000)
 
+  // Re-review minor: pins the documented fail-closed cost of exact collinearity. Two struck runs with
+  // no space between them: at slightly different sizes the strikes sit at different heights (0.3 × size),
+  // so the second run's line is not a continuation and its cap allowance covers the end of the first word.
+  test('adjacent struck runs of slightly different sizes withhold the first word; equal sizes and underlines are served', async () => {
+    const runsOf = async (first: number, second: number, deco: string) => {
+      const zip = await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'x' }] }]))
+      let xml = await zip.file('word/document.xml')!.async('string')
+      const r = (sz: number, d: string, t: string) => `<w:r><w:rPr><w:sz w:val="${sz}"/>${d}</w:rPr><w:t xml:space="preserve">${t}</w:t></w:r>`
+      xml = xml.replace(/<w:p>[^]*?<\/w:p>/, `<w:p>${r(22, '', 'x ')}${r(first, deco, 'some')}${r(second, deco, 'more')}${r(22, '', ' x')}</w:p>`)
+      zip.file('word/document.xml', xml)
+      const host = new DocumentHost()
+      const o = await host.open(`deco-${++refs}`, await zip.generateAsync({ type: 'uint8array' }), 'visible-only')
+      const paint = (host as unknown as { docs: Map<string, { paintables: Array<{ paint(c: CanvasRenderingContext2D): void }> }> }).docs.get(o.docKey)!.paintables[0]!
+      const { w, h } = o.units[0]!
+      const occ = occlusionObserver(w, h)
+      paint.paint(occ.wrap(host.backend.createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D))
+      host.drop(o.docKey)
+      return Object.fromEntries(occ.runDetails().map((d) => [d.text, d.servable ? 'served' : d.reason]))
+    }
+    for (const first of [24, 21]) expect({ first, ...(await runsOf(first, 22, '<w:strike/>')) }).toMatchObject({ first, some: 'covered', more: 'served' })
+    expect(await runsOf(22, 22, '<w:strike/>')).toMatchObject({ some: 'served', more: 'served' })
+    expect(await runsOf(24, 22, '<w:u w:val="single"/>')).toMatchObject({ some: 'served', more: 'served' })
+  }, 60_000)
+
   test('XLSX: underlined and struck cells are served through the real painter', async () => {
     const base = await buildXlsx([{ name: 'S', cols: '<col min="1" max="2" width="30" customWidth="1"/>', rows: [
       { r: 1, cells: [{ ref: 'A1', t: 's', v: 0, style: 3 }, { ref: 'B1', t: 's', v: 1, style: 4 }] },

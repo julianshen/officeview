@@ -843,9 +843,14 @@ drops the unit and re-requests once.
   >   the baseline within 0.01 device px, float slack only) and lies
   >   beside it, not on it (along the baseline the two lines, without the
   >   cap allowance the observer adds to a stroke's ends, overlap by at
-  >   most 0.01 device px). A collinear mark lying on an own line is
-  >   ordinary cover (tightened 2026-11-12; was "collinear within 0.5
-  >   device px");
+  >   most 0.01 device px). The cap allowance is discounted only for a
+  >   butt-capped stroke whose box is intact (not clipped, not shadowed)
+  >   and whose transform at stroke time is an axis-aligned
+  >   scale/translate or a rotation by a multiple of 90° (b and c, or a
+  >   and d, within 1e-6 of zero relative to the matrix scale); under any
+  >   shear or other rotation the stroke's whole box counts as painted. A
+  >   collinear mark lying on an own line is ordinary cover (tightened
+  >   2026-11-12; was "collinear within 0.5 device px");
   > - only when parallel to the run's baseline, so axis-aligned text only;
   > - only when the mark is ≥ 2× as long as it is thick;
   > - only when the mark's thickness is ≤ max(1.5·scale px, 12 % of R) and
@@ -1778,7 +1783,9 @@ render pipeline.
       only if both its edges across the baseline match the own line's
       within 0.01 device px and, along the baseline, it lies beside the
       own line rather than on it (overlap no more than the two strokes'
-      cap allowances). The hand-built layouts are withheld (`covered`).
+      cap allowances; a stroke has one only with butt caps under an
+      unsheared, right-angle transform). The hand-built layouts are
+      withheld (`covered`).
       Cost, fail closed: adjacent struck runs of slightly different sizes
       with no space between them (12 pt + 11 pt, 10.5 pt + 11 pt) now
       lose the first word; the same pairs underlined, and equal-size

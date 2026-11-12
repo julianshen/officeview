@@ -31,7 +31,8 @@ never on the wire; `server/src/text/join.ts`). The whole run takes about 6 s.
 ¹ Served ÷ (spans − withheld whitespace-only spans).
 
 Re-run on 2026-11-12 after the final fix wave (a decoration continuation
-must be exactly collinear with the run's own line and beside it; search
+must be exactly collinear with the run's own line and beside it, with
+no cap allowance for a sheared stroke; search
 stops at its budget): the table is unchanged, and so is every one of the
 258 per-unit rows (served, withheld and causes).
 

@@ -36,9 +36,12 @@ export type TextReply =
 
 export interface ServedUnit { lines: IndexLine[]; served: number; withheld: number; bytes: number; causes: WithheldCauses }
 
-/** R6 work bound: one search job builds at most this many highlight rects
- * (and returns at most this many matches). A job that would pass it stops
- * with the matches it has completed and answers `truncated: true`. */
+/** R6 work bound: one search job stops building highlight rects once this
+ * many are reached (and returns at most this many matches). The match that
+ * passes it is dropped and the job answers the matches it has completed with
+ * `truncated: true`. The count is checked after each line's rects are built
+ * (rectsForRange cannot be interrupted), so construction may overshoot by
+ * that one match's rects; no answer carries more than the bound. */
 export const SEARCH_MAX_RECTS = 100_000
 /** R6: served-index cache bound per document per worker. */
 export const SERVED_CACHE_BYTES = 32 * 1024 * 1024
