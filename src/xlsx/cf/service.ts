@@ -3,8 +3,9 @@ import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
 import { resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
+import { evaluateDataBar, resolveBarThresholds, type CfBarLayoutVariant } from './dataBar'
 import { resolveCfCellStyle } from './dxf'
-import { CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
+import { CF_BAR_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
 import { cfRuntimeEvidence, evaluatePredicate, type CfEvidenceGate } from './predicates'
 import { createCfStatistics, type CfRangeStatistics, type CfStatisticsOptions, type CfStatisticsSession } from './statistics'
@@ -14,7 +15,7 @@ const blank: CfLiteral = Object.freeze({ kind: 'blank' })
 const inside = (r: SourceRect, row: number, col: number) => row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol
 function statistical(rule: CfRule) {
   const d = rule.definition
-  return d.kind === 'colorScale' || d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
+  return d.kind === 'colorScale' || d.kind === 'dataBar' || d.kind === 'top10' || d.kind === 'aboveAverage' || (d.kind === 'predicate' && (d.type === 'uniqueValues' || d.type === 'duplicateValues'))
 }
 
 /** A caller-owned, single-generation statistics lease set. The caller admits
@@ -50,6 +51,9 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
     }
     if (rule.definition.kind === 'colorScale') {
       propertyBytes += 88
+    } else if (rule.definition.kind === 'dataBar') {
+      // Derived from the wire measurer (Lesson 6), never a hand constant.
+      propertyBytes += CF_BAR_CELL_BYTES
     }
     for (const key of rule.writes) propertyBytes += 128 + String(key).length * 4
   }
@@ -61,7 +65,9 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
   options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext;
     /** Merged regions of the sheet (final review I5): a scale scope that intersects one is an unmeasured shape. */
-    merges?: readonly SourceRect[] } = {}) {
+    merges?: readonly SourceRect[]
+    /** Ruling S3-B: the one evidenced bar layout variant. Absent (production today), every resolved bar is withheld. */
+    barLayoutVariant?: CfBarLayoutVariant } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -137,36 +143,41 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           // Scope shapes whose committed Excel fixture cannot discriminate them (Ruling F-2, final review I5): each is
           // gated on its capability, which is unverified in production, so these scales are withheld.
           const scopeBlock = new Map<CfRule, CfOutcome<never>>()
-          const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined): Promise<void> => {
+          // Scales and bars share the shape checks, each under its own family's evidence: bar scope capabilities are
+          // measured for bars and never inherited from scale:scope-* (Ruling S3-H).
+          const blockScope = async (rule: CfRule, prepared: CfRangeStatistics | undefined, family: 'scale' | 'bar'): Promise<void> => {
             const unmeasured = (): void => { scopeBlock.set(rule, { kind: 'unresolved', reason: 'cf-unmeasured-capability' }) }
-            if (rule.ranges.length > 1 && !evidence.allows('scale:scope-disjoint')) return unmeasured()
+            const allows = (capability: string): boolean => evidence.allows(`${family}:${capability}`)
+            if (rule.ranges.length > 1 && !allows('scope-disjoint')) return unmeasured()
             // Whole-column scope: the fixture's column held a hidden row, so no painted cell backs it (Ruling F-2).
-            if (rule.ranges.some(r => r.firstRow === 0 && r.lastRow >= 1048575) && !evidence.allows('scale:scope-whole-column')) return unmeasured()
-            // Duplicate blocks: another scale rule over the identical ranges.
+            if (rule.ranges.some(r => r.firstRow === 0 && r.lastRow >= 1048575) && !allows('scope-whole-column')) return unmeasured()
+            // Duplicate blocks: another rule of the same visual kind over the identical ranges.
             const key = (r: CfRule) => r.ranges.map(x => `${x.firstRow},${x.lastRow},${x.firstCol},${x.lastCol}`).join(';')
-            if (!evidence.allows('scale:scope-duplicate-blocks') && ordered.some(o => o !== rule && o.definition.kind === 'colorScale' && key(o) === key(rule))) return unmeasured()
+            if (!allows('scope-duplicate-blocks') && ordered.some(o => o !== rule && o.definition.kind === rule.definition.kind && key(o) === key(rule))) return unmeasured()
             if (options.merges?.length) {
               await work(Math.min(rule.ranges.length * options.merges.length, 1 << 20))
               const merged = options.merges.some(m => rule.ranges.some(r => m.firstRow <= r.lastRow && m.lastRow >= r.firstRow && m.firstCol <= r.lastCol && m.lastCol >= r.firstCol))
-              if (merged && !evidence.allows('scale:scope-merged-cell')) return unmeasured()
+              if (merged && !allows('scope-merged-cell')) return unmeasured()
             }
             // An autofilter writes ordinary hidden-row records, so the two cases are indistinguishable here.
-            if (prepared?.hasHiddenRows && (!evidence.allows('scale:scope-hidden-row') || !evidence.allows('scale:scope-autofilter-hidden-row'))) return unmeasured()
-            if (prepared?.hasErrors && !evidence.allows('scale:participation-error-presence')) return unmeasured()
+            if (prepared?.hasHiddenRows && (!allows('scope-hidden-row') || !allows('scope-autofilter-hidden-row'))) return unmeasured()
+            if (prepared?.hasErrors && !allows('participation-error-presence')) return unmeasured()
           }
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
             const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
             const d = rule.definition
-            const needsSorted = d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile') : undefined
+            // Only a percentile bound needs the sorted copy; min/max/num/percent scales and bars stream.
+            const needsSorted = d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile')
+              : d.kind === 'dataBar' ? d.bounds.some(b => b.type === 'percentile') : undefined
             const statOpts = needsSorted !== undefined ? { ...options.statisticsOptions, sorted: needsSorted } : options.statisticsOptions
             const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...statOpts })
             stats.set(rule, out!)
             if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
           }
           budget.resume()
-          for (const rule of ordered) if (rule.definition.kind === 'colorScale') {
+          for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar') {
             const prepared = stats.get(rule)
-            await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined)
+            await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined, rule.definition.kind === 'colorScale' ? 'scale' : 'bar')
           }
           budget.resume()
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
@@ -220,6 +231,17 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                   } else {
                     outcomes.push(colorOut)
                   }
+                } else if (rule.definition.kind === 'dataBar') {
+                  const blocked = scopeBlock.get(rule)
+                  if (blocked) { outcomes.push(blocked); continue }
+                  if (preparedStats?.kind !== 'ready') {
+                    outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
+                    continue
+                  }
+                  const gate = { hasEvidence: (cap: string) => evidence.allows(cap) }
+                  const thresh = resolveBarThresholds(rule.definition, preparedStats.value.value, gate)
+                  outcomes.push(thresh.kind !== 'ready' ? thresh
+                    : evaluateDataBar(value, rule.definition, thresh.value, preparedStats.value.value, { ...gate, variant: options.barLayoutVariant }))
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))
@@ -236,7 +258,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                 await work()
                 const outcome = outcomes[i]!
                 if (outcome.kind !== 'ready' || !outcome.value) continue
-                if (matching[i]!.definition.kind === 'colorScale') continue
+                // Visuals never count as DXF positives: their slots are arbitrated by composeCell.
+                if (matching[i]!.definition.kind === 'colorScale' || matching[i]!.definition.kind === 'dataBar') continue
                 const priority = matching[i]!.priority
                 if (priorities.has(priority) && !evidence.allows('priority:equal-priority-first')) {
                   return { kind: 'unresolved', reason: 'cf-unmeasured-capability' }

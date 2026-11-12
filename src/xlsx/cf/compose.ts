@@ -1,4 +1,4 @@
-import type { CfCellState, CfOutcome, CfRule, CfWriteMask } from './model'
+import type { CfBarDescriptor, CfCellState, CfOutcome, CfRule, CfWriteMask } from './model'
 import { hasEvidence as defaultHasEvidence } from './evidence'
 
 /** Private backing set: Object.freeze(new Set()) alone does not prevent add/delete. */
@@ -19,6 +19,19 @@ const group = (path: string): string => path.startsWith('fill.') ? 'fill'
 
 const conflicts = (a: string, b: string): boolean =>
   a === 'ALL' || b === 'ALL' || a === b || a.startsWith(b + '.') || b.startsWith(a + '.')
+
+/** The rule's visual slot: scales own `colorScale` (and arbitrate the fill slot), bars own the independent `dataBar`
+ * slot (Ruling S3-I). Unresolved stubs keep their slot through the canonical write masks. */
+export function visualSlotOf(rule: CfRule): 'colorScale' | 'dataBar' | undefined {
+  if (rule.definition.kind === 'colorScale' || rule.writes.has('colorScale')) return 'colorScale'
+  if (rule.definition.kind === 'dataBar' || rule.writes.has('dataBar')) return 'dataBar'
+  return undefined
+}
+
+/** A ready bar outcome carries its evaluated descriptor (without the rule id composition adds). */
+function barDescriptorOf(value: unknown): Omit<CfBarDescriptor, 'ruleId'> | undefined {
+  return typeof value === 'object' && value !== null && 'endFraction' in value ? value as Omit<CfBarDescriptor, 'ruleId'> : undefined
+}
 
 export interface ComposeCellOptions {
   readonly hasEvidence?: (cap: string) => boolean
@@ -44,6 +57,13 @@ function* steps(
   const properties: Record<string, string | number | boolean | null> = Object.create(null)
   const tainted = new Set<string>(), won = new Set<string>()
   let visualColorScale: { ruleId: number; argb: number } | undefined
+  let visualDataBar: CfBarDescriptor | undefined
+  // Ruling S3-J: a bar carrying stopIfTrue is unresolved until its composition is measured (OD-1 analogue).
+  const barStopMeasured = checkEvidence('bar:composition-bar-stopIfTrue')
+  const scaleStopMeasured = checkEvidence('scale:composition-scale-stopIfTrue')
+  /** Whether a rule's stopIfTrue halts composition: visuals only once their flag's effect is measured as ignored. */
+  const halts = (rule: CfRule, slot: 'colorScale' | 'dataBar' | undefined): boolean =>
+    rule.stopIfTrue && (slot === 'colorScale' ? !scaleStopMeasured : slot === 'dataBar' ? !barStopMeasured : true)
 
   if (options?.isTextCellInScale) {
     if (!checkEvidence('scale:composition-text-cell-lower-dxf')) {
@@ -54,20 +74,28 @@ function* steps(
   // Pre-scan resolved matching fills to arbitrate fill slot under Ruling S2-I & S2-J
   const matchingFills: MatchingFill[] = []
   let fillsWithheld = false
+  // Resolved matching bars reachable on this cell (S3-I exclusivity is decided over all of them).
+  let matchingBars = 0
   for (let i = 0; i < orderedRules.length; i++) {
     yield
     const rule = orderedRules[i]!
     const outcome = outcomes[i]
-    const isScale = rule.definition.kind === 'colorScale' || rule.writes.has('colorScale')
-    // Mirror the execution pass: a scale carrying an unevidenced stopIfTrue, or an unresolved stopping rule, halts
+    const slot = visualSlotOf(rule)
+    const isScale = slot === 'colorScale'
+    // Mirror the execution pass: a visual carrying an unevidenced stopIfTrue, or an unresolved stopping rule, halts
     // composition, so nothing below it may take part in fill arbitration (it could suppress an earlier winner).
-    const stopsHere = rule.stopIfTrue && (!isScale || !checkEvidence('scale:composition-scale-stopIfTrue'))
-    if (isScale && rule.stopIfTrue && !checkEvidence('scale:composition-scale-stopIfTrue')) break
+    const stopsHere = halts(rule, slot)
+    if (slot !== undefined && stopsHere) break
     if (!outcome || outcome.kind === 'unresolved') {
       if (stopsHere) break
       continue
     }
     if (outcome.kind === 'no-match' || !outcome.value) continue
+    if (slot === 'dataBar') {
+      // A bar never takes part in fill arbitration (S3-I); it only counts towards bar exclusivity.
+      if (barDescriptorOf(outcome.value)) matchingBars++
+      continue
+    }
 
     const hasDxfFill = rule.dxf && ('fill.bg' in rule.dxf || 'fill.pattern' in rule.dxf)
 
@@ -94,8 +122,14 @@ function* steps(
 
     // A matching stopIfTrue DXF halts composition: scales after it are
     // unreachable and must not participate in fill arbitration (bot P2).
-    if (rule.stopIfTrue && !isScale) break
+    if (stopsHere) break
   }
+  // S3-I: two matching bars on one cell withhold both (exclusivity is unmeasured) and taint the bar slot.
+  const barsWithheld = matchingBars > 1
+  if (barsWithheld) tainted.add('dataBar')
+  // S3-I coexistence: a bar never changes the fill slot, but paints over a scale or DXF fill only under evidence.
+  const scaleFillPresent = matchingFills.some(f => f.isScale)
+  const dxfFillPresent = matchingFills.some(f => !f.isScale)
 
   // Determine fill slot winner
   let fillWinnerIndex: number | undefined = undefined
@@ -153,20 +187,20 @@ function* steps(
     yield
     const rule = orderedRules[i]!
     const outcome = outcomes[i]
-    const isScale = rule.definition.kind === 'colorScale' || rule.writes.has('colorScale')
+    const slot = visualSlotOf(rule)
+    const isScale = slot === 'colorScale'
+    const isBar = slot === 'dataBar'
 
-    // Ruling S2-J: scale carrying stopIfTrue="1"
-    if (isScale && rule.stopIfTrue) {
-      if (!checkEvidence('scale:composition-scale-stopIfTrue')) {
-        // Unresolved until composition variant lands (S2-J); withholds p2 DXF fill and font
-        tainted.add('ALL')
-        break
-      }
-      // Once measured, flag is ignored on colorScale (OD-1)
+    // Ruling S2-J (scale) and S3-J (bar): a visual carrying stopIfTrue="1" is unresolved until its composition variant
+    // lands, whatever its outcome, so §5.7.1 withholds every later rule (the p2 DXF fill and font). Once measured, the
+    // flag is ignored on the visual (OD-1).
+    if (slot !== undefined && halts(rule, slot)) {
+      tainted.add('ALL')
+      break
     }
 
     if (!outcome || outcome.kind === 'unresolved') {
-      if (rule.stopIfTrue && (!isScale || !checkEvidence('scale:composition-scale-stopIfTrue'))) {
+      if (halts(rule, slot)) {
         tainted.add('ALL')
         break
       }
@@ -177,7 +211,7 @@ function* steps(
     if (outcome.kind === 'no-match' || !outcome.value) continue
 
     // Matching stopIfTrue rule ahead of a scale
-    if (rule.stopIfTrue && !isScale) {
+    if (rule.stopIfTrue && slot === undefined) {
       const hasLowerScale = orderedRules.slice(i + 1).some(r => r.definition.kind === 'colorScale' || r.writes.has('colorScale'))
       if (hasLowerScale) {
         if (!checkEvidence('scale:composition-matching-stopIfTrue-ahead')) {
@@ -186,7 +220,19 @@ function* steps(
       }
     }
 
-    if (isScale) {
+    if (isBar) {
+      // Bar rule (S3-I): its own slot, exclusive, and over a fill only under evidence.
+      const value = barDescriptorOf(outcome.value)
+      let blocked = barsWithheld || value === undefined
+      for (const mask of tainted) { yield; if (conflicts(mask, 'dataBar')) { blocked = true; break } }
+      // An earlier unresolved fill writer leaves the cell's fill unknown: treated as a possible DXF fill.
+      let fillUnknown = false
+      for (const mask of tainted) { yield; if (conflicts(mask, 'fill')) { fillUnknown = true; break } }
+      if (!blocked && scaleFillPresent && !checkEvidence('bar:composition-with-scale')) blocked = true
+      if (!blocked && (dxfFillPresent || fillUnknown) && !checkEvidence('bar:composition-dxf-fill')) blocked = true
+      if (blocked || !value) tainted.add('dataBar')
+      else { visualDataBar = Object.freeze({ ruleId: rule.id, ...value }); won.add('dataBar') }
+    } else if (isScale) {
       // Scale rule
       let blocked = fillsWithheld
       for (const mask of tainted) { yield; if (conflicts(mask, 'fill') || conflicts(mask, 'colorScale')) { blocked = true; break } }
@@ -221,15 +267,17 @@ function* steps(
       for (const slot of added) won.add(slot)
     }
 
-    if (rule.stopIfTrue && (!isScale || !checkEvidence('scale:composition-scale-stopIfTrue'))) {
-      break
-    }
+    if (halts(rule, slot)) break
   }
 
+  const visual = visualColorScale || visualDataBar ? Object.freeze({
+    ...(visualColorScale ? { colorScale: Object.freeze(visualColorScale) } : {}),
+    ...(visualDataBar ? { dataBar: visualDataBar } : {}),
+  }) : undefined
   const result: CfCellState = Object.freeze({
     properties: Object.freeze(properties),
     ...(tainted.size ? { unresolvedWrites: readonlyMask(tainted) } : {}),
-    ...(visualColorScale ? { visual: Object.freeze({ colorScale: Object.freeze(visualColorScale) }) } : {}),
+    ...(visual ? { visual } : {}),
   })
 
   return result
