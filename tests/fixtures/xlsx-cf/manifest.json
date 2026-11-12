@@ -722,8 +722,8 @@
       ],
       "expected": {
         "inputSha256": "c6576023e7bb31ebeb2806f3d9d0ab2f3af03cf95ef33e51c932c8cdac3ea8e3",
-        "savedSha256": "c6576023e7bb31ebeb2806f3d9d0ab2f3af03cf95ef33e51c932c8cdac3ea8e3",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "53e7317a72a68ca035ff7372969df0798bd1ba3454ca637418acf86ba9515aff",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -731,7 +731,8 @@
           "D2",
           "E2",
           "F5",
-          "G7"
+          "G7",
+          "K2"
         ],
         "negativeRefs": [
           "B4",
@@ -746,7 +747,6 @@
           "I7",
           "J2",
           "J7",
-          "K2",
           "K7",
           "L2",
           "L7"
@@ -886,8 +886,11 @@
           {
             "ref": "K2",
             "controlRef": "K11",
-            "matched": false,
-            "note": "x14 canonical containsText does not match in Excel"
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "fontRgb": "FF9C0006",
+            "bold": true,
+            "note": "x14 canonical containsText \"ab\" matches \"abc\" (Task 18c recapture with Excel's x14 URI; the legacy twin B2 matches too)"
           },
           {
             "ref": "K7",
@@ -899,7 +902,7 @@
             "ref": "L2",
             "controlRef": "L11",
             "matched": false,
-            "note": "x14 divergent formula SEARCH(\"zz\",L2) does not match \"abc\""
+            "note": "x14 divergent formula SEARCH(\"zz\",L2) overrides @text=\"ab\" and does not match \"abc\" (as the legacy twin J2)"
           },
           {
             "ref": "L7",
@@ -917,14 +920,20 @@
           "pngSha256": "140c95e4fbb320dfb27462bd2fa416d705753fb25d53f80474ab87245730b60a"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-12T02:24:16.527Z",
+        "excelVersion": "16.114",
+        "inputSha256": "c6576023e7bb31ebeb2806f3d9d0ab2f3af03cf95ef33e51c932c8cdac3ea8e3",
+        "savedSha256": "53e7317a72a68ca035ff7372969df0798bd1ba3454ca637418acf86ba9515aff",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-blanks-errors",
@@ -1147,8 +1156,8 @@
       ],
       "expected": {
         "inputSha256": "6b443acb2f3f75ed18219a332b1388f5416de9b8fda9b87b71e23bc5ca2f18f5",
-        "savedSha256": "6b443acb2f3f75ed18219a332b1388f5416de9b8fda9b87b71e23bc5ca2f18f5",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "35020697a9a2d9e4c390236d30b9c8dfb310b32470db96809bf65c4b4c5ee87f",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -1159,7 +1168,9 @@
           "H9",
           "J8",
           "K6",
-          "M6"
+          "M6",
+          "N2",
+          "O6"
         ],
         "negativeRefs": [
           "B6",
@@ -1178,9 +1189,7 @@
           "L6",
           "L8",
           "M8",
-          "N2",
           "N6",
-          "O6",
           "O8"
         ],
         "cells": [
@@ -1360,8 +1369,9 @@
           {
             "ref": "N2",
             "controlRef": "N11",
-            "matched": false,
-            "note": "x14 containsBlanks does not match in Excel"
+            "matched": true,
+            "fillRgb": "FFFFC7CE",
+            "note": "x14 containsBlanks matches the unstored blank (Task 18c recapture; the legacy twin B2 matches too)"
           },
           {
             "ref": "N6",
@@ -1372,8 +1382,10 @@
           {
             "ref": "O6",
             "controlRef": "O15",
-            "matched": false,
-            "note": "x14 notContainsErrors does not match in Excel"
+            "matched": true,
+            "fillRgb": "FFC6EFCE",
+            "fontRgb": "FF006100",
+            "note": "x14 notContainsErrors matches 0 (Task 18c recapture; the legacy twin K6 matches too)"
           },
           {
             "ref": "O8",
@@ -1391,14 +1403,20 @@
           "pngSha256": "6ea509ac070c8e2a71a30c13af47bfe31885f27231751b7c7d2dc08644fab5ee"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-12T02:24:44.614Z",
+        "excelVersion": "16.114",
+        "inputSha256": "6b443acb2f3f75ed18219a332b1388f5416de9b8fda9b87b71e23bc5ca2f18f5",
+        "savedSha256": "35020697a9a2d9e4c390236d30b9c8dfb310b32470db96809bf65c4b4c5ee87f",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage1-timeperiod-today-clock",
