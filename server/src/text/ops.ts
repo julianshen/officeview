@@ -33,43 +33,23 @@ export function searchArgs(msg: Record<string, unknown>): { query: string; caseS
   return { query, caseSensitive: caseSensitive === true }
 }
 
-/** One match whose JSON exceeds `room` bytes, split into pieces (same unit,
- * whole x,y,w,h quads) that each fit. */
-function splitMatch(m: SearchMatch, room: number): SearchMatch[] {
-  const base = bytesOf({ unit: m.unit, rects: [] })
-  const out: SearchMatch[] = []
-  let rects: number[] = [], size = base
-  for (let i = 0; i < m.rects.length; i += 4) {
-    const quad = m.rects.slice(i, i + 4)
-    const n = enc.encode(quad.map((x) => JSON.stringify(x)).join(',')).length
-    if (base + n > room) throw new Error('a single rect exceeds the message limit')
-    if (rects.length && size + 1 + n > room) { out.push({ unit: m.unit, rects }); rects = []; size = base }
-    size += (rects.length ? 1 : 0) + n
-    rects.push(...quad)
-  }
-  if (rects.length) out.push({ unit: m.unit, rects })
-  return out
-}
-
 /** `search-result` messages for `matches`, in order, each ≤ `limit` bytes of
- * UTF-8 when JSON-encoded. A match is split only when it alone cannot fit. */
-export function chunkMatches(reqId: number, matches: readonly SearchMatch[], limit = TEXT_MESSAGE_BYTES): SearchResultMessage[] {
+ * UTF-8 when JSON-encoded. One wire entry per match, always: a match whose
+ * entry alone cannot fit one message is omitted (counted in `omitted`). */
+export function chunkMatches(reqId: number, matches: readonly SearchMatch[], limit = TEXT_MESSAGE_BYTES): { messages: SearchResultMessage[]; omitted: number } {
   const base = bytesOf({ reqId, type: 'search-result', matches: [] })
-  const out: SearchResultMessage[] = []
-  let cur: SearchMatch[] = [], size = base
-  const add = (m: SearchMatch, n: number) => {
-    if (cur.length && size + 1 + n > limit) { out.push({ reqId, type: 'search-result', matches: cur }); cur = []; size = base }
-    size += (cur.length ? 1 : 0) + n
-    cur.push(m)
-  }
+  const messages: SearchResultMessage[] = []
+  let cur: SearchMatch[] = [], size = base, omitted = 0
   for (const raw of matches) {
     const m = { unit: raw.unit, rects: raw.rects }
     const n = bytesOf(m)
-    if (base + n <= limit) add(m, n)
-    else for (const piece of splitMatch(m, limit - base)) add(piece, bytesOf(piece))
+    if (base + n > limit) { omitted++; continue }
+    if (cur.length && size + 1 + n > limit) { messages.push({ reqId, type: 'search-result', matches: cur }); cur = []; size = base }
+    size += (cur.length ? 1 : 0) + n
+    cur.push(m)
   }
-  if (cur.length) out.push({ reqId, type: 'search-result', matches: cur })
-  return out
+  if (cur.length) messages.push({ reqId, type: 'search-result', matches: cur })
+  return { messages, omitted }
 }
 
 /** The in-flight search of one sid. `send`/`alive` are bound to the socket
@@ -116,7 +96,8 @@ export function supersede(slot: SearchSlot): SearchRun | undefined {
  * Runs one validated search: supersedes the sid's running one, then walks
  * the units in order, SEARCH_BATCH_UNITS per job, sending each batch's
  * matches as `search-result` messages and finally `search-done`. Each batch
- * asks for one match more than may still be sent, so truncation is exact. A
+ * asks for one match more than may still be sent, so truncation is exact; a
+ * match too large for one message is omitted and marks the answer truncated. A
  * pool failure is a refusal (AdmissionRefused ⇒ rate-limited, anything else
  * ⇒ policy-refused) and no `search-done` follows it.
  */
@@ -126,7 +107,9 @@ export async function runSearch(c: SearchContext): Promise<void> {
   const run: SearchRun = { reqId: c.reqId, sent: 0, stopped: false, settled: new Promise<void>((r) => { settle = r }), send: c.send, alive: c.alive }
   c.slot.search = run
   const current = () => !run.stopped && c.slot.search === run && c.alive()
-  const done = (truncated: boolean) => { run.stopped = true; c.send({ reqId: c.reqId, type: 'search-done', total: run.sent, truncated }) }
+  /** A match omitted for size makes the answer incomplete. */
+  let omitted = false
+  const done = (truncated: boolean) => { run.stopped = true; c.send({ reqId: c.reqId, type: 'search-done', total: run.sent, truncated: truncated || omitted }) }
   try {
     // One search in flight per sid: wait for the superseded run's pool job.
     if (prev) await prev.settled
@@ -144,8 +127,11 @@ export async function runSearch(c: SearchContext): Promise<void> {
       if (!current()) return
       if (!('op' in reply) || reply.op !== 'search') { run.stopped = true; return c.refuse('policy-refused') }
       const send = reply.matches.slice(0, remaining)
-      for (const m of chunkMatches(c.reqId, send)) c.send(m)
-      run.sent += send.length
+      const chunks = chunkMatches(c.reqId, send)
+      for (const m of chunks.messages) c.send(m)
+      // `total` counts the entries actually sent; an omitted match frees its budget slot.
+      run.sent += send.length - chunks.omitted
+      if (chunks.omitted) omitted = true
       if (reply.matches.length > remaining) return done(true)
     }
     if (current()) done(false)

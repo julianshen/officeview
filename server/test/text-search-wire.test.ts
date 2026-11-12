@@ -183,6 +183,29 @@ describe('ops.ts runSearch with a fake pool', () => {
     expect(sent).toEqual([])
   })
 
+  test('review probe: a giant match is omitted, total equals the entries sent, truncated', async () => {
+    const giant = { unit: 0, rects: Array.from({ length: 4 * 5000 }, (_, i) => i * 1.000001) }
+    const r = await run(16, async (j) => ({ op: 'search', matches: j.fromUnit === 0 ? [giant, ...matches(4999, 0)] : matches(10, 8) }))
+    const results = r.sent.filter((m) => m.type === 'search-result')
+    const entries = results.flatMap((m) => m.matches)
+    const done = r.sent.at(-1)!
+    expect(done.type).toBe('search-done')
+    expect(entries.length).toBe(done.total)
+    expect(done.total).toBeLessThanOrEqual(MAX_SEARCH_MATCHES)
+    expect(done.truncated).toBe(true)
+    expect(entries.some((e: { rects: number[] }) => e.rects.length > 4)).toBe(false)
+    for (const m of results) expect(new TextEncoder().encode(JSON.stringify(m)).length).toBeLessThanOrEqual(TEXT_MESSAGE_BYTES)
+    // The walk continued past the omission into the second batch.
+    expect(r.jobs.length).toBe(2)
+  })
+
+  test('a giant match alone: omitted, the search continues and ends truncated', async () => {
+    const giant = { unit: 0, rects: Array.from({ length: 4 * 5000 }, (_, i) => i * 1.000001) }
+    const r = await run(16, async (j) => ({ op: 'search', matches: j.fromUnit === 0 ? [giant] : matches(3, 8) }))
+    expect(r.sent.filter((m) => m.type === 'search-result').flatMap((m) => m.matches)).toEqual(matches(3, 8))
+    expect(r.sent.at(-1)).toEqual({ reqId: 7, type: 'search-done', total: 3, truncated: true })
+  })
+
   test('supersession answers the old reqId once and the new run waits for its pool job', async () => {
     const slot: SearchSlot = {}
     let release!: () => void
@@ -203,24 +226,23 @@ describe('ops.ts runSearch with a fake pool', () => {
 })
 
 describe('chunkMatches', () => {
+  const size = (m: unknown) => new TextEncoder().encode(JSON.stringify(m)).length
   test('every message is ≤ the limit and order is kept', () => {
     const ms = Array.from({ length: 4000 }, (_, i) => ({ unit: i >> 8, rects: [i + 0.123456789, 2.5, 3.75, 14.0625] }))
-    const out = chunkMatches(3, ms)
-    expect(out.length).toBeGreaterThan(1)
-    for (const m of out) expect(new TextEncoder().encode(JSON.stringify(m)).length).toBeLessThanOrEqual(TEXT_MESSAGE_BYTES)
-    expect(out.flatMap((m) => m.matches)).toEqual(ms)
+    const { messages, omitted } = chunkMatches(3, ms)
+    expect(omitted).toBe(0)
+    expect(messages.length).toBeGreaterThan(1)
+    for (const m of messages) expect(size(m)).toBeLessThanOrEqual(TEXT_MESSAGE_BYTES)
+    expect(messages.flatMap((m) => m.matches)).toEqual(ms)
   })
 
-  test('a single match over the limit is split across messages by whole rects, same unit', () => {
+  test('a match whose entry alone cannot fit one message is omitted, never split', () => {
     const rects = Array.from({ length: 4 * 5000 }, (_, i) => i * 1.000001)
-    const out = chunkMatches(3, [{ unit: 2, rects }, { unit: 3, rects: [1, 2, 3, 4] }])
-    expect(out.length).toBeGreaterThan(1)
-    for (const m of out) expect(new TextEncoder().encode(JSON.stringify(m)).length).toBeLessThanOrEqual(TEXT_MESSAGE_BYTES)
-    const pieces = out.flatMap((m) => m.matches)
-    for (const p of pieces) expect(p.rects.length % 4).toBe(0)
-    expect(pieces.filter((p) => p.unit === 2).flatMap((p) => p.rects)).toEqual(rects)
-    expect(pieces.at(-1)).toEqual({ unit: 3, rects: [1, 2, 3, 4] })
+    const { messages, omitted } = chunkMatches(3, [{ unit: 1, rects: [5, 6, 7, 8] }, { unit: 2, rects }, { unit: 3, rects: [1, 2, 3, 4] }])
+    expect(omitted).toBe(1)
+    expect(messages.flatMap((m) => m.matches)).toEqual([{ unit: 1, rects: [5, 6, 7, 8] }, { unit: 3, rects: [1, 2, 3, 4] }])
+    for (const m of messages) expect(size(m)).toBeLessThanOrEqual(TEXT_MESSAGE_BYTES)
   })
 
-  test('nothing to send ⇒ no message', () => expect(chunkMatches(3, [])).toEqual([]))
+  test('nothing to send ⇒ no message', () => expect(chunkMatches(3, [])).toEqual({ messages: [], omitted: 0 }))
 })
