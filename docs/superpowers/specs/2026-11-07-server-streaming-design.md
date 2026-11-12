@@ -858,8 +858,14 @@ drops the unit and re-requests once.
   >   perpendicular to the baseline, device font size).
   >
   > A single axis-aligned stroke segment is measured at its true line
-  > width. Everything else covers as before. Geometry alone never exempts
-  > a mark (`server/src/occlusion.ts`). Residuals: §19 item 10.
+  > width only when that is provably exact: the transform at stroke time
+  > is an axis-aligned scale/translate or a rotation by a multiple of 90°
+  > (the width across the segment is then the line width × the scale on
+  > the device axis across it). Under any shear or other rotation the
+  > segment keeps the conservative box, padded on every side by
+  > √2 × half the line width × the transform's operator norm, which
+  > contains the stroke's paint for every cap (2026-11-12). Everything
+  > else covers as before. Geometry alone never exempts a mark (`server/src/occlusion.ts`). Residuals: §19 item 10.
 - **No original media bytes (every projection):** `drawImage` ships the
   **drawn-bitmap snapshot** (as-painted), source-rect cropped
   (`src/drawing/scene-paint.ts:132–150` crops via `drawImage` source rects),

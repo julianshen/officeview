@@ -786,6 +786,87 @@ describe('a stroke under shear or a non-right-angle rotation has no cap allowanc
   })
 })
 
+describe('a stroke\'s recorded box contains its paint under every transform (re-review: stroke bound)', () => {
+  const W = 400, H = 400
+  type M = [number, number, number, number, number, number]
+  /** Strokes one segment whose DEVICE centreline is P→Q with the pen under `m` (points given in user space through m⁻¹). */
+  const stroked = (m: M, P: [number, number], Q: [number, number], lineWidth: number, lineCap: CanvasLineCap) => {
+    const ctx = createCanvas(W, H).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(W, H)
+    const c = o.wrap(ctx)
+    const [a, b, cc, d, e, f] = m, det = a * d - b * cc
+    const user = ([x, y]: [number, number]): [number, number] => [(d * (x - e) - cc * (y - f)) / det, (a * (y - f) - b * (x - e)) / det]
+    c.setTransform(a, b, cc, d, e, f)
+    c.lineWidth = lineWidth; c.lineCap = lineCap; c.strokeStyle = '#000'
+    c.beginPath(); c.moveTo(...user(P)); c.lineTo(...user(Q)); c.stroke()
+    const boxes = o.markBoxes().filter((k) => k.grid === 'cover').map((k) => k.box)
+    const px = ctx.getImageData(0, 0, W, H).data
+    return { boxes, px }
+  }
+  /** Painted pixels (alpha > 0) whose unit square touches none of the boxes. */
+  const outside = (boxes: Array<[number, number, number, number]>, px: Uint8ClampedArray) => {
+    let n = 0, painted = 0
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (px[(y * W + x) * 4 + 3]! === 0) continue
+      painted++
+      if (!boxes.some((r) => x + 1 > r[0] && x < r[2] && y + 1 > r[1] && y < r[3])) n++
+    }
+    return { outside: n, painted }
+  }
+  const rot = (deg: number): M => { const t = (deg * Math.PI) / 180; return [Math.cos(t), Math.sin(t), -Math.sin(t), Math.cos(t), 0, 0] }
+  const transforms: Array<[string, M, boolean]> = [
+    ['identity', [1, 0, 0, 1, 0, 0], true],
+    ['uniform scale 2', [2, 0, 0, 2, 3, 4], true],
+    ['anisotropic scale (3, 1)', [3, 0, 0, 1, 0, 0], true],
+    ['anisotropic scale (1, 3)', [1, 0, 0, 3, 0, 0], true],
+    ['rotation 90°', [0, 1, -1, 0, 0, 0], true],
+    ['rotation 90° with anisotropic scale', [0, 3, -1, 0, 0, 0], true],
+    ['shear in x', [1, 0, 2, 1, 0, 0], false],
+    ['shear in y', [1, 2, 0, 1, 0, 0], false],
+    ['the re-review matrix', [0.1, 1, -0.1, 1, 150, 100], false],
+    ['rotation 30°', rot(30), false],
+    ['rotation 30° of an anisotropic scale', (() => { const r = rot(30); return [r[0] * 3, r[1] * 3, r[2], r[3], 0, 0] as M })(), false],
+    ['rotation 60° then anisotropic scale', (() => { const r = rot(60); return [r[0], r[1] * 4, r[2], r[3] * 4, 0, 0] as M })(), false],
+  ]
+  const lines: Array<[string, [number, number], [number, number]]> = [['horizontal', [130.3, 200.4], [270.6, 200.4]], ['vertical', [200.4, 130.3], [200.4, 270.6]]]
+  for (const [name, m, exact] of transforms) for (const [dir, P, Q] of lines) for (const cap of ['butt', 'square', 'round'] as const) it(`${name}, ${dir} device centreline, ${cap} caps: no painted pixel lies outside the recorded box`, () => {
+    const { boxes, px } = stroked(m, P, Q, 10, cap)
+    expect(boxes.length).toBeGreaterThan(0)
+    const r = outside(boxes, px)
+    expect(r.painted).toBeGreaterThan(100)
+    expect({ name, dir, cap, outside: r.outside }).toEqual({ name, dir, cap, outside: 0 })
+    // A provably exact transform keeps the true width across the line: the pen's extent on the perpendicular device axis.
+    if (exact) {
+      const [a, b, c, d] = m, across = dir === 'horizontal' ? 10 * Math.hypot(b, d) : 10 * Math.hypot(a, c)
+      expect(boxes).toHaveLength(1)
+      const box = boxes[0]!
+      expect(dir === 'horizontal' ? box[3] - box[1] : box[2] - box[0]).toBeCloseTo(across, 9)
+    }
+  })
+  it('the re-review probe: lineWidth 10 under (0.1, 1, −0.1, 1) paints y 92.93–107.07; the box contains it', () => {
+    const { boxes, px } = stroked([0.1, 1, -0.1, 1, 150, 100], [130, 100], [170, 100], 10, 'butt')
+    expect(outside(boxes, px).outside).toBe(0)
+    expect(Math.min(...boxes.map((r) => r[1]))).toBeLessThanOrEqual(100 - 10 / Math.SQRT2)
+    expect(Math.max(...boxes.map((r) => r[3]))).toBeGreaterThanOrEqual(100 + 10 / Math.SQRT2)
+  })
+  it('multi-segment strokes and strokeRect under shear are contained too', () => {
+    for (const m of [[0.1, 1, -0.1, 1, 150, 100], [1, 0, 2, 1, 0, 0], [1, 2, 0, 1, 0, 0]] as M[]) {
+      const ctx = createCanvas(W, H).getContext('2d') as unknown as CanvasRenderingContext2D
+      const o = occlusionObserver(W, H)
+      const c = o.wrap(ctx)
+      const [a, b, cc, d, e, f] = m, det = a * d - b * cc
+      const user = (x: number, y: number): [number, number] => [(d * (x - e) - cc * (y - f)) / det, (a * (y - f) - b * (x - e)) / det]
+      c.setTransform(a, b, cc, d, e, f)
+      c.lineWidth = 8; c.lineCap = 'square'; c.lineJoin = 'round'; c.strokeStyle = '#000'
+      c.beginPath(); c.moveTo(...user(150, 150)); c.lineTo(...user(250, 150)); c.lineTo(...user(250, 250)); c.stroke()
+      const [x0, y0] = user(120, 300), [x1, y1] = user(160, 330)
+      c.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0) || 5, Math.abs(y1 - y0) || 5)
+      const boxes = o.markBoxes().filter((k) => k.grid === 'cover').map((k) => k.box)
+      expect({ m, outside: outside(boxes, ctx.getImageData(0, 0, W, H).data).outside }).toEqual({ m, outside: 0 })
+    }
+  })
+})
+
 describe('destructive composites (review 4)', () => {
   for (const op of ['copy', 'destination-in', 'source-in', 'source-out', 'destination-atop'] as const) it(`${op} far from the ink still withholds it (it clears outside its source)`, () => {
     const e = run((c) => { text(c); c.globalCompositeOperation = op; c.fillRect(170, 70, 20, 20) })

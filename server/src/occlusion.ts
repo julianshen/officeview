@@ -148,7 +148,7 @@ export class ObserverBudgetExceeded extends Error { constructor() { super('occlu
  * `scale`: the render scale the painter's ctx carries (device px per page
  * px); it scales the decoration floor. Unset means 1.
  */
-export function occlusionObserver(width: number, height: number, maxBytes = Number.POSITIVE_INFINITY, scale = 1): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[]; exceeded(): boolean } {
+export function occlusionObserver(width: number, height: number, maxBytes = Number.POSITIVE_INFINITY, scale = 1): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[]; exceeded(): boolean; markBoxes(): Array<{ seq: number; grid: 'cover' | 'erase' | 'filter'; box: [number, number, number, number] }> } {
   let spent = 0, over = false
   const charge = (n: number) => {
     if (over || spent + n > maxBytes) { over = true; throw new ObserverBudgetExceeded() }
@@ -232,7 +232,13 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   const pts = (ctx: CanvasRenderingContext2D, a: unknown[], n: number) => Array.from({ length: n }, (_, i) => devicePoint(ctx, a[i * 2] as number, a[i * 2 + 1] as number))
   const box = (ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) => [devicePoint(ctx, x0, y0), devicePoint(ctx, x1, y0), devicePoint(ctx, x1, y1), devicePoint(ctx, x0, y1)]
   const devicePoint = (ctx: CanvasRenderingContext2D, x: number, y: number): [number, number] => { const t = ctx.getTransform(); return [t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f] }
-  const maxScale = (ctx: CanvasRenderingContext2D) => { const t = ctx.getTransform(); return Math.max(Math.hypot(t.a, t.b), Math.hypot(t.c, t.d)) }
+  /** The transform's largest stretch of any direction (its operator norm, the larger singular value): a
+   * user-space vector of length r maps to a device vector no longer than maxScale × r. For a scale or a
+   * rotation this is the larger axis scale; under shear it exceeds both column norms. */
+  const maxScale = (ctx: CanvasRenderingContext2D) => {
+    const t = ctx.getTransform(), s = t.a * t.a + t.b * t.b + t.c * t.c + t.d * t.d, det = t.a * t.d - t.b * t.c
+    return Math.sqrt((s + Math.sqrt(Math.max(0, s * s - 4 * det * det))) / 2)
+  }
 
   /** One draw op with conservative device bounds `b`; `paint` = its fill/stroke style. */
   function draw(ctx: CanvasRenderingContext2D, b: Rect, paint: unknown, opts: { erase?: boolean; cap?: { px: number; axis: 0 | 1 } } = {}) {
@@ -253,25 +259,32 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     if (alpha >= 0.95) mark('cover', b, opts.cap && same(b, stroke) ? opts.cap : undefined)
   }
 
-  // Half the line width covers butt/round/square caps and round/bevel joins;
-  // a miter join can spike out to miterLimit × half the width at the join point.
+  // Every point of a stroke lies within √2 × half the line width of its path in
+  // user space (butt/round caps and round/bevel joins within half the width, a
+  // square cap's corner at √2 × that), so within strokeHalf of it in device
+  // space under any transform (maxScale is the operator norm). A miter join can
+  // spike out to miterLimit × half the width at the join point.
   const strokeHalf = (ctx: CanvasRenderingContext2D) => (ctx.lineWidth * maxScale(ctx)) / 2 * Math.SQRT2
   const joinPad = (ctx: CanvasRenderingContext2D) => strokeHalf(ctx) * (ctx.lineJoin === 'miter' ? Math.max(1, ctx.miterLimit) : 1)
-  /** The current path's stroke boxes. One straight segment that is axis-aligned
-   * in device space (no joins) is exact across the line: half the device line
-   * width each side; along it the cap allowance stays. Every other path keeps
-   * the per-segment strokeHalf boxes plus join allowances. */
+  /** The current path's stroke boxes; each contains the stroke's paint. One
+   * straight segment that is axis-aligned in device space (no joins), stroked
+   * under an axis-aligned scale/translate or a rotation by a multiple of 90°,
+   * is exact across the line: half the line width × the pen's scale on the
+   * device axis across the segment, each side (the pen is an axis-aligned
+   * ellipse there, its extent on device x is hypot(a, c) and on y hypot(b, d)
+   * per unit); along it the cap allowance stays, and is discountable (`cap`)
+   * when the caps are butt. Under any other transform (shear, other
+   * rotations) the pen leans, so the segment keeps the conservative
+   * strokeHalf box on every side and has no cap allowance. Every other path
+   * keeps the per-segment strokeHalf boxes plus join allowances. */
   function strokeBoxes(ctx: CanvasRenderingContext2D): { boxes: Rect[]; cap?: { px: number; axis: 0 | 1 } } {
-    const along = strokeHalf(ctx), across = (ctx.lineWidth * maxScale(ctx)) / 2
-    if (segments.length === 1 && joins.length === 0) {
-      const r = segments[0]!
-      // The end padding is pure allowance only under butt caps (square and round caps paint into it)
-      // and only when the transform at stroke time is an axis-aligned scale/translate or a rotation by a
-      // multiple of 90°: under shear or any other rotation the pen's cross-section leans along the line,
-      // so a butt end paints past the centreline's endpoint. Otherwise the whole box counts as painted.
-      const butt = ctx.lineCap === 'butt' && baselineAcross(ctx) !== undefined
-      if (Math.abs(r[3] - r[1]) < 1e-9) return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], ...(butt ? { cap: { px: along, axis: 0 as const } } : {}) }
-      if (Math.abs(r[2] - r[0]) < 1e-9) return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], ...(butt ? { cap: { px: along, axis: 1 as const } } : {}) }
+    const along = strokeHalf(ctx)
+    if (segments.length === 1 && joins.length === 0 && baselineAcross(ctx) !== undefined) {
+      const r = segments[0]!, t = ctx.getTransform(), half = ctx.lineWidth / 2
+      // Square and round caps paint into the end padding: only a butt end leaves it empty.
+      const butt = ctx.lineCap === 'butt'
+      if (Math.abs(r[3] - r[1]) < 1e-9) { const across = half * Math.hypot(t.b, t.d); return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], ...(butt ? { cap: { px: along, axis: 0 as const } } : {}) } }
+      if (Math.abs(r[2] - r[0]) < 1e-9) { const across = half * Math.hypot(t.a, t.c); return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], ...(butt ? { cap: { px: along, axis: 1 as const } } : {}) } }
     }
     return { boxes: [...segments.map((r) => pad(r, along)), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(ctx)))] }
   }
@@ -396,6 +409,8 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
 
   return {
     exceeded: () => over,
+    /** The recorded coverage marks' device boxes, in order (server-side only — tests check them against the raster). */
+    markBoxes: () => marks.map((m) => ({ seq: m.seq, grid: m.grid, box: [m.box[0], m.box[1], m.box[2], m.box[3]] as [number, number, number, number] })),
     beforeUnit() {},
     afterUnit() {},
     wrap(ctx) {
