@@ -622,7 +622,7 @@ async function parseSheet(
   // The first sheet view carries the frozen panes and the reading order that `context` data bars follow.
   const firstView = getChildren(getChildren(data, 'sheetViews')[0], 'sheetView')[0]
   if (hasConditionalFormatting(data)) {
-    const rtl = firstView ? sheetViewRightToLeft(attrs(firstView).rightToLeft as string | undefined) : undefined
+    const rtl = sheetViewRightToLeft(firstView ? attrs(firstView).rightToLeft as string | undefined : undefined)
     try {
       const cf = await ensureCfParser(true)
       if (cf) {

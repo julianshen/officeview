@@ -67,7 +67,8 @@ export interface CfStylesSource {
 export interface CfParseMeta {
   readonly sheetId?: string
   readonly partPath?: string
-  /** The first `<sheetView>`'s `rightToLeft`; undefined when there is no sheet view or the flag is malformed. */
+  /** The sheet's reading order (`sheetViewRightToLeft`: no sheet view is LTR, `false`); undefined means unknown (a
+   * malformed flag, or a caller that cannot tell), which a `context` bar never treats as LTR (Ruling S3-K as amended). */
   readonly sheetRightToLeft?: boolean
 }
 

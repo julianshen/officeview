@@ -17,7 +17,12 @@ const count = (raw: string | undefined, max: number): number => {
   return Number.isInteger(n) && n > 0 && n < max ? n : 0
 }
 
-/** The first sheet view's reading order (`<sheetView rightToLeft>`, default false); undefined when malformed. */
+/**
+ * The sheet's reading order from the first `<sheetView>`'s `rightToLeft` attribute value. Contract (Ruling S3-K as
+ * amended by the owner, 2026-11-12): `undefined` input (no sheet view, or a sheet view without the attribute) is the
+ * schema default, left-to-right (`false`); `'1'`/`'true'` is right-to-left; any other spelling is an unknown reading
+ * order and returns `undefined`, which callers must never treat as left-to-right.
+ */
 export const sheetViewRightToLeft = (v: string | undefined): boolean | undefined =>
   v === undefined || v === '0' || v === 'false' ? false : v === '1' || v === 'true' ? true : undefined
 

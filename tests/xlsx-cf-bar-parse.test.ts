@@ -13,6 +13,7 @@ import { MEASURED_CF_OFFICE_THEME, barRequiredCapabilities, parseCfSheet, type C
 import { DATA_BAR_WRITES, type CfDefinition, type CfRule, type CfSheetRules } from '../src/xlsx/cf/model'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { resolveSheetColor } from '../src/xlsx/sheetColors'
+import { sheetViewRightToLeft } from '../src/xlsx/frozenPane'
 import { xlsxBytes } from './helpers/xlsx-package'
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -375,14 +376,33 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     for (const rules of await bothPaths(view(''), 'bar-ltr-nocap')) {
       expect(byPriority(rules.rules, 1).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     }
-    // An unknown reading order (no sheet view, or a malformed flag) is never assumed LTR.
+    // S3-K as amended (owner, 2026-11-12): no sheet view, or one without rightToLeft, is the schema default LTR.
     injectExactCfEvidence(BAR_PARSE_CAPS)
-    for (const [sheetView, id] of [['', 'bar-noview'], [view(' rightToLeft="maybe"'), 'bar-badview']] as const) {
-      for (const rules of await bothPaths(sheetView, id)) {
-        expect(byPriority(rules.rules, 1).definition, id).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
-        expect(bar(byPriority(rules.rules, 2).definition).sheetRightToLeft, id).toBeUndefined()
+    for (const [sheetView, id] of [['', 'bar-noview'], ['<sheetViews/>', 'bar-emptyviews'], [view(' rightToLeft="0"'), 'bar-ltr0']] as const) {
+      const both = await bothPaths(sheetView, id)
+      for (const rules of both) {
+        expect(bar(byPriority(rules.rules, 1).definition), id).toMatchObject({ direction: 'context', sheetRightToLeft: false })
+        expect(bar(byPriority(rules.rules, 2).definition), id).toMatchObject({ sheetRightToLeft: false })
       }
+      expect(both[1].rules, id).toEqual(both[0].rules)
     }
+    // A malformed flag is an unknown reading order, never assumed LTR.
+    const bad = await bothPaths(view(' rightToLeft="maybe"'), 'bar-badview')
+    for (const rules of bad) {
+      expect(byPriority(rules.rules, 1).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
+      expect(bar(byPriority(rules.rules, 2).definition).sheetRightToLeft).toBeUndefined()
+    }
+    expect(bad[1].rules).toEqual(bad[0].rules)
+  })
+
+  it('sheetViewRightToLeft states its contract: absent is LTR, malformed is unknown', () => {
+    expect(sheetViewRightToLeft(undefined)).toBe(false)
+    expect(sheetViewRightToLeft('0')).toBe(false)
+    expect(sheetViewRightToLeft('false')).toBe(false)
+    expect(sheetViewRightToLeft('1')).toBe(true)
+    expect(sheetViewRightToLeft('true')).toBe(true)
+    expect(sheetViewRightToLeft('maybe')).toBeUndefined()
+    expect(sheetViewRightToLeft('')).toBeUndefined()
   })
 
   it('bar colours resolve once on both paths', async () => {

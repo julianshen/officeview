@@ -334,8 +334,9 @@ export interface SheetMetadata {
   skippedCells: number
   /** Authored frozen panes of the first sheet view. */
   frozen?: XlsxFrozenPane
-  /** The first sheet view's `rightToLeft` (undefined: no sheet view, or a malformed flag), as the resident parser reads it. */
-  sheetRightToLeft?: boolean
+  /** The first sheet view's reading order, as the resident parser reads it: absent until a right-to-left sheet view is
+   * seen (no sheet view is left-to-right, Ruling S3-K as amended), `null` for a malformed `rightToLeft` (unknown). */
+  sheetRightToLeft?: boolean | null
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
   /** Bounded sparkline records parsed from worksheet extension parts. */
@@ -749,7 +750,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         // Only the first sheet view counts (as the resident parser reads it), even when it has no pane.
         if (++sheetViews === 1) {
           const rtl = sheetViewRightToLeft(attrMap(names, values, count).rightToLeft)
-          if (rtl !== undefined) meta.sheetRightToLeft = rtl
+          if (rtl !== false) meta.sheetRightToLeft = rtl ?? null
         }
       } else if (depth === 3 && local === 'pane' && stack[1] === 'sheetViews' && stack[2] === 'sheetView' && sheetViews === 1 && !paneSeen) {
         paneSeen = true
