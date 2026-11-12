@@ -20143,8 +20143,8 @@
       ],
       "expected": {
         "inputSha256": "6953b111a025e654d9cd636b7a55cb5e000372eb919b0eab86c7f9ddecbe2b2f",
-        "savedSha256": "6953b111a025e654d9cd636b7a55cb5e000372eb919b0eab86c7f9ddecbe2b2f",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "903fa74396bfd61a00e13a7296bc0f1336fda8f4f5b948cbd2a89ee307833400",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -20188,7 +20188,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20199,18 +20199,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "B4",
             "controlRef": "B10",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20221,7 +20221,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20232,7 +20232,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20243,7 +20243,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20254,18 +20254,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "C4",
             "controlRef": "C10",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20276,7 +20276,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20287,18 +20287,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "D2",
             "controlRef": "D8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20309,7 +20309,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20320,7 +20320,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20331,7 +20331,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20342,7 +20342,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -20471,17 +20471,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-colors.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-colors.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-colors.json",
+          "pngSha256": "bef85a4a4e9df68345df1809a77d9382a821814af9b451b01cc759c3199393fb"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-12T13:13:02.156Z",
+        "excelVersion": "16.114",
+        "inputSha256": "6953b111a025e654d9cd636b7a55cb5e000372eb919b0eab86c7f9ddecbe2b2f",
+        "savedSha256": "903fa74396bfd61a00e13a7296bc0f1336fda8f4f5b948cbd2a89ee307833400",
+        "openedRepairFree": true
+      }
     }
   ]
 }

@@ -689,3 +689,7 @@ No Excel was run. **Owner ruling S3-AUTO-GREY:** the evidence for the automatic 
 
   On grey, both colours are sampled as FFFFFFFF and discriminate, and the bars measure within 1 px of the original. On white, the same white is no evidence.
 - **Pending, needs Excel.** Recipes section 2b: `build.ts` and `capture.ts` for the case, then `--verify-only` and `audit.ts --stage 3`.
+
+### Stage 3 capture run 6 (2026-11-12): automatic colours on a grey cell
+
+`stage3-bar-auto-colors` with a static FFA6A6A6 cell fill (Task 19c) built repair-free and captured `measured`; the resave keeps the cell fill, `<x14:axisColor auto="1"/>` on two bars and `<x14:negativeFillColor auto="1"/>` on three. The capture shows white negative bars and a white 1 px axis on grey: B2 86–144 (axis 144), B3 115–144, C2 310–354 (axis 354), D3 446–474; positive bars FF0000FF from the axis. `bar:color-auto-axis` and `bar:color-auto-negative-fill` verify (measured white, FFFFFFFF); `audit.ts --stage 3`: 13/13 structural, pending 0, 8 non-discriminating, 5 blocked. The geometry is identical, pixel for pixel, to run 5 on white cells, where raw RGBA showed the same opaque white. Ruling S3-AUTO-BG (orchestrator, 2026-11-12): Excel's automatic negative fill and axis do not depend on the cell background for the two backgrounds measured (no fill, FFA6A6A6), so production may use the measured colour on any cell background. Cost if wrong: a cell with some other fill shows white where Excel would show another colour; reversible by adding a no-fill requirement to the two capabilities.
