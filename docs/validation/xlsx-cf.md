@@ -671,3 +671,21 @@ Raw RGBA of `refs/stage3-bar-auto-colors.png` (cells Excel does not paint are tr
 | unpainted background | – | alpha 0 |
 
 Finding: Excel for Mac 16.114 (light appearance, `copy picture … appearance screen`) paints an automatic negative fill and an automatic axis as opaque white FFFFFFFF. On a white cell it is invisible; on a filled cell it would show. The capabilities stay blocked until the harness can use the alpha channel as the discriminator (painted vs unpainted) or a case puts the bars over a non-white cell fill. Owner decision pending.
+
+### Task 19c (2026-11-12): grey static cell fill for the automatic colours (owner ruling S3-AUTO-GREY)
+
+No Excel was run. **Owner ruling S3-AUTO-GREY:** the evidence for the automatic colours comes from bars over a light grey static cell fill, not from the capture's alpha channel. Run 5 showed that Excel paints both colours opaque white, and on a white cell they leave no ink.
+
+- **The case.** `stage3-bar-auto-colors` now gives every bar and control cell the static fill **FFA6A6A6**: a `styles.xml` fill referenced through the cell's `s`, not a CF DXF.
+  - **Why A6 and not the suggested D9.** White must count as bar ink against the background, which takes a difference of at least `BAR_STRONG_DELTA` 64. D9 is only 38 from white.
+  - A6 is 89 from white, 89 from FF0000FF and 166 from FF000000, so it clears the colour separation of 17 against every colour of the bars.
+  - It is Excel's "White, Background 1, Darker 35%".
+- **Regeneration.** The case was `measured` (run 5) with no verified capability, so it was regenerated with `generate.ts --stage 3 --case stage3-bar-auto-colors --force`. It is now `recipe-pending`, and `--verify-only` skips the stale run-5 capture.
+- **Measurer.** A run of axis-coloured columns wider than 2 is a bar, not an axis. Excel's axis is one line, and its automatic axis and automatic negative fill are both white, so a white negative bar must not be taken for the axis.
+- **Samplers.** Both samplers count the cell background among the colours an automatic colour must differ from by 17.
+- **Tests.** The real axis-negative capture is repainted the way run 5 shows Excel drawing:
+  - white negative bars and a white axis;
+  - neutral pixels re-composited over grey.
+
+  On grey, both colours are sampled as FFFFFFFF and discriminate, and the bars measure within 1 px of the original. On white, the same white is no evidence.
+- **Pending, needs Excel.** Recipes section 2b: `build.ts` and `capture.ts` for the case, then `--verify-only` and `audit.ts --stage 3`.

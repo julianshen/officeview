@@ -101,7 +101,7 @@ Refusal codes added or changed by Task 18b:
 
 ## 2b. The automatic-colours case (Task 19b, Ruling S3-F as amended)
 
-`stage3-bar-auto-colors` measures what Excel draws for the `auto="1"` axis and negative-fill colours it writes on resave. Its bars are authored with their positive fill only, the shape every existing resave turned into `<x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>`. The data is mixed-sign, so the axis (on the zero cells) and the negative fill (on the negative cells) are drawn. Run it like the other cases, with the same preconditions, close checks and rerun rule:
+`stage3-bar-auto-colors` measures what Excel draws for the `auto="1"` axis and negative-fill colours it writes on resave. Its bars are authored with their positive fill only, the shape every existing resave turned into `<x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>`. The data is mixed-sign, so the axis (on the zero cells) and the negative fill (on the negative cells) are drawn. Since Task 19c (owner ruling S3-AUTO-GREY), every bar and control cell carries a static grey cell fill FFA6A6A6, because Excel paints both automatic colours opaque white (capture run 5). The fill is a `styles.xml` fill referenced by the cells' `s`, not a CF DXF. The run-5 capture predates this input; `--verify-only` skips it as stale. Run it like the other cases, with the same preconditions, close checks and rerun rule:
 
 ```
 bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-auto-colors --refresh-clock-date
@@ -112,6 +112,7 @@ bun scripts/cf-refs/audit.ts   --stage 3
 
 What to check afterwards:
 
+- The bar cells show grey under the bars in the capture. If Excel drops the cell fill, white stays invisible and both capabilities stay blocked; record it.
 - The resaved `tests/fixtures/xlsx-cf/stage3-bar-auto-colors.xlsx` carries `auto="1"` on `<x14:axisColor>` and `<x14:negativeFillColor>` of all three bars. If Excel wrote anything else, the verifier samples nothing (it reads only `auto="1"` elements) and both capabilities stay blocked. Record that as a finding; do not edit the fixture.
 - `audit.ts --stage 3` lists `bar:color-auto-axis` and `bar:color-auto-negative-fill` as verified, with the measured ARGB in `matchedHypotheses` of the case. Otherwise the reason is printed: `bar-hypothesis-none` when the samples are not one colour, non-discriminating when the colour is within 16 per channel of the bar's own fill.
 - Never run `--write` here. The colours are published only by Task 23 (`--write --publish-stage3`).
