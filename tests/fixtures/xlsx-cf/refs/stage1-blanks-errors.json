@@ -44,14 +44,13 @@
     18
   ],
   "geometrySource": "excel-measured",
-  "resavedByExcel": true,
-  "resaveSavedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
+  "resavedByExcel": false,
   "sheet": "Sheet1",
   "range": "A1:O18",
   "hostTimeZone": "Asia/Taipei",
-  "savedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
-  "pngSha256": "cc43b90067013b87c13c81faaf5c00bed73e42f7dde9edb3547451145ca2ba3d",
-  "capturedAt": "2026-11-08T18:17:19.632Z",
+  "savedSha256": "6b443acb2f3f75ed18219a332b1388f5416de9b8fda9b87b71e23bc5ca2f18f5",
+  "pngSha256": "6ea509ac070c8e2a71a30c13af47bfe31885f27231751b7c7d2dc08644fab5ee",
+  "capturedAt": "2026-11-12T02:10:32.190Z",
   "observedCells": [
     {
       "ref": "B2",
@@ -88,7 +87,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFC7CE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,199,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "B3",
@@ -125,7 +129,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFC7CE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,199,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "B6",
@@ -162,7 +171,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "C2",
@@ -199,7 +213,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "C6",
@@ -236,7 +255,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "D2",
@@ -273,7 +297,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFC7CE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,199,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "D3",
@@ -310,7 +339,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "E2",
@@ -347,7 +381,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "E6",
@@ -384,7 +423,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFC6EFCE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "198,239,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "F2",
@@ -421,7 +465,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "F6",
@@ -458,7 +507,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "G2",
@@ -495,7 +549,12 @@
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "G6",
@@ -532,7 +591,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFC6EFCE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "198,239,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "H6",
@@ -569,7 +633,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "H8",
@@ -606,7 +675,12 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFEB9C",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,235,156",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "H9",
@@ -643,7 +717,12 @@
       "formattedText": "#DIV/0!",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFEB9C",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,235,156",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "I6",
@@ -680,7 +759,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "I8",
@@ -717,7 +801,12 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "J8",
@@ -754,7 +843,12 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFEB9C",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,235,156",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "J9",
@@ -791,7 +885,12 @@
       "formattedText": "#DIV/0!",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "K6",
@@ -828,7 +927,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFC6EFCE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "198,239,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "K8",
@@ -865,7 +969,12 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "L6",
@@ -902,7 +1011,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "L8",
@@ -939,7 +1053,12 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "M6",
@@ -976,7 +1095,12 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFC6EFCE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "198,239,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "M8",
@@ -1013,23 +1137,28 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "N2",
       "controlRef": "N11",
       "bgRgb": [
         255,
-        255,
-        255
+        199,
+        206
       ],
       "controlBgRgb": [
         255,
         255,
         255
       ],
-      "bgContrastDelta": 0,
-      "interiorMaxDelta": 0,
+      "bgContrastDelta": 56,
+      "interiorMaxDelta": 56,
       "inkPixelCount": 0,
       "inkWeight": 0,
       "inkRgb": [
@@ -1041,16 +1170,21 @@
       "controlInkWeight": 0,
       "glyphRowCount": 0,
       "glyphColumnTransitions": 0,
-      "borderTopDelta": 43,
-      "borderTopVsControlDelta": 0,
-      "borderBottomDelta": 43,
-      "borderBottomVsControlDelta": 0,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 56,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 56,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFC7CE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,199,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "N6",
@@ -1087,44 +1221,54 @@
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "O6",
       "controlRef": "O15",
       "bgRgb": [
-        255,
-        255,
-        255
+        198,
+        239,
+        206
       ],
       "controlBgRgb": [
         255,
         255,
         255
       ],
-      "bgContrastDelta": 0,
-      "interiorMaxDelta": 0,
+      "bgContrastDelta": 57,
+      "interiorMaxDelta": 92,
       "inkPixelCount": 28,
       "inkWeight": 0.025,
       "inkRgb": [
-        27,
-        27,
-        27
+        20,
+        112,
+        21
       ],
       "controlInkPixelCount": 28,
       "controlInkWeight": 0.025,
       "glyphRowCount": 7,
       "glyphColumnTransitions": 21,
-      "borderTopDelta": 43,
-      "borderTopVsControlDelta": 0,
-      "borderBottomDelta": 43,
-      "borderBottomVsControlDelta": 0,
+      "borderTopDelta": 0,
+      "borderTopVsControlDelta": 57,
+      "borderBottomDelta": 0,
+      "borderBottomVsControlDelta": 57,
       "hasUnderlineInk": false,
       "hasStrikethroughInk": false,
       "formattedText": "0",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFC6EFCE",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "198,239,206",
+      "rawBaseFill": "255,255,255"
     },
     {
       "ref": "O8",
@@ -1152,8 +1296,8 @@
       "controlInkWeight": 0.1,
       "glyphRowCount": 9,
       "glyphColumnTransitions": 70,
-      "borderTopDelta": 43,
-      "borderTopVsControlDelta": 0,
+      "borderTopDelta": 57,
+      "borderTopVsControlDelta": 27,
       "borderBottomDelta": 43,
       "borderBottomVsControlDelta": 0,
       "hasUnderlineInk": false,
@@ -1161,7 +1305,12 @@
       "formattedText": "#N/A",
       "decorationSource": "excel-display-format",
       "underline": "none",
-      "strikethrough": false
+      "strikethrough": false,
+      "fillSource": "excel-display-format",
+      "fillRgb": "FFFFFFFF",
+      "baseFillRgb": "FFFFFFFF",
+      "rawDisplayFormatFill": "255,255,255",
+      "rawBaseFill": "255,255,255"
     }
   ]
 }

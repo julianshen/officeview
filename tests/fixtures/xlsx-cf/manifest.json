@@ -721,9 +721,9 @@
         }
       ],
       "expected": {
-        "inputSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
-        "savedSha256": "b16a9abe67a7581b16a1e787b8d48c53d43d6f278d3fc7fed6eb2068e338edd7",
-        "provenance": "excel-observed",
+        "inputSha256": "c6576023e7bb31ebeb2806f3d9d0ab2f3af03cf95ef33e51c932c8cdac3ea8e3",
+        "savedSha256": "c6576023e7bb31ebeb2806f3d9d0ab2f3af03cf95ef33e51c932c8cdac3ea8e3",
+        "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
           "B3",
@@ -914,23 +914,17 @@
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-text-predicates.png",
           "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-text-predicates.json",
-          "pngSha256": "2206db4e000a774b41c503f902b64612757e3675244fe28f37077b5d3619afa7"
+          "pngSha256": "140c95e4fbb320dfb27462bd2fa416d705753fb25d53f80474ab87245730b60a"
         }
       ],
-      "status": "measured",
+      "status": "recipe-pending",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": true,
-      "resaveReceipt": {
-        "resavedAt": "2026-11-08T12:24:00.909Z",
-        "excelVersion": "16.114",
-        "inputSha256": "35d993ab3a884b05b4a0932c3c95e585b65ee7f606dda635e972705eb5deb475",
-        "savedSha256": "b16a9abe67a7581b16a1e787b8d48c53d43d6f278d3fc7fed6eb2068e338edd7",
-        "openedRepairFree": true
-      }
+      "resavedByExcel": false
     },
     {
       "id": "stage1-blanks-errors",
@@ -1152,9 +1146,9 @@
         }
       ],
       "expected": {
-        "inputSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
-        "savedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
-        "provenance": "excel-observed",
+        "inputSha256": "6b443acb2f3f75ed18219a332b1388f5416de9b8fda9b87b71e23bc5ca2f18f5",
+        "savedSha256": "6b443acb2f3f75ed18219a332b1388f5416de9b8fda9b87b71e23bc5ca2f18f5",
+        "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
           "B3",
@@ -1394,23 +1388,17 @@
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.png",
           "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage1-blanks-errors.json",
-          "pngSha256": "cc43b90067013b87c13c81faaf5c00bed73e42f7dde9edb3547451145ca2ba3d"
+          "pngSha256": "6ea509ac070c8e2a71a30c13af47bfe31885f27231751b7c7d2dc08644fab5ee"
         }
       ],
-      "status": "measured",
+      "status": "recipe-pending",
+      "reason": "Capture verification failed (semantic-evidence-pending): Excel repair-free resave provenance (resavedByExcel: true and valid resaveReceipt bound to savedSha256) required before promotion to measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": true,
-      "resaveReceipt": {
-        "resavedAt": "2026-11-08T12:24:03.334Z",
-        "excelVersion": "16.114",
-        "inputSha256": "f6e71e543c5bf0d9121a24ca4fbba609329357497e708a6a97090edfd51bd169",
-        "savedSha256": "d5699ba9d7bc3a735dd540ba92a14119c8a81cd227c8b60cb5f43090536f7751",
-        "openedRepairFree": true
-      }
+      "resavedByExcel": false
     },
     {
       "id": "stage1-timeperiod-today-clock",
@@ -9048,8 +9036,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "260d147cd9aa3627408cf9eddf5de211c1cc89f4d11118a8dc4103d68559a08e",
-        "savedSha256": "260d147cd9aa3627408cf9eddf5de211c1cc89f4d11118a8dc4103d68559a08e",
+        "inputSha256": "a1eab4421f935f38e64df09e636e275302fca23ec7c200e1adcd9e3192abfc74",
+        "savedSha256": "a1eab4421f935f38e64df09e636e275302fca23ec7c200e1adcd9e3192abfc74",
         "provenance": "seed-hypothesis",
         "positiveRefs": [],
         "negativeRefs": [
@@ -9284,7 +9272,7 @@
       },
       "captures": [],
       "status": "unsupported",
-      "reason": "Unsupported or invalid colorScale constructs fail closed per Ruling S2-C and S2-K",
+      "reason": "Preserved rejected Excel output at /Users/julianshen/prj/officeview/.worktrees/cf-s3/tests/fixtures/xlsx-cf/stage2-scale-unresolved-shapes.rejected.xlsx: Rule scale:unresolved-2cfvo-3colors (colorScale) on sqref B2:B6 with formulas [] missing from xl/worksheets/sheet1.xml",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
