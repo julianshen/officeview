@@ -1,6 +1,7 @@
 /**
  * Stage 3a — main-thread text operations over the wire (Task 4: search;
- * Task 5: select and copy, with the copy caps and the session quota).
+ * Task 5: select and copy, with the copy caps and the session quota; Task 8:
+ * a11y text, sharing copy's queue and session counter).
  *
  * `ws.ts` authenticates and dispatches; this module owns argument validation
  * (R6), the batched unit walk, the ≤ 48 KiB message chunking and per-sid
@@ -344,6 +345,132 @@ async function copyTurn(c: CopyContext): Promise<void> {
     c.slot.copiedParagraphs += n
     answered = true
     for (const m of chunkText(c.reqId, reply.text)) c.send(m)
+  } catch {
+    // A failure inside the turn never breaks the sid's queue.
+    if (!answered) try { if (c.alive()) c.refuse('policy-refused') } catch { /* the socket is gone */ }
+  }
+}
+
+// ── Task 8: a11y text ──────────────────────────────────────────────────────
+
+export type A11yJob = Extract<TextJob, { op: 'a11y' }>
+export type A11yMode = 'off' | 'unit' | 'focused'
+export interface A11yParagraph { rect: number[]; text?: string }
+export interface A11yResultMessage { reqId: number; type: 'a11y-result'; seq: number; paragraphs: A11yParagraph[]; last: boolean }
+/** The client's per-request a11y limits: paragraphs, and UTF-8 bytes of text (= COPY_MAX_BYTES). */
+export const A11Y_MAX_PARAGRAPHS = 20_000
+
+/** The a11y arguments of a client message, rebuilt from its validated fields
+ * only, or undefined (⇒ policy-refused): `unit` an integer in range,
+ * `paragraph` absent or a non-negative safe integer. */
+export function a11yArgs(msg: Record<string, unknown>, unitCount: number): { unit: number; paragraph?: number } | undefined {
+  const { unit, paragraph } = msg
+  if (!Number.isInteger(unit) || (unit as number) < 0 || (unit as number) >= unitCount) return undefined
+  if (paragraph !== undefined && !(Number.isSafeInteger(paragraph) && (paragraph as number) >= 0)) return undefined
+  return { unit: unit as number, ...(paragraph !== undefined ? { paragraph: paragraph as number } : {}) }
+}
+
+/** `a11y-result` messages for `paragraphs`, in order, each ≤ `limit` bytes of
+ * JSON UTF-8: `seq` from 0, `last` on every message (true on the final one
+ * only), never an empty non-final message; no paragraphs is one empty final
+ * message. One wire entry per paragraph: undefined when an entry alone cannot
+ * fit one message (the fixed wire shape cannot split a paragraph). */
+export function chunkA11y(reqId: number, paragraphs: readonly A11yParagraph[], limit = TEXT_MESSAGE_BYTES): A11yResultMessage[] | undefined {
+  const baseOf = (seq: number) => bytesOf({ reqId, type: 'a11y-result', seq, paragraphs: [], last: false })
+  const out: A11yResultMessage[] = []
+  let cur: A11yParagraph[] = [], base = baseOf(0), size = base
+  for (const p of paragraphs) {
+    const n = bytesOf(p)
+    if (cur.length && size + 1 + n > limit) {
+      out.push({ reqId, type: 'a11y-result', seq: out.length, paragraphs: cur, last: false })
+      cur = []; base = baseOf(out.length); size = base
+    }
+    if (base + n > limit) return undefined
+    size += (cur.length ? 1 : 0) + n
+    cur.push(p)
+  }
+  out.push({ reqId, type: 'a11y-result', seq: out.length, paragraphs: cur, last: true })
+  return out
+}
+
+export interface A11yContext {
+  slot: TextSlot
+  reqId: number
+  unit: number
+  paragraph?: number
+  /** The sid's a11y mode and copy caps in force now (read when the turn starts). */
+  mode: () => A11yMode
+  caps: () => CopyPolicy
+  job: (job: A11yJob) => Promise<TextReply>
+  /** Durable audit of one answered a11y request; throws ⇒ refused, nothing sent. */
+  record: (r: { paragraphs: number }) => void
+  alive: () => boolean
+  send: (msg: object) => void
+  refuse: (code: CopyRefusal, nums?: { limit?: number; requested?: number }) => void
+}
+
+/** Queues one validated a11y request on the sid's copy queue (the session
+ * quota's counter is shared with copy); resolves when answered. Never rejects. */
+export function runA11y(c: A11yContext): Promise<void> {
+  const turn = (c.slot.copyQueue ?? Promise.resolve()).then(() => a11yTurn(c))
+  c.slot.copyQueue = turn
+  void turn.then(() => { if (c.slot.copyQueue === turn) c.slot.copyQueue = undefined })
+  return turn
+}
+
+/** A paragraph's box as exactly four numbers (a paragraph with no rects gets a
+ * zero box: dropping it would shift the indices `paragraph` names). */
+const box = (r: unknown): number[] => Array.isArray(r) && r.length === 4 && r.every((v) => Number.isFinite(v)) && r[2] >= 0 && r[3] >= 0 ? [r[0], r[1], r[2], r[3]] : [0, 0, 0, 0]
+
+/**
+ * One a11y request, in order: mode (off ⇒ text-unavailable; a paragraph in
+ * 'unit' mode ⇒ policy-refused) → worker job → the answer rebuilt for the
+ * mode ('unit': every text; 'focused': rects only, or paragraph k's text
+ * only — k out of range ⇒ policy-refused) → client limits (≤ 20,000
+ * paragraphs, ≤ 4 MiB of text, every entry fits one message; else
+ * copy-too-large) → 'focused' k: session quota (`used + 1`) → audit record
+ * (failure ⇒ policy-refused; rects-only and empty answers write none) →
+ * counter ('focused' k only) → chunks. Nothing awaits after the job returns.
+ */
+async function a11yTurn(c: A11yContext): Promise<void> {
+  let answered = false
+  const refuse = (code: CopyRefusal, nums?: { limit?: number; requested?: number }) => { answered = true; c.refuse(code, nums) }
+  try {
+    if (!c.alive()) return
+    const mode = c.mode()
+    if (mode === 'off') return refuse('text-unavailable')
+    if (mode === 'unit' && c.paragraph !== undefined) return refuse('policy-refused')
+    const k = mode === 'focused' ? c.paragraph : undefined
+    const caps = c.caps()
+    if (k !== undefined && !caps) return refuse('text-unavailable')
+    let reply: TextReply
+    try { reply = await c.job({ op: 'a11y', unit: c.unit, ...(k !== undefined ? { paragraph: k } : {}) }) } catch (e) {
+      if (!c.alive()) return
+      if (e instanceof TextTooLarge) return refuse('copy-too-large', { limit: COPY_MAX_BYTES })
+      return refuse(e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused')
+    }
+    if (!c.alive()) return
+    if (!('op' in reply) || reply.op !== 'a11y' || !Array.isArray(reply.paragraphs)) return refuse('policy-refused')
+    const raw = reply.paragraphs
+    // Rebuilt field by field: text only where the mode allows it.
+    const withText = (i: number) => mode === 'unit' || i === k
+    const paragraphs: A11yParagraph[] = raw.map((p, i) => withText(i) && typeof p.text === 'string' ? { rect: box(p.rect), text: p.text } : { rect: box(p.rect) })
+    if (mode === 'unit' && paragraphs.some((p) => p.text === undefined)) return refuse('policy-refused')
+    if (k !== undefined && paragraphs[k]?.text === undefined) return refuse('policy-refused')
+    if (paragraphs.length > A11Y_MAX_PARAGRAPHS) return refuse('copy-too-large', { limit: COPY_MAX_BYTES })
+    const bytes = paragraphs.reduce((n, p) => n + (p.text === undefined ? 0 : Buffer.byteLength(p.text, 'utf8')), 0)
+    if (bytes > COPY_MAX_BYTES) return refuse('copy-too-large', { limit: COPY_MAX_BYTES, requested: bytes })
+    const messages = chunkA11y(c.reqId, paragraphs)
+    if (!messages) return refuse('copy-too-large', { limit: TEXT_MESSAGE_BYTES })
+    if (k !== undefined) {
+      const cap = caps ? caps.maxSessionParagraphs : null
+      if (cap !== null && !(c.slot.copiedParagraphs + 1 <= cap)) return refuse('copy-quota-exhausted', { limit: cap, requested: 1 })
+    }
+    const counted = mode === 'unit' ? paragraphs.length : k !== undefined ? 1 : 0
+    if (counted > 0) try { c.record({ paragraphs: counted }) } catch { return refuse('policy-refused') }
+    if (k !== undefined) c.slot.copiedParagraphs += 1
+    answered = true
+    for (const m of messages) c.send(m)
   } catch {
     // A failure inside the turn never breaks the sid's queue.
     if (!answered) try { if (c.alive()) c.refuse('policy-refused') } catch { /* the socket is gone */ }

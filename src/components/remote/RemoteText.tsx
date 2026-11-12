@@ -2,8 +2,10 @@
  * Stage 3a text services in the remote view (spec §4.1): the Ctrl/Cmd+F
  * search bar, search-hit and selection boxes, pointer/keyboard selection and
  * copy. Every answer comes from the server (`RemoteOfficeDoc.search/select/
- * copy`); this module never indexes text and never puts document text in the
- * DOM — the overlay is empty, percent-positioned boxes only.
+ * copy`); this module never indexes text. The overlay is empty,
+ * percent-positioned boxes only; the one place document text enters the DOM
+ * is the visually-hidden screen-reader layer (Task 8), and only when the
+ * server grants `can.textA11y` (`RemoteOfficeDoc.a11y`).
  */
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { copyText } from '../../core/clipboard'
@@ -35,6 +37,12 @@ export function copyFailure(e: unknown, caps: Manifest['caps']['copy']): string 
   return 'Copy failed.'
 }
 
+/** The status-region message for a refused or failed a11y paragraph read ('focused'). */
+export function a11yFailure(e: unknown): string {
+  const { code, limit } = (e ?? {}) as { code?: unknown; limit?: unknown }
+  return code === 'copy-quota-exhausted' && typeof limit === 'number' ? `Copy limit for this session reached (${limit} paragraphs).` : 'Text unavailable.'
+}
+
 const searchFailure = (e: unknown): string => {
   const code = (e as { code?: unknown } | undefined)?.code
   return code === 'rate-limited' ? 'too many requests' : code === 'text-unavailable' ? 'search unavailable' : 'search failed'
@@ -56,7 +64,14 @@ export interface RemoteText {
   /** Starts a selection drag on unit `i`; undefined when copy is off (no handler is attached). */
   onPointerDown: ((i: number, e: ReactPointerEvent<HTMLElement>) => void) | undefined
   boxes(i: number): UnitBoxes
+  /** Unit `i` entered the viewport: requests its a11y text once (again after a failure). No-op when a11y is off. */
+  a11yVisible(i: number): void
+  /** Unit `i`'s screen-reader layer, or null when a11y is off. */
+  layer(i: number): ReactElement | null
 }
+
+/** Visually hidden, still in the accessibility tree (never display:none or aria-hidden). */
+const SR_ONLY: CSSProperties = { position: 'absolute', top: 0, left: 0, width: 1, height: 1, margin: -1, padding: 0, border: 0, overflow: 'hidden', clip: 'rect(0 0 0 0)', clipPath: 'inset(50%)', whiteSpace: 'nowrap' }
 
 /**
  * Search, selection and copy state for one remote document. `root` is the
@@ -131,6 +146,16 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
    * the latest range riding as the trailing request. */
   const limiter = useRef<{ last: number; timer?: ReturnType<typeof setTimeout> }>({ last: -Infinity })
   const copying = useRef(false)
+  // ── a11y text (Task 8) ──
+  const a11yMode = can.textA11y ? doc.manifest.caps.a11y : 'off'
+  /** Per unit: its paragraphs ('unit': their text; 'focused': placeholders to read). */
+  const [a11yUnits, setA11yUnits] = useState<ReadonlyMap<number, ReadonlyArray<string | undefined>>>(() => new Map())
+  /** 'focused': paragraph texts read so far, by `unit:k` (cached for the document's lifetime). */
+  const [a11yTexts, setA11yTexts] = useState<ReadonlyMap<string, string>>(() => new Map())
+  /** Units asked for (in flight or answered) and `unit:k` reads in flight or done, this
+   * lifetime. Replaced, not cleared, when a lifetime ends: a stale failure cannot re-arm the new one. */
+  const a11yAsked = useRef(new Set<number>())
+  const a11yReading = useRef(new Set<string>())
   const drag = useRef<{ anchor: { unit: number; x: number; y: number }; unit: number; sx: number; sy: number; moved: boolean; detach(): void } | undefined>(undefined)
   const sendSelect = () => {
     const r = range.current, ac = selAc.current
@@ -167,6 +192,8 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
       range.current = undefined
       searchAc.current?.abort(); searchAc.current = undefined
       setSel([]); setMessage(undefined); setHits([]); setDone(undefined)
+      a11yAsked.current = new Set(); a11yReading.current = new Set()
+      setA11yUnits(new Map()); setA11yTexts(new Map())
     }
   }, [doc])
   /** Client px → page px of unit `i` at scale 1 (`x * unit.w / rect.width`), clamped to the unit. */
@@ -238,6 +265,47 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
     ).finally(settle)
   }
 
+  const a11yVisible = (i: number) => {
+    const lifetime = life.current, asked = a11yAsked.current, mode = a11yMode
+    if (mode === 'off' || !lifetime || asked.has(i)) return
+    asked.add(i)
+    // A failure leaves the layer empty and silent; the unit's next visibility retries.
+    Promise.resolve().then(() => doc.a11y(i)).then(
+      (ps) => { if (!lifetime.signal.aborted) setA11yUnits((m) => new Map(m).set(i, ps.map((p) => (mode === 'unit' ? p.text ?? '' : undefined)))) },
+      () => { if (!lifetime.signal.aborted) asked.delete(i) },
+    )
+  }
+  const a11yRead = (i: number, k: number) => {
+    const lifetime = life.current, reading = a11yReading.current, key = `${i}:${k}`
+    // Once per paragraph: a press while the read is in flight, or after it landed, sends nothing.
+    if (!lifetime || reading.has(key)) return
+    reading.add(key)
+    const failed = (e: unknown) => { if (lifetime.signal.aborted) return; reading.delete(key); setMessage(a11yFailure(e)) }
+    Promise.resolve().then(() => doc.a11y(i, k)).then((ps) => {
+      if (lifetime.signal.aborted) return
+      const text = ps[k]?.text
+      if (text === undefined) return failed(undefined)
+      setA11yTexts((m) => new Map(m).set(key, text))
+    }, failed)
+  }
+  const layer = (i: number): ReactElement | null => {
+    if (a11yMode === 'off') return null
+    const ps = a11yUnits.get(i) ?? []
+    return (
+      <div data-a11y-layer="" data-ov-remote-chrome="" role="group" aria-label={`Page ${i + 1}`} style={SR_ONLY}>
+        {a11yMode === 'unit' ? ps.map((t, k) => <p key={k}>{t}</p>) : ps.map((_, k) => {
+          const text = a11yTexts.get(`${i}:${k}`)
+          return (
+            <p key={k} tabIndex={0} {...(text === undefined ? { 'aria-label': `Paragraph ${k + 1} of ${ps.length}. Press Enter to read.` } : {})}
+              onKeyDown={(e) => { if (e.key !== 'Enter' && e.key !== ' ') return; e.preventDefault(); if (text === undefined) a11yRead(i, k) }}>
+              {text ?? ''}
+            </p>
+          )
+        })}
+      </div>
+    )
+  }
+
   const onKeyDown = (e: KeyboardEvent): boolean => {
     if (e.key === 'Escape' && open) { e.preventDefault(); close(); return true }
     if (!(e.metaKey || e.ctrlKey) || e.altKey) return false
@@ -263,7 +331,7 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
   const at = (u: number) => { let b = byUnit.get(u); if (!b) byUnit.set(u, b = { hits: [], active: [], sel: [] }); return b }
   hits.forEach((h, k) => { const b = at(h.unit); for (const r of h.rects) { b.hits.push(r); if (k === current) b.active.push(r) } })
   for (const s of sel) at(s.unit).sel.push(...s.rects)
-  return { bar, message, onKeyDown, onPointerDown, boxes: (i) => byUnit.get(i) ?? NO_BOXES }
+  return { bar, message, onKeyDown, onPointerDown, boxes: (i) => byUnit.get(i) ?? NO_BOXES, a11yVisible, layer }
 }
 
 const pct = (v: number, of: number) => `${(v * 100) / of}%`
@@ -279,10 +347,10 @@ function Box({ r, w, h, kind, active }: { r: HighlightRect; w: number; h: number
 
 /**
  * One unit: a positioned wrapper sized exactly like its canvas (`children`),
- * with the empty overlay boxes on top. A per-unit layer (Task 8's
- * screen-reader text) is another child of this wrapper.
+ * with the empty overlay boxes on top and, beside them, the screen-reader
+ * layer (`layer`, absolutely positioned: the wrapper's box stays the canvas's).
  */
-export function UnitWrap({ index, w, h, boxes, onPointerDown, children }: { index: number; w: number; h: number; boxes: UnitBoxes; onPointerDown?: (i: number, e: ReactPointerEvent<HTMLElement>) => void; children: ReactNode }): ReactElement {
+export function UnitWrap({ index, w, h, boxes, onPointerDown, layer, children }: { index: number; w: number; h: number; boxes: UnitBoxes; onPointerDown?: (i: number, e: ReactPointerEvent<HTMLElement>) => void; layer?: ReactNode; children: ReactNode }): ReactElement {
   const has = boxes.hits.length + boxes.sel.length > 0
   return (
     <div data-unit-wrap={index} style={{ position: 'relative', width: w, maxWidth: '100%' }}
@@ -294,6 +362,7 @@ export function UnitWrap({ index, w, h, boxes, onPointerDown, children }: { inde
           {boxes.sel.map((r, k) => <Box key={`s${k}`} r={r} w={w} h={h} kind="sel" />)}
         </div>
       ) : null}
+      {layer}
     </div>
   )
 }

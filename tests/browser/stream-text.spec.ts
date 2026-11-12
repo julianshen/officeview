@@ -1,7 +1,8 @@
 /**
  * Stage 3a Task 7: search, selection and copy in the remote view, in a real
  * browser against server/test/app.ts (`?copy=full|cap3|off` sets the session's
- * copy policy). Documents: pypptx-test.pptx ("Presentation Title Text" /
+ * copy policy; Task 8's `?a11y=unit|focused|off` sets copy so that text a11y
+ * resolves to that mode). Documents: pypptx-test.pptx ("Presentation Title Text" /
  * "Subtitle Text") and lo-tdf123684.pptx (six one-word "Test" paragraphs
  * stacked on slide 1, for the paragraph cap).
  */
@@ -154,8 +155,69 @@ test('print hides the search bar, the hit and selection boxes and the status lin
   await expect(page.locator('[data-hit-active]').first()).toBeHidden()
   await expect(page.locator('[data-sel]').first()).toBeHidden()
   await expect(status(page)).toBeHidden()
+  // cap3 ⇒ 'focused' a11y: the screen-reader layer does not print either.
+  await expect(page.locator('[data-a11y-layer]')).toHaveCount(1)
+  await expect(page.locator('[data-a11y-layer]')).toBeHidden()
   await expect(page.locator('canvas[data-unit="0"]')).toBeVisible()
   await page.emulateMedia({ media: 'screen' })
   await expect(page.getByTestId('officeview-search')).toBeVisible()
   await expect(page.locator('[data-sel]').first()).toBeVisible()
+})
+
+const a11ySent = (page: Page) => {
+  const sent: Array<Record<string, unknown>> = []
+  page.on('websocket', (ws) => ws.on('framesent', (f) => { if (typeof f.payload === 'string' && /"type":"a11y"/.test(f.payload)) sent.push(JSON.parse(f.payload)) }))
+  return sent
+}
+const pageGroup = (page: Page) => page.getByRole('group', { name: 'Page 1' })
+
+test("a11y=unit: page 1's accessibility tree holds the document text; the canvas stays hidden from it", async ({ page }) => {
+  const sent = a11ySent(page)
+  await open(page, 'doc=pypptx-test.pptx&a11y=unit')
+  await expect(painted(page)).toHaveCount(1)
+  await expect.poll(() => pageGroup(page).ariaSnapshot()).toContain('Presentation Title Text')
+  const tree = await pageGroup(page).ariaSnapshot()
+  expect(tree).toContain('Subtitle Text')
+  expect(tree.indexOf('Presentation Title Text')).toBeLessThan(tree.indexOf('Subtitle Text'))
+  await expect(page.locator('canvas[data-unit="0"]')).toHaveAttribute('aria-hidden', 'true')
+  expect(await viewer(page).ariaSnapshot()).not.toContain('img')
+  expect(sent.map((m) => [m.unit, m.paragraph])).toEqual([[0, undefined]])
+})
+
+test("a11y=focused: page 1's accessibility tree holds no document text until Enter; a re-press does not re-request", async ({ page }) => {
+  const sent = a11ySent(page)
+  await open(page, 'doc=pypptx-test.pptx&a11y=focused')
+  await expect(painted(page)).toHaveCount(1)
+  const ps = page.locator('[data-a11y-layer] p[tabindex="0"]')
+  await expect(ps).toHaveCount(2)
+  await expect(ps.first()).toHaveAttribute('aria-label', 'Paragraph 1 of 2. Press Enter to read.')
+  const before = `${await pageGroup(page).ariaSnapshot()}\n${await page.evaluate(() => document.body.textContent)}`
+  for (const w of DOC_WORDS) expect(before).not.toContain(w)
+  // Keyboard: from the document, Tab reaches the first paragraph.
+  await viewer(page).focus()
+  await page.keyboard.press('Tab')
+  await expect(ps.first()).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(ps.first()).toHaveText('Presentation Title Text')
+  await expect(ps.first()).not.toHaveAttribute('aria-label', /.*/)
+  expect(await pageGroup(page).ariaSnapshot()).toContain('Presentation Title Text')
+  expect(await pageGroup(page).ariaSnapshot()).not.toContain('Subtitle')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(300)
+  expect(sent.map((m) => [m.unit, m.paragraph])).toEqual([[0, undefined], [0, 0]])
+  await expect(status(page)).toHaveText('')
+})
+
+test('a11y=off: no screen-reader layer and no a11y request', async ({ page }) => {
+  const sent = a11ySent(page)
+  await open(page, 'doc=pypptx-test.pptx&a11y=off')
+  await expect(painted(page)).toHaveCount(1)
+  await expect(page.getByText('text unavailable in this viewing mode')).toHaveCount(1)
+  await page.waitForTimeout(300)
+  await expect(page.locator('[data-a11y-layer]')).toHaveCount(0)
+  expect(sent).toEqual([])
+  const text = await page.evaluate(() => `${document.body.innerText}\n${document.body.textContent}`)
+  for (const w of DOC_WORDS) expect(text).not.toContain(w)
 })

@@ -27,7 +27,7 @@ import { AdmissionRefused, RenderFailed, type Pool } from './pool'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
-import { rangeArg, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
+import { a11yArgs, rangeArg, runA11y, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
@@ -472,6 +472,33 @@ export function createStreamServer(o: StreamServerOptions) {
     })
   }
 
+  /** §4.1 a11y text: 'off' ⇒ text-unavailable; charged the R5 'text' rate;
+   * `runA11y` applies the mode, the shared session quota ('focused' k) and
+   * the audit record, on the sid's copy queue. */
+  async function onA11y(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    if (sd.policy.textA11y === 'off') return refuse(ws, reqId, 'text-unavailable')
+    const args = a11yArgs(msg, sd.doc.units.length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    await runA11y({
+      slot: sd, reqId, ...args,
+      mode: () => sd.policy.textA11y,
+      caps: () => sd.policy.copy,
+      job: (job) => {
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+      },
+      record: (r) => audit.recordCopy({ sid: s.sid, kind: 'a11y', paragraphs: r.paragraphs, fromUnit: args.unit, toUnit: args.unit }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code, nums) => refuse(ws, reqId, code, nums),
+    })
+  }
+
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
   function keyFields(doc: DocState, mark: MarkSpec, unitIndex: number, scale: number, projectionMode: 'final-raster' | 'commands', missing?: string[]): RenderKeyFields {
     return {
@@ -555,6 +582,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'search') return onSearch(ws, m)
     if (m.type === 'select') return onSelect(ws, m)
     if (m.type === 'copy') return onCopy(ws, m)
+    if (m.type === 'a11y') return onA11y(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 

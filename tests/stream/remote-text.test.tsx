@@ -380,3 +380,145 @@ describe('fix round 1: the select limiter (fake clock)', () => {
     for (let k = 1; k < log.length; k++) expect(log[k]! - log[k - 1]!).toBeGreaterThanOrEqual(200)
   })
 })
+
+describe('remote view: a11y text layer (Task 8)', () => {
+  type P = { rect: { x: number; y: number; width: number; height: number }; text?: string }
+  const r0 = rect(0, 0)
+  const unitDoc = () => fakeDoc({ copy: true, textA11y: true }, { copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit' })
+  const focusedDoc = () => fakeDoc({ copy: true, textA11y: true }, { copy: { maxParagraphs: 3, maxSessionParagraphs: 5 }, a11y: 'focused' })
+  const layer = (v: ReturnType<typeof render>, i: number) => v.container.querySelector(`[data-unit-wrap="${i}"] [data-a11y-layer]`) as HTMLElement | null
+  /** A controllable IntersectionObserver: `show(i)` reports unit i's canvas entering view. */
+  function fakeIO() {
+    const observers: Array<{ cb: IntersectionObserverCallback; els: Element[] }> = []
+    class IO { els: Element[] = []; constructor(readonly cb: IntersectionObserverCallback) { observers.push(this) } observe(el: Element) { this.els.push(el) } disconnect() { this.els = [] } unobserve() {} takeRecords() { return [] } }
+    vi.stubGlobal('IntersectionObserver', IO)
+    return (i: number, isIntersecting = true) => act(() => {
+      for (const o of observers) for (const el of o.els) if ((el as HTMLElement).dataset.unit === String(i)) o.cb([{ isIntersecting, target: el } as unknown as IntersectionObserverEntry], o as never)
+    })
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("'off': no layer and no request", async () => {
+    for (const doc of [fakeDoc(), fakeDoc({ copy: true }, { copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'off' }), fakeDoc({ textA11y: true })]) {
+      const v = view(doc)
+      await act(async () => {})
+      expect(v.container.querySelector('[data-a11y-layer]')).toBeNull()
+      expect(doc.a11y).not.toHaveBeenCalled()
+      v.unmount()
+    }
+  })
+
+  it("'unit': a visually-hidden group per unit, one <p> per paragraph in order, requested once per unit", async () => {
+    const doc = unitDoc()
+    doc.a11y.mockImplementation(async (u: number) => [{ rect: r0, text: `first ${u}` }, { rect: r0, text: `second ${u}` }] as P[])
+    const v = view(doc)
+    await waitFor(() => expect(layer(v, 1)?.querySelectorAll('p').length).toBe(2))
+    for (const i of [0, 1]) {
+      const l = layer(v, i)!
+      expect(l.getAttribute('role')).toBe('group')
+      expect(l.getAttribute('aria-label')).toBe(`Page ${i + 1}`)
+      expect(l.hasAttribute('aria-hidden')).toBe(false)
+      expect(l.hasAttribute('data-ov-remote-chrome')).toBe(true)
+      expect(l.style.display).not.toBe('none')
+      expect([l.style.position, l.style.width, l.style.height, l.style.overflow]).toEqual(['absolute', '1px', '1px', 'hidden'])
+      expect([...l.querySelectorAll('p')].map((p) => p.textContent)).toEqual([`first ${i}`, `second ${i}`])
+      expect(v.container.querySelector(`canvas[data-unit="${i}"]`)!.getAttribute('aria-hidden')).toBe('true')
+    }
+    expect(doc.a11y.mock.calls).toEqual([[0], [1]])
+    expect(status(v).textContent).toBe('')
+  })
+
+  it("'unit': requested when the unit first becomes visible; a failure leaves the layer empty and silent and retries on the next visibility", async () => {
+    const show = fakeIO()
+    const doc = unitDoc()
+    doc.a11y.mockRejectedValueOnce(new StreamSessionError('rate-limited'))
+    doc.a11y.mockImplementation(async () => [{ rect: r0, text: 'hello' }] as P[])
+    const v = view(doc)
+    await act(async () => {})
+    expect(doc.a11y).not.toHaveBeenCalled()
+    expect(layer(v, 0)!.childElementCount).toBe(0)
+    await show(0)
+    await act(async () => {})
+    // Painting reaches the neighbours; text only the unit in view.
+    expect(doc.a11y.mock.calls).toEqual([[0]])
+    expect(layer(v, 0)!.childElementCount).toBe(0)
+    expect(status(v).textContent).toBe('')
+    await show(0, false)
+    await show(0)
+    await waitFor(() => expect(layer(v, 0)!.textContent).toBe('hello'))
+    await show(0)
+    await act(async () => {})
+    expect(doc.a11y.mock.calls).toEqual([[0], [0]])
+  })
+
+  it("'focused': n focusable paragraphs; Enter reads one once and caches it; Space reads another", async () => {
+    const doc = focusedDoc()
+    doc.a11y.mockImplementation(async (_u: number, k?: number) => [0, 1, 2].map((j) => (k === j ? { rect: r0, text: `text ${j}` } : { rect: r0 })) as P[])
+    const v = view(doc)
+    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('p').length).toBe(3))
+    const ps = () => [...layer(v, 0)!.querySelectorAll('p')]
+    expect(ps().map((p) => [p.getAttribute('tabindex'), p.getAttribute('aria-label'), p.textContent])).toEqual([1, 2, 3].map((k) => ['0', `Paragraph ${k} of 3. Press Enter to read.`, '']))
+    expect(doc.a11y.mock.calls).toEqual([[0], [1]])
+    ps()[1]!.focus()
+    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
+    fireEvent.keyDown(ps()[1]!, { key: 'Enter' }) // a second press before the answer sends nothing
+    await waitFor(() => expect(ps()[1]!.textContent).toBe('text 1'))
+    expect(ps()[1]!.hasAttribute('aria-label')).toBe(false)
+    expect(ps()[0]!.getAttribute('aria-label')).toBe('Paragraph 1 of 3. Press Enter to read.')
+    fireEvent.blur(ps()[1]!); ps()[1]!.focus()
+    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
+    const space = fireEvent.keyDown(ps()[2]!, { key: ' ' })
+    expect(space).toBe(false) // preventDefault: Space does not scroll
+    await waitFor(() => expect(ps()[2]!.textContent).toBe('text 2'))
+    expect(doc.a11y.mock.calls).toEqual([[0], [1], [0, 1], [0, 2]])
+    expect(status(v).textContent).toBe('')
+  })
+
+  it("'focused': quota exhaustion shows the copy-limit message; other failures 'Text unavailable.'; a failed read may be retried", async () => {
+    const doc = focusedDoc()
+    doc.a11y.mockImplementation(async (_u: number, k?: number) => {
+      if (k === 0) throw new StreamSessionError('copy-quota-exhausted', 'x', { limit: 5, requested: 1 })
+      if (k === 1) throw new StreamSessionError('policy-refused')
+      return [{ rect: r0 }, { rect: r0 }] as P[]
+    })
+    const v = view(doc)
+    await waitFor(() => expect(layer(v, 0)?.querySelectorAll('p').length).toBe(2))
+    const ps = () => [...layer(v, 0)!.querySelectorAll('p')]
+    fireEvent.keyDown(ps()[0]!, { key: 'Enter' })
+    await waitFor(() => expect(status(v).textContent).toBe('Copy limit for this session reached (5 paragraphs).'))
+    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
+    await waitFor(() => expect(status(v).textContent).toBe('Text unavailable.'))
+    expect(ps().map((p) => p.textContent)).toEqual(['', ''])
+    fireEvent.keyDown(ps()[1]!, { key: 'Enter' })
+    await waitFor(() => expect(doc.a11y.mock.calls.filter((c) => c[1] === 1).length).toBe(2))
+  })
+
+  it('stale answers are dropped: unmount, and a document change', async () => {
+    let resolve!: (p: P[]) => void
+    const doc = unitDoc()
+    doc.a11y.mockImplementation(() => new Promise<P[]>((r) => { resolve = r }))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const v = view(doc)
+    await act(async () => {})
+    v.unmount()
+    await act(async () => { resolve([{ rect: r0, text: 'late' }]) })
+    expect(err).not.toHaveBeenCalled()
+    // A document change: the old document's answer never fills the new one's layer.
+    const a = unitDoc(), b = unitDoc()
+    const pending: Array<(p: P[]) => void> = []
+    a.a11y.mockImplementation(() => new Promise<P[]>((r) => { pending.push(r) }))
+    b.a11y.mockImplementation(() => new Promise<P[]>(() => {}))
+    const w = render(<RemoteDocView document={a as unknown as RemoteOfficeDoc} />)
+    await act(async () => {})
+    w.rerender(<RemoteDocView document={b as unknown as RemoteOfficeDoc} />)
+    await act(async () => { for (const r of pending) r([{ rect: r0, text: 'old document' }]) })
+    expect(w.container.textContent).not.toContain('old document')
+  })
+
+  it('StrictMode: the layer still fills', async () => {
+    const doc = unitDoc()
+    doc.a11y.mockImplementation(async () => [{ rect: r0, text: 'strict' }] as P[])
+    const v = render(<StrictMode><RemoteDocView document={doc as unknown as RemoteOfficeDoc} /></StrictMode>)
+    await waitFor(() => expect(layer(v, 0)?.textContent).toBe('strict'))
+  })
+})

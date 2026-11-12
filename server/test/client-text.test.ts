@@ -1,6 +1,7 @@
 /** Stage 3a Task 6 — the client's text requests (StreamSession.text) and the
- * RemoteOfficeDoc search/select/copy/a11y API, against the real server. The
- * a11y op is not on the server yet: its answers come from a tapped transport. */
+ * RemoteOfficeDoc search/select/copy/a11y API, against the real server (Task 8
+ * added the server's a11y op; the stub-transport a11y tests remain for answers
+ * the server never sends). */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -235,6 +236,25 @@ describe('RemoteOfficeDoc text API', () => {
       ],
     })
     stop()
+  }, 60_000)
+
+  test('a11y against the server: unit mode reads every paragraph; focused mode reads rects, then one paragraph, against the quota', async () => {
+    const unit = await open({ doc: await paragraphsDoc(), policy: { copy: 'full' } })
+    expect(unit.doc.manifest.caps.a11y).toBe('unit')
+    const all = await unit.doc.a11y(0)
+    expect(all.map((p) => p.text)).toEqual(NAMES.map(para))
+    for (const p of all) expect(p.rect.width).toBeGreaterThan(0)
+    expect((await failure(unit.doc.a11y(0, 1))).code).toBe('policy-refused')
+    unit.stop()
+    const focused = await open({ doc: await paragraphsDoc(), policy: capped(2, 1) })
+    expect(focused.doc.manifest.caps.a11y).toBe('focused')
+    const rects = await focused.doc.a11y(0)
+    expect(rects.length).toBe(5)
+    for (const p of rects) expect('text' in p).toBe(false)
+    expect((await focused.doc.a11y(0, 2)).map((p) => p.text)).toEqual([undefined, undefined, para('Charlie'), undefined, undefined])
+    const e = await failure(focused.doc.a11y(0, 3))
+    expect([e.code, e.limit, e.requested]).toEqual(['copy-quota-exhausted', 1, 1])
+    focused.stop()
   }, 60_000)
 
   test('a11y (stub transport): paragraphs concatenate by seq and resolve on last', async () => {

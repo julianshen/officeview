@@ -2,7 +2,8 @@
  * The remote document view (§6.3/§8.2/§8.3), loaded lazily from <OfficeDoc>.
  * Each unit is a canvas sized in CSS px at scale 1; a unit is painted at the
  * scale bucket for devicePixelRatio when it nears the viewport. Stage 3a adds
- * server-answered search, selection and copy (RemoteText.tsx); there is no
+ * server-answered search, selection and copy and the screen-reader text layer
+ * (RemoteText.tsx); there is no
  * zoom or presentation. With copy and text a11y both off the view says "text
  * unavailable in this viewing mode" once.
  */
@@ -23,8 +24,8 @@ export interface RemoteDocViewProps {
 }
 
 export const TEXT_UNAVAILABLE = 'text unavailable in this viewing mode'
-/** Printing keeps only the canvases: the search bar, the hit/selection boxes and
- * the status line (all marked data-ov-remote-chrome) never print. Owned by this
+/** Printing keeps only the canvases: the search bar, the hit/selection boxes,
+ * the screen-reader layer and the status line (all marked data-ov-remote-chrome) never print. Owned by this
  * view, so local documents' print behaviour is untouched. */
 const PRINT_CSS = '@media print { [data-ov-remote-chrome] { display: none !important; } }'
 
@@ -37,6 +38,9 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
   const units = doc.manifest.units.list
   const scroller = useRef<HTMLDivElement | null>(null)
   const text = useRemoteText(doc, scroller)
+  // The observer below is created per document; it reaches the latest a11y handler through this ref.
+  const a11yVisible = useRef(text.a11yVisible)
+  a11yVisible.current = text.a11yVisible
   const textOff = !doc.manifest.can.copy && !doc.manifest.can.textA11y
   // §10: a session that ends (revoked, expired, oversized frame…) says so once;
   // recovery is a host-driven re-open.
@@ -66,13 +70,15 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
     const beforePrint = () => { void paintAll.current() }
     window.addEventListener('beforeprint', beforePrint)
     ac.signal.addEventListener('abort', () => window.removeEventListener('beforeprint', beforePrint))
-    if (typeof IntersectionObserver !== 'function') { units.forEach((_, i) => paint(i)); return () => ac.abort() }
+    if (typeof IntersectionObserver !== 'function') { units.forEach((_, i) => { paint(i); a11yVisible.current(i) }); return () => ac.abort() }
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         if (!e.isIntersecting) continue
         const i = Number((e.target as HTMLElement).dataset.unit)
         // The unit entering view and its neighbours.
         for (const j of [i - 1, i, i + 1]) if (j >= 0 && j < units.length) paint(j)
+        // Screen-reader text: only the unit actually in view (each 'unit'-mode answer is audited).
+        a11yVisible.current(i)
       }
     }, { rootMargin: '200px' })
     for (const c of canvases.current) if (c) io.observe(c)
@@ -100,7 +106,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
         {ended ? <div role="alert" data-stream-error={ended}>Viewing session ended ({ended}).</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: pageGapPx, padding: pageGapPx }}>
           {units.map((u, i) => (
-            <UnitWrap key={i} index={i} w={u.w} h={u.h} boxes={text.boxes(i)} {...(text.onPointerDown ? { onPointerDown: text.onPointerDown } : {})}>
+            <UnitWrap key={i} index={i} w={u.w} h={u.h} boxes={text.boxes(i)} layer={text.layer(i)} {...(text.onPointerDown ? { onPointerDown: text.onPointerDown } : {})}>
               <canvas data-unit={i} ref={(el) => { canvases.current[i] = el }} aria-hidden="true"
                 style={{ display: 'block', width: u.w, maxWidth: '100%', height: 'auto', aspectRatio: `${u.w} / ${u.h}`, background: '#fff', boxShadow: 'var(--ov-shadow-page, 0 1px 3px rgba(0,0,0,.2))' }} />
             </UnitWrap>
