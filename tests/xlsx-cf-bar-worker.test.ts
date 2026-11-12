@@ -184,6 +184,9 @@ describe('CF Stage 3 Task 21 — bar wire under the receiver grant (S3-S)', () =
       const pressed = await run(1 << 24, createCfMemory({ limitBytes: baseBound + (cellCount * CF_BAR_CELL_BYTES) / 2 }), heldVisits)
       expect(pressed.kind).not.toBe('ready')
       expect(heldVisits.n).toBe(0)
+      // Refused at the working-hold growth itself: the only site that carries the visual-priced bound.
+      expect(pressed.diagnostics.map(d => d.feature)).toEqual(['cf-budget-exceeded'])
+      expect(pressed.requiredBytes).toBe(refused.requiredBytes)
 
       // Positive control: a wide grant carries one bar per scope cell.
       const wide = ready(await run(1 << 24))
@@ -344,11 +347,15 @@ describe('CF Stage 3 Task 21 — bar wire under the receiver grant (S3-S)', () =
           const perBar = clone.states.reduce((n, s) => n + measureCfCellBytes(s) - measureCfCellBytes({ ...s, bar: undefined }), 0)
           expect(statesCharge - measurePayloadBytes(stripped, () => true)!).toBe(perBar)
           expect(perBar).toBeGreaterThan(0)
-        } else {
-          // No split: the entry keeps the transport's reply charge, which is the measured clone with every bar.
-          expect(statesKey).toBeUndefined()
+        } else if (statesKey === undefined) {
+          // No split today (the walk workspace outgrows the reply-sized cap): the entry keeps the transport's reply
+          // charge, which is the measured clone with every bar.
           expect(replyHeld).toBe(true)
           expect([...ledger.entries()].find(([k]) => typeof k === 'object')?.[1]).toBe(replyBytes)
+        } else {
+          // Should the cache split larger replies later, the invariant is the same: one charge, the measured states.
+          expect(replyHeld).toBe(false)
+          expect(ledger.get(statesKey)).toBe(measurePayloadBytes({ ...clone, definitions: [] }, () => true))
         }
         handle.release()
         cache.close()
