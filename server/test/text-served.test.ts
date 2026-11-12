@@ -696,6 +696,30 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
     expect(r.text).toContain('some more')
   }, 60_000)
 
+  // Fix round 5: a wrapped cell is one text phase and one line phase, so every line's decoration is the cell's own.
+  test('XLSX: wrapped struck and underlined cells are served on every line', async () => {
+    const base = await buildXlsx([{ name: 'S', cols: '<col min="1" max="2" width="14" customWidth="1"/>', rows: [
+      { r: 1, cells: [{ ref: 'A1', t: 's', v: 0, style: 3 }, { ref: 'B1', t: 's', v: 1, style: 4 }] },
+    ] }], ['typing guide pages that wrap over lines', 'some more words that wrap over lines'])
+    const zip = await JSZip.loadAsync(base)
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    const xf = (font: number) => `<xf numFmtId="0" fontId="${font}" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment wrapText="1"/></xf>`
+    zip.file('xl/styles.xml', styles
+      .replace('<fonts count="2">', '<fonts count="4">')
+      .replace('</fonts>', '<font><u/><sz val="11"/><name val="Calibri"/></font><font><strike/><sz val="11"/><name val="Calibri"/></font></fonts>')
+      .replace('<cellXfs count="3">', '<cellXfs count="5">')
+      .replace('</cellXfs>', `${xf(2)}${xf(3)}</cellXfs>`))
+    const sheet = Object.keys(zip.files).find((f) => /worksheets\/sheet1\.xml$/.test(f))!
+    const xml = await zip.file(sheet)!.async('string')
+    expect(xml).toContain('<row r="1"')
+    zip.file(sheet, xml.replace('<row r="1"', '<row r="1" ht="75" customHeight="1"'))
+    const r = await servedCopy(await zip.generateAsync({ type: 'uint8array' }))
+    expect(r.served).toBeGreaterThanOrEqual(6) // three painted lines per cell
+    expect(r.withheld).toBe(0)
+    // Copy orders the painted lines by position, so the two cells' lines interleave.
+    expect(r.text.split('\n').map((l) => l.trim()).sort()).toEqual(['pages that', 'some more', 'typing guide', 'words that', 'wrap over lines', 'wrap over lines'])
+  }, 60_000)
+
   // The text-box painter (src/docx/drawing.ts) strokes decorations BEFORE the
   // glyphs, so they never cover them; this guards that path end to end.
   test('the DOCX text-box painter: struck and underlined words are served', async () => {

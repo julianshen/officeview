@@ -321,12 +321,17 @@ describe('text decorations (S3a Task 3c)', () => {
     other(c); word(c); bar(c, ink.height / 2, 1); phase(c, false)
     expect(o.runDetails().map((r) => r.servable)).toEqual([true, true])
   })
-  it('a scope may alternate text and line phases: a later line of the scope still exempts an earlier owned run', () => {
-    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
-    const o = occlusionObserver(200, 100)
-    const c = o.wrap(ctx)
-    word(c); bar(c, 0, 1); phase(c, 'text'); other(c); bar(c, ink.height / 2, 1); phase(c, false)
-    expect(o.runDetails().map((r) => [r.text, r.servable])).toEqual([['Typing', true], ['Elsewhere', true]])
+  it('a scope may alternate text and line phases: a later segment\'s line exempts an earlier run only as a continuation of that run\'s own line (fix round 5)', () => {
+    const both = (at: number) => {
+      const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+      const o = occlusionObserver(200, 100)
+      const c = o.wrap(ctx)
+      word(c); bar(c, 0, 1); phase(c, 'text'); other(c); bar(c, at, 1); phase(c, false)
+      return o.runDetails().map((r) => [r.text, r.servable])
+    }
+    expect(both(0)).toEqual([['Typing', true], ['Elsewhere', true]])
+    // At another height it is the later segment's line only: ordinary cover for the earlier run.
+    expect(both(ink.height / 2)).toEqual([['Typing', false], ['Elsewhere', true]])
   })
   it('malformed sequences fail closed', () => {
     const cases: Array<(c: CanvasRenderingContext2D) => void> = [
@@ -558,6 +563,89 @@ describe('decoration thresholds are bounded by the run font size (Task 3c fix ro
     const pre = (c: CanvasRenderingContext2D) => c.scale(3, 1)
     expect(probe('secret̍̍̍̍̍̍̍̍', '20px sans-serif', (i) => [[i.height - 8, 2.3]], { pre })).toMatchObject({ servable: true })
     expect(probe('secret̍̍̍̍̍̍̍̍', '20px sans-serif', (i) => [[i.height - 8, 2.5]], { pre })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+})
+
+describe('only a run\'s own lines and their continuations are decorations (Task 3c fix round 5)', () => {
+  const W = 600, H = 600
+  const style = (pt: number) => ({ fontFamily: 'sans-serif', fontSizePt: pt, bold: false, italic: false })
+  const measure = (s: string, pt = 18) => { const c = createCanvas(10, 10).getContext('2d'); c.font = `${pt}pt sans-serif`; return c.measureText(s) }
+  const placed = (text: string, pt: number, color: string, deco: 'underline' | 'strike', e: number, f: number, widthPx: number): Segment =>
+    ({ text, run: { text, color, [deco]: true }, style: style(pt), widthPx, transform: { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
+  const render = (segs: Segment[], line: Record<string, unknown> = {}) => {
+    const ctx = createCanvas(W, H).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(W, H)
+    const c = o.wrap(ctx)
+    c.fillStyle = '#fff'; c.fillRect(0, 0, W, H)
+    renderPages([{ widthPx: W, heightPx: H, tables: [], images: [], lines: [{ yPx: 0, xPx: 0, widthPx: W, align: 'left', isParagraphEnd: true, heightPx: H, contentWidthPx: W, segs, ...line }] } as unknown as PageLayout], c)
+    return { ctx, runs: o.runDetails() }
+  }
+  /** Black underlined 18 pt `word` at baseline 500, with two adjacent white strikes (from `pt`-sized struck spaces of the same stretch) centred on y = `mid`. */
+  const arrangement = (word: string, base: string, pt: number, mid: number, lines = true) => {
+    const lw = Math.max(1, pt * 0.06), b = measure(base)
+    const segs = [placed(word, 18, '000000', 'underline', 40, 500, measure(word).width), ...(lines ? [mid - lw / 2, mid + lw / 2].map((y) => placed(' ', pt, 'FFFFFF', 'strike', 20, y + 0.3 * pt, b.width + 40)) : [])]
+    const { ctx, runs } = render(segs)
+    const y0 = Math.floor(500 - b.actualBoundingBoxAscent), h = Math.ceil(b.actualBoundingBoxAscent + b.actualBoundingBoxDescent)
+    const px = ctx.getImageData(40, y0, Math.ceil(b.width), h).data
+    let dark = 0
+    for (let i = 0; i < px.length; i += 4) if (px[i]! < 160) dark++
+    return { run: runs.find((r) => r.text === word)!, dark }
+  }
+  it('real DOCX renderPages: two neighbour strikes erasing superscript letters beside a capital withhold the run', () => {
+    // ˢᵉᶜʳᵉᵗ are ~8 px tall at 24 px; two 2.75 px lines (each ≤ 12 % of the 23 px ink, 5.5 px together ≤ 25 %) erase all but their edge rows.
+    const clean = arrangement('ˢᵉᶜʳᵉᵗÉ', 'ˢᵉᶜʳᵉᵗ', 45.8, 490, false), hit = arrangement('ˢᵉᶜʳᵉᵗÉ', 'ˢᵉᶜʳᵉᵗ', 45.8, 490)
+    expect(clean.run).toMatchObject({ servable: true })
+    expect(hit.dark).toBeLessThan(clean.dark * 0.4)
+    expect(hit.run).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('real DOCX renderPages: two neighbour strikes erasing superscript digits under stacked combining marks withhold the run', () => {
+    const word = '¹²³' + '̍'.repeat(40)
+    const clean = arrangement(word, '¹²³', 47.8, 487.5, false), hit = arrangement(word, '¹²³', 47.8, 487.5)
+    expect(clean.run).toMatchObject({ servable: true })
+    expect(hit.dark).toBeLessThan(clean.dark * 0.5)
+    expect(hit.run).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('real DOCX renderPages: an underlined word, space and word in one stretch are all served (the line continues under the neighbours)', () => {
+    const seg = (text: string): Segment => ({ text, run: { text, color: '000000', underline: true }, style: style(18), widthPx: measure(text).width }) as Segment
+    const { runs } = render([seg('typing'), seg(' '), seg('guide')], { xPx: 40, baselinePx: 300 })
+    expect(runs.map((r) => [r.text, r.servable])).toEqual([['typing', true], ['guide', true]])
+  })
+
+  // Observer level: 'Typing' at (20, 50), 20 px.
+  const probe = (paint: (c: CanvasRenderingContext2D, ink: { x: number; y: number; width: number; height: number }) => void) => {
+    const ctx = createCanvas(300, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(300, 100)
+    const c = o.wrap(ctx)
+    phase(c, 'text'); text(c, 'Typing', 20, 50)
+    paint(c, o.runDetails()[0]!.ink)
+    phase(c, false)
+    return o.runDetails()[0]!
+  }
+  const bar = (c: CanvasRenderingContext2D, ink: { x: number; width: number }, y: number, t: number) => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, y, ink.width + 4, t) }
+  /** Another segment of the scope: its own text phase (a run elsewhere), then its line phase. */
+  const neighbour = (c: CanvasRenderingContext2D, lines: () => void) => { phase(c, 'text'); text(c, 'next', 150, 90); phase(c, 'line'); lines() }
+  it('a line of another segment at another position is ordinary cover', () => {
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 9, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a line of another segment at the same position and thickness is a continuation', () => {
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: true })
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3.4, 1)) })).toMatchObject({ servable: true })
+  })
+  it('a continuation must match both edges within 0.5 px', () => {
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3.6, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3, 1.6)) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a run with no own lines gets no exemption from the scope\'s other lines', () => {
+    expect(probe((c, i) => { neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a continuation of another scope is ordinary cover', () => {
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); phase(c, false); neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('own lines and continuations share one union cap', () => {
+    // Own lines at three heights and their continuations: still three bands (3 px ≤ 25 %); a fourth and fifth own band pass it.
+    const at = [2, 6, 10]
+    expect(probe((c, i) => { phase(c, 'line'); for (const y of at) bar(c, i, i.y + y, 1); neighbour(c, () => { for (const y of at) bar(c, i, i.y + y, 1) }) })).toMatchObject({ servable: true })
+    expect(probe((c, i) => { phase(c, 'line'); for (const y of [...at, 12, 14, 16]) bar(c, i, i.y + y, 1) })).toMatchObject({ servable: false, reason: 'covered' })
   })
 })
 
