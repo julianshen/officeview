@@ -120,14 +120,16 @@ Record Excel's open/repair/strip outcome per shape (orphan x14, duplicate GUID, 
 ```
 bun scripts/cf-refs/capture.ts --stage 3 --verify-only     # re-verifies every Stage 3 sidecar without touching Excel; relabels barEvidence from the pixel recomputation; skips a kept capture whose sidecar records an older saved workbook
 bun scripts/cf-refs/audit.ts --stage 3                     # needs ok=true; stageComplete=true only when every supported capability is verified
-bun scripts/cf-refs/audit.ts --stage 3 --write             # only if capabilities verified; the only way verifiedCapabilities.ts changes
-bun scripts/cf-refs/audit.ts --stage 3 --write             # second run must change nothing (idempotent, Lesson 4)
+bun scripts/cf-refs/audit.ts --write                       # re-renders Stage 1/2 from their audits; the Stage 3 export stays as committed
+bun scripts/cf-refs/audit.ts --write                       # second run must change nothing (idempotent, Lesson 4)
 git diff --stat src/xlsx/cf/verifiedCapabilities.ts         # after the second run: identical to after the first
 bun scripts/cf-refs/audit.ts --stage 2                     # must still be ok=true stageComplete=true
 bun scripts/cf-compare.ts --stage 3 --mode interactive     # data path and hash binding for the Stage 3 cases
 ```
 
-The first `--stage 3 --write` also adds the empty-or-filled `VERIFIED_STAGE3_CAPABILITIES` export and rewrites the file header; Stage 1 and Stage 2 sets must be byte-identical to before (the oracle test renders them independently and compares).
+**`--write` and Ruling S3-WRITE.** Every `audit.ts --write` renders every stage's export from its own audit, whatever `--stage` says, so `src/xlsx/cf/verifiedCapabilities.ts` always carries `VERIFIED_STAGE1_CAPABILITIES` and `VERIFIED_STAGE2_CAPABILITIES`. This matters because a Stage-1-only rendering once dropped the Stage 2 export and broke `evidence.ts`.
+
+**Stage 3 is not published here.** Without `--publish-stage3` the Stage 3 export is carried over exactly as committed; today there is none, so production withholds every bar. Publication happens in **Task 23**, which runs `bun scripts/cf-refs/audit.ts --stage 3 --write --publish-stage3` twice. That adds the audited `VERIFIED_STAGE3_CAPABILITIES`, and the second run must change nothing. Its Stage 1 and Stage 2 sets must be byte-identical to before; the oracle test renders them independently and compares.
 
 Then the gates, with Stage 1/2 conformance exactly `398` checked, `364` exact, `34` withheld:
 
