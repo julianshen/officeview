@@ -47,10 +47,11 @@
       "cellWidthPx": 180,
       "bar": {
         "leftPx": 86,
-        "rightPx": 144,
+        "rightPx": 143,
         "topPx": 32,
         "bottomPx": 57
-      }
+      },
+      "axisPx": 144
     },
     {
       "ref": "B3",
@@ -58,10 +59,11 @@
       "cellWidthPx": 180,
       "bar": {
         "leftPx": 115,
-        "rightPx": 144,
+        "rightPx": 143,
         "topPx": 62,
         "bottomPx": 87
-      }
+      },
+      "axisPx": 144
     },
     {
       "ref": "B4",
@@ -100,10 +102,11 @@
       "cellWidthPx": 180,
       "bar": {
         "leftPx": 310,
-        "rightPx": 354,
+        "rightPx": 353,
         "topPx": 32,
         "bottomPx": 57
-      }
+      },
+      "axisPx": 354
     },
     {
       "ref": "C3",
@@ -111,10 +114,11 @@
       "cellWidthPx": 180,
       "bar": {
         "leftPx": 332,
-        "rightPx": 354,
+        "rightPx": 353,
         "topPx": 62,
         "bottomPx": 87
-      }
+      },
+      "axisPx": 354
     },
     {
       "ref": "C4",
