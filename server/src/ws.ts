@@ -27,6 +27,7 @@ import { AdmissionRefused, RenderFailed, type Pool } from './pool'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
+import { runSearch, searchArgs, type SearchRun } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
@@ -35,7 +36,7 @@ export const CLOSE = {
   'session-expired': 4004, 'revoked': 4005, 'layout-changed': 4006, 'rate-limited': 4008, 'policy-refused': 4009,
 } as const
 export type CloseName = keyof typeof CLOSE
-export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated'
+export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted'
 
 const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4 } as const
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
@@ -96,7 +97,7 @@ export function createStreamServer(o: StreamServerOptions) {
   const audit = o.audit ?? new AuditTable()
   const ipRates = new IpRates()
   const docs = new Map<string, DocState>()          // docRef → state
-  const sessionDoc = new Map<string, { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued }>()
+  const sessionDoc = new Map<string, { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -109,7 +110,8 @@ export function createStreamServer(o: StreamServerOptions) {
   const pack = loadPack()
 
   const send = (ws: WS, msg: object) => { if (ws.data.phase !== 'closed') ws.send(JSON.stringify(msg)) }
-  const refuse = (ws: WS, reqId: unknown, code: RefusalCode) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'refused', code })
+  /** `limit`/`requested`: the cap a refusal states (copy caps, Task 5). */
+  const refuse = (ws: WS, reqId: unknown, code: RefusalCode, nums: { limit?: number; requested?: number } = {}) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'refused', code, ...nums })
   const close = (ws: WS, name: CloseName | 'superseded') => {
     if (ws.data.phase === 'closed') return
     const code = name === 'superseded' ? 4409 : CLOSE[name]
@@ -261,6 +263,7 @@ export function createStreamServer(o: StreamServerOptions) {
     leases.get(sid)?.close(); leases.delete(sid)
     const sd = sessionDoc.get(sid)
     sessionDoc.delete(sid)
+    if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
     if (sd) releaseDoc(sd.doc.docRef)
   }
   /** Keep the session (and its document charge) for a resume until the grace
@@ -371,6 +374,38 @@ export function createStreamServer(o: StreamServerOptions) {
     sendFrames(ws, messages)
   }
 
+  /** §4.1 search: the onUnit checks, then R6 arguments and the R5 'text'
+   * rate; `runSearch` walks the units and owns supersession. Between batches
+   * the run re-checks ownership, the stream phase and the session entry. */
+  async function onSearch(ws: WS, msg: Record<string, unknown>) {
+    const reqId = msg.reqId
+    const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return refuse(ws, reqId, 'policy-refused')
+    const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
+    if (!owns(ws, s.sid)) return
+    if (!v.ok) return v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused')
+    const jti = table.acceptJti(s.sid, v.claims.jti)
+    if (jti === 'rotated') return refuse(ws, reqId, 'session-rotated')
+    if (jti === 'unknown') return refuse(ws, reqId, 'policy-refused')
+    const args = searchArgs(msg)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    // R5: a 'text' overflow is a refusal only (never a breach toward 4008).
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    await runSearch({
+      slot: sd, reqId, ...args, unitCount: sd.doc.units.length,
+      batch: (job) => {
+        // A long walk can outlive the parse: every job re-charges it.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+      },
+      alive: () => owns(ws, s.sid) && ws.data.phase === 'stream' && sessionDoc.get(s.sid) === sd,
+      send: (m) => send(ws, m),
+      refuse: (code) => refuse(ws, reqId, code),
+    })
+  }
+
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
   function keyFields(doc: DocState, mark: MarkSpec, unitIndex: number, scale: number, projectionMode: 'final-raster' | 'commands', missing?: string[]): RenderKeyFields {
     return {
@@ -451,6 +486,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'ready') return onReady(ws, m)
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
+    if (m.type === 'search') return onSearch(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 
