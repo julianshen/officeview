@@ -294,6 +294,20 @@ describe('CF x14 pairing by GUID', () => {
     expect(value.rules[0]!.writes.has('dataBar')).toBe(true)
   })
 
+  it('a paired bar withholds under production evidence with exactly the dataBar slot, on both paths', async () => {
+    // No Stage 3 capability is published (Task 23), so every bar withholds; the mask never widens to ALL or fill.
+    const { value } = parse(pairedBase + pairedExt, DXF_FILL, undefined, undefined, { sheetRightToLeft: false })
+    expect(value.rules[0]!.definition).toMatchObject({ kind: 'unresolved', type: 'dataBar', reason: 'cf-unsupported-rule' })
+    expect([...value.rules[0]!.writes]).toEqual(['dataBar'])
+    const memory = createCfMemory()
+    const handle = createCfStreamEvents(stylesFor(DXF_FILL), memory, { sheetRightToLeft: false })
+    const bytes = new TextEncoder().encode(`<worksheet xmlns="${NS}" xmlns:x14="${X14}" xmlns:xm="${XM}">${pairedBase + pairedExt}</worksheet>`)
+    await tokenizeBytes((async function* () { yield bytes })(), handle.events)
+    const streamed = handle.finish()
+    expect(streamed.value).toEqual(value)
+    streamed.release()
+  })
+
   it('keeps standalone priority bars with fillColor without a partner', () => {
     const { value } = parse(standaloneExt)
     expect(value.unresolvedSheet).toBeUndefined()

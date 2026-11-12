@@ -17,6 +17,10 @@ const count = (raw: string | undefined, max: number): number => {
   return Number.isInteger(n) && n > 0 && n < max ? n : 0
 }
 
+/** The first sheet view's reading order (`<sheetView rightToLeft>`, default false); undefined when malformed. */
+export const sheetViewRightToLeft = (v: string | undefined): boolean | undefined =>
+  v === undefined || v === '0' || v === 'false' ? false : v === '1' || v === 'true' ? true : undefined
+
 export function frozenPaneFrom(a: Record<string, string | undefined>): XlsxFrozenPane | undefined {
   if (a.state !== 'frozen' && a.state !== 'frozenSplit') return undefined
   const rows = count(a.ySplit, MAX_FROZEN_ROWS), cols = count(a.xSplit, MAX_FROZEN_COLS)

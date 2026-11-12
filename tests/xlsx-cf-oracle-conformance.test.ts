@@ -578,7 +578,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
   it('stage 3 bar cells are withheld until their evidence lands', async () => {
     // The guard itself has teeth: a ready cell that carries a bar descriptor is NOT withheld.
-    expect(barWithheld({ kind: 'ready', value: { properties: {}, visual: { dataBar: { fraction: 0.5, color: 'FF0000FF' } } } })).toBe(false)
+    expect(barWithheld({ kind: 'ready', value: { properties: {}, visual: { dataBar: { ruleId: 0, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: 0xff0000ff, isGradient: false, isNegative: false, showValue: true, direction: 'leftToRight' } } } })).toBe(false)
     expect(barWithheld({ kind: 'ready', value: { properties: {} } })).toBe(true)
     expect(barWithheld({ kind: 'no-match' })).toBe(true)
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)

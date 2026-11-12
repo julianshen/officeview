@@ -17,6 +17,16 @@ export type CfScaleBound =
 export type CfScalePoint = Readonly<{ bound: CfScaleBound; argb: number }>
 export const COLOR_SCALE_WRITES: ReadonlySet<string> = Object.freeze(new Set(['colorScale', 'fill']))
 export const COLOR_SCALE_WRITE_MASK = COLOR_SCALE_WRITES
+/** `autoMin`/`autoMax` resolve only from `<x14:cfvo>` (Ruling S3-C). */
+export type CfBarBound = CfScaleBound | { type: 'autoMin' } | { type: 'autoMax' }
+/** The one canonical data-bar write mask, for resolved and unresolved bars alike (a bar never writes the fill slot). */
+export const DATA_BAR_WRITES: ReadonlySet<string> = Object.freeze(new Set(['dataBar']))
+/** Spec §5.9 evaluated bar descriptor (Task 20 evaluates it; Task 19 only defines it). */
+export type CfBarDescriptor = Readonly<{
+  ruleId: number; axisFraction: number; startFraction: number; endFraction: number; fillColor: number
+  borderColor?: number; isGradient: boolean; isNegative: boolean; axisColor?: number; showValue: boolean
+  direction: 'leftToRight' | 'rightToLeft'
+}>
 export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'cellIs'; operator: CfOperator; operands: readonly CfLiteral[] }
   | { kind: 'text'; type: 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith'; needle: string }
@@ -25,6 +35,13 @@ export type CfDefinition = (CfRuleOrigin & (
   | { kind: 'top10'; rank?: number; bottom: boolean; percent: boolean }
   | { kind: 'aboveAverage'; above: boolean; equal: boolean; stdDev?: number }
   | { kind: 'colorScale'; points: readonly [CfScalePoint, CfScalePoint] | readonly [CfScalePoint, CfScalePoint, CfScalePoint] }
+  // Colours are resolved ARGB, normalised once. An optional colour is absent when its element is missing or the
+  // rule's settings never draw it; an evaluator that needs an absent colour must withhold (Ruling S3-F).
+  | { kind: 'dataBar'; bounds: readonly [CfBarBound, CfBarBound]; fillArgb: number; negativeFillArgb?: number
+      borderArgb?: number; negativeBorderArgb?: number; axisArgb?: number; minLength: number; maxLength: number; gradient: boolean
+      border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
+      axisPosition: 'automatic' | 'middle' | 'none'; direction: 'context' | 'leftToRight' | 'rightToLeft'; showValue: boolean
+      sheetRightToLeft?: boolean }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }
 /** Presence means a winning override; null explicitly clears a property. */
 export interface CfCellState {
@@ -33,7 +50,7 @@ export interface CfCellState {
   readonly unresolvedWrites?: CfWriteMask
   readonly visual?: Readonly<{
     colorScale?: Readonly<{ ruleId: number; argb: number; fraction?: number }>
-    dataBar?: Readonly<{ fraction: number; color: string }>
+    dataBar?: CfBarDescriptor
     iconSet?: Readonly<{ name: string; index: number }>
   }>
 }

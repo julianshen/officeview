@@ -7,7 +7,7 @@
  * part is retained. The paged record builders (S1.2) will live next to it.
  */
 import { sheetFormat } from '../columnWidth'
-import { frozenPaneFrom, type XlsxFrozenPane } from '../frozenPane'
+import { frozenPaneFrom, sheetViewRightToLeft, type XlsxFrozenPane } from '../frozenPane'
 import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
@@ -334,6 +334,8 @@ export interface SheetMetadata {
   skippedCells: number
   /** Authored frozen panes of the first sheet view. */
   frozen?: XlsxFrozenPane
+  /** The first sheet view's `rightToLeft` (undefined: no sheet view, or a malformed flag), as the resident parser reads it. */
+  sheetRightToLeft?: boolean
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
   /** Bounded sparkline records parsed from worksheet extension parts. */
@@ -745,7 +747,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         meta.tablePartIds.push(typeof id === 'string' && id !== '' ? id : undefined)
       } else if (depth === 2 && local === 'sheetView' && stack[1] === 'sheetViews') {
         // Only the first sheet view counts (as the resident parser reads it), even when it has no pane.
-        sheetViews++
+        if (++sheetViews === 1) {
+          const rtl = sheetViewRightToLeft(attrMap(names, values, count).rightToLeft)
+          if (rtl !== undefined) meta.sheetRightToLeft = rtl
+        }
       } else if (depth === 3 && local === 'pane' && stack[1] === 'sheetViews' && stack[2] === 'sheetView' && sheetViews === 1 && !paneSeen) {
         paneSeen = true
         const frozen = frozenPaneFrom(attrMap(names, values, count))

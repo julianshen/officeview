@@ -23,6 +23,7 @@ import { hasEvidence } from './evidence'
 import { measureCfPayload } from './limits'
 import { parseCfDxf } from './dxf'
 import {
+  CF_BAR_DEFINITION_BYTES,
   CF_LIMITS,
   createCfCaps,
   createCfDiagnostics,
@@ -32,6 +33,8 @@ import {
 } from './limits'
 import {
   COLOR_SCALE_WRITES,
+  DATA_BAR_WRITES,
+  type CfBarBound,
   type CfCellState,
   type CfDefinition,
   type CfLease,
@@ -64,6 +67,8 @@ export interface CfStylesSource {
 export interface CfParseMeta {
   readonly sheetId?: string
   readonly partPath?: string
+  /** The first `<sheetView>`'s `rightToLeft`; undefined when there is no sheet view or the flag is malformed. */
+  readonly sheetRightToLeft?: boolean
 }
 
 /** Workbook-shared parse account, keyed by the per-workbook styles object. */
@@ -612,8 +617,17 @@ interface BodyInputs {
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
   colorScaleNode: XmlNode | undefined
+  /** The rule's own `<dataBar>` (base) or `<x14:dataBar>` (standalone x14). */
+  dataBarNode: XmlNode | undefined
+  /** The paired companion's `<x14:dataBar>`, read inside this rule's admitted bound (S3-Q precedence). */
+  pairedBar: PairedBar | undefined
   ns: string | undefined
   origin: CfRuleOrigin
+}
+
+interface PairedBar {
+  readonly node: XmlNode
+  readonly activePresent: boolean
 }
 
 export interface CfScaleBoundInput {
@@ -876,6 +890,256 @@ function parseColorScaleRule(
   )
 }
 
+type CfDataBarDefinition = Extract<CfDefinition, { kind: 'dataBar' }>
+
+/** S3-K: `context` follows the sheet's reading order, and the viewer lays out no RTL sheet. This id is never verified
+ * throughout Stage 3, so it withholds a context bar whose sheet is RTL or of unknown order. */
+const BAR_CONTEXT_RTL_SHEET = 'bar:direction-context-rtl-sheet'
+
+/**
+ * Computes the parse-level bar:* capability IDs required to authorize a data-bar rule (the pattern of
+ * `scaleRequiredCapabilities`). Fail-closed: the rule resolves iff every required capability has evidence. Never
+ * empty: every bar needs the evidence of its pairing shape. Bounds, lengths, axis, rendering and negative-bar
+ * geometry are evaluation gates (Task 20), not parse gates. `colours` are the colour inputs the bar draws.
+ * `defaultedAttributes` (default true, fail-closed) says a schema default stood in for an omitted attribute;
+ * `legacyBoundValue` says a `min`/`max`/`autoMin`/`autoMax` cfvo carried a value (S3-D).
+ */
+export function barRequiredCapabilities(
+  def: CfDataBarDefinition,
+  colours: readonly CfScaleColorInput[],
+  options: { readonly defaultedAttributes?: boolean; readonly legacyBoundValue?: boolean } = {},
+): Set<string> {
+  const req = new Set<string>()
+  // S3-Q pairing shape. A base-only bar takes every x14 attribute from the schema defaults.
+  if (def.dialect === 'x14') req.add('bar:pairing-standalone')
+  else if (def.guid !== undefined) req.add('bar:pairing-paired').add('bar:settings-paired-precedence')
+  else req.add('bar:pairing-base-only').add('bar:settings-schema-defaults')
+  if (options.defaultedAttributes !== false) req.add('bar:settings-schema-defaults')
+  // S3-K direction.
+  if (def.direction === 'leftToRight') req.add('bar:direction-ltr')
+  else if (def.direction === 'rightToLeft') req.add('bar:direction-rtl')
+  else req.add(def.sheetRightToLeft === false ? 'bar:direction-context-ltr-sheet' : BAR_CONTEXT_RTL_SHEET)
+  // S3-D positional and legacy shapes.
+  const [lo, hi] = def.bounds
+  const minSide = (t: string) => t === 'min' || t === 'autoMin'
+  const maxSide = (t: string) => t === 'max' || t === 'autoMax'
+  if (options.legacyBoundValue || maxSide(lo.type) || minSide(hi.type)) req.add('bar:bounds-positional')
+  // S3-E degenerate bounds visible without data.
+  for (const b of def.bounds) {
+    if ((b.type === 'percent' || b.type === 'percentile') && (b.value < 0 || b.value > 100)) req.add('bar:bounds-out-of-domain')
+  }
+  if (lo.type === 'num' && hi.type === 'num' && lo.value > hi.value) req.add('bar:degenerate-inverted')
+  // S3-F colour forms. auto, alpha and unresolvable colours never reach here: the parser withholds them outright.
+  for (const c of colours) {
+    if (typeof c !== 'object' || c === null) continue
+    if (c.theme !== undefined) {
+      req.add('bar:colors-theme-tint')
+      if (c.customTheme) req.add('bar:colors-custom-theme')
+    }
+    if (c.indexed !== undefined) req.add('bar:colors-indexed')
+  }
+  return req
+}
+
+const NUMERIC_LITERAL = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/
+
+/** A cfvo value under the Stage 1 numeric literal grammar; references and expressions wait for Stage 5. */
+function cfvoLiteral(text: string): number | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
+  const clean = text.trim().replace(/^=/, '').trim()
+  if (NUMERIC_LITERAL.test(clean)) {
+    const n = Number(clean)
+    return Number.isFinite(n) ? n : 'cf-invalid-cfvo'
+  }
+  const formulaOrRef = /^\$?[A-Za-z]{1,3}\$?\d+$/.test(clean) || /[A-Za-z_][A-Za-z0-9_]*\(/.test(clean) ||
+    clean.startsWith('$') || clean.startsWith('=') || /[:!]/.test(clean)
+  return formulaOrRef ? 'cf-unsupported-rule' : 'cf-invalid-cfvo'
+}
+
+/** One bar cfvo (S3-C/S3-D). Base cfvo carry `@val`; x14 cfvo carry one `<xm:f>` and never `@val`. */
+function barBound(
+  cfvo: XmlNode,
+  x14: boolean,
+): { bound: CfBarBound; legacy: boolean } | 'cf-unsupported-rule' | 'cf-invalid-cfvo' {
+  const a = attrs(cfvo)
+  const type = a['type']
+  const fs = x14 ? kids(cfvo, 'f', XM_MAIN_NS) : []
+  if (x14 && (fs.length > 1 || a['val'] !== undefined)) return 'cf-invalid-cfvo'
+  const text = x14 ? (fs[0] !== undefined ? textOf(fs[0]) : undefined) : a['val']
+  switch (type) {
+    case 'formula':
+      return 'cf-unsupported-rule'
+    case 'autoMin':
+    case 'autoMax':
+      // S3-C: auto bounds exist only in x14; a base auto bound stays unresolved until Excel's handling is recorded.
+      if (!x14) return 'cf-unsupported-rule'
+      return { bound: { type }, legacy: text !== undefined }
+    case 'min':
+    case 'max':
+      return { bound: { type }, legacy: text !== undefined }
+    case 'num':
+    case 'percent':
+    case 'percentile': {
+      if (text === undefined) return 'cf-invalid-cfvo'
+      const value = cfvoLiteral(text)
+      return typeof value === 'number' ? { bound: { type, value }, legacy: false } : value
+    }
+    default:
+      return 'cf-invalid-cfvo'
+  }
+}
+
+type BarColorSlot = 'fill' | 'border' | 'negativeFill' | 'negativeBorder' | 'axis'
+const X14_BAR_COLORS: ReadonlyArray<readonly [BarColorSlot, string]> = [
+  ['border', 'borderColor'], ['negativeFill', 'negativeFillColor'], ['negativeBorder', 'negativeBorderColor'], ['axis', 'axisColor'],
+]
+
+/** An x14 `CT_DataBar` unsigned length, or its schema default. */
+function barLength(v: string | undefined, def: number): number | undefined {
+  if (v === undefined) return def
+  if (!isIntText(v)) return undefined
+  const n = Number(v)
+  return Number.isSafeInteger(n) && n >= 0 ? n : undefined
+}
+
+function parseDataBarRule(
+  fin: SheetFinalizer,
+  inputs: BodyInputs,
+  rule: { readonly active: boolean; readonly hasDxf: boolean },
+  finishResolved: (definition: Record<string, unknown>, extraWrites?: CfWriteMask) => number,
+  finishUnresolved: (reason: string, writes: CfWriteMask) => number,
+): number {
+  const slot = DATA_BAR_WRITES
+  const standalone = inputs.origin.dialect === 'x14'
+  const paired = inputs.pairedBar
+  // S3-R: activation predicates wait for Stage 5, on the rule or its companion.
+  if (rule.active || paired?.activePresent) return finishUnresolved('cf-unsupported-rule', slot)
+  // Excel never writes a DXF on a bar: withhold rather than paint a bar rule's DXF.
+  if (rule.hasDxf) return finishUnresolved('cf-unsupported-rule', slot)
+  const host = inputs.dataBarNode
+  if (!host) return finishUnresolved('cf-invalid-rule', slot)
+  if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', slot)
+
+  // S3-C: exactly two cfvo, min-side then max-side, on every bar element the rule carries.
+  const x14Bar = standalone ? host : paired?.node
+  const baseCfvos = standalone ? [] : kids(host, 'cfvo', inputs.ns)
+  const x14Cfvos = x14Bar ? kids(x14Bar, 'cfvo', X14_MAIN_NS) : []
+  if ((!standalone && baseCfvos.length !== 2) || (x14Bar && x14Cfvos.length !== 2)) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+  // The base bounds are validated even when the companion's take precedence (S3-Q).
+  const parsedBase = baseCfvos.map(c => barBound(c, false))
+  const parsedX14 = x14Cfvos.map(c => barBound(c, true))
+  for (const p of [...parsedX14, ...parsedBase]) if (typeof p === 'string') return finishUnresolved(p, slot)
+  const effective = (x14Bar ? parsedX14 : parsedBase) as Array<{ bound: CfBarBound; legacy: boolean }>
+
+  // Attributes: the base `<dataBar>` carries minLength/maxLength/showValue; `<x14:dataBar>` carries the rest and,
+  // when present, its lengths take precedence. Every omitted attribute takes its schema default (spec §3).
+  let defaulted = false
+  const pick = (a: Record<string, string>, key: string): string | undefined => {
+    const v = a[key]
+    if (v === undefined) defaulted = true
+    return v
+  }
+  const baseAttrs = standalone ? {} : attrs(host)
+  const xa = x14Bar ? attrs(x14Bar) : {}
+  const baseMin = barLength(baseAttrs['minLength'], 10)
+  const baseMax = barLength(baseAttrs['maxLength'], 90)
+  // `showValue` exists only on the base `<dataBar>`: a standalone x14 bar always takes its default.
+  const showValue = parseBoolAttr(pick(baseAttrs, 'showValue'), true)
+  if (baseMin === undefined || baseMax === undefined || showValue === undefined) return finishUnresolved('cf-invalid-rule', slot)
+  // A base-only bar takes every x14 attribute from the schema defaults.
+  if (!x14Bar) defaulted = true
+  const minLength = x14Bar ? barLength(pick(xa, 'minLength'), 10) : baseMin
+  const maxLength = x14Bar ? barLength(pick(xa, 'maxLength'), 90) : baseMax
+  const gradient = parseBoolAttr(x14Bar ? pick(xa, 'gradient') : undefined, true)
+  const border = parseBoolAttr(x14Bar ? pick(xa, 'border') : undefined, false)
+  const negSame = parseBoolAttr(x14Bar ? pick(xa, 'negativeBarColorSameAsPositive') : undefined, false)
+  const negBorderSame = parseBoolAttr(x14Bar ? pick(xa, 'negativeBarBorderColorSameAsPositive') : undefined, true)
+  const axisText = (x14Bar ? pick(xa, 'axisPosition') : undefined) ?? 'automatic'
+  const directionText = (x14Bar ? pick(xa, 'direction') : undefined) ?? 'context'
+  if (
+    minLength === undefined || maxLength === undefined || gradient === undefined || border === undefined ||
+    negSame === undefined || negBorderSame === undefined ||
+    (axisText !== 'automatic' && axisText !== 'middle' && axisText !== 'none') ||
+    (directionText !== 'context' && directionText !== 'leftToRight' && directionText !== 'rightToLeft')
+  ) {
+    return finishUnresolved('cf-invalid-rule', slot)
+  }
+  // Lengths are percentages of the cell; an inverted or over-100 pair is schema-valid but unmeasured.
+  if (minLength > maxLength || maxLength > 100) return finishUnresolved('cf-unsupported-rule', slot)
+  // S3-K: a context bar draws in the sheet's reading order, which the viewer only lays out LTR.
+  if (directionText === 'context' && fin.meta.sheetRightToLeft !== false) return finishUnresolved('cf-unsupported-rule', slot)
+
+  // S3-F colours: the positive fill comes from the base `<color>` (paired, base-only) or `<x14:fillColor>`
+  // (standalone). Only the colours this bar's settings draw are read; each resolves once, here.
+  const elements: Partial<Record<BarColorSlot, XmlNode>> = {}
+  const fillNode = standalone ? kids(host, 'fillColor', X14_MAIN_NS)[0] : kids(host, 'color', inputs.ns)[0]
+  if (fillNode) elements.fill = fillNode
+  if (x14Bar) for (const [slotName, local] of X14_BAR_COLORS) {
+    const node = kids(x14Bar, local, X14_MAIN_NS)[0]
+    if (node) elements[slotName] = node
+  }
+  const drawn: Record<BarColorSlot, 'required' | 'conditional' | 'unused'> = {
+    fill: 'required',
+    border: border ? 'required' : 'unused',
+    negativeFill: negSame ? 'unused' : 'conditional',
+    negativeBorder: border && !negBorderSame ? 'conditional' : 'unused',
+    // An automatic axis is drawn only for mixed-sign data, so its colour is needed only then.
+    axis: axisText === 'middle' ? 'required' : axisText === 'automatic' ? 'conditional' : 'unused',
+  }
+  const officeTheme = isMeasuredOfficeTheme(fin.styles.colors.theme)
+  const colourInputs: CfScaleColorInput[] = []
+  const argb: Partial<Record<BarColorSlot, number>> = {}
+  for (const slotName of ['fill', 'border', 'negativeFill', 'negativeBorder', 'axis'] as const) {
+    if (drawn[slotName] === 'unused') continue
+    const node = elements[slotName]
+    if (!node) {
+      // A missing colour that every cell draws has no measured default; a conditional one stays absent and the
+      // evaluator withholds any cell that would draw it.
+      if (drawn[slotName] === 'required') return finishUnresolved('cf-unsupported-rule', slot)
+      continue
+    }
+    const ca = attrs(node)
+    // auto/system colours and alpha other than FF are unresolved, never a #000000 fallback.
+    const auto = parseBoolAttr(ca['auto'], false)
+    if (auto !== false) return finishUnresolved('cf-unsupported-rule', slot)
+    const hex = resolveSheetColor(ca, fin.styles.colors)?.toUpperCase()
+    const full = hex === undefined ? undefined : hex.length === 6 ? `FF${hex}` : hex
+    if (full === undefined || !/^FF[0-9A-F]{6}$/.test(full)) return finishUnresolved('cf-unsupported-rule', slot)
+    argb[slotName] = parseInt(full, 16)
+    colourInputs.push(ca['theme'] !== undefined && !officeTheme ? { ...ca, customTheme: true } : ca)
+  }
+
+  const sheetRightToLeft = fin.meta.sheetRightToLeft
+  const definition = {
+    kind: 'dataBar' as const,
+    bounds: [effective[0]!.bound, effective[1]!.bound] as const,
+    fillArgb: argb.fill!,
+    ...(argb.negativeFill !== undefined ? { negativeFillArgb: argb.negativeFill } : {}),
+    ...(argb.border !== undefined ? { borderArgb: argb.border } : {}),
+    ...(argb.negativeBorder !== undefined ? { negativeBorderArgb: argb.negativeBorder } : {}),
+    ...(argb.axis !== undefined ? { axisArgb: argb.axis } : {}),
+    minLength,
+    maxLength,
+    gradient,
+    border,
+    negativeBarColorSameAsPositive: negSame,
+    negativeBarBorderColorSameAsPositive: negBorderSame,
+    axisPosition: axisText as CfDataBarDefinition['axisPosition'],
+    direction: directionText as CfDataBarDefinition['direction'],
+    showValue,
+    ...(sheetRightToLeft !== undefined ? { sheetRightToLeft } : {}),
+  }
+  const required = barRequiredCapabilities({ ...inputs.origin, ...definition }, colourInputs, {
+    defaultedAttributes: defaulted,
+    legacyBoundValue: effective.some(e => e.legacy),
+  })
+  for (const cap of required) {
+    if (!hasEvidence(cap)) return finishUnresolved('cf-unsupported-rule', slot)
+  }
+  return finishResolved(definition, slot)
+}
+
 function buildRuleBody(
   fin: SheetFinalizer,
   inputs: BodyInputs,
@@ -883,7 +1147,9 @@ function buildRuleBody(
   documentOrder: number,
   fallbackType: CfRuleType | 'unknown',
 ): number {
-  let actual = 256 + inputs.formulas.reduce((n, f) => n + f.length * 2, 0)
+  // A bar's normalized fields are priced from the payload measurer, never a hand constant.
+  let actual = 256 + inputs.formulas.reduce((n, f) => n + f.length * 2, 0) +
+    ((inputs.typeText ?? '').trim() === 'dataBar' ? CF_BAR_DEFINITION_BYTES : 0)
   const pushUnresolved = (reason: string, priority: number, stop: boolean, writes: CfWriteMask): number => {
     fin.diag('unsupported', reason as `cf-${string}`, `rule priority=${priority} type=${inputs.typeText?.trim() ?? ''}: ${reason}`)
     fin.rules.push({
@@ -1072,7 +1338,10 @@ function buildRuleBody(
     case 'colorScale': {
       return parseColorScaleRule(fin, inputs, finishResolved, finishUnresolved)
     }
-    case 'dataBar':
+    case 'dataBar': {
+      const hasDxf = inputs.inlineDxf !== undefined || inputs.dxfIdText !== undefined
+      return parseDataBarRule(fin, inputs, { active, hasDxf }, finishResolved, finishUnresolved)
+    }
     case 'iconSet': {
       const slot = new Set([type])
       if (inputs.cfvoMissingType) return finishUnresolved('cf-invalid-cfvo', withDxf(slot))
@@ -1148,6 +1417,13 @@ interface VisualFacts {
   customIcons: number
   iconProblem: 'cf-unsupported-icon' | undefined
   colorScaleNode?: XmlNode
+  dataBarNode?: XmlNode
+}
+
+/** Bounded `<xm:f>` text inside one `<x14:cfvo>` (the streamed path bounds it at capture). */
+function cfvoFormulaWithinCap(cfvo: XmlNode): boolean {
+  for (const f of kids(cfvo, 'f', XM_MAIN_NS)) if (textOf(f).length > CF_LIMITS.textUnits) return false
+  return true
 }
 
 function scanRuleVisual(
@@ -1173,6 +1449,10 @@ function scanRuleVisual(
       fin.diag('unsupported', 'cf-resource-limit', 'cfvo val exceeds the text cap')
       return undefined
     }
+    if (ns === X14_MAIN_NS && !cfvoFormulaWithinCap(cfvo)) {
+      fin.diag('unsupported', 'cf-resource-limit', 'cfvo xm:f exceeds the text cap')
+      return undefined
+    }
   }
   let customIcons = 0
   let iconProblem: 'cf-unsupported-icon' | undefined
@@ -1194,7 +1474,11 @@ function scanRuleVisual(
     const setName = attrs(host)['iconSet']
     if (setName !== undefined && ICON_SETS.get(setName) === undefined) iconProblem = 'cf-unsupported-icon'
   }
-  return { cfvoCount, cfvoMissingType, customIcons, iconProblem, ...(type === 'colorScale' ? { colorScaleNode: host } : {}) }
+  return {
+    cfvoCount, cfvoMissingType, customIcons, iconProblem,
+    ...(type === 'colorScale' ? { colorScaleNode: host } : {}),
+    ...(type === 'dataBar' ? { dataBarNode: host } : {}),
+  }
 }
 
 function readRuleInputs(
@@ -1220,6 +1504,7 @@ function readRuleInputs(
   let customIcons = 0
   let iconProblem: 'cf-unsupported-icon' | undefined
   let colorScaleNode: XmlNode | undefined
+  let dataBarNode: XmlNode | undefined
   if (VISUAL_TYPES.has(type)) {
     const scan = scanRuleVisual(fin, ruleNode, dialect === 'base' ? ns : X14_MAIN_NS, type)
     if (!scan) return { ok: false, reason: 'cf-resource-limit' }
@@ -1228,6 +1513,7 @@ function readRuleInputs(
     customIcons = scan.customIcons
     iconProblem = scan.iconProblem
     colorScaleNode = scan.colorScaleNode
+    dataBarNode = scan.dataBarNode
   }
   const textAttr = a['text']
   if (textAttr !== undefined && textAttr.length > CF_LIMITS.textUnits) {
@@ -1262,6 +1548,7 @@ function readRuleInputs(
     read.formulas.reduce((n, f) => n + f.length * 2, 0) +
     (textAttr ? textAttr.length * 2 : 0) +
     dxfBudget * 2 +
+    (type === 'dataBar' ? CF_BAR_DEFINITION_BYTES : 0) +
     256
   return {
     ok: true,
@@ -1280,6 +1567,8 @@ function readRuleInputs(
         customIcons,
         iconProblem,
         colorScaleNode,
+        dataBarNode,
+        pairedBar: undefined,
         ns: dialect === 'base' ? ns : X14_MAIN_NS,
         origin,
       },
@@ -1327,13 +1616,17 @@ function invalidLinkRule(
   })
 }
 
-/** Bounded x14 companion visual facts for a structurally clean pair. */
+interface PairedExtFacts { cfvoCount: number; cfvoMissingType: boolean; bar: PairedBar | undefined }
+
+/** Bounded x14 companion visual facts for a structurally clean pair. The companion's `<x14:dataBar>` (its
+ * attributes, colours and `<x14:cfvo>` bounds) travels by reference and is normalized inside the base rule's
+ * admitted bound, so nothing is copied before admission. */
 function readPairedExtFacts(
   fin: SheetFinalizer,
   extNode: XmlNode,
-): { ok: true; cfvoCount: number; cfvoMissingType: boolean } | { ok: false } {
+): ({ ok: true } & PairedExtFacts) | { ok: false } {
   const visual = kids(extNode, 'dataBar', X14_MAIN_NS)[0]
-  if (!visual) return { ok: true, cfvoCount: 0, cfvoMissingType: false }
+  if (!visual) return { ok: true, cfvoCount: 0, cfvoMissingType: false, bar: undefined }
   let cfvoCount = 0
   let cfvoMissingType = false
   for (const cfvo of kids(visual, 'cfvo', X14_MAIN_NS)) {
@@ -1344,12 +1637,13 @@ function readPairedExtFacts(
     }
     const a = attrs(cfvo)
     if (a['type'] === undefined) cfvoMissingType = true
-    if (a['val'] !== undefined && a['val'].length > CF_LIMITS.textUnits) {
+    if ((a['val'] !== undefined && a['val'].length > CF_LIMITS.textUnits) || !cfvoFormulaWithinCap(cfvo)) {
       fin.diag('unsupported', 'cf-resource-limit', 'paired x14 cfvo val exceeds the text cap')
       return { ok: false }
     }
   }
-  return { ok: true, cfvoCount, cfvoMissingType }
+  const active = parseBoolAttr(attrs(extNode)['activePresent'], false)
+  return { ok: true, cfvoCount, cfvoMissingType, bar: { node: visual, activePresent: active !== false } }
 }
 
 function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base: XmlNode[], x14: XmlNode[]): void {
@@ -1505,7 +1799,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
 
   const mergedBases = new Set<PendingRule>()
   const mergedExts = new Map<PendingRule, PendingRule>()
-  const mergedExtFacts = new Map<PendingRule, { cfvoCount: number; cfvoMissingType: boolean }>()
+  const mergedExtFacts = new Map<PendingRule, PairedExtFacts>()
   const invalidBases = new Set<PendingRule>()
   const rectsEqual = (a: ParsedRange, b: ParsedRange): boolean =>
     a.firstRow === b.firstRow && a.lastRow === b.lastRow && a.firstCol === b.firstCol && a.lastCol === b.lastCol
@@ -1546,7 +1840,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
       if (facts.ok) {
         mergedBases.add(loneBase)
         mergedExts.set(loneExt, loneBase)
-        mergedExtFacts.set(loneBase, { cfvoCount: facts.cfvoCount, cfvoMissingType: facts.cfvoMissingType })
+        mergedExtFacts.set(loneBase, { cfvoCount: facts.cfvoCount, cfvoMissingType: facts.cfvoMissingType, bar: facts.bar })
         continue
       }
     }
@@ -1613,7 +1907,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     docOrder: number,
     pairRaw: string | undefined,
     fallbackType: CfRuleType | 'unknown',
-    mergeFacts?: { cfvoCount: number; cfvoMissingType: boolean },
+    mergeFacts?: PairedExtFacts,
   ): void => {
     const read = readRuleInputs(fin, node, ns, kind, pairRaw)
     if (!read.ok) {
@@ -1623,6 +1917,7 @@ function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base:
     if (mergeFacts) {
       read.inputs.cfvoCount += mergeFacts.cfvoCount
       read.inputs.cfvoMissingType = read.inputs.cfvoMissingType || mergeFacts.cfvoMissingType
+      read.inputs.pairedBar = mergeFacts.bar
       if (read.inputs.cfvoCount > CF_LIMITS.cfvo) {
         pushRuleRefusal(kind, node, ranges, docOrder, fallbackType)
         return
@@ -1791,7 +2086,7 @@ export function cfChildLimit(parent: string, child: string): number | undefined 
   if (child === 'cfvo' || child === 'cfIcon') return 6 // one overflow witness
   if (child === 'color' && parent === 'colorScale') return 5
   if (['sqref', 'dxf', 'color', 'fill', 'font', 'border', 'numFmt',
-    'patternFill', 'fgColor', 'bgColor', 'negativeFillColor', 'negativeBorderColor',
+    'patternFill', 'fgColor', 'bgColor', 'fillColor', 'negativeFillColor', 'negativeBorderColor',
     'axisColor', 'borderColor', 'dataBar', 'colorScale', 'iconSet'].includes(child)) return 1
   return undefined
 }

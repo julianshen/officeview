@@ -8,6 +8,15 @@ import type { CfDiagnostic, CfLease, CfOutcome } from './model'
  * estimate cannot drift from `measureCfCellBytes` (it includes the optional `fraction`). */
 export const CF_SCALE_CELL_BYTES: number = measureCfCellBytes({ properties: {}, scale: { ruleId: 0, argb: 0, fraction: 0 } }) - measureCfCellBytes({ properties: {} })
 
+/** Upper bound of one normalized data-bar definition's own fields (the rule origin is priced by the rule bound),
+ * DERIVED from the payload measurer with every optional field present and the longest enum spellings. */
+export const CF_BAR_DEFINITION_BYTES: number = measurePayloadBytes({
+  kind: 'dataBar', bounds: [{ type: 'percentile', value: 0 }, { type: 'percentile', value: 0 }],
+  fillArgb: 0, negativeFillArgb: 0, borderArgb: 0, negativeBorderArgb: 0, axisArgb: 0, minLength: 0, maxLength: 0,
+  gradient: false, border: false, negativeBarColorSameAsPositive: false, negativeBarBorderColorSameAsPositive: false,
+  axisPosition: 'automatic', direction: 'rightToLeft', showValue: false, sheetRightToLeft: false,
+})!
+
 export const CF_LIMITS = Object.freeze({ rules: 4096, rangesPerRule: 256, rangesPerSheet: 16384,
   sheetMetadataBytes: 4 * 1024 ** 2, workbookMetadataBytes: 16 * 1024 ** 2,
   textUnits: 8192, formulaTokens: 4096, formulaChildren: 3, cfvo: 5, customIcons: 5,

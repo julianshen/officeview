@@ -514,7 +514,8 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
           const owner = finalizeCfSubtrees({ base: [], x14: [], sheetNs: undefined, truncated: true }, { colors: {}, dxfNodes: [] }, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath })
           sheet.cfOwner = owner; sheet.conditionalFormatting = owner.value
         } else {
-          const capture = createCfStreamEvents(cfStyles!, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath })
+          const rtl = sheet.metadata.sheetRightToLeft
+          const capture = createCfStreamEvents(cfStyles!, cfMemory, { sheetId: sheet.sheetId, partPath: sheet.partPath, ...(rtl !== undefined ? { sheetRightToLeft: rtl } : {}) })
           try {
             await tokenizeBytes(openPart(src, entry, partOpts(sheet.partPath, limits.paged.expandedBytes)), capture.events, {
               signal, limits: { maxTokenChars: limits.maxTokenChars }, afterChunk: () => ledger.drainQueue(),
