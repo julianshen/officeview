@@ -92,7 +92,12 @@ interface SheetPayload {
   autoFilterXml?: string
   /** Stage 3: add a date-formatted `cellXfs` entry (style 4). */
   dateStyle?: boolean
+  /** Stage 3: a static solid cell fill (ARGB) as the last `cellXfs` entry (`cellFillXf`), for the bar and control cells. */
+  cellFillRgb?: string
 }
+
+/** The `cellXfs` index of the static cell fill: after the four base styles and the optional date style. */
+const cellFillXf = (dateStyle: boolean): number => (dateStyle ? 5 : 4)
 
 const DEFAULT_DXFS_XML = [
   '<dxfs count="3">',
@@ -1200,16 +1205,18 @@ const idExtXml = (guid: string): string =>
 function stage3Payload(fx: S3Fixture): SheetPayload {
   const off = s3ControlOffset(fx)
   const cells: CellSpec[] = []
+  // Ruling S3-AUTO-GREY: a static cell fill under the bars and their controls (never a CF DXF).
+  const fill = fx.cellFill !== undefined ? { s: cellFillXf(fx.dateStyle === true) } : {}
   const put = (ref: string, v: S3Value, ctrlRef: string, labelSuffix = ''): void => {
     void labelSuffix
     for (const target of [ref, ctrlRef]) {
       if (v === null) continue
       if (typeof v === 'object') {
-        if ('err' in v) cells.push({ ref: target, err: v.err })
-        else if ('f' in v) cells.push({ ref: target, f: v.f, v: v.v })
+        if ('err' in v) cells.push({ ref: target, err: v.err, ...fill })
+        else if ('f' in v) cells.push({ ref: target, f: v.f, v: v.v, ...fill })
         else cells.push({ ref: target, v: v.date, s: 4 })
       } else {
-        cells.push({ ref: target, v })
+        cells.push({ ref: target, v, ...fill })
       }
     }
   }
@@ -1261,6 +1268,7 @@ function stage3Payload(fx: S3Fixture): SheetPayload {
     showGridLines: fx.gridlines === true,
     ...(fx.autoFilterXml ? { autoFilterXml: fx.autoFilterXml } : {}),
     ...(fx.dateStyle ? { dateStyle: true } : {}),
+    ...(fx.cellFill !== undefined ? { cellFillRgb: fx.cellFill } : {}),
   }
 }
 
@@ -1365,7 +1373,7 @@ function buildWorksheetXml(p: SheetPayload): string {
   ].join('')
 }
 
-function buildStylesXml(dxfsXml: string, dateStyle = false): string {
+function buildStylesXml(dxfsXml: string, dateStyle = false, cellFillRgb?: string): string {
   return [
     XML_DECL,
     `<styleSheet xmlns="${NS_MAIN}">`,
@@ -1377,21 +1385,23 @@ function buildStylesXml(dxfsXml: string, dateStyle = false): string {
     '<font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>',
     '<font><b/><u/><strike/><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>',
     '</fonts>',
-    '<fills count="3">',
+    `<fills count="${cellFillRgb ? 4 : 3}">`,
     '<fill><patternFill patternType="none"/></fill>',
     '<fill><patternFill patternType="gray125"/></fill>',
     '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill>',
+    ...(cellFillRgb ? [`<fill><patternFill patternType="solid"><fgColor rgb="${cellFillRgb}"/><bgColor indexed="64"/></patternFill></fill>`] : []),
     '</fills>',
     '<borders count="1">',
     '<border><left/><right/><top/><bottom/><diagonal/></border>',
     '</borders>',
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>',
-    `<cellXfs count="${dateStyle ? 5 : 4}">`,
+    `<cellXfs count="${cellFillXf(dateStyle) + (cellFillRgb ? 1 : 0)}">`,
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>',
     '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
     ...(dateStyle ? ['<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'] : []),
+    ...(cellFillRgb ? ['<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'] : []),
     '</cellXfs>',
     dxfsXml,
     '</styleSheet>',
@@ -1571,7 +1581,7 @@ export async function generateCaseArchive(id: string, anchorDateIso = DEFAULT_CL
         : []),
       '</Relationships>',
     ].join(''),
-    'xl/styles.xml': buildStylesXml(p.dxfsXml, p.dateStyle === true),
+    'xl/styles.xml': buildStylesXml(p.dxfsXml, p.dateStyle === true, p.cellFillRgb),
     'xl/worksheets/sheet1.xml': buildWorksheetXml(p),
   }
   if (p.tablePartXml || p.pivotParts) {

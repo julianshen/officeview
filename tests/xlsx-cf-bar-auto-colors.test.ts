@@ -103,6 +103,65 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     expect(assumed instanceof Map && [...original].every(([ref, o]) => JSON.stringify(assumed.get(ref)) === JSON.stringify(o))).toBe(false)
   })
 
+  it('on a grey static cell fill, Excel\'s white automatic colours are ink and sampled as FFFFFFFF (Ruling S3-AUTO-GREY)', () => {
+    const { c, parts, geom, png } = load('stage3-bar-axis-negative')
+    const original = measureCaseBars(c, png, geom, parts) as ReadonlyMap<string, CfObservedBar>
+    const auto = withSheet(parts, autoAll)
+    // Run 5: Excel paints the automatic negative fill and axis opaque white. Paint the real capture that way, first on
+    // the grey cell fill the case now carries, then on white. The capture's neutral pixels (background and antialiased
+    // black text, composited over white) are re-composited over the grey: v * A6 / FF.
+    const paint = (grey: boolean): DecodedPng => {
+      const out = clonePng(png)
+      const d = out.data
+      const axisCols = new Set([...original.values()].map(o => o.axisPx).filter((x): x is number => x !== undefined))
+      for (let i = 0; i < d.length; i += 4) {
+        const x = (i / 4) % out.width
+        const [r, g, b] = [d[i]!, d[i + 1]!, d[i + 2]!]
+        if (r === 255 && g === 0 && b === 0) d.set([255, 255, 255], i)
+        else if (r === 0 && g === 0 && b === 0 && axisCols.has(x)) d.set([255, 255, 255], i)
+        else if (grey && r === g && g === b) d.set([0, 0, 0].map(() => Math.round((r * 0xa6) / 0xff)), i)
+      }
+      return out
+    }
+    const onGrey = paint(true)
+    const measured = measureCaseBars(c, onGrey, geom, auto)
+    expect(measured).toBeInstanceOf(Map)
+    const bars = measured as ReadonlyMap<string, CfObservedBar>
+    // The white negative bars are measured where Excel drew them (a white axis next to them may add its column).
+    for (const ref of ['B2', 'B3', 'C2', 'C3', 'D3', 'E2', 'E3']) {
+      const was = original.get(ref)!.bar!
+      const now = bars.get(ref)!.bar!
+      expect(Math.abs(now.leftPx - was.leftPx) + Math.abs(now.rightPx - was.rightPx), ref).toBeLessThanOrEqual(1)
+    }
+    // A white negative bar is never mistaken for an axis: the axis stays the one-column line of the zero cells.
+    expect(bars.get('B4')).toMatchObject({ bar: null, axisPx: original.get('B4')!.axisPx })
+    const obs = sampleBarAutoColours(c, auto, onGrey, geom, bars)
+    expect(judgeBarAutoColour(obs['bar:color-auto-axis'])).toMatchObject({ status: 'discriminating', matched: 'FFFFFFFF' })
+    expect(judgeBarAutoColour(obs['bar:color-auto-negative-fill'])).toMatchObject({ status: 'discriminating', matched: 'FFFFFFFF' })
+    // The grey background counts as another colour of the bar: white clears it by 89, above the 17 separation.
+    expect(obs['bar:color-auto-axis']!.others).toContain('FFA6A6A6')
+    // On white cells the same white is no ink at all: nothing to sample, so the capabilities stay blocked (run 5).
+    const onWhite = paint(false)
+    const whiteBars = measureCaseBars(c, onWhite, geom, auto)
+    const white = sampleBarAutoColours(c, auto, onWhite, geom, whiteBars instanceof Map ? whiteBars : undefined)
+    expect(judgeBarAutoColour(white['bar:color-auto-axis']).status).not.toBe('discriminating')
+    expect(judgeBarAutoColour(white['bar:color-auto-negative-fill']).status).not.toBe('discriminating')
+  })
+
+  it('the automatic-colours case puts a static grey fill under every bar and control cell', () => {
+    const tpl = CF_STAGE3_CASES.find(x => x.id === 'stage3-bar-auto-colors')!
+    const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, tpl.input))))!
+    const styles = new TextDecoder().decode(parts.get('xl/styles.xml')!)
+    const sheet = new TextDecoder().decode(parts.get('xl/worksheets/sheet1.xml')!)
+    expect(styles).toContain('<fill><patternFill patternType="solid"><fgColor rgb="FFA6A6A6"/><bgColor indexed="64"/></patternFill></fill>')
+    expect(styles).toContain('<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>')
+    // The grey is not a CF DXF.
+    expect(styles).not.toMatch(/<dxf>[^]*A6A6A6/)
+    for (const cell of tpl.expected.cells) {
+      for (const ref of [cell.ref, cell.controlRef]) expect(sheet, ref).toMatch(new RegExp(`<c r="${ref}"[^>]* s="4"`))
+    }
+  })
+
   it('an automatic colour that is not one colour refuses, and one too close to another colour of the bar does not discriminate', () => {
     const { c, parts, geom, png } = load('stage3-bar-axis-negative')
     const auto = withSheet(parts, autoAll)

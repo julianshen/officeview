@@ -3831,6 +3831,8 @@ export interface S3Fixture {
   extraCells?: readonly { ref: string; v: S3Value }[]
   dxfsXml?: string
   dateStyle?: boolean
+  /** A static solid cell fill (ARGB) under every stored bar and control cell (Ruling S3-AUTO-GREY), never a CF DXF. */
+  cellFill?: string
   /** Positive ref -> control ref when the control cannot sit one control offset lower (a whole-column rule formats that cell too). */
   controlCells?: Readonly<Record<string, string>>
   calibration?: CfOracleCase['barCalibration']
@@ -3847,6 +3849,12 @@ const ORANGE = 'FFFFA500'
 const MIN_MAX: readonly CfBarCfvo[] = [{ type: 'min' }, { type: 'max' }]
 const SOLID_0_100: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
 const VALUES_5: readonly S3Value[] = [0, 25, 50, 75, 100]
+/**
+ * Ruling S3-AUTO-GREY: the static cell fill of stage3-bar-auto-colors. Excel's "White, Background 1, Darker 35%". White
+ * must be bar ink against it, so it sits at least BAR_STRONG_DELTA (64) below white (89 here); it is at least the colour
+ * separation (17) from FF0000FF (89 on blue) and FF000000 (166), and the value text stays legible.
+ */
+const AUTO_GREY = 'FFA6A6A6'
 
 /** x14 companion cfvo derived from the base cfvo: bounds with a value carry it as `<xm:f>`. */
 function deriveX14Cfvo(base: readonly CfBarCfvo[]): CfBarCfvo[] {
@@ -4280,9 +4288,10 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
   // 13. stage3-bar-auto-colors
   rect(
     'stage3-bar-auto-colors',
-    'Ruling S3-F as amended (owner, 2026-11-12): what Excel draws for the automatic colours it writes on resave. Each bar is authored with its positive fill only, the shape Excel resaves with <x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>, on mixed-sign data {-50,-25,0,50,100} so the negative fill and the axis are drawn: B automatic axis, C middle axis, D no axis (negative fill only). The zero cells show the axis alone; the negative cells show the negative fill. The verifier samples only colour elements the resaved workbook carries as auto="1".',
+    'Ruling S3-F as amended (owner, 2026-11-12): what Excel draws for the automatic colours it writes on resave. Each bar is authored with its positive fill only, the shape Excel resaves with <x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>, on mixed-sign data {-50,-25,0,50,100} so the negative fill and the axis are drawn: B automatic axis, C middle axis, D no axis (negative fill only). The zero cells show the axis alone; the negative cells show the negative fill. The verifier samples only colour elements the resaved workbook carries as auto="1". Ruling S3-AUTO-GREY (owner, 2026-11-12): Excel paints both automatic colours opaque white (capture run 5), so every bar and control cell carries a static grey fill FFA6A6A6, against which white is ink.',
     {
       n: 5,
+      cellFill: AUTO_GREY,
       cols: [
         col('B', 'AutoAxis', [-50, -25, 0, 50, 100]),
         col('C', 'AutoMiddle', [-50, -25, 0, 50, 100]),

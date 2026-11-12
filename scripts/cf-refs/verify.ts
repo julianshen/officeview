@@ -1780,11 +1780,19 @@ export function measureBarGeometry(
           if (rgbMaxDelta(pixelAt(png, box.x0 + dx, y), axisRgb) <= BAR_AXIS_TOLERANCE) hits++
           if (rgbMaxDelta(pixelAt(png, ctrl.x0 + dx, cy), axisRgb) <= BAR_AXIS_TOLERANCE) ctrlHits++
         }
-        if (hits * 2 >= rows && ctrlHits * 2 < rows) {
-          axisCols.add(dx)
-          if (axisPx === undefined) axisPx = box.x0 + dx
-        }
+        if (hits * 2 >= rows && ctrlHits * 2 < rows) axisCols.add(dx)
       }
+      // Excel's axis is one line (at most 2 columns): a wider run in the axis colour is a bar painted in that colour
+      // (Excel paints its automatic axis and automatic negative fill both white, Ruling S3-AUTO-GREY), never an axis.
+      const wide = [...axisCols].filter(dx => {
+        let lo = dx
+        let hi = dx
+        while (axisCols.has(lo - 1)) lo--
+        while (axisCols.has(hi + 1)) hi++
+        return hi - lo + 1 > 2
+      })
+      for (const dx of wide) axisCols.delete(dx)
+      if (axisCols.size > 0) axisPx = box.x0 + Math.min(...axisCols)
     }
     const scan = (background: [number, number, number]) => {
       const isInk = (dx: number, y: number): boolean => {
@@ -3043,18 +3051,22 @@ export function sampleBarAutoColours(
   for (const cell of c.expected.cells) {
     const v = facts.values.get(cell.ref.toUpperCase())
     if (v?.kind !== 'num') continue
+    // The cell background is one of the colours an automatic colour must be told apart from (Ruling S3-AUTO-GREY).
+    const ctrlBox = cellPixelBox(png, geom, cell.controlRef)
+    const background = ctrlBox ? toArgb(sampleCellBackgroundRgb(png, ctrlBox)) : undefined
     for (const b of bars) {
       if (!isCellInSqref(cell.ref, b.sqref)) continue
+      const others = b.others === undefined || background === undefined ? undefined : [...b.others, background]
       if (b.axisAuto && v.v === 0 && scopeHasMixedSigns(b.sqref, facts)) {
         const o = obs('bar:color-auto-axis')
-        addOthers(o, b.others)
+        addOthers(o, others)
         const s = sampleZeroCellAxis(png, geom, cell.ref, cell.controlRef)
         if ('argb' in s) o.samples.push({ ref: cell.ref, argb: s.argb })
         else o.unsampled.push(s.reason)
       }
       if (b.negativeFillAuto && b.solid && v.v < 0) {
         const o = obs('bar:color-auto-negative-fill')
-        addOthers(o, b.others)
+        addOthers(o, others)
         const m = measured?.get(cell.ref)
         const t = m?.bar ? observeBarTraits(png, geom, cell.ref, cell.controlRef, m) : undefined
         if (t?.rgb && t.traits.fill === 'solid') o.samples.push({ ref: cell.ref, argb: t.rgb })
