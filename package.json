@@ -70,6 +70,7 @@
     "s0:napi": "bun --preload ./scripts/stream-s0/napi-preload.ts",
     "gates:core": "OV_MODULE_MAP=1 bun run build && bun scripts/core-gates.ts",
     "test:server": "cd server && bun test",
+    "typecheck:server": "cd server && bun run typecheck",
     "stream:demo": "bun --preload ./scripts/stream-s0/napi-preload.ts server/src/main.ts --demo --doc-dir corpus"
   },
   "peerDependencies": {

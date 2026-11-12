@@ -514,7 +514,7 @@ describe('decoration thresholds are bounded by the run font size (Task 3c fix ro
     phase(c, 'line')
     for (const [at, t] of bars(i)) c.fillRect(i.x - 2, i.y + at, i.width + 4, t)
     phase(c, false)
-    return { ink: i, ...o.runDetails()[0]! }
+    return { ...o.runDetails()[0]!, ink: i }
   }
   const tall = 'secret' + '̍'.repeat(40)
   it('a font size smaller than the ink extent bounds the thickness limit', () => {

@@ -61,6 +61,10 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
 
+      # The root include set excludes server/: its sources and tests get their own check.
+      - name: Typecheck the stream server
+        run: bun run typecheck:server
+
       # Before the suite, so corpus-regressions.test.ts runs instead of skipping.
       - name: Fetch the real-file corpus
         run: bun scripts/fetch-corpus.ts
