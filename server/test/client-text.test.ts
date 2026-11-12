@@ -217,7 +217,7 @@ describe('RemoteOfficeDoc text API', () => {
   }, 60_000)
 
   test('select chunks that repeat a unit are merged into one hit', async () => {
-    const { doc, stop } = await open({ doc: await paragraphsDoc(), policy: capped(5) }, {
+    const { doc, stop } = await open({ doc: await lines(100, 'alpha beta'), policy: capped(5) }, {
       out: (m, _s, inject) => {
         if (m.type !== 'select') return
         inject({ reqId: m.reqId, type: 'select-result', units: [{ unit: 0, rects: [1, 2, 3, 4] }], paragraphs: 2 })
@@ -225,6 +225,7 @@ describe('RemoteOfficeDoc text API', () => {
         return false
       },
     })
+    expect(doc.manifest.units.count).toBeGreaterThan(1)
     const s = await doc.select({ all: true })
     expect(s).toEqual({
       paragraphs: 2,
@@ -278,6 +279,123 @@ describe('RemoteOfficeDoc text API', () => {
     expect((await failure(p)).code).toBe('revoked')
     stop()
   }, 120_000)
+})
+
+/** A doc whose `type` requests are swallowed and answered with `answer(reqId)` (injected in order). */
+async function stubbed(type: string, answer: (reqId: number) => object[], policy: AuthDecision['policy'] = capped(5)) {
+  return open({ doc: await paragraphsDoc(), policy }, {
+    out: (m, _s, inject) => {
+      if (m.type !== type) return
+      for (const x of answer(m.reqId)) inject(x)
+      return false
+    },
+  })
+}
+const refusedPolicy = async (p: Promise<unknown>) => { const e = await failure(p); expect(e).toBeInstanceOf(StreamSessionError); expect(e.code).toBe('policy-refused'); return e }
+const quads = (n: number) => Array.from({ length: n }, () => [1, 2, 3, 4]).flat()
+
+describe('text answers are bounded and checked (review round 1)', () => {
+  test('copy: 100 chunks of 48,000 chars (4.8 MB > 4 MiB) reject policy-refused; the session survives', async () => {
+    const { doc, stop } = await stubbed('copy', (reqId) => Array.from({ length: 100 }, (_, seq) => ({ reqId, type: 'copy-result', seq, text: 'a'.repeat(48_000), last: seq === 99 })))
+    const e = await refusedPolicy(doc.copy({ all: true }))
+    expect(e.message).toContain('4 MiB')
+    expect((await doc.search('Item')).total).toBe(5)
+    stop()
+  }, 60_000)
+
+  test('one text-service message over 48 KiB of UTF-8 rejects (ASCII length under the cap, bytes over it)', async () => {
+    // 30,000 'é' = 30,000 UTF-16 units (under 49,152) but 60,000 bytes of UTF-8.
+    const { doc, stop } = await stubbed('copy', (reqId) => [{ reqId, type: 'copy-result', seq: 0, text: 'é'.repeat(30_000), last: true }])
+    expect((await refusedPolicy(doc.copy({ all: true }))).message).toContain('48 KiB')
+    stop()
+  }, 60_000)
+
+  test('search: 5,100 hits (> 5,000) reject before the consumer sees the overflow', async () => {
+    const sizes: number[] = []
+    const { doc, stop } = await stubbed('search', (reqId) => [
+      ...Array.from({ length: 6 }, () => ({ reqId, type: 'search-result', matches: Array.from({ length: 850 }, () => ({ unit: 0, rects: [1, 2, 3, 4] })) })),
+      { reqId, type: 'search-done', total: 5100, truncated: false },
+    ])
+    await refusedPolicy(doc.search('x', { onHits: (h) => sizes.push(h.length) }))
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(5000)
+    stop()
+  }, 60_000)
+
+  test('search: a search-done total that differs from the hits delivered rejects', async () => {
+    const { doc, stop } = await stubbed('search', (reqId) => [
+      { reqId, type: 'search-result', matches: [{ unit: 0, rects: [1, 2, 3, 4] }, { unit: 0, rects: [5, 6, 7, 8] }] },
+      { reqId, type: 'search-done', total: 3, truncated: false },
+    ])
+    expect((await refusedPolicy(doc.search('x'))).message).toContain('total')
+    stop()
+  }, 60_000)
+
+  test('select: more than 20,000 rects across chunks rejects', async () => {
+    const { doc, stop } = await stubbed('select', (reqId) => Array.from({ length: 11 }, (_, i) => ({ reqId, type: 'select-result', units: [{ unit: 0, rects: quads(2000) }], paragraphs: 1, ...(i === 10 ? { last: true } : {}) })))
+    await refusedPolicy(doc.select({ all: true }))
+    stop()
+  }, 60_000)
+
+  test('a11y: more than 20,000 paragraphs, or more than 4 MiB of text, rejects', async () => {
+    let mode: 'count' | 'bytes' = 'count'
+    const { doc, stop } = await stubbed('a11y', (reqId) => mode === 'count'
+      ? Array.from({ length: 14 }, (_, seq) => ({ reqId, type: 'a11y-result', seq, paragraphs: Array.from({ length: 1500 }, () => ({ rect: [1, 2, 3, 4] })), last: seq === 13 }))
+      : Array.from({ length: 90 }, (_, seq) => ({ reqId, type: 'a11y-result', seq, paragraphs: [{ rect: [1, 2, 3, 4], text: 'a'.repeat(48_000) }], last: seq === 89 })), { textA11y: true })
+    await refusedPolicy(doc.a11y(0))
+    mode = 'bytes'
+    await refusedPolicy(doc.a11y(0))
+    stop()
+  }, 60_000)
+
+  test('a hit on a unit the manifest does not have, or a negative width, rejects before onHits; negative x/y are kept', async () => {
+    let rects = [1, 2, -3, 4], unit = 999
+    const calls: RemoteSearchHit[][] = []
+    const { doc, stop } = await stubbed('search', (reqId) => [
+      { reqId, type: 'search-result', matches: [{ unit, rects }] },
+      { reqId, type: 'search-done', total: 1, truncated: false },
+    ])
+    expect(doc.manifest.units.count).toBeLessThan(999)
+    await refusedPolicy(doc.search('x', { onHits: (h) => calls.push(h) }))
+    unit = 0
+    await refusedPolicy(doc.search('x', { onHits: (h) => calls.push(h) }))
+    rects = [1, 2, 3, -4]
+    await refusedPolicy(doc.search('x', { onHits: (h) => calls.push(h) }))
+    expect(calls).toEqual([])
+    rects = [-1, -2, 3, 4]
+    expect(await doc.search('x', { onHits: (h) => calls.push(h) })).toEqual({ total: 1, truncated: false })
+    expect(calls).toEqual([[{ unit: 0, rects: [{ x: -1, y: -2, width: 3, height: 4 }] }]])
+    stop()
+  }, 60_000)
+
+  test('select and a11y geometry are checked the same way', async () => {
+    const { doc, stop } = await stubbed('select', (reqId) => [{ reqId, type: 'select-result', units: [{ unit: 999, rects: [1, 2, 3, 4] }], paragraphs: 1, last: true }])
+    await refusedPolicy(doc.select({ all: true }))
+    stop()
+    const b = await stubbed('a11y', (reqId) => [{ reqId, type: 'a11y-result', seq: 0, paragraphs: [{ rect: [1, 2, -3, 4] }], last: true }], { textA11y: true })
+    await refusedPolicy(b.doc.a11y(0))
+    b.stop()
+  }, 60_000)
+
+  test('a live AbortSignal is released by every settled request (success, refusal, supersession, end)', async () => {
+    const ac = new AbortController(), sig = ac.signal
+    let added = 0, removed = 0
+    const add = sig.addEventListener.bind(sig), remove = sig.removeEventListener.bind(sig)
+    sig.addEventListener = ((...a: Parameters<typeof add>) => { if (a[0] === 'abort') added++; return add(...a) }) as typeof sig.addEventListener
+    sig.removeEventListener = ((...a: Parameters<typeof remove>) => { if (a[0] === 'abort') removed++; return remove(...a) }) as typeof sig.removeEventListener
+    const { doc, stop } = await open({ doc: await paragraphsDoc(), policy: capped(5) })
+    for (let i = 0; i < 3; i++) await doc.search('Item', { signal: sig })
+    await refusedPolicy(doc.search('x'.repeat(300), { signal: sig }))     // refused by the server (query > 256)
+    const older = doc.select({ all: true }, sig), newer = doc.select({ all: true }, sig)
+    expect((await failure(older)).code).toBe('closed')
+    await newer
+    const pending = doc.search('Item', { signal: sig })
+    doc.close()
+    await failure(pending)
+    expect(sig.aborted).toBe(false)
+    expect(added).toBe(7)
+    expect(removed).toBe(added)
+    stop()
+  }, 60_000)
 })
 
 describe('remote path purity', () => {

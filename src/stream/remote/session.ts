@@ -19,7 +19,7 @@ import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError } from './errors'
 import { Admission, ASSET_ALLOWANCE, unitCost } from './reservation'
-import { isTerminal, requestBody, TEXT_REFUSALS, textMessage, type TextMessage, type TextRefusalCode, type TextRequest } from './text-wire'
+import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 
@@ -72,6 +72,8 @@ interface TextReq {
   sent: boolean
   /** The next `seq` expected (copy/a11y answers). */
   seq: number
+  /** What the current issue has received (checked against TEXT_LIMITS). */
+  tally: TextTally
   rotatedRetry: boolean
 }
 /** Re-issued after a resume; copy and a11y are not (the server may already
@@ -171,12 +173,22 @@ export class StreamSession {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
     if (signal?.aborted) throw signal.reason ?? abortError()
     return new Promise<void>((resolve, reject) => {
-      const req: TextReq = {
-        request, reqId: 0, on, sent: false, seq: 0, rotatedRetry: false,
-        resolve: () => { this.texts.delete(req.reqId); resolve() },
-        reject: (e) => { this.texts.delete(req.reqId); reject(e) },
+      // The one settlement path: idempotent, drops the request and its abort listener.
+      let settled = false
+      const settle = (done: () => void) => {
+        if (settled) return
+        settled = true
+        if (this.texts.get(req.reqId) === req) this.texts.delete(req.reqId)
+        signal?.removeEventListener('abort', onAbort)
+        done()
       }
-      signal?.addEventListener('abort', () => { if (this.texts.get(req.reqId) === req) req.reject(signal.reason ?? abortError()) }, { once: true })
+      const onAbort = () => req.reject(signal!.reason ?? abortError())
+      const req: TextReq = {
+        request, reqId: 0, on, sent: false, seq: 0, tally: emptyTally(), rotatedRetry: false,
+        resolve: () => settle(resolve),
+        reject: (e) => settle(() => reject(e)),
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
       if (request.type === 'select') {
         for (const r of [...this.texts.values()]) if (r.request.type === 'select') r.reject(new StreamSessionError('closed', 'superseded by a newer select'))
       }
@@ -203,7 +215,7 @@ export class StreamSession {
   }
   private issueText(req: TextReq) {
     this.texts.delete(req.reqId)
-    req.reqId = this.allocId(); req.seq = 0; req.sent = false
+    req.reqId = this.allocId(); req.seq = 0; req.sent = false; req.tally = emptyTally()
     this.texts.set(req.reqId, req)
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
     req.sent = true
@@ -220,7 +232,7 @@ export class StreamSession {
     try { req.on(m) } catch (e) { req.reject(e) }
     return this.texts.get(req.reqId) === req
   }
-  private onTextAnswer(req: TextReq, m: Record<string, unknown>) {
+  private onTextAnswer(req: TextReq, m: Record<string, unknown>, bytes: number) {
     if (m.type === 'refused') {
       // A RENEW race (refused before the op ran): a search/select is retried once.
       if (m.code === 'session-rotated' && REISSUED.has(req.request.type) && !req.rotatedRetry) { req.rotatedRetry = true; return this.reissueText(req) }
@@ -228,8 +240,12 @@ export class StreamSession {
       const limit = isCount(m.limit) ? m.limit : undefined, requested = isCount(m.requested) ? m.requested : undefined
       return req.reject(new StreamSessionError(code, code, { ...(limit !== undefined ? { limit } : {}), ...(requested !== undefined ? { requested } : {}) }))
     }
-    const msg = textMessage(req.request.type, m, req.seq)
+    // Over-limit answers fail closed (never truncated); the session carries on.
+    if (bytes > TEXT_MESSAGE_BYTES) return req.reject(new StreamSessionError('policy-refused', `${String(m.type)} message over 48 KiB of UTF-8`))
+    const msg = textMessage(req.request.type, m, req.seq, this.manifest.units.count)
     if (!msg) return req.reject(new StreamSessionError('policy-refused', `malformed ${String(m.type)} answer`))
+    const over = admit(req.tally, msg)
+    if (over) return req.reject(new StreamSessionError('policy-refused', over))
     if ('seq' in msg) req.seq++
     if (this.deliver(req, msg) && isTerminal(msg)) req.resolve()
   }
@@ -310,7 +326,8 @@ export class StreamSession {
       return
     }
     const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
-    if (text) return this.onTextAnswer(text, m)
+    // Only text-service answers are held to 48 KiB (refused/diag are control messages).
+    if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) ? utf8Bytes(data) : 0)
     if (m.type === 'refused' && typeof m.reqId === 'number') {
       const req = this.units.get(m.reqId)
       if (!req) return
