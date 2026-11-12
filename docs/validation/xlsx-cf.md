@@ -654,3 +654,20 @@ No Excel, `osascript` or `osacompile` was run. `audit.ts --write` was not run, a
 - Without both, the bar withholds with the existing `cf-unsupported-rule`, so every production outcome is unchanged.
 
 **Pending, needs Excel.** The orchestrator runs `build.ts --stage 3 --case stage3-bar-auto-colors --refresh-clock-date`, then `capture.ts --stage 3 --case stage3-bar-auto-colors`, then `--verify-only` and `audit.ts --stage 3` (recipes, section 2b).
+
+### Stage 3 capture run 5 (2026-11-12): automatic colours are painted white
+
+`stage3-bar-auto-colors` built repair-free and was captured (`measured`, 6b469ce7). Excel's resave carries `<x14:negativeFillColor auto="1"/>` on all three bars and `<x14:axisColor auto="1"/>` on the automatic- and middle-axis bars. The harness left `bar:color-auto-axis` and `bar:color-auto-negative-fill` blocked: its decoder composites the RGBA capture over white, and the sampled colour did not differ from the background by the required 17.
+
+Raw RGBA of `refs/stage3-bar-auto-colors.png` (cells Excel does not paint are transparent, alpha 0; the decoded/composited view hides this):
+
+| Cell | Value | Raw pixels |
+|---|---|---|
+| B2 (automatic axis) | −50 | opaque white (255,255,255,255) x 86–144: the negative bar, ending at the axis column 145 |
+| B4 | 0 | a 1 px opaque white column at x 144: the axis |
+| B5, B6 | 50, 100 | opaque FF0000FF bars starting at x 145 |
+| C2 (middle axis) | −50 | opaque white up to x 354 (axis at 355) |
+| D3 (axis none) | −25 | opaque white x 446–~479 |
+| unpainted background | – | alpha 0 |
+
+Finding: Excel for Mac 16.114 (light appearance, `copy picture … appearance screen`) paints an automatic negative fill and an automatic axis as opaque white FFFFFFFF. On a white cell it is invisible; on a filled cell it would show. The capabilities stay blocked until the harness can use the alpha channel as the discriminator (painted vs unpainted) or a case puts the bars over a non-white cell fill. Owner decision pending.
