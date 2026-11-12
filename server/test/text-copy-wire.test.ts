@@ -158,7 +158,7 @@ describe('select and copy over the wire', () => {
   test('a selection across two pages copies both in order and counts per page', async () => {
     // The long middle paragraph crosses the page break: it counts once per page.
     const doc = await buildDocx([{ runs: [{ text: 'Intro paragraph.' }] }, { runs: [{ text: 'word '.repeat(1500) + 'end.' }] }, { runs: [{ text: 'Closing paragraph.' }] }])
-    const { c, m, stop } = await session({ doc, policy: { copy: 'full' } })
+    const { c, m, store, stop } = await session({ doc, policy: { copy: 'full' } })
     expect(m.units.count).toBe(2)
     const all = await copy(c, 10, { all: true })
     const local = wholeText(await localIndex(doc))
@@ -181,8 +181,10 @@ describe('select and copy over the wire', () => {
     expect(seen).toEqual([...seen].sort())
     for (const p of s.parts) expect(p.bytes).toBeLessThanOrEqual(KIB48)
     for (const p of s.parts) expect(p.text.paragraphs).toBe(4)
-    expect(s.parts.map((p) => p.text.last)).toEqual([...s.parts.slice(1).map(() => false), true])
+    expect(s.parts.map((p) => p.text.last)).toEqual([...s.parts.slice(1).map(() => undefined), true])
     expect(await copy(c, 33, across)).toMatchObject({ text: local })
+    // The copy is charged per page too, and its record spans both units.
+    expect(store.copies(m.session.sid).at(-1)).toEqual({ sid: m.session.sid, kind: 'copy', paragraphs: 4, fromUnit: 0, toUnit: 1, at: expect.any(Number) })
     stop()
   }, 60_000)
 
@@ -246,6 +248,18 @@ describe('select and copy over the wire', () => {
     expect(h.stream.audit.get(sid)!.services).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused' })
     stop()
   }, 60_000)
+
+  test('R5: copy is charged the text rate (refusal only); select only the message budget', async () => {
+    let t = Date.now()
+    const { c, stop } = await session({ doc: await paragraphsDoc(), policy: { copy: 'full' }, now: () => t })
+    // 200 ms apart: well inside the message budget (20/s, 120/10 s).
+    for (let i = 0; i < 59; i++) { t += 200; expect((await c.text({ reqId: 100 + i, type: 'search', query: 'Item' })).end.type).toBe('search-done') }
+    t += 200; expect(await copy(c, 10, { all: true })).toMatchObject({ text: textOf(0, 4) })   // the 60th text op
+    for (let i = 0; i < 4; i++) { t += 200; expect((await copy(c, 20 + i, { all: true })).refused).toEqual({ reqId: 20 + i, type: 'refused', code: 'rate-limited' }) }
+    t += 200; expect((await select(c, 30, { all: true })).end).toMatchObject({ reqId: 30, type: 'select-result', paragraphs: 5, last: true })
+    expect(c.ws.readyState).toBe(WebSocket.OPEN)
+    stop()
+  }, 120_000)
 
   test('{all:true} on a full-copy session returns the whole document text chunked ≤ 48 KiB', async () => {
     const line = 'alpha beta gamma delta epsilon zeta eta theta "quoted"'
@@ -416,7 +430,7 @@ describe('chunking', () => {
     const ms = chunkSelect(9, units, 4)
     expect(ms.length).toBeGreaterThan(2)
     for (const m of ms) { expect(size(m)).toBeLessThanOrEqual(TEXT_MESSAGE_BYTES); expect(m.paragraphs).toBe(4); for (const u of m.units) expect(u.rects.length % 4).toBe(0) }
-    expect(ms.map((m) => m.last)).toEqual([...ms.slice(1).map(() => false), true])
+    expect(ms.map((m) => m.last)).toEqual([...ms.slice(1).map(() => undefined), true])
     // Reassembled per unit, in order.
     const back = new Map<number, number[]>()
     for (const m of ms) for (const u of m.units) back.set(u.unit, [...(back.get(u.unit) ?? []), ...u.rects])

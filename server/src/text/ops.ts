@@ -152,7 +152,7 @@ export type SelectJob = Extract<TextJob, { op: 'select' }>
 export type CopyJob = Extract<TextJob, { op: 'copy' }>
 export type CopyRefusal = TextRefusal | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted'
 export interface SelectUnit { unit: number; rects: number[] }
-export interface SelectResultMessage { reqId: number; type: 'select-result'; units: SelectUnit[]; paragraphs: number; last: boolean }
+export interface SelectResultMessage { reqId: number; type: 'select-result'; units: SelectUnit[]; paragraphs: number; last?: true }
 export interface CopyResultMessage { reqId: number; type: 'copy-result'; seq: number; text: string; last: boolean }
 
 /** The in-flight select of one sid (a newer one supersedes it). */
@@ -187,10 +187,10 @@ export function rangeArg(v: unknown, unitCount: number): TextRange | undefined {
 /** `select-result` messages, each ≤ `limit` bytes of JSON UTF-8. Whole
  * `{unit, rects}` entries share a message where they fit; a unit whose entry
  * alone cannot fit is split across messages at rect (4-number) boundaries.
- * Every message carries `paragraphs`; only the last has `last: true`; an
+ * Every message carries `paragraphs`; only the last carries `last: true`; an
  * empty selection is one message with no units. */
 export function chunkSelect(reqId: number, units: readonly SelectUnit[], paragraphs: number, limit = TEXT_MESSAGE_BYTES): SelectResultMessage[] {
-  // `last: false` is the longer spelling: the budget holds for either.
+  // Budgeted with `last: false` (longer than `last: true`): holds for every chunk.
   const base = bytesOf({ reqId, type: 'select-result', units: [], paragraphs, last: false })
   const out: SelectUnit[][] = []
   let cur: SelectUnit[] = [], size = base
@@ -217,7 +217,7 @@ export function chunkSelect(reqId: number, units: readonly SelectUnit[], paragra
     add({ unit: raw.unit, rects }, rs)
   }
   if (cur.length || !out.length) out.push(cur)
-  return out.map((u, i) => ({ reqId, type: 'select-result', units: u, paragraphs, last: i === out.length - 1 }))
+  return out.map((u, i) => ({ reqId, type: 'select-result', units: u, paragraphs, ...(i === out.length - 1 ? { last: true as const } : {}) }))
 }
 
 /** UTF-8 bytes of one code point inside a JSON string (as JSON.stringify writes it). */
