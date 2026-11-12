@@ -838,8 +838,8 @@ drops the unit and re-requests once.
   > `src/core/text-recording.ts`). The conditions:
   > - only for runs of the same scope;
   > - only for the run's own lines (the `'line'` phase right after the
-  >   run's `'text'` phase), or exact continuations of them (collinear
-  >   within 0.5 device px);
+  >   run's `'text'` phase), or continuations of them (collinear within
+  >   0.5 device px);
   > - only when parallel to the run's baseline, so axis-aligned text only;
   > - only when the mark is ≥ 2× as long as it is thick;
   > - only when the mark's thickness is ≤ max(1.5·scale px, 12 % of R) and

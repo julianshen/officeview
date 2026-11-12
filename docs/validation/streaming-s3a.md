@@ -53,8 +53,8 @@ The top cause is whitespace: 220 of 255 withheld PPTX spans. A probe of the
 four largest contributors (`poi-at.ecodesign.www_downloads_Vertiefungsvortrag_elektronik.pptx`
 74, `poi-60810.pptx` 59, `poi-aptia.pptx` 23, `poi-table_test.pptx` 18) found
 that every withheld blank span there has **no same-line span with ink**.
-Almost all of them are **empty strings** (empty paragraphs and empty table
-cells recorded as zero-length spans). No characters are lost. With blank
+Almost all of them (171 of 174) are **zero-length spans**: they carry no
+characters at all. The other 3 are single spaces. No characters are lost. With blank
 spans set aside, PPTX serves 96.7 %. The next cause is `covered` (29 spans:
 text under a later opaque shape or picture, e.g. 15 in `poi-60810.pptx`).
 No `no candidate run` class is above 5 % (the highest is PPTX at 0.3 %).

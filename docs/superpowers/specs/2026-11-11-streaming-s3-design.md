@@ -184,8 +184,8 @@ audit rows carry the counts.
 >    span's whitespace-stripped text occurs contiguously, at wholly
 >    unconsumed positions, in the candidates' text in paint order. Each
 >    painted character vouches for one span only. A whitespace-only span is
->    served iff its nearest same-line neighbours with ink exist and are all
->    served.
+>    served iff at least one nearest same-line neighbour with ink exists
+>    (before or after it) and every such neighbour is served.
 > 5. **Limits.**
 >    - A query is ≤ 256 UTF-16 units.
 >    - A search sends ≤ 5,000 matches. A single match that cannot fit one
