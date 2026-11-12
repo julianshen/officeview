@@ -279,6 +279,77 @@ export type Stage3CapabilityAudit = Stage1CapabilityAudit
 export interface Stage3AuditReport extends Stage1AuditReport {
   /** Ruling S3-F as amended: the measured ARGB of each VERIFIED automatic-colour capability (empty until one verifies). */
   autoBarColours: Readonly<Record<string, string>>
+  /** Ruling S3-B: the one layout variant per scope sign that the verified captures select, with why any scope has none. */
+  barLayout: BarLayoutDerivation
+}
+
+/** A `CfBarLayoutVariant` (src/xlsx/cf/dataBar.ts) and the verified capabilities that select it. */
+export interface BarLayoutSelection { origin: 'span' | 'axis'; lengthBasis: 'cell' | 'side'; settledBy: string[] }
+export type BarLayoutScope = 'allPositive' | 'mixedSign'
+export interface BarLayoutDerivation {
+  layout: Partial<Record<BarLayoutScope, BarLayoutSelection>>
+  findings: string[]
+}
+
+/**
+ * Ruling S3-B: the layout each length/axis hypothesis of the bar predictor (`predictBarCell`, verify.ts) embodies.
+ * - With no axis the predictor starts every bar at the cell's leading edge and applies minLength/maxLength to the whole
+ *   cell: `{ span, cell }` (the `effective` lengths hypothesis).
+ * - With an axis it predicts each side separately (`v / v_max` of the positive side, `v / v_min` of the negative side,
+ *   `max(|v_min|, |v_max|)` for `middle`): `{ axis, side }`. It predicts axes only at 0/100 lengths, where the side and
+ *   cell bases coincide; production therefore draws an axis only at 0/100 lengths.
+ * A matched hypothesis absent from a capability's map (for example `base` or `full` lengths) selects no variant.
+ */
+export const BAR_LAYOUT_SETTLING: Readonly<Record<string, { scope: BarLayoutScope; variants: Readonly<Record<string, { origin: 'span' | 'axis'; lengthBasis: 'cell' | 'side' }>> }>> = {
+  'bar:lengths-explicit-0-100': { scope: 'allPositive', variants: { effective: { origin: 'span', lengthBasis: 'cell' } } },
+  'bar:lengths-default-10-90': { scope: 'allPositive', variants: { effective: { origin: 'span', lengthBasis: 'cell' } } },
+  'bar:axis-automatic': { scope: 'mixedSign', variants: { automatic: { origin: 'axis', lengthBasis: 'side' } } },
+  'bar:axis-middle': { scope: 'mixedSign', variants: { middle: { origin: 'axis', lengthBasis: 'side' } } },
+}
+
+/**
+ * Selects one variant per scope sign: every VERIFIED settling capability of the scope, pooled across every case's matched
+ * hypotheses, must map to the same variant. Any match that maps to no variant or to a different one leaves the scope
+ * without a variant (bars of that sign stay withheld) and records a finding; capability dispositions are untouched.
+ */
+export function deriveBarLayout(
+  perCapability: readonly Pick<Stage3CapabilityAudit, 'capabilityId' | 'disposition'>[],
+  matchedByCase: readonly Readonly<Record<string, string>>[],
+): BarLayoutDerivation {
+  const layout: BarLayoutDerivation['layout'] = {}
+  const findings: string[] = []
+  for (const scope of ['allPositive', 'mixedSign'] as const) {
+    const settling = Object.keys(BAR_LAYOUT_SETTLING).filter(cap => BAR_LAYOUT_SETTLING[cap]!.scope === scope &&
+      perCapability.some(p => p.capabilityId === cap && p.disposition === 'verified')).sort()
+    if (settling.length === 0) continue
+    const seen = new Map<string, string[]>()
+    for (const matched of matchedByCase) {
+      for (const cap of settling) {
+        const hyp = matched[cap]
+        if (hyp === undefined) continue
+        const v = BAR_LAYOUT_SETTLING[cap]!.variants[hyp]
+        const key = v ? `${v.origin}/${v.lengthBasis}` : `unmapped:${cap}=${hyp}`
+        seen.set(key, [...(seen.get(key) ?? []), `${cap}=${hyp}`])
+      }
+    }
+    const keys = [...seen.keys()]
+    if (keys.length === 1 && !keys[0]!.startsWith('unmapped:')) {
+      const [origin, lengthBasis] = keys[0]!.split('/') as ['span' | 'axis', 'cell' | 'side']
+      layout[scope] = { origin, lengthBasis, settledBy: settling }
+    } else {
+      findings.push(`${scope}: no single layout variant (${keys.length === 0 ? 'no matched hypothesis' : [...seen].map(([k, v]) => `${k} <- ${v.join(', ')}`).join('; ')})`)
+    }
+  }
+  return { layout, findings }
+}
+
+/** The generated export of the selected layout (fixed key order, so `--write` stays idempotent). */
+export function renderBarLayoutBlock(layout: BarLayoutDerivation['layout']): string {
+  const rows = (['allPositive', 'mixedSign'] as const).filter(scope => layout[scope]).map(scope => {
+    const v = layout[scope]!
+    return `  ${scope}: { origin: '${v.origin}', lengthBasis: '${v.lengthBasis}', settledBy: [${v.settledBy.map(c => `'${c}'`).join(', ')}] },\n`
+  }).join('')
+  return `export const VERIFIED_STAGE3_BAR_LAYOUT: Readonly<Record<string, { origin: string; lengthBasis: string; settledBy: readonly string[] }>> = {\n${rows}}\n`
 }
 
 /**
@@ -372,6 +443,8 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
     }
   }
   const autoBarColours = verifiedAutoBarColours(perCapability, pooled)
+  const matchedByCase = [...evidence.values()].flatMap(r => r.kind === 'verified' && r.matchedHypotheses ? [r.matchedHypotheses] : [])
+  const barLayout = deriveBarLayout(perCapability, matchedByCase)
   const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
   const unknownNonDiscriminating = Object.keys(CF_STAGE3_NONDISCRIMINATING).filter(id => !stage3Ids.has(id) || !CF_STAGE3_NONDISCRIMINATING[id]!.trim())
   const caseOk = (p: Stage3CaseAudit): boolean => {
@@ -383,6 +456,7 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   const gate = stageGateStatus(perCapability)
   return {
     autoBarColours,
+    barLayout,
     ok,
     perCase,
     perCapability,
@@ -424,6 +498,11 @@ const exportedColours = (text: string | undefined): string | undefined => {
   return m ? m[0] : undefined
 }
 
+const exportedLayout = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_LAYOUT: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
 const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
   const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
   return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
@@ -444,6 +523,8 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
     : exportedSet(options.committedSource, 'VERIFIED_STAGE3_CAPABILITIES')
   // Ruling S3-F as amended: the measured automatic colours travel only beside a published Stage 3 set.
   const autoColoursBlock = stage3Report ? renderAutoBarColoursBlock(stage3Report.autoBarColours) : exportedColours(options.committedSource)
+  // Ruling S3-B: the selected layout travels the same way, only beside a published Stage 3 set.
+  const layoutBlock = stage3Report ? renderBarLayoutBlock(stage3Report.barLayout.layout) : exportedLayout(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -454,7 +535,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -1152,6 +1233,12 @@ async function main(): Promise<void> {
   for (const entry of cases) printCase(entry)
   // eslint-disable-next-line no-console
   console.log(`manifest: ${report.summary.structuralValid}/${report.summary.cases} structural, capabilities ${report.summary.covered}/${report.summary.capabilities}, missing=[${report.missingCases.join(',')}] extra=[${report.extraCases.join(',')}]`)
+  if ('barLayout' in report) {
+    const l = (report as Stage3AuditReport).barLayout
+    const show = (scope: BarLayoutScope): string => { const v = l.layout[scope]; return v ? `${v.origin}/${v.lengthBasis} (${v.settledBy.join(', ')})` : 'none' }
+    // eslint-disable-next-line no-console
+    console.log(`bar layout (S3-B): allPositive=${show('allPositive')} mixedSign=${show('mixedSign')}${l.findings.length ? ` findings=[${l.findings.join('; ')}]` : ''}`)
+  }
   // eslint-disable-next-line no-console
   console.log('--- pressure ---')
 
