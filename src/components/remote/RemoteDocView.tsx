@@ -23,6 +23,10 @@ export interface RemoteDocViewProps {
 }
 
 export const TEXT_UNAVAILABLE = 'text unavailable in this viewing mode'
+/** Printing keeps only the canvases: the search bar, the hit/selection boxes and
+ * the status line (all marked data-ov-remote-chrome) never print. Owned by this
+ * view, so local documents' print behaviour is untouched. */
+const PRINT_CSS = '@media print { [data-ov-remote-chrome] { display: none !important; } }'
 
 /** Host props that do not apply to a remote document are ignored: the baked
  * mark is authoritative (no `watermark`), copy follows the server's `can.copy`,
@@ -85,13 +89,14 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
         e.preventDefault()
         if (allowPrint) void paintAll.current().then(() => { requestAnimationFrame(() => window.print()) })
       }}>
+      <style>{PRINT_CSS}</style>
       <div ref={scroller} data-officeview-root="" role="document" aria-label={title ?? doc.manifest.name} tabIndex={0}
         style={{ overflow: 'auto', height: '100%', background: background ?? 'var(--ov-color-backdrop)' }}>
         {/* The floating search bar stays at the top of the scroller (zero height: no layout change). */}
-        {text.bar ? <div style={{ position: 'sticky', top: 0, height: 0, zIndex: 6 }}>{text.bar}</div> : null}
+        {text.bar ? <div data-ov-remote-chrome="" style={{ position: 'sticky', top: 0, height: 0, zIndex: 6 }}>{text.bar}</div> : null}
         {/* One line is always reserved: a copy message coming or going must not
             shift the units under a drag in progress. */}
-        <div role="status" data-officeview-notice="" style={{ minHeight: '1lh' }}>{text.message ?? (textOff ? TEXT_UNAVAILABLE : '')}</div>
+        <div role="status" data-officeview-notice="" data-ov-remote-chrome="" style={{ minHeight: '1lh' }}>{text.message ?? (textOff ? TEXT_UNAVAILABLE : '')}</div>
         {ended ? <div role="alert" data-stream-error={ended}>Viewing session ended ({ended}).</div> : null}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: pageGapPx, padding: pageGapPx }}>
           {units.map((u, i) => (

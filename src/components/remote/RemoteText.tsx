@@ -94,7 +94,6 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
     }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [doc, open, query])
-  useEffect(() => () => searchAc.current?.abort(), [])
   useEffect(() => { if (open) inputRef.current?.focus() }, [open])
   const count = done ? done.total : hits.length
   const current = hits.length ? Math.min(active, hits.length - 1) : 0
@@ -118,22 +117,58 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
   const [sel, setSel] = useState<RemoteSearchHit[]>([])
   const [message, setMessage] = useState<string>()
   const range = useRef<RemoteRange | undefined>(undefined)
+  /** Bumped by every select sent, a cleared selection and the end of a view
+   * lifetime: only the newest select answer draws (a drag keeps live feedback). */
   const selGen = useRef(0)
-  const selAc = useRef(new AbortController())
-  const drag = useRef<{ anchor: { unit: number; x: number; y: number }; unit: number; sx: number; sy: number; moved: boolean; last: number; timer?: ReturnType<typeof setTimeout>; detach(): void } | undefined>(undefined)
+  /** Bumped by every selection change and the end of a view lifetime: a copy
+   * started for an older selection neither writes the clipboard nor sets a message. */
+  const selVersion = useRef(0)
+  /** The current view lifetime's controller (created in the effect, so a StrictMode
+   * replay or a document change starts a fresh one); undefined between lifetimes. */
+  const life = useRef<AbortController | undefined>(undefined)
+  const selAc = useRef<AbortController | undefined>(undefined)
+  /** The select limiter, shared by drags and Ctrl/Cmd+A: one request per SELECT_INTERVAL_MS,
+   * the latest range riding as the trailing request. */
+  const limiter = useRef<{ last: number; timer?: ReturnType<typeof setTimeout> }>({ last: -Infinity })
+  const copying = useRef(false)
+  const drag = useRef<{ anchor: { unit: number; x: number; y: number }; unit: number; sx: number; sy: number; moved: boolean; detach(): void } | undefined>(undefined)
   const sendSelect = () => {
-    const r = range.current
-    if (!r) return
+    const r = range.current, ac = selAc.current
+    if (!r || !ac || ac.signal.aborted) return
     const gen = ++selGen.current
-    // A newer select supersedes an older one ('closed'); only the newest answer draws.
-    doc.select(r, selAc.current.signal).then((s) => { if (gen === selGen.current) setSel(s.units) }, () => {})
+    // A newer select supersedes an older one ('closed'); only the current generation draws.
+    doc.select(r, ac.signal).then((s) => { if (gen === selGen.current && !ac.signal.aborted) setSel(s.units) }, () => {})
   }
+  const requestSelect = () => {
+    const l = limiter.current
+    if (l.timer) return // the pending trailing request sends the latest range
+    const wait = l.last + SELECT_INTERVAL_MS - Date.now()
+    if (wait <= 0) { l.last = Date.now(); sendSelect(); return }
+    l.timer = setTimeout(() => { l.timer = undefined; l.last = Date.now(); sendSelect() }, wait)
+  }
+  const cancelPending = () => { const l = limiter.current; if (l.timer) { clearTimeout(l.timer); l.timer = undefined } }
+  /** A selection change: earlier select/copy answers no longer apply. */
+  const select = (r: RemoteRange) => { range.current = r; selVersion.current++; setMessage(undefined); requestSelect() }
   const clearSelection = () => {
-    range.current = undefined; selGen.current++
-    selAc.current.abort(); selAc.current = new AbortController()
+    range.current = undefined; selGen.current++; selVersion.current++; cancelPending()
+    selAc.current?.abort(); selAc.current = life.current && new AbortController()
     setSel([])
   }
-  useEffect(() => () => { selAc.current.abort(); drag.current?.detach() }, [])
+  useEffect(() => {
+    const ac = new AbortController()
+    life.current = ac; selAc.current = new AbortController()
+    return () => {
+      // End of this lifetime (unmount, StrictMode replay, document change):
+      // nothing it started may draw, write the clipboard or set a message.
+      ac.abort(); selAc.current?.abort()
+      life.current = undefined; selAc.current = undefined
+      selGen.current++; selVersion.current++; cancelPending(); copying.current = false
+      drag.current?.detach(); drag.current = undefined
+      range.current = undefined
+      searchAc.current?.abort(); searchAc.current = undefined
+      setSel([]); setMessage(undefined); setHits([]); setDone(undefined)
+    }
+  }, [doc])
   /** Client px → page px of unit `i` at scale 1 (`x * unit.w / rect.width`), clamped to the unit. */
   const pointIn = (i: number, cx: number, cy: number) => {
     const wrap = root.current?.querySelector(`[data-unit-wrap="${i}"]`)
@@ -153,46 +188,54 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
     e.preventDefault()
     root.current?.focus({ preventScroll: true })
     drag.current?.detach()
+    const to = (ev: PointerEvent) => {
+      const d = drag.current!
+      d.unit = unitAt(ev.clientX, ev.clientY, d.unit)
+      select({ anchor: d.anchor, focus: pointIn(d.unit, ev.clientX, ev.clientY) })
+    }
     const move = (ev: PointerEvent) => {
       const d = drag.current!
       if (!d.moved && Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < DRAG_SLOP_PX) return
-      if (!d.moved) { d.moved = true; setMessage(undefined) }
-      d.unit = unitAt(ev.clientX, ev.clientY, d.unit)
-      range.current = { anchor: d.anchor, focus: pointIn(d.unit, ev.clientX, ev.clientY) }
-      if (d.timer) return
-      const wait = SELECT_INTERVAL_MS - (Date.now() - d.last)
-      if (wait <= 0) { d.last = Date.now(); sendSelect(); return }
-      d.timer = setTimeout(() => { d.timer = undefined; d.last = Date.now(); sendSelect() }, wait)
+      d.moved = true
+      to(ev)
     }
     const up = (ev: PointerEvent) => {
       const d = drag.current!
+      // A click without movement clears the selection; a drag's final position
+      // always goes (as the trailing request when the limiter is closed).
+      if (!d.moved) clearSelection()
+      else if (ev.type === 'pointerup') to(ev)
       d.detach()
       drag.current = undefined
-      // A click without movement clears the selection.
-      if (!d.moved) { clearSelection(); return }
-      if (ev.type === 'pointerup') { d.unit = unitAt(ev.clientX, ev.clientY, d.unit); range.current = { anchor: d.anchor, focus: pointIn(d.unit, ev.clientX, ev.clientY) } }
-      sendSelect()
     }
     const detach = () => {
-      const d = drag.current
-      if (d?.timer) { clearTimeout(d.timer); d.timer = undefined }
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', up)
     }
-    drag.current = { anchor: pointIn(i, e.clientX, e.clientY), unit: i, sx: e.clientX, sy: e.clientY, moved: false, last: 0, detach }
+    drag.current = { anchor: pointIn(i, e.clientX, e.clientY), unit: i, sx: e.clientX, sy: e.clientY, moved: false, detach }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
   } : undefined
 
   const copy = () => {
-    const r = range.current
-    if (!r) return
+    const r = range.current, lifetime = life.current
+    // One copy at a time: a Ctrl/Cmd+C while one is in flight sends nothing.
+    if (!r || !lifetime || copying.current) return
+    copying.current = true
+    const version = selVersion.current
+    const live = () => !lifetime.signal.aborted && version === selVersion.current
+    const settle = () => { if (!lifetime.signal.aborted) copying.current = false }
     doc.copy(r).then(
-      async (text) => { setMessage((await copyText(text)) === 'failed' ? 'Copy failed.' : undefined) },
-      (e) => setMessage(copyFailure(e, doc.manifest.caps.copy)),
-    )
+      async (text) => {
+        if (!live()) return
+        // The helper re-checks before the native write and before its fallback.
+        const out = await copyText(text, { allowed: live, signal: lifetime.signal })
+        if (live()) setMessage(out === 'failed' ? 'Copy failed.' : undefined)
+      },
+      (e) => { if (live()) setMessage(copyFailure(e, doc.manifest.caps.copy)) },
+    ).finally(settle)
   }
 
   const onKeyDown = (e: KeyboardEvent): boolean => {
@@ -205,7 +248,7 @@ export function useRemoteText(doc: RemoteOfficeDoc, root: RefObject<HTMLElement 
       return true
     }
     if (!can.copy || inField(e.target)) return false
-    if (k === 'a') { e.preventDefault(); setMessage(undefined); range.current = { all: true }; sendSelect(); return true }
+    if (k === 'a') { e.preventDefault(); select({ all: true }); return true }
     if (k === 'c' && range.current) { e.preventDefault(); copy(); return true }
     return false
   }
@@ -246,7 +289,7 @@ export function UnitWrap({ index, w, h, boxes, onPointerDown, children }: { inde
       {...(onPointerDown ? { onPointerDown: (e: ReactPointerEvent<HTMLElement>) => onPointerDown(index, e) } : {})}>
       {children}
       {has ? (
-        <div data-unit-overlay="" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+        <div data-unit-overlay="" data-ov-remote-chrome="" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
           {boxes.hits.map((r, k) => <Box key={`h${k}`} r={r} w={w} h={h} kind="hit" active={boxes.active.includes(r)} />)}
           {boxes.sel.map((r, k) => <Box key={`s${k}`} r={r} w={w} h={h} kind="sel" />)}
         </div>
