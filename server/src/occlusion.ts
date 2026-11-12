@@ -21,9 +21,17 @@
  *   phases may be exempted only for runs drawn in that same scope's 'text'
  *   phases, and for a given run only if it is one of the run's OWN lines (drawn
  *   in the 'line' phase that directly follows the run's 'text' phase) or a
- *   CONTINUATION of one (another mark of the scope whose interval across the
- *   run's baseline matches an own line's within 0.5 device px at both edges:
- *   the same line carried on under a neighbouring segment). Provenance and
+ *   CONTINUATION of one: another mark of the scope (a) whose interval across
+ *   the run's baseline matches an own line's within 0.01 device px at both
+ *   edges (exact collinearity; the slack is for float error only) and (b)
+ *   which lies BESIDE every own line it matches, not on it — along the
+ *   baseline the two lines' extents, each without the cap allowance the
+ *   observer adds to a stroke's ends, overlap by at most 0.01 device px (so
+ *   two abutting strokes' boxes overlap by no more than their cap paddings).
+ *   That is the same line carried on under a neighbouring segment; a
+ *   collinear mark overlapping an own line further is ordinary cover. A mark
+ *   whose box was cut by a clip or the surface, or grown by a shadow, has no
+ *   cap allowance to discount (its whole box counts). Provenance and
  *   ownership — geometry alone never exempts a mark; any other mark of the
  *   scope, a decoration over any other run, and a run with no own lines get
  *   ordinary cover; malformed sequences record ordinary marks. Further, only
@@ -104,8 +112,10 @@ function colorAlpha(style: unknown): number | undefined {
 const DECORATION_FLOOR_PX = 1.5, DECORATION_RATIO = 0.12, DECORATION_UNION = 0.25
 /** A decoration's side along the run's baseline is at least this × its thickness across it. */
 const DECORATION_ELONGATION = 2
-/** A continuation's edges across the baseline match an own line's within this many device px. */
-const DECORATION_COLLINEAR_PX = 0.5
+/** A continuation's edges across the baseline match an own line's within this many device px (float slack: exact collinearity). */
+const DECORATION_COLLINEAR_PX = 0.01
+/** A continuation's extent along the baseline (cap allowance excluded) overlaps the own line's by at most this many device px (float slack: beside it, not on it). */
+const DECORATION_BESIDE_PX = 0.01
 /** The px size of a canvas font string (the getter serialises every size as px); undefined when it has none. */
 function fontSizePx(font: unknown): number | undefined {
   const m = typeof font === 'string' ? /(?:^|\s)(\d+(?:\.\d+)?|\.\d+)px(?=[\s/]|$)/.exec(font) : null
@@ -145,8 +155,13 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
    * sequence order (a 4 px cell grid withheld every spreadsheet cell next to a
    * gridline; a 1 px grid costs ~40 MB per page). */
   /** `scope`/`piece`: set on a cover mark drawn in a decoration scope's 'line'
-   * phase — the scope, and the 'text' phase that 'line' phase follows. */
-  const marks: Array<{ seq: number; box: Rect; grid: Grid; scope?: number; piece?: number }> = []
+   * phase — the scope, and the 'text' phase that 'line' phase follows.
+   * `cap`/`capAxis`: the cap allowance inside `box` at each end of a single
+   * straight axis-aligned stroke, and the device axis it lies along (0 = x);
+   * absent for every other mark and for a box that is no longer the stroke's
+   * own (cut by a clip or the surface, grown by a shadow). */
+  type Mark = { seq: number; box: Rect; grid: Grid; scope?: number; piece?: number; cap?: number; capAxis?: 0 | 1 }
+  const marks: Mark[] = []
   // PAINT_DECORATION scopes: 'text' opens one; it then alternates 'text'
   // (owned runs) and 'line' (owned decoration marks) any number of times
   // until false. 'line' with no open scope, or any other value, is malformed:
@@ -172,9 +187,14 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   let cur: [number, number] | undefined, start: [number, number] | undefined
   let pathRects = 0, pathOther = false, pathRect: Rect | undefined
 
-  const mark = (grid: Grid, r: Rect) => {
+  const same = (a: Rect, b: Rect) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3]
+  const mark = (grid: Grid, r: Rect, cap?: { px: number; axis: 0 | 1 }) => {
     const b = intersect(r, surface)
-    if (b[2] > b[0] && b[3] > b[1]) { charge(64); marks.push(grid === 'cover' && phase === 'line' ? { seq, box: b, grid, scope: scopeId, piece: pieceId } : { seq, box: b, grid }) }
+    if (!(b[2] > b[0] && b[3] > b[1])) return
+    charge(64)
+    const m: Mark = grid === 'cover' && phase === 'line' ? { seq, box: b, grid, scope: scopeId, piece: pieceId } : { seq, box: b, grid }
+    if (cap && m.scope !== undefined && same(b, r)) { m.cap = cap.px; m.capAxis = cap.axis }
+    marks.push(m)
   }
   const overlaps = (a: Rect, b: Rect) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 
@@ -211,8 +231,9 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   const maxScale = (ctx: CanvasRenderingContext2D) => { const t = ctx.getTransform(); return Math.max(Math.hypot(t.a, t.b), Math.hypot(t.c, t.d)) }
 
   /** One draw op with conservative device bounds `b`; `paint` = its fill/stroke style. */
-  function draw(ctx: CanvasRenderingContext2D, b: Rect, paint: unknown, opts: { erase?: boolean } = {}) {
+  function draw(ctx: CanvasRenderingContext2D, b: Rect, paint: unknown, opts: { erase?: boolean; cap?: { px: number; axis: 0 | 1 } } = {}) {
     seq++
+    const stroke = b
     const shadowAlpha = colorAlpha(ctx.shadowColor) ?? 1
     if (shadowAlpha > 0 && (ctx.shadowBlur > 0 || ctx.shadowOffsetX || ctx.shadowOffsetY)) {
       const d = ctx.shadowBlur * 2 + Math.max(Math.abs(ctx.shadowOffsetX), Math.abs(ctx.shadowOffsetY))
@@ -224,7 +245,8 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     if (ctx.filter && ctx.filter !== 'none') { mark('filter', b); return }
     if (opts.erase || ctx.globalCompositeOperation !== 'source-over') { mark('erase', b); return }
     const alpha = ctx.globalAlpha * (colorAlpha(paint) ?? 1)
-    if (alpha >= 0.95) mark('cover', b)
+    // The cap allowance holds only while the box is still the stroke's own.
+    if (alpha >= 0.95) mark('cover', b, opts.cap && same(b, stroke) ? opts.cap : undefined)
   }
 
   // Half the line width covers butt/round/square caps and round/bevel joins;
@@ -235,19 +257,19 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
    * in device space (no joins) is exact across the line: half the device line
    * width each side; along it the cap allowance stays. Every other path keeps
    * the per-segment strokeHalf boxes plus join allowances. */
-  function strokeBoxes(ctx: CanvasRenderingContext2D): Rect[] {
+  function strokeBoxes(ctx: CanvasRenderingContext2D): { boxes: Rect[]; cap?: { px: number; axis: 0 | 1 } } {
     const along = strokeHalf(ctx), across = (ctx.lineWidth * maxScale(ctx)) / 2
     if (segments.length === 1 && joins.length === 0) {
       const r = segments[0]!
-      if (Math.abs(r[3] - r[1]) < 1e-9) return [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]]
-      if (Math.abs(r[2] - r[0]) < 1e-9) return [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]]
+      if (Math.abs(r[3] - r[1]) < 1e-9) return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], cap: { px: along, axis: 0 } }
+      if (Math.abs(r[2] - r[0]) < 1e-9) return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], cap: { px: along, axis: 1 } }
     }
-    return [...segments.map((r) => pad(r, along)), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(ctx)))]
+    return { boxes: [...segments.map((r) => pad(r, along)), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(ctx)))] }
   }
-  /** One op painting several boxes (a multi-segment stroke): one sequence number. */
-  function draws(ctx: CanvasRenderingContext2D, boxes: Rect[], paint: unknown) {
+  /** One op painting several boxes (a multi-segment stroke): one sequence number. `cap`: the one box's cap allowance (strokeBoxes). */
+  function draws(ctx: CanvasRenderingContext2D, boxes: Rect[], paint: unknown, cap?: { px: number; axis: 0 | 1 }) {
     if (!boxes.length) return
-    draw(ctx, boxes[0]!, paint)
+    draw(ctx, boxes[0]!, paint, boxes.length === 1 && cap ? { cap } : {})
     for (let i = 1; i < boxes.length; i++) { seq--; draw(ctx, boxes[i]!, paint) }
   }
 
@@ -290,8 +312,16 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     // The run's own lines: the marks of the 'line' phase after its 'text' phase.
     const scoped = a !== undefined && r.scope !== undefined && !voidScopes.has(r.scope)
     const own = scoped ? marks.filter((m) => m.scope === r.scope && m.piece === r.piece) : []
-    const eligible = (m: (typeof marks)[number]) => m.piece === r.piece
-      || own.some((o) => Math.abs(o.box[a!]! - m.box[a!]!) <= DECORATION_COLLINEAR_PX && Math.abs(o.box[a! + 2]! - m.box[a! + 2]!) <= DECORATION_COLLINEAR_PX)
+    // A foreign mark is a continuation when it is collinear with an own line and beside every own line it is collinear with.
+    const collinear = (o: Mark, m: Mark) => Math.abs(o.box[a!]! - m.box[a!]!) <= DECORATION_COLLINEAR_PX && Math.abs(o.box[a! + 2]! - m.box[a! + 2]!) <= DECORATION_COLLINEAR_PX
+    /** A mark's extent along the run's baseline, without its stroke-cap allowance. */
+    const core = (m: Mark): [number, number] => { const c = m.capAxis === b ? m.cap! : 0; return [m.box[b]! + c, m.box[b + 2]! - c] }
+    const beside = (o: Mark, m: Mark) => { const p = core(o), q = core(m); return Math.min(p[1], q[1]) - Math.max(p[0], q[0]) <= DECORATION_BESIDE_PX }
+    const eligible = (m: Mark) => {
+      if (m.piece === r.piece) return true
+      const lines = own.filter((o) => collinear(o, m))
+      return lines.length > 0 && lines.every((o) => beside(o, m))
+    }
     for (const m of marks) {
       if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
       const decoration = scoped && own.length > 0 && m.scope === r.scope && eligible(m)
@@ -338,7 +368,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     },
     // A Path2D argument has unknown geometry: the whole surface.
     fill: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : subpaths, c.fillStyle),
-    stroke: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : strokeBoxes(c), c.strokeStyle),
+    stroke: (c, a) => { if (a.length && typeof a[0] === 'object') return draws(c, [surface], c.strokeStyle); const s = strokeBoxes(c); draws(c, s.boxes, c.strokeStyle, s.cap) },
     fillRect: (c, a) => { const [x, y, w, h] = a as number[]; draw(c, hull(c, x!, y!, x! + w!, y! + h!), c.fillStyle) },
     strokeRect: (c, a) => {
       const [x, y, w, h] = a as number[]

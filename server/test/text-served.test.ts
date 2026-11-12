@@ -641,6 +641,62 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
     expect(copy.text).toBe('Visit the typing guide today, not gone tomorrow.')
   }, 60_000)
 
+  // Final fix, item 1: the tightened continuation rule (exact collinearity, beside the own line) on parsed
+  // documents. Each decorated phrase is several runs (word, space, words), as Word writes edited text,
+  // so the phrase is a stretch of segments whose lines continue one another across the spaces.
+  /** Two paragraphs, at `sizes` half-points: an underlined multi-word hyperlink and a struck multi-word phrase between plain words. */
+  async function decoratedPhrases(sizes: number[]): Promise<Uint8Array> {
+    const zip = await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'x' }] }]))
+    let xml = await zip.file('word/document.xml')!.async('string')
+    const r = (rpr: string, t: string) => `<w:r><w:rPr>${rpr}</w:rPr><w:t xml:space="preserve">${t}</w:t></w:r>`
+    const para = (sz: number) => {
+      const size = `<w:sz w:val="${sz}"/>`, link = `${size}<w:color w:val="0563C1"/><w:u w:val="single"/>`, struck = `${size}<w:strike/>`
+      return `<w:p>${r(size, 'See ')}<w:hyperlink w:anchor="target">${r(link, 'typing')}${r(link, ' ')}${r(link, 'guide pages')}</w:hyperlink>${r(size, ' not ')}${r(struck, 'some')}${r(struck, ' ')}${r(struck, 'more words')}${r(size, ' now.')}</w:p>`
+    }
+    xml = xml.replace(/<w:p>[^]*?<\/w:p>/, sizes.map(para).join(''))
+    expect(xml.match(/<w:u w:val="single"\/>/g)).toHaveLength(3 * sizes.length)
+    expect(xml.match(/<w:strike\/>/g)).toHaveLength(3 * sizes.length)
+    zip.file('word/document.xml', xml)
+    return zip.generateAsync({ type: 'uint8array' })
+  }
+  const PHRASES = 'See typing guide pages not some more words now.'
+
+  test('parsed DOCX, open → prepare: an underlined multi-word hyperlink and a struck multi-word phrase are served with their spaces at 11 pt and 18 pt', async () => {
+    const d = await opened(await decoratedPhrases([22, 36]))
+    expect(d.open.units.length).toBe(1)
+    const prep = await d.text({ op: 'prepare', unit: 0 }) as Extract<TextReply, { op: 'prepare' }>
+    expect(prep.served).toBeGreaterThan(0)
+    expect(prep.withheld).toBe(0)
+    const copy = await d.text(copyAll) as Extract<TextReply, { op: 'copy'; text: string }>
+    expect(copy.text).toBe(`${PHRASES}\n${PHRASES}`)
+    for (const query of ['typing guide pages', 'some more words', 'See typing guide pages not', 'not some more words now']) {
+      const s = await d.text({ op: 'search', query, caseSensitive: true, fromUnit: 0, toUnit: 0, maxMatches: 10 }) as Extract<TextReply, { op: 'search' }>
+      expect({ query, matches: s.matches.length }).toEqual({ query, matches: 2 })
+    }
+  }, 60_000)
+
+  test('parsed DOCX: the decorated phrases really are stretches of several segments whose lines reach the neighbouring words', async () => {
+    // The guard above is not vacuous: every decorated word is a run of its own with its own line, the
+    // stretch draws more lines than it has word runs (the spaces' lines), and a neighbour's line box
+    // reaches each word's ink edge region (the cap allowance) — the continuation rule is what serves them.
+    const host = new DocumentHost()
+    const o = await host.open(`deco-${++refs}`, await decoratedPhrases([22, 36]), 'visible-only')
+    const paint = (host as unknown as { docs: Map<string, { paintables: Array<{ paint(c: CanvasRenderingContext2D): void }> }> }).docs.get(o.docKey)!.paintables[0]!
+    const { w, h } = o.units[0]!
+    const occ = occlusionObserver(w, h)
+    let lines = 0
+    const ctx = host.backend.createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D
+    const wrapped = occ.wrap(ctx)
+    const counting = new Proxy(wrapped, { get(t, k) { const v = Reflect.get(t, k, t); return k === 'stroke' && typeof v === 'function' ? (...a: unknown[]) => { lines++; return (v as (...a: unknown[]) => unknown)(...a) } : v }, set(t, k, v) { return Reflect.set(t, k, v, t) } })
+    paint.paint(counting)
+    host.drop(o.docKey)
+    const runs = occ.runDetails()
+    const texts = runs.map((r) => r.text)
+    for (const word of ['typing', 'guide', 'pages', 'some', 'more', 'words']) expect({ word, runs: texts.filter((t) => t.trim() === word).length }).toEqual({ word, runs: 2 })
+    expect(runs.every((r) => r.servable)).toBe(true)
+    expect(lines).toBeGreaterThan(12) // 12 decorated word runs + the spaces between them
+  }, 60_000)
+
   /** `words` struck or underlined at `sz` half-points, between plain words; via the body painter or a text box. */
   async function single(words: string, sz: number, deco: 'strike' | 'u', where: 'body' | 'textbox'): Promise<Uint8Array> {
     const zip = await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'x' }] }]))

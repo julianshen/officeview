@@ -326,7 +326,10 @@ describe('text decorations (S3a Task 3c)', () => {
       const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
       const o = occlusionObserver(200, 100)
       const c = o.wrap(ctx)
-      word(c); bar(c, 0, 1); phase(c, 'text'); other(c); bar(c, at, 1); phase(c, false)
+      // Own line over the left half of the word; the later segment's line carries on from where it ends.
+      const mid = ink.x + ink.width / 2
+      word(c); deco(c, () => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, ink.y, mid - ink.x + 2, 1) })
+      phase(c, 'text'); other(c); deco(c, () => c.fillRect(mid, ink.y + at, ink.x1 + 2 - mid, 1)); phase(c, false)
       return o.runDetails().map((r) => [r.text, r.servable])
     }
     expect(both(0)).toEqual([['Typing', true], ['Elsewhere', true]])
@@ -611,6 +614,33 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
     expect(runs.map((r) => [r.text, r.servable])).toEqual([['typing', true], ['guide', true]])
   })
 
+  // Final review, finding 1 (residual A): a 6 pt struck word (8 px font, 1 px own line) and two white struck
+  // spaces of the same stretch at ±0.45 px, each spanning the word: the three lines band to about 1.9 px.
+  const reviewer = (word: string, hit: boolean, shift = 0.45) => {
+    const seg = (text: string, color: string, f: number): Segment => ({ text, run: { text, color, strike: true }, style: style(6), widthPx: 40, transform: { a: 1, b: 0, c: 0, d: 1, e: 20, f } }) as Segment
+    const { ctx, runs } = render([seg(word, '000000', 80), ...(hit ? [-shift, shift].map((d) => seg(' ', 'FFFFFF', 80 + d)) : [])])
+    const px = ctx.getImageData(15, 65, 60, 20).data
+    let dark = 0
+    for (let i = 0; i < px.length; i += 4) if (px[i]! < 160) dark++
+    return { run: runs.find((r) => r.text === word)!, dark, count: runs.length }
+  }
+  for (const word of ['secretÉ', 'ˢᵉᶜʳᵉᵗÉ']) it(`final review repro through the real DOCX renderPages: 6 pt struck ${word} under two near-collinear white strikes is covered; its control is served`, () => {
+    const clean = reviewer(word, false), hit = reviewer(word, true)
+    expect(clean.run).toMatchObject({ servable: true })
+    expect(clean.dark).toBeGreaterThan(0)
+    expect(hit.dark).toBeLessThan(clean.dark * 0.6)
+    expect(hit.count).toBe(1)
+    expect(hit.run).toMatchObject({ servable: false, reason: 'covered' })
+    // Exactly collinear too: a foreign line lying on the own line is cover whatever its offset.
+    expect(reviewer(word, true, 0).run).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('real DOCX renderPages: a struck word, space and word placed by transforms (abutting segments) are all served', () => {
+    const w = (s: string) => measure(s, 18).width
+    const seg = (text: string, e: number): Segment => ({ text, run: { text, color: '000000', strike: true }, style: style(18), widthPx: w(text), transform: { a: 1, b: 0, c: 0, d: 1, e, f: 300 } }) as Segment
+    const { runs } = render([seg('some', 40), seg(' ', 40 + w('some')), seg('more', 40 + w('some') + w(' '))])
+    expect(runs.map((r) => [r.text, r.servable])).toEqual([['some', true], ['more', true]])
+  })
+
   // Observer level: 'Typing' at (20, 50), 20 px.
   const probe = (paint: (c: CanvasRenderingContext2D, ink: { x: number; y: number; width: number; height: number }) => void) => {
     const ctx = createCanvas(300, 100).getContext('2d') as unknown as CanvasRenderingContext2D
@@ -622,18 +652,53 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
     return o.runDetails()[0]!
   }
   const bar = (c: CanvasRenderingContext2D, ink: { x: number; width: number }, y: number, t: number) => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, y, ink.width + 4, t) }
+  /** The left part of a line across the word (the run's own line), ending `cut` px into the ink… */
+  const left = (c: CanvasRenderingContext2D, ink: { x: number; width: number }, y: number, t: number, cut = ink.width / 2) => { c.fillStyle = '#000'; c.fillRect(ink.x - 2, y, cut + 2, t) }
+  /** …and the rest of it, starting `from` px into the ink (a neighbour's line carrying on beside the own one when from = cut). */
+  const rest = (c: CanvasRenderingContext2D, ink: { x: number; width: number }, y: number, t: number, from = ink.width / 2) => { c.fillStyle = '#000'; c.fillRect(ink.x + from, y, ink.width - from + 2, t) }
   /** Another segment of the scope: its own text phase (a run elsewhere), then its line phase. */
   const neighbour = (c: CanvasRenderingContext2D, lines: () => void) => { phase(c, 'text'); text(c, 'next', 150, 90); phase(c, 'line'); lines() }
   it('a line of another segment at another position is ordinary cover', () => {
     expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 9, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
   })
-  it('a line of another segment at the same position and thickness is a continuation', () => {
-    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: true })
-    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3.4, 1)) })).toMatchObject({ servable: true })
+  it('a line of another segment at the same position and thickness, carrying on beside the own line, is a continuation', () => {
+    expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3, 1)) })).toMatchObject({ servable: true })
+    expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3.005, 1)) })).toMatchObject({ servable: true })
   })
-  it('a continuation must match both edges within 0.5 px', () => {
-    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3.6, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
-    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3, 1.6)) })).toMatchObject({ servable: false, reason: 'covered' })
+  it('a continuation must match both edges within 0.01 px (final fix: was 0.5)', () => {
+    for (const d of [0.02, 0.4, 0.6]) {
+      expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3 + d, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+      expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3 - d, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+      expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3, 1 + d)) })).toMatchObject({ servable: false, reason: 'covered' })
+    }
+  })
+  it('a collinear line of another segment lying on the own line is ordinary cover (final fix: a continuation is beside the own line)', () => {
+    // Exactly the own line's position and thickness, drawn over it: whole, or reaching 1 px back over its end.
+    expect(probe((c, i) => { phase(c, 'line'); bar(c, i, i.y + 3, 1); neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3, 1, i.width / 2 - 1)) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3, 1, i.width / 2 - 0.02)) })).toMatchObject({ servable: false, reason: 'covered' })
+    // Float slack only: 0.005 px back is still beside it; a gap is too.
+    expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3, 1, i.width / 2 - 0.005)) })).toMatchObject({ servable: true })
+    expect(probe((c, i) => { phase(c, 'line'); left(c, i, i.y + 3, 1); neighbour(c, () => rest(c, i, i.y + 3, 1, i.width / 2 + 1)) })).toMatchObject({ servable: true })
+  })
+  it('stroked lines: two abutting strokes overlap only by their cap allowances and continue; a stroke reaching back over the own line covers', () => {
+    const stroke = (c: CanvasRenderingContext2D, x0: number, x1: number, y: number) => { c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); c.stroke() }
+    const at = (back: number, clip = false) => probe((c, i) => {
+      const mid = i.x + i.width / 2, y = i.y + 3.5
+      phase(c, 'line'); stroke(c, i.x - 2, mid, y)
+      neighbour(c, () => {
+        if (clip) { c.save(); c.beginPath(); c.rect(mid - 0.3, 0, 300, 100); c.clip() }
+        stroke(c, mid - back, i.x + i.width + 2, y)
+        if (clip) c.restore()
+      })
+    })
+    expect(at(0)).toMatchObject({ servable: true })
+    expect(at(0.005)).toMatchObject({ servable: true })
+    expect(at(0.02)).toMatchObject({ servable: false, reason: 'covered' })
+    expect(at(1.2)).toMatchObject({ servable: false, reason: 'covered' })
+    // A clip that cuts into the stroke's box (0.3 px before its true start, inside its 0.71 px cap allowance)
+    // takes the allowance away: the whole clipped box counts, and that reaches back over the own line.
+    expect(at(0, true)).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('a run with no own lines gets no exemption from the scope\'s other lines', () => {
     expect(probe((c, i) => { neighbour(c, () => bar(c, i, i.y + 3, 1)) })).toMatchObject({ servable: false, reason: 'covered' })
@@ -644,7 +709,8 @@ describe('only a run\'s own lines and their continuations are decorations (Task 
   it('own lines and continuations share one union cap', () => {
     // Own lines at three heights and their continuations: still three bands (3 px ≤ 25 %); a fourth and fifth own band pass it.
     const at = [2, 6, 10]
-    expect(probe((c, i) => { phase(c, 'line'); for (const y of at) bar(c, i, i.y + y, 1); neighbour(c, () => { for (const y of at) bar(c, i, i.y + y, 1) }) })).toMatchObject({ servable: true })
+    expect(probe((c, i) => { phase(c, 'line'); for (const y of at) left(c, i, i.y + y, 1); neighbour(c, () => { for (const y of at) rest(c, i, i.y + y, 1) }) })).toMatchObject({ servable: true })
+    expect(probe((c, i) => { phase(c, 'line'); for (const y of [...at, 12, 14, 16]) left(c, i, i.y + y, 1); neighbour(c, () => { for (const y of [...at, 12, 14, 16]) rest(c, i, i.y + y, 1) }) })).toMatchObject({ servable: false, reason: 'covered' })
     expect(probe((c, i) => { phase(c, 'line'); for (const y of [...at, 12, 14, 16]) bar(c, i, i.y + y, 1) })).toMatchObject({ servable: false, reason: 'covered' })
   })
 })
