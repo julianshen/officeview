@@ -20143,8 +20143,8 @@
       ],
       "expected": {
         "inputSha256": "10290a8494d588d2f27bfd28d377f8620a02ed65d21304aa26d52454a2001c9d",
-        "savedSha256": "10290a8494d588d2f27bfd28d377f8620a02ed65d21304aa26d52454a2001c9d",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "1a606c7754fefb78fd0b4fc98c0f2b0a3ff908e81a6eb8567597525d88d35dcc",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -20184,7 +20184,7 @@
             "ref": "B2",
             "controlRef": "B8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20195,7 +20195,7 @@
             "ref": "B3",
             "controlRef": "B9",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20206,7 +20206,7 @@
             "ref": "B4",
             "controlRef": "B10",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20239,7 +20239,7 @@
             "ref": "C2",
             "controlRef": "C8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20250,7 +20250,7 @@
             "ref": "C3",
             "controlRef": "C9",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20261,7 +20261,7 @@
             "ref": "C4",
             "controlRef": "C10",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20294,7 +20294,7 @@
             "ref": "D2",
             "controlRef": "D8",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20305,7 +20305,7 @@
             "ref": "D3",
             "controlRef": "D9",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
@@ -20471,17 +20471,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-colors.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-colors.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-colors.json",
+          "pngSha256": "53a04158de4d350c764c7f1492fec4f0dc4836e245b104a029aef0e13b2f2678"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-12T13:02:00.088Z",
+        "excelVersion": "16.114",
+        "inputSha256": "10290a8494d588d2f27bfd28d377f8620a02ed65d21304aa26d52454a2001c9d",
+        "savedSha256": "1a606c7754fefb78fd0b4fc98c0f2b0a3ff908e81a6eb8567597525d88d35dcc",
+        "openedRepairFree": true
+      }
     }
   ]
 }
