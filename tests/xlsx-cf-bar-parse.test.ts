@@ -270,8 +270,12 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
       expect(reason(baseBar('A1:A5', 1, MINMAX + BLUE, undefined, ` activePresent="${spelling}"`)), spelling).toMatchObject(unresolved('cf-unsupported-rule'))
     }
     const A = '{00000000-0000-4000-8000-0000000000A0}'
-    expect(reason(baseBar('A1:A5', 1, MINMAX + BLUE, A) + x14Block(companion('A1:A5', A, '', '<x14:cfvo type="min"/><x14:cfvo type="max"/>', ' activePresent="1"'))))
-      .toMatchObject(unresolved('cf-unsupported-rule'))
+    const withCompanionFlag = (flag: string) =>
+      reason(baseBar('A1:A5', 1, MINMAX + BLUE, A) + x14Block(companion('A1:A5', A, '', '<x14:cfvo type="min"/><x14:cfvo type="max"/>', ` activePresent="${flag}"`)))
+    for (const flag of ['1', 'true']) expect(withCompanionFlag(flag), flag).toMatchObject(unresolved('cf-unsupported-rule'))
+    // A malformed companion flag is not a boolean: invalid, never read as inactive.
+    expect(withCompanionFlag('maybe')).toMatchObject(unresolved('cf-invalid-rule'))
+    expect(withCompanionFlag('0').kind).toBe('dataBar')
     // autoMin/autoMax resolve only on <x14:cfvo>.
     expect(reason(baseBar('A1:A5', 1, '<cfvo type="autoMin"/><cfvo type="max"/>' + BLUE))).toMatchObject(unresolved('cf-unsupported-rule'))
     // S3-D positional and legacy shapes: unresolved until bar:bounds-positional.

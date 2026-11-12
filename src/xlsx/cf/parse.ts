@@ -628,6 +628,8 @@ interface BodyInputs {
 interface PairedBar {
   readonly node: XmlNode
   readonly activePresent: boolean
+  /** The companion's `activePresent` is not a boolean. */
+  readonly activeInvalid: boolean
 }
 
 export interface CfScaleBoundInput {
@@ -1012,6 +1014,7 @@ function parseDataBarRule(
   const standalone = inputs.origin.dialect === 'x14'
   const paired = inputs.pairedBar
   // S3-R: activation predicates wait for Stage 5, on the rule or its companion.
+  if (paired?.activeInvalid) return finishUnresolved('cf-invalid-rule', slot)
   if (rule.active || paired?.activePresent) return finishUnresolved('cf-unsupported-rule', slot)
   // Excel never writes a DXF on a bar: withhold rather than paint a bar rule's DXF.
   if (rule.hasDxf) return finishUnresolved('cf-unsupported-rule', slot)
@@ -1525,7 +1528,8 @@ function readRuleInputs(
   const origin: CfRuleOrigin = {
     dialect,
     ...(guid !== undefined ? { guid } : {}),
-    ...(a['activePresent'] === '1' ? { activePresent: true as const } : {}),
+    // Any boolean spelling counts (S2-C/S3-R): "true" is refused exactly like "1".
+    ...(parseBoolAttr(a['activePresent'], false) === true ? { activePresent: true as const } : {}),
     formulas: read.formulas,
     ...(a['dxfId'] !== undefined && isIntText(a['dxfId']) ? { dxfId: Number(a['dxfId']) } : {}),
   }
@@ -1643,7 +1647,7 @@ function readPairedExtFacts(
     }
   }
   const active = parseBoolAttr(attrs(extNode)['activePresent'], false)
-  return { ok: true, cfvoCount, cfvoMissingType, bar: { node: visual, activePresent: active !== false } }
+  return { ok: true, cfvoCount, cfvoMissingType, bar: { node: visual, activePresent: active === true, activeInvalid: active === undefined } }
 }
 
 function collectAndBuild(fin: SheetFinalizer, sheetNs: string | undefined, base: XmlNode[], x14: XmlNode[]): void {

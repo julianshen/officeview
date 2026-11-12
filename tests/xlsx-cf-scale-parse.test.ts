@@ -250,6 +250,18 @@ describe('CF Stage 2 colour-scale model and parsing (Task 13)', () => {
       reason: 'cf-unsupported-rule',
     })
 
+    // activePresent is a boolean: the "true" spelling is refused like "1", even with the scale's evidence (S2-C).
+    withExactCfEvidence(['scale:thresholds-min-max'], () => {
+      const xml = (flag: string) =>
+        `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1" activePresent="${flag}"><colorScale>` +
+        `<cfvo type="min"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting>`
+      for (const flag of ['1', 'true']) {
+        const def = parse(xml(flag)).value.rules[0]!.definition
+        expect(def, flag).toMatchObject({ kind: 'unresolved', type: 'colorScale', reason: 'cf-unsupported-rule', origin: { activePresent: true } })
+      }
+      expect(parse(xml('0')).value.rules[0]!.definition.kind).toBe('colorScale')
+    })
+
     // 4. min val="0" and mid-list min -> unresolved without evidence
     const legacyMin = parse(
       `<conditionalFormatting sqref="A1"><cfRule type="colorScale" priority="1"><colorScale>` +
