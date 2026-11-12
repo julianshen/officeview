@@ -284,13 +284,14 @@ describe('ops.ts a11y with a fake pool', () => {
     expect([x.sent, x.c.slot.copiedParagraphs]).toEqual([[], 0])
   })
 
-  test('over the client limits (4 MiB of text, 20,000 paragraphs) is refused copy-too-large with the 4 MiB limit', async () => {
+  test('over the client limits is refused copy-too-large with the limit that was passed: 4194304 for 4 MiB of text, 20000 for 20,000 paragraphs', async () => {
     const big = ctx({ job: async () => reply(...Array.from({ length: 100 }, () => ({ rect: [1, 2, 3, 4], text: 'x'.repeat(42_000) }))) })
     await runA11y(big.c)
     expect(big.refused).toEqual([['copy-too-large', { limit: COPY_MAX_BYTES, requested: 4_200_000 }]])
     const many = ctx({ mode: () => 'focused', caps: () => ({ maxParagraphs: 2, maxSessionParagraphs: null }), job: async () => reply(...Array.from({ length: 20_001 }, () => ({ rect: [1, 2, 3, 4] }))) })
     await runA11y(many.c)
-    expect(many.refused).toEqual([['copy-too-large', { limit: COPY_MAX_BYTES }]])
+    expect(many.refused).toEqual([['copy-too-large', { limit: 20_000, requested: 20_001 }]])
+    expect(COPY_MAX_BYTES).toBe(4_194_304)
     const huge = ctx({ job: async () => { throw new TextTooLarge([2]) } })
     await runA11y(huge.c)
     expect(huge.refused).toEqual([['copy-too-large', { limit: COPY_MAX_BYTES }]])

@@ -30,6 +30,11 @@ never on the wire; `server/src/text/join.ts`). The whole run takes about 6 s.
 
 ¹ Served ÷ (spans − withheld whitespace-only spans).
 
+Re-run on 2026-11-12 after the final fix wave (a decoration continuation
+must be exactly collinear with the run's own line and beside it; search
+stops at its budget): the table is unchanged, and so is every one of the
+258 per-unit rows (served, withheld and causes).
+
 Causes: **no candidate run** — no painted text run lies under the span;
 **covered / clipped / off-surface / transparent** — a candidate run exists
 but the occlusion observer withheld it for that reason (when several
@@ -92,7 +97,11 @@ loads only on the lazy stream path.
 
 Paragraph counting (Task 3b): `tests/text-recording-group.test.ts`. Text
 decorations (Task 3c): `server/test/occlusion.test.ts`,
-`tests/paint-decoration.test.ts`. Policy, manifest caps and resume:
+`tests/paint-decoration.test.ts`; on parsed documents,
+`server/test/text-served.test.ts` ("parsed DOCX, open → prepare: an
+underlined multi-word hyperlink and a struck multi-word phrase are served
+with their spaces at 11 pt and 18 pt"). Search work bound:
+`server/test/text-search-bound.test.ts`. Policy, manifest caps and resume:
 `server/test/text-policy.test.ts`. Remote view (search bar, selection, copy
 messages, a11y layer): `tests/stream/remote-text.test.tsx`,
 `tests/browser/stream-text.spec.ts`. Withheld-cause tally:

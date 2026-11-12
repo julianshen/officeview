@@ -458,7 +458,7 @@ async function a11yTurn(c: A11yContext): Promise<void> {
     const paragraphs: A11yParagraph[] = raw.map((p, i) => withText(i) && typeof p.text === 'string' ? { rect: box(p.rect), text: p.text } : { rect: box(p.rect) })
     if (mode === 'unit' && paragraphs.some((p) => p.text === undefined)) return refuse('policy-refused')
     if (k !== undefined && paragraphs[k]?.text === undefined) return refuse('policy-refused')
-    if (paragraphs.length > A11Y_MAX_PARAGRAPHS) return refuse('copy-too-large', { limit: COPY_MAX_BYTES })
+    if (paragraphs.length > A11Y_MAX_PARAGRAPHS) return refuse('copy-too-large', { limit: A11Y_MAX_PARAGRAPHS, requested: paragraphs.length })
     const bytes = paragraphs.reduce((n, p) => n + (p.text === undefined ? 0 : Buffer.byteLength(p.text, 'utf8')), 0)
     if (bytes > COPY_MAX_BYTES) return refuse('copy-too-large', { limit: COPY_MAX_BYTES, requested: bytes })
     const messages = chunkA11y(c.reqId, paragraphs)

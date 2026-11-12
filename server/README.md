@@ -219,11 +219,11 @@ session stays open):
 | code | when |
 |---|---|
 | `text-unavailable` | select or copy with copy off; a11y with a11y off |
-| `copy-too-large` | over `maxParagraphs` (`limit` = the cap, `requested` = the paragraphs selected); over 4 MiB (`limit` = 4194304, `requested` = bytes when known); an a11y answer over its limits |
+| `copy-too-large` | over `maxParagraphs` (`limit` = the cap, `requested` = the paragraphs selected); over 4 MiB (`limit` = 4194304, `requested` = bytes when known); an a11y answer over 4 MiB of text (`limit` = 4194304, `requested` = bytes), over 20,000 paragraphs (`limit` = 20000, `requested` = the paragraph count), or with one paragraph over 48 KiB (`limit` = 49152) |
 | `copy-quota-exhausted` | the session total would pass `maxSessionParagraphs` (`limit` = the cap, `requested` = this copy's paragraphs; 1 for a focused read) |
 | `rate-limited` | over the `'text'` rate, or the pool is saturated |
 | `policy-refused` | malformed arguments, or an internal failure |
-| `session-rotated` | a request under a superseded token; the client re-issues it |
+| `session-rotated` | a request under a superseded token. The client re-issues a unit request, a search or a select once under the new token. A copy or an a11y read rejects and is not replayed (it may already have counted). |
 
 **Rates and limits.**
 - Rate class `'text'`: 60 requests per minute per session, covering search,
@@ -234,7 +234,10 @@ session stays open):
 - A query is at most 256 UTF-16 units. A search answers at most 5,000
   matches (`truncated: true` beyond). A single match too large for one
   message is left out and also marks the answer truncated. One search runs
-  per session; a new one supersedes it.
+  per session; a new one supersedes it. The worker stops matching once it
+  has the matches still wanted (in unit, line, position order) and builds
+  at most 100,000 highlight rects per job of 8 units; a job that would
+  pass that ends the search with what it has, `truncated: true`.
 - The viewer rejects any answer of more than 4,096 messages, a select of more
   than 20,000 rects, and an a11y answer over 4 MiB of text or 20,000
   paragraphs. A single a11y paragraph over 48 KiB refuses the request.

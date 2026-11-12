@@ -15,7 +15,7 @@
  * Run from the repo root. `--rows` writes one row per unit (document, unit,
  * served, withheld, causes or refusal) for picking example documents.
  * Exit 1 if any format serves nothing. */
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { AdmissionRefused, Pool, RenderFailed, RenderTimeout } from '../src/pool'
 import type { WithheldCauses } from '../src/text/join'
@@ -53,8 +53,8 @@ async function main(args: string[]): Promise<number> {
   const files = DIRS.flatMap((dir) => {
     let names: string[] = []
     try { names = readdirSync(resolve(root, dir)) } catch { /* absent directory: none */ }
-    return names.filter((n) => /\.(docx|xlsx|pptx)$/i.test(n) && !n.startsWith('~$') && (!filter || filter.test(n))).map((n) => ({ dir, name: n, path: resolve(root, dir, n) }))
-  }).sort((a, b) => readFileSync(b.path).length - readFileSync(a.path).length)   // largest first: a slow unit shows early
+    return names.filter((n) => /\.(docx|xlsx|pptx)$/i.test(n) && !n.startsWith('~$') && (!filter || filter.test(n))).map((n) => { const path = resolve(root, dir, n); return { dir, name: n, path, size: statSync(path).size } })
+  }).sort((a, b) => b.size - a.size)   // largest first: a slow unit shows early (sizes read once, by stat)
   const log = (s: string) => process.stderr.write(`${new Date().toISOString().slice(11, 19)} ${s}\n`)
   log(`${files.length} documents (${DIRS.map((d) => `${d}: ${files.filter((f) => f.dir === d).length}`).join(', ')})`)
 

@@ -189,7 +189,12 @@ audit rows carry the counts.
 > 5. **Limits.**
 >    - A query is ≤ 256 UTF-16 units.
 >    - A search sends ≤ 5,000 matches. A single match that cannot fit one
->      message is omitted, and the answer says `truncated: true`.
+>      message is omitted, and the answer says `truncated: true`. A worker
+>      search job (8 units) stops matching at the matches still wanted and
+>      builds ≤ 100,000 highlight rects; past that the search ends with
+>      what it has, `truncated: true` (2026-11-12).
+>    - An a11y answer over 20,000 paragraphs is refused `copy-too-large`
+>      with `limit` 20000; over 4 MiB of text, with `limit` 4194304.
 >    - One copy is ≤ 4 MiB of UTF-8 (`copy-too-large` beyond, even under
 >      `'full'`).
 >    - Every text answer message is ≤ 48 KiB of UTF-8.
@@ -228,8 +233,11 @@ audit rows carry the counts.
 >    the final chunk), `copy-result {seq, text, last}` and
 >    `a11y-result {seq, paragraphs:[{rect, text?}], last}`. New refusal
 >    codes are `text-unavailable`, `copy-too-large` and
->    `copy-quota-exhausted`; the last two carry `limit` and `requested`
->    (parent §6.2 rule 8 amendment).
+>    `copy-quota-exhausted`; the last two carry `limit`. `requested` is
+>    present on `copy-quota-exhausted`, and on `copy-too-large` only when
+>    it is known (the paragraphs selected, the bytes of a built answer, an
+>    a11y answer's paragraph count; not when the worker refused before
+>    building the text) (parent §6.2 rule 8 amendment).
 > 10. **UI strings (exact).** 'Selection too large to copy (limit: N
 >     paragraphs).', 'Copy limit for this session reached (N paragraphs).',
 >     'Selection too large to copy.', 'Too many requests. Try again
@@ -241,7 +249,12 @@ audit rows carry the counts.
 >     toward the session cap. It is never re-issued.
 > 12. **Text decorations.** Underlined or struck text is served under a
 >     narrow exemption to the parent's 100 %-ink rule (parent §7.7
->     amendment). Its residuals are listed in parent §19.
+>     amendment). Its residuals are listed in parent §19. As of 2026-11-12
+>     a line of a neighbouring segment counts as the run's own line carried
+>     on only when it is exactly collinear with it (both edges within
+>     0.01 device px) and lies beside it, not on it (the two lines overlap
+>     along the baseline by no more than their stroke-cap allowances); the
+>     review's residual A is closed.
 
 ### 4.2 Piece 2 — print (parent §2 item 9)
 

@@ -838,8 +838,14 @@ drops the unit and re-requests once.
   > `src/core/text-recording.ts`). The conditions:
   > - only for runs of the same scope;
   > - only for the run's own lines (the `'line'` phase right after the
-  >   run's `'text'` phase), or continuations of them (collinear within
-  >   0.5 device px);
+  >   run's `'text'` phase), or continuations of them: a mark of the same
+  >   scope that is exactly collinear with an own line (both edges across
+  >   the baseline within 0.01 device px, float slack only) and lies
+  >   beside it, not on it (along the baseline the two lines, without the
+  >   cap allowance the observer adds to a stroke's ends, overlap by at
+  >   most 0.01 device px). A collinear mark lying on an own line is
+  >   ordinary cover (tightened 2026-11-12; was "collinear within 0.5
+  >   device px");
   > - only when parallel to the run's baseline, so axis-aligned text only;
   > - only when the mark is ≥ 2× as long as it is thick;
   > - only when the mark's thickness is ≤ max(1.5·scale px, 12 % of R) and
@@ -1764,11 +1770,19 @@ render pipeline.
     - (a) A document's own thin decoration line can hide a glyph smaller
       than the line (a period, a hyphen) inside decorated text that is
       still served (§7.7 amendment).
-    - (b) **Open residual from review**, parked for the final fix pass:
-      the continuation tolerance is 0.5 device px, so three near-collinear
-      strike lines can smear text of ≤ 6 pt while it is served. This was
-      shown only with a hand-built page layout, not from a parsed
-      document. The prescribed fix is exact collinearity.
+    - (b) **Closed 2026-11-12** (was the review's open residual A: a
+      0.5 device px continuation tolerance let three near-collinear strike
+      lines smear text of ≤ 6 pt while it was served, shown only with a
+      hand-built page layout). The rule is now exact collinearity and no
+      overlap: a neighbouring segment's line continues a run's own line
+      only if both its edges across the baseline match the own line's
+      within 0.01 device px and, along the baseline, it lies beside the
+      own line rather than on it (overlap no more than the two strokes'
+      cap allowances). The hand-built layouts are withheld (`covered`).
+      Cost, fail closed: adjacent struck runs of slightly different sizes
+      with no space between them (12 pt + 11 pt, 10.5 pt + 11 pt) now
+      lose the first word; the same pairs underlined, and equal-size
+      runs, are served.
     - (c) Withheld, fail closed: decorated text that is rotated (not
       axis-aligned); adjacent decorated runs of clearly different sizes
       with no space between them; an 18 pt struck spreadsheet word with no
