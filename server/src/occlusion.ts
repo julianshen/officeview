@@ -21,15 +21,16 @@
  *   phases may be exempted only for runs drawn in that same scope's 'text' phases
  *   (provenance and ownership — geometry alone never exempts a mark, and a
  *   decoration over any other run is ordinary cover; malformed sequences
- *   record ordinary marks), and only when its thickness
- *   along its own thin axis (the smaller side of its box; a square box is
- *   never one) is at most max(1.5 × scale px, 12 % of the ink's extent on
- *   that axis) is a thin decoration — an underline, strike or overline that
- *   leaves the word legible. Decorations are ignored while, on each axis,
- *   their merged extent over the ink stays ≤ 25 % of the ink's extent;
- *   past that the run is `covered`. Erase and filter marks, and every
- *   thicker cover, withhold as before. Rotated text keeps its axis-aligned
- *   hull, so its decorations may not qualify (withheld).
+ *   record ordinary marks), only for a run whose baseline is axis-aligned,
+ *   only when the mark is a line along that baseline (its side along it
+ *   ≥ 2 × its side across it), and only when its thickness across the
+ *   baseline is at most max(1.5 × scale px, 12 % of the ink's extent across
+ *   the baseline) — an underline, strike or overline that leaves the word
+ *   legible. Decorations are ignored while their merged extent across the
+ *   baseline, clipped to the ink, stays ≤ 25 % of that extent; past that the
+ *   run is `covered`. Erase and filter marks, and every other cover, withhold
+ *   as before. Text whose baseline is not axis-aligned in device space gets
+ *   no exemption (withheld).
  */
 import type { PaintObserver } from './render'
 import { PAINT_DECORATION } from '../../src/core/text-recording'
@@ -58,8 +59,11 @@ export interface RunDetail {
 
 type Rect = [x0: number, y0: number, x1: number, y1: number]
 type Clip = Rect | 'nonrect' | undefined
-/** `scope`: the decoration scope (PAINT_DECORATION 'text' phase) that drew this run. */
-interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason; scope?: number }
+/** `scope`: the decoration scope (PAINT_DECORATION 'text' phase) that drew
+ * this run. `across`: the device axis perpendicular to its baseline (1 = y for
+ * horizontal text, 0 = x for vertical); absent when the baseline is not
+ * axis-aligned. */
+interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason; scope?: number; across?: 0 | 1 }
 
 /** Canvas composite modes whose effect is not bounded by the source shape. */
 const UNBOUNDED_COMPOSITES = new Set(['copy', 'source-in', 'source-out', 'destination-in', 'destination-atop'])
@@ -88,6 +92,8 @@ function colorAlpha(style: unknown): number | undefined {
 
 /** Task 3c decoration rule: thin-mark floor (× scale), thin-mark ratio and union cap (× ink extent). */
 const DECORATION_FLOOR_PX = 1.5, DECORATION_RATIO = 0.12, DECORATION_UNION = 0.25
+/** A decoration's side along the run's baseline is at least this × its thickness across it. */
+const DECORATION_ELONGATION = 2
 /** Total length of the union of intervals (sorts `bands` in place). */
 function unionLength(bands: Array<[number, number]>): number {
   bands.sort((p, q) => p[0] - q[0])
@@ -159,6 +165,14 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     for (const [x, y] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) r = grow(r, t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f)
     return r
   }
+  /** The device axis perpendicular to the text baseline under the current transform, if axis-aligned. */
+  const baselineAcross = (ctx: CanvasRenderingContext2D): 0 | 1 | undefined => {
+    const t = ctx.getTransform()
+    const ad = Math.max(Math.abs(t.a), Math.abs(t.d)), bc = Math.max(Math.abs(t.b), Math.abs(t.c))
+    if (ad > 0 && bc <= 1e-6 * ad) return 1
+    if (bc > 0 && ad <= 1e-6 * bc) return 0
+    return undefined
+  }
   const axisAligned = (ctx: CanvasRenderingContext2D) => { const t = ctx.getTransform(); return Math.abs(t.b) < 1e-9 && Math.abs(t.c) < 1e-9 }
   /** Extend the current subpath through device points (one segment's hull). */
   const segment = (pts: Array<[number, number]>) => {
@@ -226,6 +240,8 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     const style = stroke ? ctx.strokeStyle : ctx.fillStyle
     const alpha = ctx.globalAlpha * (colorAlpha(style) ?? 1)
     const run: Run = phase === 'text' ? { seq: seq + 1, ink, text: str, scope: scopeId } : { seq: seq + 1, ink, text: str }
+    const across = baselineAcross(ctx)
+    if (across !== undefined) run.across = across
     if (str.trim() === '' || !(ink[2] > ink[0])) { draw(ctx, ink, style); return }
     if (alpha <= 0.05) run.reason = 'transparent'
     else if (!inside(ink, surface)) run.reason = 'off-surface'
@@ -240,17 +256,19 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   function verdict(r: Run): OcclusionReason | undefined {
     if (r.reason) return r.reason
     const later = new Set<Grid>()
-    // A decoration is measured along its own thin axis (0 = x, 1 = y); the two axes are tracked separately.
-    const bands: [Array<[number, number]>, Array<[number, number]>] = [[], []]
+    // A decoration is judged on one axis: perpendicular to the run's baseline (a).
+    const a = r.across, b = a === 1 ? 0 : 1
+    const extent = a === undefined ? 0 : r.ink[a + 2]! - r.ink[a]!
+    const thin = Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * extent)
+    const bands: Array<[number, number]> = []
     for (const m of marks) {
       if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
-      const w = m.box[2] - m.box[0], h = m.box[3] - m.box[1]
-      const a = h < w ? 1 : 0, t = Math.min(w, h)
-      if (m.scope !== undefined && m.scope === r.scope && !voidScopes.has(m.scope) && m.grid === 'cover' && w !== h && t <= Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (r.ink[a + 2]! - r.ink[a]!))) {
-        bands[a].push([Math.max(m.box[a]!, r.ink[a]!), Math.min(m.box[a + 2]!, r.ink[a + 2]!)])
-      } else later.add(m.grid)
+      const decoration = a !== undefined && m.grid === 'cover' && m.scope !== undefined && m.scope === r.scope && !voidScopes.has(m.scope)
+      const t = decoration ? m.box[a + 2]! - m.box[a]! : 0, along = decoration ? m.box[b + 2]! - m.box[b]! : 0
+      if (decoration && along >= DECORATION_ELONGATION * t && t <= thin) bands.push([Math.max(m.box[a]!, r.ink[a]!), Math.min(m.box[a + 2]!, r.ink[a + 2]!)])
+      else later.add(m.grid)
     }
-    for (const a of [0, 1] as const) if (bands[a].length && unionLength(bands[a]) > DECORATION_UNION * (r.ink[a + 2]! - r.ink[a]!)) later.add('cover')
+    if (bands.length && unionLength(bands) > DECORATION_UNION * extent) later.add('cover')
     return later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
   }
 

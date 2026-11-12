@@ -9,6 +9,7 @@ import { projectPackage } from '../src/policy'
 import { occlusionObserver } from '../src/occlusion'
 import { PAINT_DECORATION } from '../../src/core/text-recording'
 import { paintCellLayout } from '../../src/xlsx/render'
+import { renderPages, type PageLayout, type Segment } from '../../src/docx/layout'
 import type { CellBodyLayout } from '../../src/xlsx/view/textLayout'
 
 /** The PAINT_DECORATION hook as the painters call it: 'text' opens a scope, 'line' starts its lines, false ends it. */
@@ -382,8 +383,8 @@ describe('text decorations (S3a Task 3c)', () => {
     const lw = thin * 0.9 // ≤ the threshold; lw·√2 is above it
     expect(lw * Math.SQRT2).toBeGreaterThan(thin)
     expect(verdict((c) => { word(c); line(c, lw, (p) => { p.moveTo(ink.x - 2, mid); p.lineTo(ink.x1 + 2, mid) }) })).toMatchObject({ servable: true })
-    // A vertical segment through a wide word: its thin axis is x.
-    expect(verdict((c) => { word(c); line(c, 1, (p) => { p.moveTo(ink.x + 10, ink.y - 2); p.lineTo(ink.x + 10, ink.y1 + 2) }) })).toMatchObject({ servable: true })
+    // A vertical segment through a horizontal word is perpendicular to its baseline: ordinary cover (fix round 3).
+    expect(verdict((c) => { word(c); line(c, 1, (p) => { p.moveTo(ink.x + 10, ink.y - 2); p.lineTo(ink.x + 10, ink.y1 + 2) }) })).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('a true-width stroke thicker than the threshold still covers', () => {
     expect(verdict((c) => { word(c); line(c, thin * 1.1, (p) => { p.moveTo(ink.x - 2, mid); p.lineTo(ink.x1 + 2, mid) }) })).toMatchObject({ servable: false, reason: 'covered' })
@@ -403,7 +404,7 @@ describe('text decorations (S3a Task 3c)', () => {
   })
 })
 
-describe("text decorations measured along the mark's own thin axis (Task 3c ruling b)", () => {
+describe('text decorations judged across the run baseline (Task 3c ruling b, fix round 3)', () => {
   const inkOf = (s: string) => {
     const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
     const o = occlusionObserver(200, 100)
@@ -432,12 +433,65 @@ describe("text decorations measured along the mark's own thin axis (Task 3c ruli
   it('a square mark is never a decoration', () => {
     expect(verdictOf('I', (c) => c.fillRect(I.x, I.y + 2, 1, 1))).toMatchObject({ servable: false, reason: 'covered' })
   })
-  it('the two axes are tracked separately: one thin bar on each axis is served; either axis past 25 % covers', () => {
+  // Fix round 3: one axis per run — perpendicular to its baseline.
+  it('a thin vertical bar through horizontal text is covered even inside the same scope', () => {
     const T = inkOf('Typing')
-    const h = (c: CanvasRenderingContext2D, at: number, t: number) => c.fillRect(T.x - 2, T.y + at, T.width + 4, t)
-    const v = (c: CanvasRenderingContext2D, at: number, t: number) => c.fillRect(T.x + at, T.y - 2, t, T.height + 4)
-    expect(verdictOf('Typing', (c) => { h(c, T.height / 2, 1); v(c, 10, 1) })).toMatchObject({ servable: true })
-    expect(verdictOf('Typing', (c) => { h(c, T.height / 2, 1); for (const at of [0, 0.25, 0.5, 0.75]) v(c, T.width * at, T.width * 0.1) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(verdictOf('Typing', (c) => c.fillRect(T.x + 10, T.y - 2, 1, T.height + 4))).toMatchObject({ servable: false, reason: 'covered' })
+    expect(verdictOf('Typing', (c) => { c.fillRect(T.x - 2, T.y + T.height / 2, T.width + 4, 1); c.fillRect(T.x + 10, T.y - 2, 1, T.height + 4) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a mark not elongated along the baseline (side along < 2 × side across) is covered', () => {
+    const T = inkOf('Typing')
+    // 1.9 px long, 1 px thick: thin enough, but not a line along the baseline.
+    expect(verdictOf('Typing', (c) => c.fillRect(T.x + 10, T.y + T.height / 2, 1.9, 1))).toMatchObject({ servable: false, reason: 'covered' })
+    expect(verdictOf('Typing', (c) => c.fillRect(T.x + 10, T.y + T.height / 2, 2.1, 1))).toMatchObject({ servable: true })
+  })
+  it('decorated rotated (non-axis-aligned) text is withheld', () => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    const c = o.wrap(ctx)
+    c.translate(60, 50); c.rotate(0.3)
+    phase(c, 'text'); text(c, 'Hi', -10, 5)
+    phase(c, 'line'); c.fillStyle = '#000'; c.fillRect(-12, 0, 30, 1); phase(c, false)
+    expect(o.runDetails()).toMatchObject([{ servable: false, reason: 'covered' }])
+  })
+  it('vertical text (90° transform) with a thin line parallel to its baseline is served; one across it is covered', () => {
+    const vert = (across: boolean) => {
+      const ctx = createCanvas(200, 200).getContext('2d') as unknown as CanvasRenderingContext2D
+      const o = occlusionObserver(200, 200)
+      const c = o.wrap(ctx)
+      c.translate(100, 20); c.rotate(Math.PI / 2)
+      phase(c, 'text'); text(c, 'Typing', 0, 0)
+      const i = o.runDetails()[0]!.ink
+      c.setTransform(1, 0, 0, 1, 0, 0)
+      phase(c, 'line'); c.fillStyle = '#000'
+      if (across) c.fillRect(i.x - 2, i.y + 10, i.width + 4, 1)
+      else c.fillRect(i.x + i.width / 2, i.y - 2, 1, i.height + 4)
+      phase(c, false)
+      expect(i.height).toBeGreaterThan(i.width)
+      return o.runDetails()[0]!
+    }
+    expect(vert(false)).toMatchObject({ servable: true })
+    expect(vert(true)).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('review probe through the real DOCX renderPages: same-scope rotated struck segments erasing a sparse run withhold it', () => {
+    const ctx = createCanvas(500, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(500, 100)
+    const c = o.wrap(ctx)
+    c.fillStyle = '#fff'; c.fillRect(0, 0, 500, 100)
+    const style = (pt: number) => ({ fontFamily: 'Arial', fontSizePt: pt, bold: false, italic: false })
+    const seg = (text: string, pt: number, color: string, deco: 'underline' | 'strike', e: number, f: number, rotated: boolean, widthPx: number): Segment =>
+      ({ text, run: { text, color, [deco]: true }, style: style(pt), widthPx, transform: rotated ? { a: 0, b: 1, c: -1, d: 0, e, f } : { a: 1, b: 0, c: 0, d: 1, e, f } }) as Segment
+    const victim = 'A' + ' '.repeat(30) + 'B'
+    const page = { widthPx: 500, heightPx: 100, tables: [], images: [], lines: [{
+      yPx: 0, xPx: 0, widthPx: 500, align: 'left', isParagraphEnd: true, heightPx: 100, contentWidthPx: 500,
+      segs: [seg(victim, 18, '000000', 'underline', 20, 50, false, 240), seg(' ', 800 / 3, 'FFFFFF', 'strike', -52, 0, true, 100), seg(' ', 800 / 3, 'FFFFFF', 'strike', 165, 0, true, 100)],
+    }] } as unknown as PageLayout
+    renderPages([page], c)
+    const px = ctx.getImageData(0, 0, 500, 50).data
+    let dark = 0
+    for (let i = 0; i < px.length; i += 4) if (px[i]! < 128) dark++
+    expect(dark).toBe(0)
+    expect(o.runDetails()).toMatchObject([{ text: victim, servable: false, reason: 'covered' }])
   })
 })
 
