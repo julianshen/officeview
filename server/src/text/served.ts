@@ -10,7 +10,7 @@
  * whitespace inside a segment — is reachable from a served unit. Copy may
  * therefore break a paragraph at a withheld gap or a page break.
  */
-import { createRecordingContext, findMatches, rectsForRange, spansToLines, type IndexLine, type TextIndex, type TextSpan } from '../../../src/core/search'
+import { createRecordingContext, rectsForRange, spansToLines, type IndexLine, type TextIndex, type TextSpan } from '../../../src/core/search'
 import { hitTest, normalizeRange, rectsForSelectionOnPage, selectionSlices, textForRange, type CaretPos, type SelectionRange } from '../../../src/core/selection'
 import type { HighlightRect } from '../../../src/core/overlay'
 import { RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type LogicalTextSource } from '../../../src/core/text-recording'
@@ -28,7 +28,7 @@ export type TextJob =
   | { op: 'a11y'; unit: number; paragraph?: number }
 export type TextReply =
   | { op: 'prepare'; served: number; withheld: number; bytes: number; /** Diagnostic counts only (yield script); never sent on the wire. */ causes: WithheldCauses }
-  | { op: 'search'; matches: Array<{ unit: number; rects: number[] /* x,y,w,h … */ }> }
+  | { op: 'search'; matches: Array<{ unit: number; rects: number[] /* x,y,w,h … */ }>; /** The job stopped at SEARCH_MAX_RECTS: `matches` is a prefix of the answer. */ truncated?: true }
   | { op: 'select'; units: Array<{ unit: number; rects: number[] }>; paragraphs: number }
   | { op: 'copy'; text: string; paragraphs: number } | { op: 'copy'; refused: 'too-large'; paragraphs: number; bytes: number }
   | { op: 'a11y'; paragraphs: Array<{ rect: number[]; text?: string }> }
@@ -36,6 +36,10 @@ export type TextReply =
 
 export interface ServedUnit { lines: IndexLine[]; served: number; withheld: number; bytes: number; causes: WithheldCauses }
 
+/** R6 work bound: one search job builds at most this many highlight rects
+ * (and returns at most this many matches). A job that would pass it stops
+ * with the matches it has completed and answers `truncated: true`. */
+export const SEARCH_MAX_RECTS = 100_000
 /** R6: served-index cache bound per document per worker. */
 export const SERVED_CACHE_BYTES = 32 * 1024 * 1024
 /** Fixed allowance for one prepare's text structures, split into the two
@@ -286,6 +290,111 @@ function paragraphsIn(index: TextIndex, sel: SelectionRange): number {
 const endOf = (lines: IndexLine[], unit: number): CaretPos => ({ pageIndex: unit, lineIndex: Math.max(0, lines.length - 1), charIndex: lines[lines.length - 1]?.text.length ?? 0 })
 const startOf = (unit: number): CaretPos => ({ pageIndex: unit, lineIndex: 0, charIndex: 0 })
 
+// ── Bounded search (final fix, item 2) ─────────────────────────────────────
+// The library's findMatches builds every match of the index, rects included,
+// before anything can cut the answer. The worker matches the same text the
+// same way but keeps only the first `limit` matches of a unit, in line →
+// position order, and builds rects for those alone.
+
+/** One span of a paragraph source on a line, as findMatches collects them. */
+interface SourceRange { span: TextSpan; lineIndex: number; offset: number }
+/** A match not yet given rects. `line`/`start`: its first line and offset
+ * there (the order key); `item`/`at`: findMatches' emission order (ties).
+ * `ranges`/`first`: a source match's spans and the first one it covers. */
+interface Candidate { line: number; start: number; item: number; at: number; ranges?: SourceRange[]; first?: number }
+const candidateOrder = (a: Candidate, b: Candidate) => a.line - b.line || a.start - b.start || a.item - b.item || a.at - b.at
+
+/**
+ * The first `limit` matches of `needle` on one unit's lines, ordered by
+ * line, then position, then findMatches' own order — the order a stable
+ * sort of findMatches' result by (line, start) gives. At most 2 × `limit`
+ * candidates are held at once; nothing unbounded is built or sorted. Matching
+ * stops as soon as no later match can come before the `limit`-th kept: at
+ * the end of a source-less line, in a paragraph source whose spans lie in
+ * source order (every painter's), and before every item that starts on a
+ * later line. A source whose spans are out of order is scanned to its end
+ * (positions only: a candidate past the cut is not built).
+ */
+function unitMatches(lines: IndexLine[], needle: string, caseSensitive: boolean, limit: number): Candidate[] {
+  if (!(limit > 0)) return []
+  const sources = new Map<LogicalTextSource, SourceRange[]>()
+  lines.forEach((line, lineIndex) => {
+    let offset = 0
+    for (const span of line.spans) {
+      if (span.logical) {
+        const ranges = sources.get(span.logical.source) ?? []
+        ranges.push({ span, lineIndex, offset }); sources.set(span.logical.source, ranges)
+      }
+      offset += span.text.length
+    }
+  })
+  // Items in findMatches' emission order: paragraph sources, then source-less lines.
+  const items: Array<{ minLine: number; text: string; ranges?: SourceRange[]; ordered: boolean }> = []
+  for (const [source, ranges] of sources) {
+    ranges.sort((a, b) => a.span.logical!.start - b.span.logical!.start)
+    let minLine = Infinity, ordered = true
+    ranges.forEach((r, i) => {
+      minLine = Math.min(minLine, r.lineIndex)
+      const p = ranges[i - 1]
+      if (p && !(r.lineIndex > p.lineIndex || (r.lineIndex === p.lineIndex && r.offset >= p.offset + (p.span.logical!.end - p.span.logical!.start)))) ordered = false
+    })
+    items.push({ minLine, text: source.text, ranges, ordered })
+  }
+  lines.forEach((line, li) => { if (!line.spans.some((span) => span.logical)) items.push({ minLine: li, text: line.text, ordered: true }) })
+  const byLine = items.map((_, i) => i).sort((a, b) => items[a]!.minLine - items[b]!.minLine || a - b)
+
+  const kept: Candidate[] = []
+  /** The `limit`-th kept candidate once there are that many: nothing at or after it is wanted. */
+  let cut: Candidate | undefined
+  const settle = () => { kept.sort(candidateOrder); if (kept.length > limit) kept.length = limit; cut = kept.length === limit ? kept[limit - 1] : undefined }
+  /** Keeps the candidate unless it is at or after the cut (false). */
+  const offer = (line: number, start: number, item: number, at: number, ranges?: SourceRange[], first?: number): boolean => {
+    if (cut && (line - cut.line || start - cut.start || item - cut.item || at - cut.at) >= 0) return false
+    kept.push(ranges ? { line, start, item, at, ranges, first } : { line, start, item, at })
+    if ((!cut && kept.length === limit) || kept.length >= 2 * limit) settle()
+    return true
+  }
+  for (const i of byLine) {
+    const it = items[i]!
+    if (cut && cut.line < it.minLine) break
+    const haystack = caseSensitive ? it.text : it.text.toLowerCase()
+    const ranges = it.ranges
+    let from = 0, lo = 0
+    for (;;) {
+      const at = haystack.indexOf(needle, from)
+      if (at < 0) break
+      const end = at + needle.length
+      from = end
+      if (!ranges) { if (!offer(it.minLine, at, i, at)) break; continue }
+      // The first span the match covers (logical end > at and start < end), as findMatches' filter finds it.
+      while (lo < ranges.length && ranges[lo]!.span.logical!.end <= at) lo++
+      let first = -1
+      for (let j = lo; j < ranges.length && ranges[j]!.span.logical!.start < end; j++) if (ranges[j]!.span.logical!.end > at) { first = j; break }
+      if (first < 0) continue
+      const f = ranges[first]!
+      if (!offer(f.lineIndex, f.offset + Math.max(0, at - f.span.logical!.start), i, at, ranges, first) && it.ordered) break
+    }
+  }
+  settle()
+  return kept
+}
+
+/** A candidate's rects, as findMatches builds them; undefined once they would take the job past `budget` rects. */
+function candidateRects(c: Candidate, lines: IndexLine[], length: number, budget: number): HighlightRect[] | undefined {
+  if (!c.ranges) { const r = rectsForRange(lines[c.line]!, c.at, c.at + length); return r.length <= budget ? r : undefined }
+  const end = c.at + length
+  let rects: HighlightRect[] | undefined
+  for (let j = c.first!; j < c.ranges.length && c.ranges[j]!.span.logical!.start < end; j++) {
+    const r = c.ranges[j]!, logical = r.span.logical!
+    if (!(logical.end > c.at)) continue
+    const part = rectsForRange(lines[r.lineIndex]!, r.offset + Math.max(0, c.at - logical.start), r.offset + Math.min(r.span.text.length, end - logical.start))
+    if (!rects) rects = part
+    else for (const rect of part) rects.push(rect)
+    if (rects.length > budget) return undefined
+  }
+  return rects ?? []
+}
+
 export class TextRefusal extends Error { constructor(readonly code: 'unit-range' | 'bad-job') { super(code); this.name = 'TextRefusal' } }
 
 /**
@@ -317,9 +426,25 @@ export function answerText(job: Exclude<TextJob, { op: 'prepare' }>, unitCount: 
   const index: TextIndex = { pages: needed.map((u) => ({ index: u, lines: units.get(u)!.lines })) }
 
   if (job.op === 'search') {
-    const found = findMatches(index, job.query, { caseSensitive: job.caseSensitive })
-      .sort((a, b) => a.pageIndex - b.pageIndex || a.lineIndex - b.lineIndex || a.start - b.start)
-    return { op: 'search', matches: found.slice(0, Math.max(0, job.maxMatches)).map((m) => ({ unit: m.pageIndex, rects: flat(m.rects) })) }
+    // Unit → line → position order; the budget is spent unit by unit and no
+    // unit is matched once it is met. The caller asks for one match more than
+    // it will send, so it sees whether the answer went on.
+    const needle = job.caseSensitive ? job.query : job.query.toLowerCase()
+    const limit = Math.min(Math.floor(Math.max(0, job.maxMatches)) || 0, SEARCH_MAX_RECTS)
+    const matches: Array<{ unit: number; rects: number[] }> = []
+    let built = 0
+    if (needle.length > 0) for (const u of needed) {
+      if (matches.length >= limit) break
+      const lines = units.get(u)!.lines
+      for (const c of unitMatches(lines, needle, job.caseSensitive, limit - matches.length)) {
+        const rects = candidateRects(c, lines, needle.length, SEARCH_MAX_RECTS - built)
+        if (!rects) return { op: 'search', matches, truncated: true }
+        built += rects.length
+        matches.push({ unit: u, rects: flat(rects) })
+      }
+    }
+    // A job that asked for more matches than the bound allows cannot tell whether the answer went on.
+    return matches.length >= limit && job.maxMatches > limit ? { op: 'search', matches, truncated: true } : { op: 'search', matches }
   }
 
   if (job.op === 'a11y') {

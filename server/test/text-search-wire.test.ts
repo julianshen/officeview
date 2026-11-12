@@ -160,6 +160,15 @@ describe('ops.ts runSearch with a fake pool', () => {
     expect(over.sent.filter((m) => m.type === 'search-result').flatMap((m) => m.matches).length).toBe(5000)
   })
 
+  test('final fix: a worker job that stopped at its rect bound ends the search truncated, and no later batch is asked', async () => {
+    const r = await run(24, async (j) => ({ op: 'search', matches: matches(3, j.fromUnit), ...(j.fromUnit === 8 ? { truncated: true as const } : {}) }))
+    expect(r.jobs.map((j) => j.fromUnit)).toEqual([0, 8])
+    expect(r.sent.filter((m) => m.type === 'search-result').flatMap((m) => m.matches).length).toBe(6)
+    expect(r.sent.at(-1)).toEqual({ reqId: 7, type: 'search-done', total: 6, truncated: true })
+    expect(r.refused).toEqual([])
+    expect(r.slot.search).toBeUndefined()
+  })
+
   test('zero units: search-done at once, no pool job', async () => {
     const r = await run(0, async () => { throw new Error('unreachable') })
     expect(r.jobs).toEqual([])

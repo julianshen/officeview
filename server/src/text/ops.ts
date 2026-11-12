@@ -137,7 +137,8 @@ export async function runSearch(c: SearchContext): Promise<void> {
       // `total` counts the entries actually sent; an omitted match frees its budget slot.
       run.sent += send.length - chunks.omitted
       if (chunks.omitted) omitted = true
-      if (reply.matches.length > remaining) return done(true)
+      // More than may be sent, or the worker stopped at its rect bound: the answer is a prefix.
+      if (reply.matches.length > remaining || reply.truncated === true) return done(true)
     }
     if (current()) done(false)
   } finally {
