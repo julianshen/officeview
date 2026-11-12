@@ -302,6 +302,15 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     expect(only(withExactCfEvidence(BAR_PARSE_CAPS, () => parse(at('abc"'))).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-cfvo' })
   })
 
+  it('a malformed rule activePresent fails closed on the streamed path too (Task 20 carry-over)', async () => {
+    injectExactCfEvidence(BAR_PARSE_CAPS)
+    const xml = baseBar('A1:A5', 1, MINMAX + BLUE, undefined, ' activePresent="maybe"')
+    const streamed = await stream(xml)
+    expect(only(streamed.value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+    expect(streamed.value).toEqual(parse(xml).value)
+    streamed.release()
+  })
+
   it('bar structure refusals', () => {
     injectExactCfEvidence(BAR_PARSE_CAPS)
     const reason = (inner: string) => only(parse(inner).value.rules).definition
@@ -329,6 +338,14 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     // A malformed companion flag is not a boolean: invalid, never read as inactive.
     expect(withCompanionFlag('maybe')).toMatchObject(unresolved('cf-invalid-rule'))
     expect(withCompanionFlag('0').kind).toBe('dataBar')
+    // Task 20 carry-over: a malformed flag on the rule itself fails closed like the companion's (cf-invalid-rule),
+    // base and standalone x14 alike, never read as inactive.
+    const standaloneFlag = (flag: string) => x14Block(companion('A1:A5', '{00000000-0000-4000-8000-0000000000A1}', ' minLength="0" maxLength="100" gradient="0" direction="leftToRight"',
+      '<x14:cfvo type="min"/><x14:cfvo type="max"/><x14:fillColor rgb="FF638EC6"/>', ` priority="1" activePresent="${flag}"`))
+    for (const flag of ['maybe', '2', '']) {
+      expect(reason(baseBar('A1:A5', 1, MINMAX + BLUE, undefined, ` activePresent="${flag}"`)), `base ${flag}`).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+      expect(reason(standaloneFlag(flag)), `x14 ${flag}`).toMatchObject({ kind: 'unresolved', reason: 'cf-invalid-rule' })
+    }
     // autoMin/autoMax resolve only on <x14:cfvo>.
     expect(reason(baseBar('A1:A5', 1, '<cfvo type="autoMin"/><cfvo type="max"/>' + BLUE))).toMatchObject(unresolved('cf-unsupported-rule'))
     // S3-D positional and legacy shapes: unresolved until bar:bounds-positional.

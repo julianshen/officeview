@@ -208,7 +208,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
                 expect(gotMatched, `${cellKey}: only bar rules cover it, so no style may paint until ${barCaps.join(', ')} is verified`).toBe(false)
                 continue
               }
-              if (underUnevidencedBarStop(c, exp.ref)) continue // Ruling S3-J: asserted in the pending S3-J test below
+              if (underUnevidencedBarStop(c, exp.ref)) continue // Ruling S3-J: asserted in the S3-J tests below
               if (st?.fillColor) {
                 // A fill that paints is exactly Excel's fill for that cell (the capture's background, +-8 per channel).
                 const excel = excelCellBackground(c, exp.ref)
@@ -510,18 +510,17 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
   })
 
 
-  // PENDING (Needs ruling / Task 20): Ruling S3-J reads "until bar:composition-bar-stopIfTrue is verified, the rule is
-  // unresolved, so §5.7.1 withholds every later rule on its cells (tainted.add('ALL'))". Production today still paints
-  // the later DXF fill on stage3-bar-composition H2:H4 (it does not yet treat the bar as a stopIfTrue rule). Excel's
-  // capture shows that same DXF fill (Excel ignores the bar's stopIfTrue), so the paint is not a wrong colour, but it is
-  // painted without the evidence the ruling requires. `it.fails` keeps the suite green while the gap exists and turns
-  // red the moment production honours S3-J, so the pin can then be flipped to `it`.
-  const s3jViolations = async (): Promise<string[]> => {
+  // Ruling S3-J (Task 20): until bar:composition-bar-stopIfTrue is verified a bar carrying stopIfTrue="1" is unresolved,
+  // so §5.7.1 withholds every later rule on its cells (compose taints ALL). The flag lives in the INPUT workbook only:
+  // Excel's resave drops stopIfTrue from the base bar rule (saved stage3-bar-composition H2:H5 reads `priority="13"` with
+  // no flag), so the saved workbook has no stopping bar to honour. The withholding is therefore asserted on the input
+  // workbook, as the Task 18c test below does for the x14 forms Excel rewrites.
+  const s3jViolations = async (workbook: 'input' | 'saved'): Promise<string[]> => {
     const violations: string[] = []
     for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
       const cells = c.expected.cells.filter(e => underUnevidencedBarStop(c, e.ref))
       if (cells.length === 0) continue
-      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
+      const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, workbook === 'input' ? c.input : c.saved)))
       const doc = await parseXlsx(await OfficePackage.load(bytes))
       const sheet = doc.sheets.find(x => x.name === c.sheet) ?? doc.sheets[0]!
       const paint = await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence })
@@ -534,12 +533,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     }
     return violations
   }
-  it.fails('PENDING S3-J: a later rule under an unevidenced bar stopIfTrue is withheld (production gap, Task 20)', async () => {
-    expect(await s3jViolations()).toEqual([])
-  })
-  it('the S3-J gap is exactly the later DXF fill on composition H2:H4, and it is Excel\'s fill there', async () => {
-    expect(await s3jViolations()).toEqual(['stage3-bar-composition:H2', 'stage3-bar-composition:H3', 'stage3-bar-composition:H4'])
+  it('S3-J: a later rule under an unevidenced bar stopIfTrue is withheld (input workbook, the flag Excel authored)', async () => {
     const c = manifest.cases.find(x => x.id === 'stage3-bar-composition')!
+    expect(c.expected.cells.filter(e => underUnevidencedBarStop(c, e.ref)).map(e => e.ref)).toEqual(expect.arrayContaining(['H2', 'H3', 'H4']))
+    expect(await s3jViolations('input')).toEqual([])
+  })
+  it('S3-J: the saved workbook carries no bar stopIfTrue, so its later DXF fill on H2:H4 is Excel\'s fill', async () => {
+    // Excel ignores and drops the flag on resave; production then paints exactly the fill Excel painted there.
+    expect(await s3jViolations('saved')).toEqual(['stage3-bar-composition:H2', 'stage3-bar-composition:H3', 'stage3-bar-composition:H4'])
+    const c = manifest.cases.find(x => x.id === 'stage3-bar-composition')!
+    const saved = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))))
+    const rules = (saved.sheets.find(x => x.name === c.sheet) ?? saved.sheets[0]!).conditionalFormatting!.rules
+    const hBar = rules.find(r => r.priority === 13)!
+    expect(hBar.writes.has('dataBar')).toBe(true)
+    expect(hBar.stopIfTrue).toBe(false)
     for (const ref of ['H2', 'H3', 'H4']) expect(argbDelta(excelCellBackground(c, ref), 'FFFFC7CE'), ref).toBeLessThanOrEqual(8)
   })
 
