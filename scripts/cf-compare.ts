@@ -1,7 +1,12 @@
 /**
  * XLSX Conditional Formatting reference comparator (plan Task 1 & Task 8).
  *
- *   bun scripts/cf-compare.ts [--stage 1] [--mode static|interactive|paged|print|export] [--case <id>] [--out <dir>]
+ *   bun scripts/cf-compare.ts [--stage 1] [--mode static|interactive|paged|print|export] [--case <id>] [--out <dir>] [--evidence production|audit]
+ *
+ * `--evidence audit` (Task 22) runs the viewer under the Stage 3 audit's OWN result instead of the published set: the
+ * verified capabilities, the selected bar layout and the measured automatic colours, injected exactly on top of
+ * production's Stage 1/2 set before any workbook is parsed. Until Task 23 publishes, that is the only way to compare
+ * bars against Excel; the default stays `production`.
  *
  * Reuses the sparkline comparator primitives (`diffFrames`, `withinTolerance`, `COMPARE_SCALE`, `STRONG_DELTA`,
  * `loadFrame`, `crop`) from `scripts/sparkline-compare.ts`, validates manifest hashes and strict capture
@@ -575,9 +580,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const modeArg = (args.includes('--mode') ? args[args.indexOf('--mode') + 1] : 'static') as CfCompareMode
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
   const outDir = args.includes('--out') ? resolve(args[args.indexOf('--out') + 1]) : undefined
+  const evidenceArg = args.includes('--evidence') ? args[args.indexOf('--evidence') + 1] : 'production'
+  if (evidenceArg !== 'production' && evidenceArg !== 'audit') {
+    console.error('Usage: --evidence production|audit')
+    process.exit(2)
+  }
 
   if (!['static', 'interactive', 'paged', 'print', 'export'].includes(modeArg)) {
-    console.error(`Usage: bun scripts/cf-compare.ts [--stage N] [--mode static|interactive|paged|print|export] [--case id] [--out dir]`)
+    console.error(`Usage: bun scripts/cf-compare.ts [--stage N] [--mode static|interactive|paged|print|export] [--case id] [--out dir] [--evidence production|audit]`)
     process.exit(2)
   }
 
@@ -587,6 +597,16 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 
   const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
+  if (evidenceArg === 'audit') {
+    const { auditStage3Manifest } = await import('./cf-refs/audit')
+    const evidence = await import('../src/xlsx/cf/evidence')
+    const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+    const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
+    evidence.injectExactCfEvidence([...evidence.VERIFIED_CAPABILITIES, ...verified])
+    evidence.injectCfBarLayout(audit.barLayout.layout)
+    evidence.injectCfAutoBarColours(audit.autoBarColours)
+    console.log(`Evidence: audit (${verified.length} Stage 3 capabilities verified by the harness, unpublished)`)
+  }
   let passCount = 0
   let pendingCount = 0
   let unsupportedCount = 0

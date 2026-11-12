@@ -557,3 +557,36 @@ test('Stage 2 print capture produces canvas with scale fill', async ({ context }
     })
   }
 })
+
+test('Stage 3 data bars stay withheld under production evidence on every leg (Task 22)', async ({ context }) => {
+  // Nothing Stage 3 is published (Task 23 publishes), so the Excel-resaved lengths case, whose bars Excel draws in
+  // FF0000FF, must paint no bar pixel and announce its bar cells as unavailable formatting, never as a data bar.
+  const BARS = 'stage3-bar-lengths'
+  const bytes = readFileSync(`${CF_FIXTURES}${BARS}.xlsx`)
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      const page = await context.newPage()
+      try {
+        await openCf(page, BARS, bytes, leg)
+        const c6 = page.getByRole('gridcell', { name: /^C6, value / })
+        await expect(c6, `${leg.name}: C6 announces its withheld bar as unavailable`).toContainText('Conditional formatting unavailable', { timeout: 30_000 })
+        await expect(c6).not.toContainText('Data bar')
+        await expect(page.getByRole('alert'), `${leg.name}: no error alert`).toHaveCount(0)
+        const box = await page.locator('canvas').first().boundingBox()
+        expect(box, 'the grid canvas has a box').not.toBeNull()
+        const shoot = async () => page.screenshot({ clip: { x: box!.x, y: box!.y, width: Math.min(box!.width, 1000), height: Math.min(box!.height, 480) }, animations: 'disabled', caret: 'hide' })
+        let previous = await shoot(), shot = previous
+        for (const deadline = Date.now() + 15_000; Date.now() < deadline;) {
+          await page.waitForTimeout(250)
+          shot = await shoot()
+          if (shot.equals(previous)) break
+          previous = shot
+        }
+        const grid = await decode(shot)
+        expect(countColor(grid, 0, 0, grid.width, grid.height, 0, 0, 0xff, 32), `${leg.name}: no bar pixel`).toBe(0)
+      } finally {
+        await page.close()
+      }
+    })
+  }
+})
