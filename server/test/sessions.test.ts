@@ -48,7 +48,7 @@ describe('effective policy (§2 item 5 defaults; Stage-2a forensic)', () => {
 })
 
 describe('audit table', () => {
-  const row = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off' as const, forensic: false, forensicRequested: false }, relaxed: true, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const } }
+  const row = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off' as const, forensic: false, forensicRequested: false }, relaxed: true, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const }, services: { copy: false as const, textA11y: 'off' as const } }
   it('is write-once', () => {
     const a = new AuditTable(); a.record('s1', row)
     expect(() => a.record('s1', row)).toThrow(/write-once/)

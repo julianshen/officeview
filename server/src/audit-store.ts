@@ -5,6 +5,7 @@
 import { Database } from 'bun:sqlite'
 import { chmodSync, closeSync, existsSync, openSync, statSync } from 'node:fs'
 import type { AuditRowInput } from './audit'
+import type { A11yMode, CopyPolicy } from './hooks'
 import type { MarkSpec } from './render'
 
 /** §9.3: rows are kept 90 days, then deleted. */
@@ -18,6 +19,10 @@ export interface StoredRow extends AuditRowInput {
 }
 /** One `(unitIndex, scale)` delivered to a sid; `refSha256` is the canonical PNG the mark was applied to. */
 export interface DeliveryRecord { sid: string; unitIndex: number; scale: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
+/** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated. */
+export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; at: number }
+/** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). */
+export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; at: number }
 export interface DetectionLog { at: number; osUser: string; investigator?: string; imageSha256: string; docRefs: string[]; unitIndex: number; answer: string; sid?: string }
 
 const SCHEMA = `
@@ -26,6 +31,10 @@ CREATE INDEX IF NOT EXISTS rows_doc ON rows (doc_ref);
 CREATE INDEX IF NOT EXISTS rows_msg ON rows (key_generation, msg40);
 CREATE TABLE IF NOT EXISTS deliveries (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, scale REAL NOT NULL, status TEXT NOT NULL, reason TEXT, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, unit_index, scale, ref_sha256, status));
 CREATE INDEX IF NOT EXISTS deliveries_unit ON deliveries (unit_index);
+CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind TEXT NOT NULL, paragraphs INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
+CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS services_sid ON services (sid);
 CREATE TABLE IF NOT EXISTS counters (gen INTEGER PRIMARY KEY, next INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS detections (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, log TEXT NOT NULL);
 `
@@ -93,6 +102,24 @@ export class AuditStore {
     return this.db.query<DeliveryCols & { row: string }, [string, number]>('SELECT d.*, r.row FROM deliveries d JOIN rows r ON r.sid = d.sid WHERE r.doc_ref = ? AND d.unit_index = ? ORDER BY d.rowid')
       .all(docRef, unitIndex).map((x) => ({ sid: x.sid, row: JSON.parse(x.row) as StoredRow, delivery: delivery(x) }))
   }
+  /** Appends one copy/a11y record (repeats are kept); throws for a sid with no row. */
+  putCopy(r: CopyRecord): void {
+    this.writable()
+    this.db.query('INSERT INTO copies (sid, kind, paragraphs, from_unit, to_unit, at) VALUES (?, ?, ?, ?, ?, ?)').run(r.sid, r.kind, r.paragraphs, r.fromUnit, r.toUnit, r.at)
+  }
+  copies(sid: string): CopyRecord[] {
+    return this.db.query<{ sid: string; kind: CopyRecord['kind']; paragraphs: number; from_unit: number; to_unit: number; at: number }, [string]>('SELECT * FROM copies WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, kind: r.kind, paragraphs: r.paragraphs, fromUnit: r.from_unit, toUnit: r.to_unit, at: r.at }))
+  }
+  /** Appends one services change; throws for a sid with no row. */
+  putServices(r: ServicesRecord): void {
+    this.writable()
+    this.db.query('INSERT INTO services (sid, copy, text_a11y, at) VALUES (?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, r.at)
+  }
+  services(sid: string): ServicesRecord[] {
+    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, at: r.at }))
+  }
   /** The token `takeToken(gen)` would return. */
   nextToken(gen: number): number {
     return this.db.query<{ next: number }, [number]>('SELECT next FROM counters WHERE gen = ?').get(gen)?.next ?? 0
@@ -118,12 +145,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, copies and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      this.db.query('DELETE FROM deliveries WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)').run(cutoff)
+      for (const t of ['deliveries', 'copies', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }

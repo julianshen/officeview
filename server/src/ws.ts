@@ -27,7 +27,7 @@ import { AdmissionRefused, RenderFailed, type Pool } from './pool'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
-import { runSearch, searchArgs, type SearchRun } from './text/ops'
+import { rangeArg, runCopy, runSearch, runSelect, searchArgs, type SearchRun, type TextSlot } from './text/ops'
 import { issueToken, newSid, verifyToken } from './tokens'
 
 /** §6.2 rule 8 — the complete registry. 4007 is client-only and never sent here. */
@@ -97,7 +97,10 @@ export function createStreamServer(o: StreamServerOptions) {
   const audit = o.audit ?? new AuditTable()
   const ipRates = new IpRates()
   const docs = new Map<string, DocState>()          // docRef → state
-  const sessionDoc = new Map<string, { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
+  /** Per-sid session entry. Its text state (in-flight search/select, the copy
+   * queue and the quota counter `copiedParagraphs`) survives resume and is
+   * gone on teardown. */
+  const sessionDoc = new Map<string, TextSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -208,10 +211,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -242,6 +245,11 @@ export function createStreamServer(o: StreamServerOptions) {
     const token = await issueToken(o.keys.kToken, { docRef: s.docRef, sid: s.sid, ttlSec: ttl, now: nowSec() })
     if (gone(ws)) return
     if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
+    // A change of the mutable text services is durable before it takes effect
+    // (the open row stays write-once); a failed write refuses the resume.
+    if (JSON.stringify([policy!.copy, policy!.textA11y]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y])) {
+      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y }) } catch { return close(ws, 'policy-refused') }
+    }
     const old = s.activeSocket as unknown as WS | undefined
     if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
     const reaper = reapers.get(s.sid); if (reaper) { clearTimeout(reaper); reapers.delete(s.sid) }
@@ -264,6 +272,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)
     sessionDoc.delete(sid)
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
+    if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
     if (sd) releaseDoc(sd.doc.docRef)
   }
   /** Keep the session (and its document charge) for a resume until the grace
@@ -374,19 +383,30 @@ export function createStreamServer(o: StreamServerOptions) {
     sendFrames(ws, messages)
   }
 
+  /** The onUnit preamble for a text op: stream phase, reqId, token, ownership
+   * after the await, jti. Answers (refuse/close) and returns undefined on failure. */
+  async function textOp(ws: WS, msg: Record<string, unknown>) {
+    const reqId = msg.reqId
+    const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return void refuse(ws, reqId, 'policy-refused')
+    const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
+    if (!owns(ws, s.sid)) return
+    if (!v.ok) return void (v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused'))
+    const jti = table.acceptJti(s.sid, v.claims.jti)
+    if (jti === 'rotated') return void refuse(ws, reqId, 'session-rotated')
+    if (jti === 'unknown') return void refuse(ws, reqId, 'policy-refused')
+    return { reqId, s, sd }
+  }
+  /** The issuing socket still owns the sid, in `stream`, with the same entry. */
+  const textAlive = (ws: WS, sid: string, sd: unknown) => () => owns(ws, sid) && ws.data.phase === 'stream' && sessionDoc.get(sid) === sd
+
   /** §4.1 search: the onUnit checks, then R6 arguments and the R5 'text'
    * rate; `runSearch` walks the units and owns supersession. Between batches
    * the run re-checks ownership, the stream phase and the session entry. */
   async function onSearch(ws: WS, msg: Record<string, unknown>) {
-    const reqId = msg.reqId
-    const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
-    if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return refuse(ws, reqId, 'policy-refused')
-    const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
-    if (!owns(ws, s.sid)) return
-    if (!v.ok) return v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused')
-    const jti = table.acceptJti(s.sid, v.claims.jti)
-    if (jti === 'rotated') return refuse(ws, reqId, 'session-rotated')
-    if (jti === 'unknown') return refuse(ws, reqId, 'policy-refused')
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
     const args = searchArgs(msg)
     if (!args) return refuse(ws, reqId, 'policy-refused')
     // R5: a 'text' overflow is a refusal only (never a breach toward 4008).
@@ -400,9 +420,55 @@ export function createStreamServer(o: StreamServerOptions) {
         if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
         return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
       },
-      alive: () => owns(ws, s.sid) && ws.data.phase === 'stream' && sessionDoc.get(s.sid) === sd,
+      alive: textAlive(ws, s.sid, sd),
       send: (m) => send(ws, m),
       refuse: (code) => refuse(ws, reqId, code),
+    })
+  }
+
+  /** §4.1 select (rects of a range): requires `can.copy`; charged only the
+   * message budget (R5). A newer select on the sid supersedes this one. */
+  async function onSelect(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    if (sd.policy.copy === false) return refuse(ws, reqId, 'text-unavailable')
+    const range = rangeArg(msg.range, sd.doc.units.length)
+    if (!range) return refuse(ws, reqId, 'policy-refused')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    await runSelect({
+      slot: sd, reqId, range,
+      job: (job) => o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code) => refuse(ws, reqId, code),
+    })
+  }
+
+  /** §4.1 copy: the copy caps, the session quota and the audit record
+   * (`runCopy`); charged the R5 'text' rate. Copies on one sid are serial. */
+  async function onCopy(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    if (sd.policy.copy === false) return refuse(ws, reqId, 'text-unavailable')
+    const range = rangeArg(msg.range, sd.doc.units.length)
+    if (!range) return refuse(ws, reqId, 'policy-refused')
+    if (ws.data.rates.check('text', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    await runCopy({
+      slot: sd, reqId, range, unitCount: sd.doc.units.length,
+      caps: () => sd.policy.copy,
+      job: (job) => {
+        // A queued copy can outlive the parse: charge it when it runs.
+        if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return Promise.reject(new Error('document cache full'))
+        return o.pool.text(s.sid, { docRef: sd.doc.docRef, contentPolicy: sd.policy.contentPolicy, ...job })
+      },
+      record: (r) => audit.recordCopy({ sid: s.sid, kind: 'copy', ...r }),
+      alive: textAlive(ws, s.sid, sd),
+      send: (m) => send(ws, m),
+      refuse: (code, nums) => refuse(ws, reqId, code, nums),
     })
   }
 
@@ -487,6 +553,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'renew-ack') return onRenewAck(ws, m)
     if (m.type === 'unit') return onUnit(ws, m)
     if (m.type === 'search') return onSearch(ws, m)
+    if (m.type === 'select') return onSelect(ws, m)
+    if (m.type === 'copy') return onCopy(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 

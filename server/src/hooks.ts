@@ -39,7 +39,9 @@ export interface EffectivePolicy {
   print: boolean
   role: 'presenter' | 'audience'
   /** Any departure from the protected defaults (audited, §6.1). Copy and
-   * a11y do not count: the audit row records the resolved services instead. */
+   * a11y do not count (R4): the audit row records the resolved services at
+   * open (`AuditRow.services`), and every resume that changes them appends a
+   * timestamped entry (`AuditRow.servicesChanged`, the audit `services` table). */
   relaxed: boolean
   /** Resolved copy caps; `'full'` ⇒ both null. Mutable on resume. */
   copy: CopyPolicy
