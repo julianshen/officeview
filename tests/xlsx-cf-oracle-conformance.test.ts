@@ -77,6 +77,16 @@ function excelCellBackground(c: { id: string; captures: ReadonlyArray<{ pngPath:
   }
   return [...votes].sort((a, b) => b[1] - a[1])[0]![0]
 }
+/** The committed capture of a Stage 3 case, decoded once (shared with excelCellBackground). */
+function excelPng(c: { id: string; captures: ReadonlyArray<{ pngPath: string; sidecarPath: string }> }): DecodedPng {
+  excelCellBackground(c, 'A1')
+  return stage3Pngs.get(c.id)!.png
+}
+const pixelArgb = (png: DecodedPng, x: number, y: number): string => {
+  const i = (y * png.width + x) * 4
+  return `FF${[0, 1, 2].map(k => png.data[i + k]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+}
+const argbHex = (argb: number): string => `FF${(argb & 0xffffff).toString(16).padStart(6, '0').toUpperCase()}`
 const argbDelta = (a: string, b: string): number => Math.max(...[2, 4, 6].map(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16))))
 
 /**
@@ -678,6 +688,14 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
    * Geometry: layoutDataBar at the capture scale (1 device px per pt: zoom x DPR = 3/4 in viewer units, a pure unit
    * conversion of the sidecar's cellLeftPx/cellWidthPx and row heights) against the sidecar's raw px. Edges and the axis
    * within +-1 px, the vertical insets exactly (Ruling S3-A step 6). No expected px is computed by the painter.
+   *
+   * Units: 4/3 CSS px per point is the viewer's convention, taken from `src/xlsx/sparklines/geometry.ts` (`PT_PX`, its
+   * Task 7 reference comparison) and the static renderer (`cellFontString`: pt x 96/72); `paintCfCapture` in
+   * scripts/cf-compare.ts renders Excel's 1 px/pt captures at the same density (pxPerPt / CSS_PX_PER_PT). The factor is
+   * that shared convention, not measured here: the conversion is exact only if it holds.
+   *
+   * Axis (fix round 1): every measured axis column is compared pixel by pixel over its whole cell height (Excel's
+   * dotted pattern: 3 on, 1 off, the gap at y = x (mod 4), white in the gap); a solid axis fails (mutant below).
    */
   it('bar geometry conformance (Lesson 1)', async () => {
     const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
@@ -715,7 +733,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     for (const f of Object.values(BAR_FINDINGS)) expect(f.outcome).toBe('withheld')
 
     const usedFindings = new Set<string>(), usedPainted = new Set<string>()
-    let painted = 0, withheldFound = 0, measuredPainted = 0, axes = 0
+    let painted = 0, withheldFound = 0, measuredPainted = 0, axes = 0, axisRows = 0, solidMutantFails = 0
     injectCfBarLayout(audit.barLayout.layout)
     injectCfAutoBarColours(audit.autoBarColours)
     try {
@@ -751,8 +769,21 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
               }
               if (o!.axisPx !== undefined) {
                 expect(p!.axis, `${cellKey}: Excel draws an axis`).toBeDefined()
-                expect(Math.abs(p!.axis!.x - o!.axisPx), `${cellKey} axis ${p!.axis!.x} vs ${o!.axisPx}`).toBeLessThanOrEqual(1)
+                expect(p!.axis!.x, `${cellKey} axis x`).toBe(o!.axisPx)
                 expect(p!.axis!.w).toBe(1)
+                // Pixel by pixel down the column: the gap underlay, overpainted by the dashes, against Excel's pixels.
+                const ours = new Map<number, number>()
+                for (const r of [p!.axis!, ...(p!.axisDashes ?? [])]) for (let y = r.y; y < r.y + r.h; y++) ours.set(y, r.argb)
+                const png = excelPng(c)
+                let solidMismatch = false
+                for (let y = top; y < top + height; y++) {
+                  const excel = pixelArgb(png, o!.axisPx, y)
+                  expect(ours.has(y), `${cellKey} axis row ${y}`).toBe(true)
+                  expect(argbDelta(argbHex(ours.get(y)!), excel), `${cellKey} axis (${o!.axisPx}, ${y}) ours ${argbHex(ours.get(y)!)} Excel ${excel}`).toBeLessThanOrEqual(8)
+                  if (argbDelta(argbHex(bar.axisColor!), excel) > 8) solidMismatch = true
+                  axisRows++
+                }
+                if (solidMismatch) solidMutantFails++
                 axes++
               } else if (p!.axis) {
                 // Only an axis the capture cannot see: the measured automatic white (S3-AUTO-BG) on Excel's white cell.
@@ -776,7 +807,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
-    expect({ painted, measuredPainted, withheldFound, axes }).toEqual({ painted: 140, measuredPainted: 123, withheldFound: 80, axes: 38 })
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows }).toEqual({ painted: 140, measuredPainted: 123, withheldFound: 80, axes: 38, axisRows: 38 * 30 })
+    // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
+    expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(28)
   }, 60_000)
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {

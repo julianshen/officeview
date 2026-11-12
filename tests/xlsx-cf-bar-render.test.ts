@@ -160,14 +160,15 @@ async function pagedBatch(sheet: XlsxSheet, rows: number, cols: number): Promise
     stamp: st, key: 'paged', layer: scope.paintLayer!,
     barAt: (r, c) => scope.barAt?.(r, c),
     paintBars: (ctx, cellRect, visible, scale) => scope.paintBars?.(ctx, cellRect, visible, scale) ?? true,
-    hidesTextAt: (r, c) => scope.hidesTextAt?.(r, c) ?? false,
+    hidesTextAt: (r, c, host, scale) => scope.hidesTextAt?.(r, c, host, scale) ?? false,
     dispose: () => scope.dispose(),
   }
 }
 
-/** Static yellow fills on every bar cell, so the record shows fill → bar → content for one host. */
+/** Static yellow fills on every bar cell, so the record shows fill → bar → content for one host. The axis is the
+ * measured automatic white: an explicit (non-white) axis over a filled host withholds (its dash gap is unmeasured). */
 function fivesSheet(): XlsxSheet {
-  const sheet = barSheet([-50, 0, 50, 100])
+  const sheet = barSheet([-50, 0, 50, 100], { def: { axisArgb: 0xffffffff } })
   for (const row of sheet.rows) for (const cell of row.cells) cell.style = { numFmtId: 0, fillColor: 'FFFFFF00' }
   return sheet
 }
@@ -215,6 +216,7 @@ describe('bars paint in the fill phase in all five views', () => {
 
       const blue = '#0000ff', yellow = '#ffff00'
       const sourceRects: Record<string, { x: number; y: number; w: number; h: number }> = {}
+      const axisRects: Record<string, string[]> = {}
       for (const [name, { ops }] of Object.entries(views)) {
         // Calibrate device → source from the host's own static fill (its source rect is known).
         const fill = ops.filter(o => o.op === 'rect' && o.style === yellow)[2]
@@ -229,7 +231,12 @@ describe('bars paint in the fill phase in all five views', () => {
         expect(ops.slice(barIndex).some(o => o.op === 'rect' && o.style === yellow), `${name}: fills precede bars`).toBe(false)
         const b = ops[barIndex]!
         sourceRects[name] = { x: (b.x - ox) / k, y: (b.y - oy) / k, w: b.w / k, h: b.h / k }
+        // The axis column (gap underlay and dashes) of the host, in source space.
+        axisRects[name] = ops.filter(o => o.op === 'rect' && o.style === '#ffffff' && o.w / k < 2 && (o.y - oy) / k >= cellY - 1e-9 && (o.y - oy) / k < cellY + cellH)
+          .map(o => [(o.x - ox) / k, (o.y - oy) / k, o.w / k, o.h / k].map(v => v.toFixed(6)).join(','))
       }
+      expect(axisRects.static!.length, 'the axis paints its gap column and its dashes').toBeGreaterThan(2)
+      for (const [name, rects] of Object.entries(axisRects)) expect(rects, `${name} axis`).toEqual(axisRects.static)
       const reference = sourceRects.static!
       // [1/3, 2/3] of the 200 px host, inside the measured insets.
       expect(reference.x).toBeGreaterThan(cellX + 66); expect(reference.x + reference.w).toBeLessThan(cellX + 136)
@@ -390,7 +397,7 @@ describe('showValue=0 hides canvas text only under evidence (S3-O)', () => {
         expect(got.bars, view).toBe(2) // the minimum's bar has zero length
         expect(got.texts, view).toEqual([])
       }
-      expect(batch.hidesTextAt(1, 0)).toBe(true)
+      expect(batch.hidesTextAt(1, 0, { x: 0, y: 20, width: 200, height: 20 }, { zoom: 1, dpr: 1 })).toBe(true)
       batch.dispose()
     }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
   })
@@ -424,5 +431,78 @@ describe('showValue=0 hides canvas text only under evidence (S3-O)', () => {
         batch.dispose()
       }, options)
     }
+  })
+})
+
+describe('the axis is Excel\'s dotted column (fix round 1)', () => {
+  const axisBar = bar({ axisFraction: 1 / 3, startFraction: 1 / 3, endFraction: 2 / 3, axisColor: 0xff000000 })
+  /** The colour each device row of the axis column paints: the gap underlay, overpainted by the dashes. */
+  const column = (p: NonNullable<ReturnType<typeof layoutDataBar>>): Map<number, number> => {
+    const rows = new Map<number, number>()
+    for (const r of [p.axis!, ...p.axisDashes!]) for (let y = r.y; y < r.y + r.h; y++) rows.set(y, r.argb)
+    return rows
+  }
+  it('3 on, 1 off, the gap starting where y ≡ x (mod 4) at the capture scale, white in the gap', () => {
+    for (const [left, top] of [[84, 30], [264, 60], [444, 150], [85, 31]] as const) {
+      const p = layoutDataBar(axisBar, ptCell(left, top, 180, 30), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)!
+      expect(p.axis!.w).toBe(1)
+      const x = p.axis!.x, rows = column(p)
+      expect([...rows.keys()].sort((a, b) => a - b)).toEqual(Array.from({ length: 30 }, (_, i) => top + i))
+      for (const [y, argb] of rows) expect(argb, `x ${x} y ${y}`).toBe((((y - x) % 4) + 4) % 4 === 0 ? 0xffffffff : 0xff000000)
+    }
+  })
+  it('scales the dash with the point geometry and snaps it to device px (OD-8)', () => {
+    // 2 device px per pt: an 8 px period with 2 px gaps.
+    const p = layoutDataBar(axisBar, ptCell(84, 30, 180, 30), { zoom: 1.5, dpr: 1, output: 'device' }, CF_BAR_RENDER_MODEL, ALL)!
+    expect(p.axis!.w).toBe(2)
+    const gaps = [...column(p)].filter(([, argb]) => argb === 0xffffffff).map(([y]) => y)
+    expect(gaps.length).toBeGreaterThanOrEqual(14) // 7.5 periods in a 60 px host: 7 or 8 two-pixel gaps
+    for (const y of gaps) expect((((y - p.axis!.x) % 8) + 8) % 8 < 2, `gap ${y}`).toBe(true)
+  })
+  it('a non-white axis over a filled host withholds the bar; a white host or the white axis paints', () => {
+    const host = (fill?: string) => ({ ...ptCell(84, 30, 180, 30), ...(fill ? { fill } : {}) })
+    expect(layoutDataBar(axisBar, host('#FFFF00'), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+    expect(layoutDataBar(axisBar, host('#FFFFFF'), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.axisDashes?.length).toBeGreaterThan(0)
+    expect(layoutDataBar(axisBar, host(), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.axisDashes?.length).toBeGreaterThan(0)
+    expect(layoutDataBar({ ...axisBar, axisColor: 0xffffffff }, host('#A6A6A6'), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.axis).toBeDefined()
+    // No axis drawn: the host fill does not matter.
+    expect(layoutDataBar(bar(), host('#FFFF00'), AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.fill).toBeDefined()
+  })
+})
+
+describe('text is hidden only under a bar that paints (S3-O, fix round 1)', () => {
+  it('a bar withheld by the unmeasured minimum visible width keeps its text, at every scale', async () => {
+    await withBars(async () => {
+      // 0.001 of [0, 1000]: a non-zero share that rounds to no pixel at the capture scale (withheld at every zoom).
+      const sheet = barSheet([0, 0.001, 1000], { def: { showValue: false } })
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const metrics = computeMetrics(sheet)
+      for (const s of [0.75, 1, 2]) {
+        const r = recorder(metrics.widthPx * s, metrics.heightPx * s)
+        r.ctx.scale(s, s)
+        renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: batch })
+        // 0 (a zero-length bar, laid out) and 1000 hide their text; the withheld 0.001 shows it.
+        expect(r.ops.filter(o => o.op === 'text').map(o => o.text), `scale ${s}`).toEqual(['0.001'])
+        expect(batch.hidesTextAt(1, 0, { x: 0, y: metrics.rowHeightsPx[0]!, width: 200, height: metrics.rowHeightsPx[1]! }, { zoom: s, dpr: 1 })).toBe(false)
+        expect(batch.hidesTextAt(2, 0, { x: 0, y: 0, width: 200, height: 20 }, { zoom: s, dpr: 1 })).toBe(true)
+      }
+      const viewport = recorder(metrics.widthPx, metrics.heightPx)
+      renderSheetViewport(sheet, viewport.ctx, buildSheetGeometry(sheet), { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+      expect(viewport.ops.filter(o => o.op === 'text').map(o => o.text)).toEqual(['0.001'])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
+  })
+  it('a non-white axis over a filled host withholds the bar and keeps the text', async () => {
+    await withBars(async () => {
+      const sheet = barSheet([-50, 50, 100], { def: { showValue: false } })
+      for (const row of sheet.rows) for (const cell of row.cells) cell.style = { numFmtId: 0, fillColor: 'FFFFFF00' }
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const metrics = computeMetrics(sheet)
+      const r = recorder(metrics.widthPx, metrics.heightPx)
+      renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: batch })
+      expect(r.ops.filter(o => o.op === 'rect' && (o.style === '#0000ff' || o.style === '#000000'))).toEqual([])
+      expect(r.ops.filter(o => o.op === 'text').map(o => o.text)).toEqual(['-50', '50', '100'])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
   })
 })

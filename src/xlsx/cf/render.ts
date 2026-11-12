@@ -5,7 +5,7 @@ import { cfRuntimeEvidence, type CfEvidenceGate } from './predicates'
 import { createCfService, type CfPaintStatistics } from './service'
 import { CF_LIMITS, createCfMemory, createCfWorkBudget, measureCfPayload, type CfMemory, type CfWorkBudget } from './limits'
 import { resolveCfCellStyle } from './dxf'
-import { barHidesText, barPaintable, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarScale } from './dataBarPaint'
+import { barHidesText, barPaintable, CF_BAR_RENDER_MODEL, paintDataBars, type CfBarHost, type CfBarScale } from './dataBarPaint'
 import type { CfBarDescriptor, CfCellState, CfLiteral, CfPrepareRequest, CfStamp, CfValueSource, SourceRect } from './model'
 import type { XlsxSheet } from '../types'
 import type { RegionStyleLayer } from '../tableStyles/regionLayer'
@@ -26,10 +26,11 @@ export interface CfPaintBatch {
   /** The bar this batch paints at a source cell (current generation, every paint gate held), else undefined. */
   barAt(row: number, col: number): CfBarDescriptor | undefined
   /** Paints the batch's bars of `visible` in the fill phase, each clipped to its `cellRect` host (Task 22). */
-  paintBars(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => import('../view/textLayout').Rect | undefined,
+  paintBars(ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => CfBarHost | undefined,
     visible: { r0: number; c0: number; r1: number; c1: number }, scale: CfBarScale): boolean
-  /** Ruling S3-O: the canvas draws no value text here (a painted `showValue="0"` bar, under evidence). */
-  hidesTextAt(row: number, col: number): boolean
+  /** Ruling S3-O: the canvas draws no value text in this host at this scale (a `showValue="0"` bar that paints there,
+   * under evidence). */
+  hidesTextAt(row: number, col: number, host: CfBarHost, scale: CfBarScale): boolean
   dispose(): void
 }
 /** No inferred values: cached formula errors stay errors; missing formula
@@ -375,7 +376,7 @@ export async function prepareCfPaint(sheet: XlsxSheet, options: {
     return { stamp, key: JSON.stringify([stamp.owner, stamp.sheetId, stamp.workbookValueGen, stamp.cfGen, stamp.viewGen, stamp.structureGen, stamp.clockGen]), layer,
       barAt,
       paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, barAt, cellRect, visible, scale, allows),
-      hidesTextAt: (row, col) => barHidesText(barAt(row, col), allows),
+      hidesTextAt: (row, col, host, scale) => barHidesText(barAt(row, col), host, scale, allows),
       dispose() { if (disposed) return; disposed = true; states.clear(); bars.clear(); hold.release() } }
   } catch (error) { hold.release(); return error instanceof CfPageFault && (error.fault === 'incomplete' || error.fault === 'stale') ? undefined : unavailable(sheet) } finally {
     for (const result of statistics.results.values()) if (result.kind === 'ready') result.value.release()

@@ -26,8 +26,16 @@ export interface CfBarRenderModel {
   readonly rounding: 'half-up'
   /** `bar:render-border`: the border is a frame of this width inside the bar rect. */
   readonly borderPt: number
-  /** The axis is one column this wide over the host's full height (addendum §2; Excel's dash is not reproduced). */
+  /** The axis is one column this wide over the host's full height. */
   readonly axisPt: number
+  /**
+   * Excel's axis dash (fix round 1, verified pixel by pixel on every measured axis by the Lesson 1 conformance test):
+   * a period of `onPt + offPt` points whose gap starts where `y ≡ x (mod period)` in sheet points, `x` being the axis
+   * column's own left edge. The gap is painted `gapArgb`: the measured automatic white axis over a grey cell shows no
+   * gap, and every explicit axis was measured on a white cell, so a non-white axis over a filled host is unmeasured and
+   * withholds its bar.
+   */
+  readonly axisDash: Readonly<{ onPt: number; offPt: number; gapArgb: number }>
   /** `bar:geometry-min-visible-width`: unmeasured (non-discriminating), so absent; a non-zero length that rounds to
    * nothing withholds. */
   readonly minVisiblePt?: number
@@ -43,10 +51,12 @@ export const CF_BAR_RENDER_MODEL: CfBarRenderModel = Object.freeze({
   rounding: 'half-up',
   borderPt: 1,
   axisPt: 1,
+  axisDash: Object.freeze({ onPt: 3, offPt: 1, gapArgb: 0xffffffff }),
 })
 
-/** The cell-independent paint gates: the measured inset model, its rounding and its clip to narrow hosts. "Narrow"
- * has no measured threshold, so `bar:geometry-narrow-clip` gates every bar rather than a guessed width class. */
+/** The cell-independent paint gates: the measured inset model, its rounding and its clip to narrow hosts. Ruling S3-N
+ * withholds narrow cells only, but no width threshold for "narrow" was measured (the capture has one 12 pt column),
+ * so `bar:geometry-narrow-clip` gates EVERY bar: deliberately over-broad and fail closed, until a threshold exists. */
 export const CF_BAR_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['bar:geometry-insets', 'bar:geometry-snapping', 'bar:geometry-narrow-clip'])
 
 /** Whether a descriptor can paint at all, whatever the cell: the paint gates hold and the model covers its fill.
@@ -57,15 +67,21 @@ export function barPaintable(bar: CfBarDescriptor | undefined, model: CfBarRende
   return !bar.isGradient || model.gradientStops !== undefined
 }
 
-/** S3-O: text is hidden only under a painted bar whose `showValue` is false, and only with evidence. */
-export function barHidesText(bar: CfBarDescriptor | undefined, check: (cap: string) => boolean = defaultHasEvidence): boolean {
+/** S3-O: text is hidden only under a bar that paints in this host (laid out, not withheld) whose `showValue` is false,
+ * and only with evidence. A zero-length bar paints nothing but is not withheld, so it hides its text as Excel does. */
+export function barHidesText(bar: CfBarDescriptor | undefined, host: CfBarHost, scale: CfBarScale, check: (cap: string) => boolean = defaultHasEvidence): boolean {
   return barPaintable(bar, CF_BAR_RENDER_MODEL, check) && bar.showValue === false && check('bar:showvalue-canvas-suppression')
+    && layoutDataBar(bar, host, scale, CF_BAR_RENDER_MODEL, check) !== undefined
 }
+
+/** A bar's host: its logical rect, and the fill painted under it (CSS `#RRGGBB`) when the renderer knows one. */
+export type CfBarHost = Rect & { readonly fill?: string }
 
 /** One axis-aligned rect in output units; colours stay ARGB. */
 export type CfBarRect = Readonly<{ x: number; y: number; w: number; h: number; argb: number }>
-/** What one bar paints, in paint order: the fill, its border frame, then the axis. Empty when the host is too small. */
-export type CfBarPrimitives = Readonly<{ fill?: CfBarRect; border?: readonly CfBarRect[]; axis?: CfBarRect }>
+/** What one bar paints, in paint order: the fill, its border frame, the axis column in the gap colour, then the axis
+ * dashes over it. Empty when the host is too small. */
+export type CfBarPrimitives = Readonly<{ fill?: CfBarRect; border?: readonly CfBarRect[]; axis?: CfBarRect; axisDashes?: readonly CfBarRect[] }>
 export type CfBarScale = Readonly<{ zoom: number; dpr: number; output?: 'logical' | 'device' }>
 
 const roundHalfUp = (x: number): number => Math.floor(x + 0.5)
@@ -79,10 +95,15 @@ const roundHalfUp = (x: number): number => Math.floor(x + 0.5)
  * the trailing one) as `round(share × span)`; with an axis, the axis takes `axisPt` at `round(axisFraction × span)`
  * and each side is its own span: the positive side `span − axis`, the negative side `axis − axisPt` (Ruling S3-B:
  * axis layouts are `lengthBasis: 'side'`). Right-to-left mirrors the whole layout inside the span.
+ *
+ * Whether a bar is withheld never depends on the render scale: the unmeasured minimum-visible-width branch (a non-zero
+ * share that rounds to no pixel) is decided at the capture scale (1 device px per pt), so every view and zoom agrees.
+ * At another scale a bar that rounds to nothing there simply paints nothing (OD-8: semantics exact, fidelity
+ * unverified).
  */
 export function layoutDataBar(
   bar: CfBarDescriptor,
-  cell: Rect,
+  cell: CfBarHost,
   scale: CfBarScale,
   model: CfBarRenderModel = CF_BAR_RENDER_MODEL,
   check: (cap: string) => boolean = defaultHasEvidence,
@@ -90,9 +111,13 @@ export function layoutDataBar(
   if (!barPaintable(bar, model, check)) return undefined
   if (bar.borderColor !== undefined && !check('bar:render-border')) return undefined
   for (const n of [bar.axisFraction, bar.startFraction, bar.endFraction]) if (!Number.isFinite(n) || n < 0 || n > 1) return undefined
+  // A non-white axis over a filled host: the dash gap colour there is unmeasured.
+  if (bar.axisColor !== undefined && (bar.axisColor & 0xffffff) !== (model.axisDash.gapArgb & 0xffffff) && cell.fill !== undefined && !/^#?ffffff$/i.test(cell.fill)) return undefined
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
   const devPerPx = zoom * dpr, devPerPt = devPerPx * PT_PX
+  const atCapture = Math.abs(devPerPt - 1) < 1e-9
+  if (!atCapture && layoutDataBar(bar, cell, { zoom: 3 / 4, dpr: 1, output: 'device' }, model, check) === undefined) return undefined
   const dev = (pt: number): number => roundHalfUp(pt * devPerPt)
   // Host edges on the sheet-global device grid; the measured insets in whole device px.
   const X0 = roundHalfUp(cell.x * devPerPx), X1 = roundHalfUp((cell.x + cell.width) * devPerPx)
@@ -104,7 +129,7 @@ export function layoutDataBar(
   // A non-zero share that rounds to no pixel is the unmeasured minimum-visible-width branch.
   const lengthOf = (share: number, span: number): number | undefined => {
     const n = roundHalfUp(share * span)
-    if (n > 0 || !(share > 0)) return n
+    if (n > 0 || !(share > 0) || !atCapture) return n
     return model.minVisiblePt === undefined ? undefined : Math.min(span, Math.max(1, dev(model.minVisiblePt)))
   }
   let a: number, b: number
@@ -137,7 +162,7 @@ export function layoutDataBar(
   }
   const out = scale.output === 'device' ? (v: number) => v : (v: number) => v / devPerPx
   const rect = (x: number, y: number, w: number, h: number, argb: number): CfBarRect => ({ x: out(x), y: out(y), w: out(w), h: out(h), argb })
-  const primitives: { fill?: CfBarRect; border?: CfBarRect[]; axis?: CfBarRect } = {}
+  const primitives: { fill?: CfBarRect; border?: CfBarRect[]; axis?: CfBarRect; axisDashes?: CfBarRect[] } = {}
   if (b > a) {
     const x = L + a, w = b - a, h = B - T
     primitives.fill = rect(x, T, w, h, bar.fillColor)
@@ -150,7 +175,22 @@ export function layoutDataBar(
       ]
     }
   }
-  if (axis && bar.axisColor !== undefined) primitives.axis = rect(L + axis[0], Y0, axis[1] - axis[0], Y1 - Y0, bar.axisColor)
+  if (axis && bar.axisColor !== undefined) {
+    // The column in the gap colour, then the dashes: gaps of offPt start at y ≡ x (mod period) in sheet points.
+    const ax = L + axis[0], aw = axis[1] - axis[0]
+    const { onPt, offPt, gapArgb } = model.axisDash
+    const period = onPt + offPt, xPt = ax / devPerPt
+    primitives.axis = rect(ax, Y0, aw, Y1 - Y0, gapArgb)
+    const dashes: CfBarRect[] = []
+    const first = Math.floor((Y0 / devPerPt - xPt) / period) - 1
+    for (let k = first; ; k++) {
+      const top = roundHalfUp((xPt + k * period + offPt) * devPerPt), bottom = roundHalfUp((xPt + (k + 1) * period) * devPerPt)
+      if (top >= Y1) break
+      const y0 = Math.max(top, Y0), y1 = Math.min(bottom, Y1)
+      if (y1 > y0) dashes.push(rect(ax, y0, aw, y1 - y0, bar.axisColor))
+    }
+    primitives.axisDashes = dashes
+  }
   return primitives
 }
 
@@ -169,7 +209,7 @@ export function paintDataBars(
   ctx: CanvasRenderingContext2D,
   bars: CfBarCells,
   barAt: (row: number, col: number) => CfBarDescriptor | undefined,
-  cellRect: (row: number, col: number) => Rect | undefined,
+  cellRect: (row: number, col: number) => CfBarHost | undefined,
   visible: { r0: number; c0: number; r1: number; c1: number },
   scale: CfBarScale,
   check: (cap: string) => boolean = defaultHasEvidence,
@@ -188,7 +228,7 @@ export function paintDataBars(
     try {
       ctx.beginPath(); ctx.rect(host.x, host.y, host.width, host.height); ctx.clip()
       if (transform) ctx.setTransform(1, 0, 0, 1, transform.e, transform.f)
-      for (const r of [primitives.fill, ...(primitives.border ?? []), primitives.axis]) {
+      for (const r of [primitives.fill, ...(primitives.border ?? []), primitives.axis, ...(primitives.axisDashes ?? [])]) {
         if (!r) continue
         ctx.fillStyle = css(r.argb)
         ctx.fillRect(r.x, r.y, r.w, r.h)

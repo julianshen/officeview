@@ -557,6 +557,8 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
     styles: '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0"/></numFmts><cellXfs count="1"><xf numFmtId="164"/></cellXfs>',
     afterSheetData: BAR_XML,
   })
+  /** A 200 px host at 100 %: where the canvas would paint these cells. */
+  const HOST = { x: 0, y: 0, width: 200, height: 20 }, AT_100 = { zoom: 1, dpr: 1 }
   const SUPPRESS = { extra: [BAR_SHOWVALUE_EVIDENCE, 'bar:bounds-automin', 'bar:bounds-automax', 'bar:participation-dateserial'] }
 
   it('resident find and copy return the formatted value of a showValue="0" bar cell in near and far rows', async () => {
@@ -570,7 +572,7 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
       const scope = (await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 500, c0: 0, c1: 0 }].flatMap(r => [{ ...r, r1: 0 }, { ...r, r0: 500 }]), signal: new AbortController().signal, budget }))!
       for (const row of [0, 500]) {
         expect(scope.barAt?.(row, 0)?.showValue, `row ${row}`).toBe(false)
-        expect(scope.hidesTextAt?.(row, 0), `row ${row}`).toBe(true)
+        expect(scope.hidesTextAt?.(row, 0, HOST, AT_100), `row ${row}`).toBe(true)
       }
       scope.dispose()
       for (const [text, want] of [['1.3', [[0, 0, '1.3']]], ['3.8', [[500, 0, '3.8']]]] as const) {
@@ -594,7 +596,7 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
         const copied = await serializeSelection(input(row))
         expect(copied.kind === 'ready' ? copied.text : copied.kind, `row ${row}`).toBe(want)
         // Mutant: a formatter that applies the canvas suppression to copy fails this test.
-        const mutant = await serializeSelection(input(row, (cell, allocation, scope) => scope?.hidesTextAt?.(cell.row, cell.col) ? '' : format(cell, allocation, scope)))
+        const mutant = await serializeSelection(input(row, (cell, allocation, scope) => scope?.hidesTextAt?.(cell.row, cell.col, HOST, AT_100) ? '' : format(cell, allocation, scope)))
         expect(mutant.kind === 'ready' ? mutant.text : mutant.kind, `mutant row ${row}`).not.toBe(want)
       }
     }, SUPPRESS)
@@ -630,9 +632,9 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
           const copied = await serializeSelection(input)
           expect(copied.kind === 'ready' ? copied.text : JSON.stringify(copied), `row ${row}`).toBe(want)
           const scope = (await prepareScope([{ r0: row, r1: row, c0: 0, c1: 0 }], new AbortController().signal))!
-          expect(scope.hidesTextAt?.(row, 0), `paged scope hides the canvas text at row ${row}`).toBe(true)
+          expect(scope.hidesTextAt?.(row, 0, HOST, AT_100), `paged scope hides the canvas text at row ${row}`).toBe(true)
           scope.dispose()
-          const mutant = await serializeSelection({ ...input, format: (cell, allocation, s) => s?.hidesTextAt?.(cell.row, cell.col) ? '' : format(cell, allocation, s) })
+          const mutant = await serializeSelection({ ...input, format: (cell, allocation, s) => s?.hidesTextAt?.(cell.row, cell.col, HOST, AT_100) ? '' : format(cell, allocation, s) })
           expect(mutant.kind === 'ready' ? mutant.text : mutant.kind, `mutant row ${row}`).not.toBe(want)
         }
         // Last: the worker session releases the source it searches.

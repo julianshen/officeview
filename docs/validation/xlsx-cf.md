@@ -693,3 +693,27 @@ No Excel was run. **Owner ruling S3-AUTO-GREY:** the evidence for the automatic 
 ### Stage 3 capture run 6 (2026-11-12): automatic colours on a grey cell
 
 `stage3-bar-auto-colors` with a static FFA6A6A6 cell fill (Task 19c) built repair-free and captured `measured`; the resave keeps the cell fill, `<x14:axisColor auto="1"/>` on two bars and `<x14:negativeFillColor auto="1"/>` on three. The capture shows white negative bars and a white 1 px axis on grey: B2 86–144 (axis 144), B3 115–144, C2 310–354 (axis 354), D3 446–474; positive bars FF0000FF from the axis. `bar:color-auto-axis` and `bar:color-auto-negative-fill` verify (measured white, FFFFFFFF); `audit.ts --stage 3`: 13/13 structural, pending 0, 8 non-discriminating, 5 blocked. The geometry is identical, pixel for pixel, to run 5 on white cells, where raw RGBA showed the same opaque white. Ruling S3-AUTO-BG (orchestrator, 2026-11-12): Excel's automatic negative fill and axis do not depend on the cell background for the two backgrounds measured (no fill, FFA6A6A6), so production may use the measured colour on any cell background. Cost if wrong: a cell with some other fill shows white where Excel would show another colour; reversible by adding a no-fill requirement to the two capabilities.
+
+### Task 22 (2026-11-13): the painter's measured model, and what it withholds
+
+No Excel was run, and `verifiedCapabilities.ts` is unchanged: production still withholds every bar until Task 23 publishes.
+
+`CF_BAR_RENDER_MODEL` (src/xlsx/cf/dataBarPaint.ts) is read from the captures above at 1 px/pt. Its rules:
+
+- **Insets.** The bar spans [left + 2, right − 1) × [top + 2, bottom − 2) pt of its host.
+- **Lengths.** They are rounded half up.
+- **Border.** A bar border is a 1 pt frame inside the bar.
+- **Axis.** The axis is a 1 pt column over the host's full height. Excel draws it dotted, 3 on and 1 off, and the gap starts where y ≡ x (mod 4) in capture px, x being the axis column.
+  - Fix round 1 checked this rule against every measured axis: 40 cells, 30 black and 10 automatic white.
+  - The 30 black axes are axis-negative B, C, E, F, G and H, rows 2–6, on white cells. All 30 match exactly.
+  - The 10 white axes are auto-colors B and C, rows 2–6, on the grey FFA6A6A6 cells. They show no gap: the gap rows are white, not grey.
+  - So the model paints the gap white (FFFFFFFF), which reproduces all 40 cells pixel for pixel.
+  - An explicit non-white axis over a filled host was never measured, because its gap could show the fill. Such a bar is withheld.
+  - The Lesson 1 conformance test compares every axis row by row.
+
+Two values were never measured, so the model leaves them absent and the branch that needs them withholds:
+
+- **Gradient stops** (`bar:render-gradient-stops`).
+- **Minimum visible width** (`bar:geometry-min-visible-width`). A non-zero share that rounds to no pixel at the capture scale is withheld at every zoom. A withheld bar never hides its cell's text (Ruling S3-O).
+
+Ruling S3-N withholds narrow cells only. No width threshold for "narrow" was measured: the capture has a single 12 pt column. `bar:geometry-narrow-clip` therefore gates every bar, which is deliberately over-broad and fail closed until a threshold is measured.

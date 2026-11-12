@@ -264,6 +264,7 @@ export function renderSheetViewport(
     // Two passes: every fill first, then text and borders, so overflow into an
     // empty formatted neighbour is drawn over its fill (S13, as Excel does).
     const cf = prepared?.conditionalFormatting
+    const barScale = { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' as const }
     const replay = (record: CellLayout, phase: 'fill' | 'content') => {
       // Float64 local offset; the canvas only ever sees tile-local coordinates.
       const lx = record.logicalBounds.x - vx, ly = record.logicalBounds.y - vy
@@ -273,7 +274,7 @@ export function renderSheetViewport(
       ctx.save()
       ctx.translate(lx, ly)
       // Ruling S3-O: a painted showValue="0" bar hides only the drawn text; the record keeps it (find, copy, a11y).
-      const body = phase === 'content' && cf?.hidesTextAt(record.source.row, record.source.col) ? { ...record.body, text: undefined } : record.body
+      const body = phase === 'content' && cf?.hidesTextAt(record.source.row, record.source.col, { ...record.logicalBounds, ...(record.body.fill ? { fill: record.body.fill } : {}) }, barScale) ? { ...record.body, text: undefined } : record.body
       const border = paintCellLayout(ctx, body, localExtent, phase)
       ctx.restore()
       if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
@@ -289,17 +290,17 @@ export function renderSheetViewport(
     if (extraActive) replay(extraActive, 'fill')
     // Data bars (Task 22): over the fills, under the text, on exactly the hosts this frame painted.
     if (cf && plan.kind === 'detail') {
-      const hosts = new Map<number, Rect>()
+      const hosts = new Map<number, Rect & { fill?: string }>()
       let r0 = Infinity, c0 = Infinity, r1 = -1, c1 = -1
       for (const record of extraActive ? [...records, extraActive] : records) {
         const { row, col } = record.source
-        hosts.set(row * 16384 + col, record.logicalBounds)
+        hosts.set(row * 16384 + col, record.body.fill ? { ...record.logicalBounds, fill: record.body.fill } : record.logicalBounds)
         r0 = Math.min(r0, row); r1 = Math.max(r1, row); c0 = Math.min(c0, col); c1 = Math.max(c1, col)
       }
       if (hosts.size) {
         ctx.save()
         ctx.translate(-vx, -vy)
-        try { cf.paintBars(ctx, (row, col) => hosts.get(row * 16384 + col), { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }) } finally { ctx.restore() }
+        try { cf.paintBars(ctx, (row, col) => hosts.get(row * 16384 + col), { r0, c0, r1, c1 }, barScale) } finally { ctx.restore() }
       }
     }
     // The source window this tile shows and each source cell's logical box (merges

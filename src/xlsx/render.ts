@@ -847,6 +847,8 @@ export function renderSheet(
   }
   const extent = { width: m.widthPx, height: m.heightPx }
   const laidOut: CellBodyLayout[] = []
+  const cf = prepared?.conditionalFormatting, barScale = { zoom: sparklineScale, dpr: 1 }
+  const barHosts = new Map<number, { x: number; y: number; width: number; height: number; fill?: string }>()
   let paintRows: readonly XlsxRow[] = sheet.rows
   // Styled empty table cells are real paint surfaces. Add them only where no
   // source cell exists, and only where this request paints (see syntheticRegionRows).
@@ -905,7 +907,10 @@ export function renderSheet(
       const styledCell = regionStyledCell(regionStyles, cell)
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
-      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source), undefined, undefined, prepared?.conditionalFormatting?.hidesTextAt(cell.row, cell.col))
+      // A bar's host carries the fill painted under it (its axis dash needs it) and decides S3-O text suppression.
+      const host = cf && { x, y, width: w, height: hh, ...(styledCell.style?.fillColor ? { fill: spreadsheetColor(styledCell.style.fillColor) } : {}) }
+      if (host) barHosts.set(cell.row * MAX_COLS + cell.col, host)
+      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source), undefined, undefined, host ? cf.hidesTextAt(cell.row, cell.col, host, barScale) : undefined)
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }
@@ -920,7 +925,7 @@ export function renderSheet(
   }
   const grid = { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }
   // Data bars paint over the fills and under the text (Task 22), through the lazy painter the batch carries.
-  prepared?.conditionalFormatting?.paintBars(ctx, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
+  cf?.paintBars(ctx, (row, col) => cellBox(row, col) && barHosts.get(row * MAX_COLS + col), grid, barScale)
   if (sheet.resolvedSparklines?.size) {
     const painted = paintSparklinesIn(ctx, sheet, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
     if (!painted) {

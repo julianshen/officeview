@@ -1415,7 +1415,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // The lazy scope's bar painter (Task 22): the paged view paints exactly the bars the wire carried.
       barAt:(row:number,col:number)=>scope.barAt?.(row,col),
       paintBars:(ctx:CanvasRenderingContext2D,cellRect:Parameters<NonNullable<typeof scope.paintBars>>[1],visible:{r0:number;c0:number;r1:number;c1:number},scale:{zoom:number;dpr:number;output?:'logical'|'device'})=>scope.paintBars?.(ctx,cellRect,visible,scale)??true,
-      hidesTextAt:(row:number,col:number)=>scope.hidesTextAt?.(row,col)??false,dispose(){}}
+      hidesTextAt:(row:number,col:number,host:Parameters<NonNullable<typeof scope.hidesTextAt>>[2],scale:{zoom:number;dpr:number;output?:'logical'|'device'})=>scope.hidesTextAt?.(row,col,host,scale)??false,dispose(){}}
   },[remote,currentRemotePaint,liveCfScope,activeSheetId,cfLiveKey])
   const frameAssets=remote && hasRemoteCf && residentFrameAssets ? {...residentFrameAssets,conditionalFormatting:remotePaint} : residentFrameAssets
 

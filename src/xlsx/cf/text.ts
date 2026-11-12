@@ -237,7 +237,7 @@ function assembleScope(
     },
     barAt,
     paintBars: (ctx, cellRect, visible, scale) => paintDataBars(ctx, bars, barAt, cellRect, visible, scale),
-    hidesTextAt: (row, col) => barHidesText(barAt(row, col)),
+    hidesTextAt: (row, col, host, scale) => barHidesText(barAt(row, col), host, scale),
     describe: (row, col) => {
       if (disposed || !current()) return undefined
       const state = states.get(row * 16384 + col)
