@@ -467,9 +467,9 @@ describe('payload-free chunks and the message cap (review round 2)', () => {
 })
 
 describe('remote path purity', () => {
-  test('src/stream/remote never reaches the local text index or selection modules', () => {
-    const root = resolve(import.meta.dir, '../../src/stream/remote')
-    const seen = new Set<string>(), queue = readdirSync(root).filter((f) => f.endsWith('.ts')).map((f) => resolve(root, f))
+  test('src/stream/remote and the remote view (src/components/remote) never reach the local text index or selection modules', () => {
+    const roots = ['../../src/stream/remote', '../../src/components/remote'].map((d) => resolve(import.meta.dir, d))
+    const seen = new Set<string>(), queue = roots.flatMap((root) => readdirSync(root).filter((f) => /\.tsx?$/.test(f)).map((f) => resolve(root, f)))
     while (queue.length) {
       const file = queue.pop()!
       if (seen.has(file)) continue
@@ -485,5 +485,6 @@ describe('remote path purity', () => {
     const reached = [...seen].map((f) => f.slice(resolve(import.meta.dir, '../..').length + 1))
     expect(reached.filter((f) => f === 'src/core/search.ts' || f === 'src/core/selection.ts')).toEqual([])
     expect(reached).toContain('src/stream/remote/session.ts')
+    expect(reached).toContain('src/components/remote/RemoteText.tsx')
   })
 })

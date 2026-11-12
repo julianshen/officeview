@@ -23,6 +23,7 @@ const inked = (page: Page, i: number) => page.evaluate((i) => {
   return n
 }, i)
 
+// Copy and text a11y are off in the demo default policy, so the notice shows once.
 test('happy: a protected deck streams rasters with no text layer and the host watermark ignored', async ({ page }) => {
   await open(page, 'doc=pypptx-test.pptx')
   await expect(viewer(page)).toBeVisible()
@@ -66,7 +67,8 @@ test('reconnect: a dropped socket resumes the same session; scroll position kept
   await open(page, 'doc=lo-tdf104788.pptx')
   await expect(page.locator('canvas')).toHaveCount(6)
   const scroller = viewer(page)
-  await scroller.evaluate((el) => { const c = el.querySelectorAll('canvas')[3] as HTMLElement; el.scrollTop = c.offsetTop })
+  // A rect delta, not offsetTop: the canvas's offsetParent is its positioned unit wrapper (Stage 3a).
+  await scroller.evaluate((el) => { const c = el.querySelectorAll('canvas')[3] as HTMLElement; el.scrollTop += c.getBoundingClientRect().top - el.getBoundingClientRect().top })
   await expect(page.locator('canvas[data-unit="3"][data-painted="1"]')).toHaveCount(1)
   const before = await scroller.evaluate((el) => el.scrollTop)
   const [sid] = await sids(page)

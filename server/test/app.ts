@@ -8,6 +8,7 @@
  * Ports (OV_STREAM_PORT, default 4181):
  *   P      stream server (token ttl 300 s)
  *   P + 2  stream server with ttl 8 s / renew lead 5 s (the expiry spec)
+ *   ?copy=full|cap3|off on the stream URL sets the session's copy policy.
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity)
  */
@@ -23,7 +24,17 @@ const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `htt
 const root = resolve(import.meta.dir, '../..')
 const keys = await deriveKeys(crypto.getRandomValues(new Uint8Array(32)))
 const pool = new Pool({ workers: 2 })
-const hooks = demoHooks({ docDir: resolve(root, 'corpus'), demo: true })
+const demo = demoHooks({ docDir: resolve(root, 'corpus'), demo: true })
+/** TEST-ONLY `?copy=full|cap3|off` (Stage 3a): the session's copy policy; absent = the demo default. */
+const COPY = { full: 'full', cap3: { maxParagraphs: 3 }, off: false } as const
+const hooks = {
+  ...demo,
+  authorize: async (req: Parameters<typeof demo.authorize>[0]) => {
+    const d = await demo.authorize(req)
+    const copy = req.url.searchParams.get('copy')
+    return d && copy !== null && copy in COPY ? { ...d, policy: { ...d.policy, copy: COPY[copy as keyof typeof COPY] } } : d
+  },
+}
 
 const servers = {
   normal: createStreamServer({ keys, originAllowlist: ORIGINS, pool, ...hooks }),
