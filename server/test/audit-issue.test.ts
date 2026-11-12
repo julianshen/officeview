@@ -7,7 +7,7 @@ import { extendedCodeword } from '../src/mark/bch'
 import { messageFor } from '../src/mark/message'
 
 const kMsg = Uint8Array.from({ length: 32 }, (_, i) => 200 - i)
-const base: StoredRow = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off', forensic: false, forensicRequested: false }, relaxed: false, forensic: null, docRef: 'd', contentPolicy: 'visible-only', visibleMark: { kind: 'off' } }
+const base: StoredRow = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off', forensic: false, forensicRequested: false }, relaxed: false, forensic: null, docRef: 'd', contentPolicy: 'visible-only', visibleMark: { kind: 'off' }, services: { copy: false, textA11y: 'off' } }
 /** A table whose generation-1 message for (token, salt) is already live. */
 const withLive = (token: number, salt: number) => { const t = new AuditTable({ firstToken: token }); t.record('live', { ...base, forensic: { codec: 'l1-bch512x40@1', token24: token, salt8: salt, msg40: hexOf(messageFor(kMsg, 1, token, salt)) } }); return t }
 const deliver = (t: AuditTable, sid: string, status: 'l1' | 'unmarked') => t.recordDelivery({ sid, unitIndex: status === 'l1' ? 0 : 1, scale: 1, status, ...(status === 'unmarked' ? { reason: 'capacity' } : {}), refSha256: 'r' })

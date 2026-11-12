@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { AUDIT_RETENTION_SEC, AuditTable, msgHex } from '../src/audit'
-import { AuditStore, type DeliveryRecord, type StoredRow } from '../src/audit-store'
+import { AuditStore, type CopyRecord, type DeliveryRecord, type StoredRow } from '../src/audit-store'
 import { messageFor } from '../src/mark/message'
 import { Client, corpus, disposePool, start } from './harness'
 
@@ -18,7 +18,7 @@ const dbPath = () => { const d = mkdtempSync(join(tmpdir(), 'ov-audit-')); dirs.
 const kMsg = Uint8Array.from({ length: 32 }, (_, i) => 200 - i)
 const row = (o: Partial<StoredRow> = {}): StoredRow => ({
   ip: '1.2.3.4', startedAt: 1000, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'viewer', forensicRequested: true }, relaxed: false, forensic: null,
-  docRef: 'doc-a', contentPolicy: 'visible-only', visibleMark: { kind: 'viewer', text: 'alice' }, ...o,
+  docRef: 'doc-a', contentPolicy: 'visible-only', visibleMark: { kind: 'viewer', text: 'alice' }, services: { copy: false, textA11y: 'off' }, ...o,
 })
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex')
 
@@ -197,4 +197,65 @@ describe('serving order', () => {
     expect(store2.deliveries(sid2)).toEqual([{ sid: sid2, unitIndex: 0, scale: 1, status: 'unmarked', reason: 'capacity', refSha256: sha(h2.stream.canonicalOf(sid2, 0, 1)!), at: expect.any(Number) }])
     c2.close(); h2.stop()
   }, 30_000)
+})
+
+describe('text services audit (Stage 3a Task 5)', () => {
+  const copyRec = (sid: string, paragraphs: number): Omit<CopyRecord, 'at'> => ({ sid, kind: 'copy', paragraphs, fromUnit: 0, toUnit: 1 })
+
+  it('copies are their own rows: repeats are kept, get() totals copy events only', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('s1', row({ services: { copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused' } }))
+    t.recordCopy(copyRec('s1', 2)); t.recordCopy(copyRec('s1', 2))
+    s.putCopy({ sid: 's1', kind: 'a11y', paragraphs: 1, fromUnit: 0, toUnit: 0, at: 9 })
+    expect(s.copies('s1')).toEqual([{ ...copyRec('s1', 2), at: expect.any(Number) }, { ...copyRec('s1', 2), at: expect.any(Number) }, { sid: 's1', kind: 'a11y', paragraphs: 1, fromUnit: 0, toUnit: 0, at: 9 }])
+    expect(t.get('s1')).toMatchObject({ services: { copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused' }, servicesChanged: [], copied: { events: 2, paragraphs: 4 } })
+    expect(() => t.recordCopy(copyRec('nope', 1))).toThrow(/no audit row/)
+    expect(() => t.recordServices('nope', { copy: false, textA11y: 'off' })).toThrow(/no audit row/)
+    s.close()
+  })
+
+  it('services changes are recorded beside the write-once row, in order, with when', () => {
+    const path = dbPath()
+    const t = new AuditTable({ store: AuditStore.open(path) })
+    t.record('s1', row())
+    t.recordServices('s1', { copy: { maxParagraphs: null, maxSessionParagraphs: null }, textA11y: 'unit' })
+    t.recordServices('s1', { copy: false, textA11y: 'off' })
+    ;(t as unknown as { store: AuditStore }).store.close()
+    const s2 = AuditStore.open(path), t2 = new AuditTable({ store: s2 })
+    expect(s2.getRow('s1')).toEqual(row())
+    expect(t2.get('s1')!.services).toEqual({ copy: false, textA11y: 'off' })
+    expect(t2.get('s1')!.servicesChanged).toEqual([
+      { copy: { maxParagraphs: null, maxSessionParagraphs: null }, textA11y: 'unit', at: expect.any(Number) },
+      { copy: false, textA11y: 'off', at: expect.any(Number) },
+    ])
+    s2.close()
+  })
+
+  it('a row stored before Stage 3a reads as services off', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    const { services: _s, ...legacy } = row()
+    s.putRow('old', legacy as StoredRow)
+    expect(t.get('old')).toMatchObject({ services: { copy: false, textA11y: 'off' }, servicesChanged: [], copied: { events: 0, paragraphs: 0 } })
+    s.close()
+  })
+
+  it('expire() removes copies with their row', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('old', row({ startedAt: 0 })); t.record('new', row({ startedAt: 100 }))
+    t.recordCopy(copyRec('old', 1)); t.recordCopy(copyRec('new', 1))
+    t.recordServices('old', { copy: false, textA11y: 'off' })
+    expect(t.expire(AUDIT_RETENTION_SEC)).toBe(1)
+    expect(s.copies('old')).toEqual([]); expect(s.services('old')).toEqual([])
+    expect(s.copies('new').length).toBe(1)
+    s.close()
+  })
+
+  it('trace store refuses copy and services writes', () => {
+    const path = dbPath()
+    const s = AuditStore.open(path); s.putRow('s1', row()); s.close()
+    const r = AuditStore.openReadOnlyForTrace(path)
+    expect(() => r.putCopy({ ...copyRec('s1', 1), at: 1 })).toThrow(/read-only/)
+    expect(() => r.putServices({ sid: 's1', copy: false, textA11y: 'off', at: 1 })).toThrow(/read-only/)
+    r.close()
+  })
 })

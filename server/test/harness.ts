@@ -31,7 +31,7 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
   return { url: `ws://localhost:${srv.port}/stream`, stream, stop: () => srv.stop(true) }
 }
 
-export type Msg = { text: Record<string, any> } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
+export type Msg = { text: Record<string, any>; /** UTF-8 bytes as received. */ bytes?: number } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
 const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20] }
 
 export class Client {
@@ -50,7 +50,7 @@ export class Client {
     let inbox = Promise.resolve()
     this.ws.addEventListener('message', (e) => {
       const step = inbox.then(async () => {
-        if (typeof e.data === 'string') this.msgs.push({ text: JSON.parse(e.data) })
+        if (typeof e.data === 'string') this.msgs.push({ text: JSON.parse(e.data), bytes: new TextEncoder().encode(e.data).length })
         else {
           const res = await this.r.push(new Uint8Array(e.data as ArrayBuffer))
           if (res && !res.ok) throw new Error(`frame rejected: ${res.reason}`)
@@ -95,6 +95,19 @@ export class Client {
       if ('text' in m) throw new Error(`refused ${m.text.code}`)
       out.push(m.binary)
       if (m.binary.kind === 3 || m.binary.kind === 4) return { messages: out, unit: decodeUnit(m.binary.payload) }
+    }
+  }
+  /** Sends a text op with the current token (unless `msg.token` is given) and
+   * collects its reqId's replies: every `partial` message, then the first
+   * other one (`end`: e.g. `search-done` or `refused`). */
+  async text(msg: { reqId: number; type: string } & Record<string, unknown>, o: { partial?: readonly string[]; ms?: number } = {}) {
+    const partial = o.partial ?? ['search-result']
+    this.send({ token: this.manifest!.session.token, ...msg })
+    const parts: Array<{ text: Record<string, any>; bytes: number }> = []
+    for (;;) {
+      const m = await this.next((m) => 'text' in m && m.text.reqId === msg.reqId, o.ms) as { text: Record<string, any>; bytes: number }
+      if (!partial.includes(m.text.type)) return { parts, end: m.text }
+      parts.push(m)
     }
   }
   close() { this.ws.close() }

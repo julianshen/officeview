@@ -4,7 +4,8 @@
   "type": "module",
   "description": "WS-only demo stream server for officeview (spec 2026-11-07 \u00a79).",
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.1.0",

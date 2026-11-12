@@ -6,7 +6,7 @@ import type { Manifest } from '../../src/stream/manifest'
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import { createRemoteDoc, type SessionLike } from '../../src/stream/remote/remote-doc'
 import { openRemoteDocument } from '../../src/stream/remote/open'
-import type { StreamNotice, UnitPayload } from '../../src/stream/remote/session'
+import type { StreamNotice, TextMessage, TextRequest, UnitPayload } from '../../src/stream/remote/session'
 import { serverBackend } from '../src/backend'
 import { ORIGIN, disposePool, start } from './harness'
 
@@ -45,11 +45,17 @@ describe('RemoteOfficeDoc', () => {
   }, 30_000)
 })
 
-function fakeSession(payloads: UnitPayload[], ended?: Promise<StreamSessionError | undefined>): SessionLike & { requests: number; closes: number; released: number } {
-  const manifest = { units: { count: 1, list: [{ w: 4, h: 4 }] }, recorder: { scalesBuckets: [1, 2] }, can: { search: false, copy: false } } as unknown as Manifest
+function fakeSession(payloads: UnitPayload[], ended?: Promise<StreamSessionError | undefined>): SessionLike & { requests: number; closes: number; released: number; texts: TextRequest[] } {
+  const manifest = { units: { count: 1, list: [{ w: 4, h: 4 }] }, recorder: { scalesBuckets: [1, 2] }, can: { search: true, copy: false, textA11y: false }, caps: { copy: null, a11y: 'off' } } as unknown as Manifest
   const s = {
-    manifest, requests: 0, closes: 0, released: 0,
+    manifest, requests: 0, closes: 0, released: 0, texts: [] as TextRequest[],
     async unit() { const p = payloads[Math.min(s.requests, payloads.length - 1)]!; s.requests++; return { ...p, release: () => { s.released++ } } },
+    /** Answers a search with one hit; nothing else is offered by this manifest. */
+    async text(r: TextRequest, on: (m: TextMessage) => void) {
+      s.texts.push(r)
+      on({ type: 'search-result', matches: [{ unit: 0, rects: [1, 2, 3, 4] }] })
+      on({ type: 'search-done', total: 1, truncated: false })
+    },
     close() { s.closes++ },
     ...(ended ? { ended } : {}),
   }
@@ -71,11 +77,19 @@ describe('RemoteOfficeDoc failure paths', () => {
     expect(notices).toEqual([{ code: 'unit-failed', unit: 0 }])
     expect(pixels(canvas).equals(before)).toBe(true)    // never half-painted
   })
-  it('search and copy reject; text-unavailable is emitted once', async () => {
+  it('search is answered by the session; copy off rejects text-unavailable, emitted once', async () => {
     const notices: StreamNotice[] = []
-    const doc = createRemoteDoc(fakeSession([]), { backend, onNotice: (n) => notices.push(n) })
-    await expect(doc.search('x')).rejects.toBeInstanceOf(StreamSessionError)
-    await expect(doc.copy({})).rejects.toBeInstanceOf(StreamSessionError)
+    const s = fakeSession([])
+    const doc = createRemoteDoc(s, { backend, onNotice: (n) => notices.push(n) })
+    const hits: unknown[] = []
+    expect(await doc.search('x', { onHits: (h) => hits.push(h) })).toEqual({ total: 1, truncated: false })
+    expect(hits).toEqual([[{ unit: 0, rects: [{ x: 1, y: 2, width: 3, height: 4 }] }]])
+    for (const p of [doc.copy({ all: true }), doc.select({ all: true }), doc.copy({ all: true })]) {
+      const e = await p.then(() => undefined, (x) => x)
+      expect(e).toBeInstanceOf(StreamSessionError)
+      expect((e as StreamSessionError).code).toBe('text-unavailable')
+    }
+    expect(s.texts).toEqual([{ type: 'search', query: 'x' }])
     expect(notices.filter((n) => n.code === 'text-unavailable').length).toBe(1)
   })
   it('close() closes the session once; later paint rejects', async () => {

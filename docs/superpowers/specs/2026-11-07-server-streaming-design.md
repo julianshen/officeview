@@ -110,6 +110,8 @@ everything they once covered.
     recorded in its audit row (§6.1, §19.2).
 12. **A11y.** `can.textA11y` defaults on; turning it off ships the §15 notice.
     It alone never authorises notes (§12a.5).
+    *(Amended for stream sessions, 2026-11-11: `can.textA11y` follows the
+    copy setting — Stage 3 design §4.1; as built, §4.1 amendment item 7.)*
 13. **Canvas backend.** Skia via `@napi-rs/canvas` for the server pool; Stage
     0 confirms; **one `CanvasBackend` seam for every canvas-construction site**
     (§9.2).
@@ -394,6 +396,12 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    capability including `can.notes` for the resumed viewer (§12a.5). A
    wrong-viewer proof, a proof/policy mismatch, or a missing `resumeProof`
    closes with `auth-failed` — never a silent switch.
+   *Amendment (2026-11-12, Stage 3a):* the policy match excludes the two
+   text services, `copy` and `textA11y`. On resume, `authorize` may change
+   them; the new values replace the old, the session's copied totals are
+   kept and measured against the new caps, the resumed MANIFEST carries the
+   new caps, and the change is audited (the `services` table) before it
+   takes effect. Every other policy field keeps the exact-match rule.
 8. **Code registry (round-10 F4; one normative registry, complete):**
    the only session CLOSE codes and op-refusal codes in the protocol are
    in this table — "no other code exists" means exactly this list, and
@@ -415,6 +423,9 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `layout-changed` | close (`4006`) | §9.3 `layoutFingerprint` mismatch mid-session — a new open, not a repaint of stale work |
    | `oversized-frame` | close (`4007`) | §7.1: the client-side guard when a trusted server's frame exceeds the transport cap (server→client direction only) |
    | `4409 superseded` | WS close on the superseded socket | §6.2 rule 7: resume closes the old socket |
+   | `text-unavailable` | op refusal, never a CLOSE (added 2026-11-12, Stage 3a) | select/copy with copy off; a11y with `textA11y` off (Stage 3 design §4.1) |
+   | `copy-too-large` | op refusal, never a CLOSE, carries `limit` (+ `requested`) (added 2026-11-12) | a copy over `maxParagraphs` or over 4 MiB; an a11y answer over its limits |
+   | `copy-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-12) | a copy or focused a11y read that would pass `maxSessionParagraphs` |
 
    `session-rotated` is **only** an op refusal (a typed text-message
    reply; the session stays open) — never a CLOSE. `rate-limited` and
@@ -819,6 +830,42 @@ drops the unit and re-requests once.
   projection pass, so it applies to **every provider that paints a
   unit**: the `getPaintables` unit closures (§2's record point) and
   the §12 XLSX viewport-tile path (below) alike.
+
+  > **Amendment (2026-11-12, Stage 3a).** "100 % of its ink bounds
+  > survive" has **one** exemption: a text decoration (underline, strike,
+  > overline) that the painter announces through the ownership scope
+  > `PAINT_DECORATION` (`'text'` / `'line'` / `false`;
+  > `src/core/text-recording.ts`). The conditions:
+  > - only for runs of the same scope;
+  > - only for the run's own lines (the `'line'` phase right after the
+  >   run's `'text'` phase), or continuations of them: a mark of the same
+  >   scope that is exactly collinear with an own line (both edges across
+  >   the baseline within 0.01 device px, float slack only) and lies
+  >   beside it, not on it (along the baseline the two lines, without the
+  >   cap allowance the observer adds to a stroke's ends, overlap by at
+  >   most 0.01 device px). The cap allowance is discounted only for a
+  >   butt-capped stroke whose box is intact (not clipped, not shadowed)
+  >   and whose transform at stroke time is an axis-aligned
+  >   scale/translate or a rotation by a multiple of 90° (b and c, or a
+  >   and d, within 1e-6 of zero relative to the matrix scale); under any
+  >   shear or other rotation the stroke's whole box counts as painted. A
+  >   collinear mark lying on an own line is ordinary cover (tightened
+  >   2026-11-12; was "collinear within 0.5 device px");
+  > - only when parallel to the run's baseline, so axis-aligned text only;
+  > - only when the mark is ≥ 2× as long as it is thick;
+  > - only when the mark's thickness is ≤ max(1.5·scale px, 12 % of R) and
+  >   the union of exempted marks is ≤ 25 % of R, where R = min(ink extent
+  >   perpendicular to the baseline, device font size).
+  >
+  > A single axis-aligned stroke segment is measured at its true line
+  > width only when that is provably exact: the transform at stroke time
+  > is an axis-aligned scale/translate or a rotation by a multiple of 90°
+  > (the width across the segment is then the line width × the scale on
+  > the device axis across it). Under any shear or other rotation the
+  > segment keeps the conservative box, padded on every side by
+  > √2 × half the line width × the transform's operator norm, which
+  > contains the stroke's paint for every cap (2026-11-12). Everything
+  > else covers as before. Geometry alone never exempts a mark (`server/src/occlusion.ts`). Residuals: §19 item 10.
 - **No original media bytes (every projection):** `drawImage` ships the
   **drawn-bitmap snapshot** (as-painted), source-rect cropped
   (`src/drawing/scene-paint.ts:132–150` crops via `drawImage` source rects),
@@ -1061,6 +1108,13 @@ pairs.
   a disabled service states **"text unavailable in this viewing mode"**
   once.
 - **Chart text:** visible-projection only, no model value ranges.
+- *Amendment (2026-11-12, Stage 3a):* the client's `copyText` legacy
+  fallback (a transient hidden `<textarea>`, used when the async clipboard
+  API is missing or fails) is an **authorised exception** to "no document text in
+  the DOM". It runs only for a copy the server has already allowed and
+  audited, and removes the textarea at once. As built, the join rule is
+  Stage 3 design §4.1 amendment item 4, and the §7.7 decoration exemption
+  applies.
 
 ## 12. XLSX in stream mode
 
@@ -1445,6 +1499,12 @@ outcomes.
   per sid 120 WS messages/10s (burst 20/s), 60 unit requests/min, 10
   print jobs/min (2 concurrent renders), 30 sort/filter ops/min (1 in
   flight); process 256 sockets, 4,096 queued units.
+  *Amendment (2026-11-12, Stage 3a):* a new per-sid rate class `'text'`
+  of 60 ops/min covers search, copy and a11y (refused off-mode a11y
+  requests included). A `'text'` overflow is an op refusal
+  (`rate-limited`) only and never counts toward the 4008 breach window.
+  Select is charged only the message budget above; the client sends at
+  most one select per 200 ms (≤ 5/s).
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1472,6 +1532,15 @@ outcomes.
   | NOTES_RASTER | ≤ 8 MiB | ≤ 64 MiB |
   | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB |
   | text control message | ≤ 64 KiB | ≤ 64 KiB |
+
+  *Amendment (2026-11-12, Stage 3a):* every server→client **text-service
+  answer** (`search-result`, `search-done`, `select-result`,
+  `copy-result`, `a11y-result`) is ≤ **48 KiB** of UTF-8. Larger answers
+  are chunked (`seq`/`last`) by the server, and the client rejects any
+  single message over 48 KiB. Per-request client limits: ≤ 4,096
+  messages, ≤ 5,000 search hits, ≤ 20,000 select rects, copy ≤ 4 MiB,
+  and a11y ≤ 4 MiB of text and ≤ 20,000 paragraphs. An over-limit answer
+  fails its request; the session stays open.
 
   Admission is **streaming inflation** (round-10 F3): the compressed
   payload is inflated incrementally and the inflate/parse **aborts the
@@ -1708,6 +1777,33 @@ render pipeline.
    answers only highlight boxes but repeated probing can reconstruct text
    even with copy off (rate-limited, not prevented); a11y text follows the
    copy setting.
+10. **Stage 3a text services as built (2026-11-12).**
+    - (a) A document's own thin decoration line can hide a glyph smaller
+      than the line (a period, a hyphen) inside decorated text that is
+      still served (§7.7 amendment).
+    - (b) **Closed 2026-11-12** (was the review's open residual A: a
+      0.5 device px continuation tolerance let three near-collinear strike
+      lines smear text of ≤ 6 pt while it was served, shown only with a
+      hand-built page layout). The rule is now exact collinearity and no
+      overlap: a neighbouring segment's line continues a run's own line
+      only if both its edges across the baseline match the own line's
+      within 0.01 device px and, along the baseline, it lies beside the
+      own line rather than on it (overlap no more than the two strokes'
+      cap allowances; a stroke has one only with butt caps under an
+      unsheared, right-angle transform). The hand-built layouts are
+      withheld (`covered`).
+      Cost, fail closed: adjacent struck runs of slightly different sizes
+      with no space between them (12 pt + 11 pt, 10.5 pt + 11 pt) now
+      lose the first word; the same pairs underlined, and equal-size
+      runs, are served.
+    - (c) Withheld, fail closed: decorated text that is rotated (not
+      axis-aligned); adjacent decorated runs of clearly different sizes
+      with no space between them; an 18 pt struck spreadsheet word with no
+      tall letters.
+    - (d) Text drawn as glyph paths (warped WordArt) has no text run and
+      is withheld (`docs/validation/streaming-s3a.md`).
+    - (e) A page with more than about 12k text pieces (> 3 MiB of
+      recorded spans) is refused for text services.
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 

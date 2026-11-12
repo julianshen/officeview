@@ -16,7 +16,7 @@ import { resolveColor } from '../core/color'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
 import { layoutTextBody } from '../drawing/text-layout'
 import { clusterOrientation } from '../drawing/vertical-orientation'
-import { graphemes, RECORD_TEXT, type LogicalTextRange, type TextRecordingContext } from '../core/text-recording'
+import { graphemes, PAINT_DECORATION, RECORD_GROUP, RECORD_TEXT, type LogicalTextRange, type TextRecordingContext } from '../core/text-recording'
 import type { DrawingTextParagraph, LocalAffine, TextDirection } from '../drawing/text'
 
 export interface RunStyle {
@@ -82,6 +82,8 @@ export interface LineBox {
   logical?: LogicalTextRange
   defaultStyle?: RunStyle
   bidi?: boolean
+  /** Identity shared by every line of one laid-out paragraph (RECORD_GROUP key). */
+  paragraph?: object
 }
 
 export interface PageLayout {
@@ -270,6 +272,7 @@ function layoutParagraph(
   }
 ): { lines: LineBox[]; endY: number } {
   const lines: LineBox[] = []
+  const paragraph = {}
   const { contentX, contentWidth, startY, defaults } = opts
   const indentLeft = twipsToPx(para.indentLeftTwips ?? 0)
   const indentRight = twipsToPx(para.indentRightTwips ?? 0)
@@ -418,6 +421,7 @@ function layoutParagraph(
       contentWidthPx: lineUsable,
       marker,
       bidi: isBidiRtl,
+      paragraph,
       ...(boxes.length ? { inlineImages: boxes, baselinePx: y + h - descent } : {})
     })
     y += h
@@ -1077,8 +1081,15 @@ export function renderPages(
     }
     const paintLines = (allLines: LineBox[]) => {
       ctx.textAlign = 'left'
+      const group = (ctx as TextRecordingContext)[RECORD_GROUP]
+      // Decoration scopes: one per maximal stretch of consecutive underlined or
+      // struck segments on a line ('text' before each segment's draw, 'line'
+      // before its line, false when the stretch ends), in today's paint order.
+      const decorate = (ctx as TextRecordingContext)[PAINT_DECORATION]
       for (const line of allLines) {
+        group?.(line.paragraph)
         if (line.bidi) ctx.direction = 'rtl'
+        let stretch = false
         try {
           let offset = 0
           if (line.align === 'center') offset = (line.contentWidthPx - line.widthPx) / 2
@@ -1109,6 +1120,9 @@ export function renderPages(
             ctx.fillText(line.marker.text.trimEnd(), line.xPx - line.marker.widthPx, baseline)
           }
           for (const seg of line.segs) {
+            const decorated = !!(seg.run.underline || seg.run.strike)
+            if (stretch && !decorated) { stretch = false; decorate?.(false) }
+            if (decorated) { stretch = true; decorate?.('text') }
             const fontCssStr = fontCss(seg.style, resolveFamily)
             if (fontCssStr !== lastFont) {
               ctx.font = fontCssStr
@@ -1130,7 +1144,8 @@ export function renderPages(
                 ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
                 if (record && seg.logical) record(seg.text, 0, 0, seg.widthPx, seg.logical)
                 else ctx.fillText(seg.text, 0, 0)
-                if (seg.run.underline || seg.run.strike) {
+                if (decorated) {
+                  decorate?.('line')
                   ctx.strokeStyle = ctx.fillStyle
                   ctx.lineWidth = Math.max(1, size * 0.06)
                   ctx.beginPath()
@@ -1158,7 +1173,8 @@ export function renderPages(
             const vertDy = seg.run.vertAlign === 'superscript' ? -seg.style.fontSizePt * 0.35
               : seg.run.vertAlign === 'subscript' ? seg.style.fontSizePt * 0.25 : 0
             ctx.fillText(seg.text, segX, baseline + vertDy)
-            if (seg.run.underline || seg.run.strike) {
+            if (decorated) {
+              decorate?.('line')
               ctx.strokeStyle = ctx.fillStyle
               ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
               ctx.beginPath()
@@ -1170,7 +1186,9 @@ export function renderPages(
             x = segX + seg.widthPx
           }
         } finally {
+          if (stretch) decorate?.(false)
           if (line.bidi) ctx.direction = 'ltr'
+          group?.(undefined)
         }
       }
     }

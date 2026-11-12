@@ -263,7 +263,7 @@ export function visibleTextPolygon(p: TextPlacement, from = 0, to = 1): Array<{ 
 }
 
 /** Merge collinear baselines and order along their directed axis, including rotation/reflection. */
-function spansToLines(spans: TextSpan[]): IndexLine[] {
+export function spansToLines(spans: TextSpan[]): IndexLine[] {
   const buckets = new Map<string, { spans: TextSpan[]; ux: number; uy: number }>()
   const sourceIds = new Map<LogicalTextSource, number>()
   for (const span of spans) {

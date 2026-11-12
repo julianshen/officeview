@@ -67,6 +67,11 @@ export class SessionTable {
     if (old && old !== socket) old.close(4409, 'superseded')
     return s
   }
+  /** Resume (R3): the re-evaluated policy replaces the stored one (only the
+   * mutable text services can differ; the caller checked the rest). */
+  setPolicy(sid: string, p: EffectivePolicy): void {
+    this.must(sid).effectivePolicy = p
+  }
   /** The active socket dropped abnormally: keep the row for a resume. */
   detach(sid: string): void {
     const s = this.must(sid)

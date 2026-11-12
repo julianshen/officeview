@@ -15,7 +15,8 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function fakeDoc(name = 'deck.pptx'): RemoteOfficeDoc & { close: Mock; paint: Mock } {
   const manifest = {
     name, kind: 'pptx', units: { count: 2, list: [{ w: 100, h: 50 }, { w: 100, h: 50 }] },
-    can: { search: false, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+    can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
+    caps: { copy: null, a11y: 'off' },
     recorder: { scalesBuckets: [1, 2] }, notices: [],
   }
   return {
@@ -43,11 +44,21 @@ describe('<OfficeFile data={StreamSource}>', () => {
     expect(h.open.mock.calls[0]![0]).toBe(src)
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(view.getByRole('document')).toBeTruthy()
+    // Copy and text a11y are both off in this session: the notice shows once.
     const notice = view.container.querySelectorAll('[data-officeview-notice]')
     expect([...notice].filter((n) => n.textContent?.includes('text unavailable in this viewing mode')).length).toBe(1)
     expect(view.container.querySelector('input')).toBeNull()
     expect(view.container.textContent).not.toContain('HOSTMARK')
     await waitFor(() => expect(doc.paint).toHaveBeenCalled())
+  })
+  it('Stage 3a: the text-unavailable notice is absent when copy is on', async () => {
+    const doc = fakeDoc()
+    ;(doc.manifest.can as { copy: boolean }).copy = true
+    h.open.mockReset(); h.open.mockResolvedValueOnce(doc)
+    const view = render(<OfficeFile data={stream()} />)
+    await waitFor(() => expect(view.container.querySelectorAll('canvas').length).toBe(2))
+    expect(view.container.textContent).not.toContain('text unavailable in this viewing mode')
+    expect(view.container.querySelectorAll('[role="status"][data-officeview-notice]').length).toBe(1)
   })
   it('replacing the source mid-open closes the first document exactly once; unmount closes the second', async () => {
     const first = fakeDoc('a'), second = fakeDoc('b'), d1 = deferred<RemoteOfficeDoc>()

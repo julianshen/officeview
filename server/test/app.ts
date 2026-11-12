@@ -8,6 +8,9 @@
  * Ports (OV_STREAM_PORT, default 4181):
  *   P      stream server (token ttl 300 s)
  *   P + 2  stream server with ttl 8 s / renew lead 5 s (the expiry spec)
+ *   ?copy=full|cap3|off on the stream URL sets the session's copy policy.
+ *   ?a11y=unit|focused|off sets copy so that a11y resolves to that mode (R7):
+ *          unit = copy 'full'; focused = copy capped 3 / session 5; off = copy and a11y off.
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity)
  */
@@ -23,7 +26,21 @@ const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `htt
 const root = resolve(import.meta.dir, '../..')
 const keys = await deriveKeys(crypto.getRandomValues(new Uint8Array(32)))
 const pool = new Pool({ workers: 2 })
-const hooks = demoHooks({ docDir: resolve(root, 'corpus'), demo: true })
+const demo = demoHooks({ docDir: resolve(root, 'corpus'), demo: true })
+/** TEST-ONLY `?copy=full|cap3|off` (Stage 3a): the session's copy policy; absent = the demo default. */
+const COPY = { full: 'full', cap3: { maxParagraphs: 3 }, off: false } as const
+/** TEST-ONLY `?a11y=unit|focused|off` (Stage 3a Task 8); applied after `?copy=`. */
+const A11Y = { unit: { copy: 'full' }, focused: { copy: { maxParagraphs: 3, maxSessionParagraphs: 5 } }, off: { copy: false, textA11y: false } } as const
+const pick = <T extends object>(table: T, v: string | null): T[keyof T] | undefined => (v !== null && v in table ? table[v as keyof T] : undefined)
+const hooks = {
+  ...demo,
+  authorize: async (req: Parameters<typeof demo.authorize>[0]) => {
+    const d = await demo.authorize(req)
+    if (!d) return d
+    const copy = pick(COPY, req.url.searchParams.get('copy')), a11y = pick(A11Y, req.url.searchParams.get('a11y'))
+    return { ...d, policy: { ...d.policy, ...(copy !== undefined ? { copy } : {}), ...a11y } }
+  },
+}
 
 const servers = {
   normal: createStreamServer({ keys, originAllowlist: ORIGINS, pool, ...hooks }),

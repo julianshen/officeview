@@ -15,8 +15,45 @@
  *   clip (tracked exactly only while every clip is an axis-aligned rect), is
  *   not fully transparent, and no ink cell was covered — or touched by a
  *   non-`source-over` op or a filter — after the run was drawn.
+ * - Text decorations (S3a Task 3c): the painter brackets a decorated piece of
+ *   text and its own lines in one scope (`ctx[PAINT_DECORATION]`: 'text' and
+ *   'line' alternating, then false). A `cover` mark drawn in a scope's 'line'
+ *   phases may be exempted only for runs drawn in that same scope's 'text'
+ *   phases, and for a given run only if it is one of the run's OWN lines (drawn
+ *   in the 'line' phase that directly follows the run's 'text' phase) or a
+ *   CONTINUATION of one: another mark of the scope (a) whose interval across
+ *   the run's baseline matches an own line's within 0.01 device px at both
+ *   edges (exact collinearity; the slack is for float error only) and (b)
+ *   which lies BESIDE every own line it matches, not on it — along the
+ *   baseline the two lines' extents, each without the cap allowance the
+ *   observer adds to a stroke's ends, overlap by at most 0.01 device px (so
+ *   two abutting strokes' boxes overlap by no more than their cap paddings).
+ *   That is the same line carried on under a neighbouring segment; a
+ *   collinear mark overlapping an own line further is ordinary cover. A mark
+ *   whose box was cut by a clip or the surface, or grown by a shadow, a
+ *   stroke with square or round caps, and a stroke whose transform at stroke
+ *   time is sheared or rotated by other than a multiple of 90° (b and c, or
+ *   a and d, not within 1e-6 of zero relative to the matrix scale), has no
+ *   cap allowance to discount (its whole box counts as painted). Provenance and
+ *   ownership — geometry alone never exempts a mark; any other mark of the
+ *   scope, a decoration over any other run, and a run with no own lines get
+ *   ordinary cover; malformed sequences record ordinary marks. Further, only
+ *   for a run whose baseline is axis-aligned,
+ *   only when the mark is a line along that baseline (its side along it
+ *   ≥ 2 × its side across it), and only when its thickness across the
+ *   baseline is at most max(1.5 × scale px, 12 % of R) — an underline,
+ *   strike or overline that leaves the word legible. R is the smaller of the
+ *   ink's extent across the baseline and the run's font size in device px
+ *   (the px size of `ctx.font` × the transform's scale across the baseline,
+ *   read when the run is drawn), so ink inflated by stacked combining marks
+ *   does not widen the limits. Decorations are ignored while their merged
+ *   extent across the baseline, clipped to the ink, stays ≤ 25 % of R; past
+ *   that the run is `covered`. Erase and filter marks, and every other cover,
+ *   withhold as before. Text whose baseline is not axis-aligned in device
+ *   space, or whose font size cannot be read, gets no exemption (withheld).
  */
 import type { PaintObserver } from './render'
+import { PAINT_DECORATION } from '../../src/core/text-recording'
 
 export type OcclusionReason = 'covered' | 'clipped' | 'off-surface' | 'composite' | 'filter' | 'nonrect-clip' | 'transparent'
 export interface OcclusionEvidence {
@@ -29,10 +66,25 @@ export interface OcclusionEvidence {
   /** Withheld runs and why (server-side only — for audits and tests). */
   withheldRuns: Array<{ text: string; reason: OcclusionReason }>
 }
+/** One recorded text run with its verdict (server-side only — the visible-text join's input). */
+export interface RunDetail {
+  /** Paint order (the observer's sequence number for this run). */
+  seq: number
+  text: string
+  /** Ink hull in device px (the scale bucket applied). */
+  ink: { x: number; y: number; width: number; height: number }
+  servable: boolean
+  reason?: OcclusionReason
+}
 
 type Rect = [x0: number, y0: number, x1: number, y1: number]
 type Clip = Rect | 'nonrect' | undefined
-interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason }
+/** `scope`: the decoration scope that drew this run, and `piece` its 'text'
+ * phase within it (the lines of the following 'line' phase are its own). `across`: the device axis perpendicular to its baseline (1 = y for
+ * horizontal text, 0 = x for vertical); absent when the baseline is not
+ * axis-aligned. `fontPx`: its font size in device px across the baseline;
+ * absent when `ctx.font` yields no px size. */
+interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason; scope?: number; piece?: number; across?: 0 | 1; fontPx?: number }
 
 /** Canvas composite modes whose effect is not bounded by the source shape. */
 const UNBOUNDED_COMPOSITES = new Set(['copy', 'source-in', 'source-out', 'destination-in', 'destination-atop'])
@@ -59,12 +111,73 @@ function colorAlpha(style: unknown): number | undefined {
   return /^[a-z]+$/.test(s) ? 1 : undefined
 }
 
+/** Task 3c decoration rule: thin-mark floor (× scale), thin-mark ratio and union cap (× ink extent). */
+const DECORATION_FLOOR_PX = 1.5, DECORATION_RATIO = 0.12, DECORATION_UNION = 0.25
+/** A decoration's side along the run's baseline is at least this × its thickness across it. */
+const DECORATION_ELONGATION = 2
+/** A continuation's edges across the baseline match an own line's within this many device px (float slack: exact collinearity). */
+const DECORATION_COLLINEAR_PX = 0.01
+/** A continuation's extent along the baseline (cap allowance excluded) overlaps the own line's by at most this many device px (float slack: beside it, not on it). */
+const DECORATION_BESIDE_PX = 0.01
+/** The px size of a canvas font string (the getter serialises every size as px); undefined when it has none. */
+function fontSizePx(font: unknown): number | undefined {
+  const m = typeof font === 'string' ? /(?:^|\s)(\d+(?:\.\d+)?|\.\d+)px(?=[\s/]|$)/.exec(font) : null
+  const px = m ? Number(m[1]) : NaN
+  return px > 0 && Number.isFinite(px) ? px : undefined
+}
+/** Total length of the union of intervals (sorts `bands` in place). */
+function unionLength(bands: Array<[number, number]>): number {
+  bands.sort((p, q) => p[0] - q[0])
+  let total = 0, s = bands[0]![0], e = bands[0]![1]
+  for (const [b0, b1] of bands) {
+    if (b0 > e) { total += e - s; s = b0; e = b1 } else e = Math.max(e, b1)
+  }
+  return total + (e - s)
+}
+
 type Grid = 'cover' | 'erase' | 'filter'
-export function occlusionObserver(width: number, height: number): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence } {
+/** Thrown from a hooked op once an observer's record budget is spent. */
+export class ObserverBudgetExceeded extends Error { constructor() { super('occlusion observer record budget exceeded'); this.name = 'ObserverBudgetExceeded' } }
+/**
+ * `maxBytes` (optional): a running cap on the observer's records — marks,
+ * runs, path elements, clip stack — estimated as they are added (64 B per
+ * mark/path element, 96 B + 2 B/char per run, 16 B per saved clip; never
+ * decremented). When the next record would pass it, the op throws
+ * ObserverBudgetExceeded before recording and `exceeded()` stays true. Unset
+ * (every render path) means unlimited.
+ * `scale`: the render scale the painter's ctx carries (device px per page
+ * px); it scales the decoration floor. Unset means 1.
+ */
+export function occlusionObserver(width: number, height: number, maxBytes = Number.POSITIVE_INFINITY, scale = 1): PaintObserver & { wrap(ctx: CanvasRenderingContext2D): CanvasRenderingContext2D; evidence(): OcclusionEvidence; runDetails(): RunDetail[]; exceeded(): boolean; markBoxes(): Array<{ seq: number; grid: 'cover' | 'erase' | 'filter'; box: [number, number, number, number] }> } {
+  let spent = 0, over = false
+  const charge = (n: number) => {
+    if (over || spent + n > maxBytes) { over = true; throw new ObserverBudgetExceeded() }
+    spent += n
+  }
   /** The coverage "grid" at full precision: every painting op's device box, in
    * sequence order (a 4 px cell grid withheld every spreadsheet cell next to a
    * gridline; a 1 px grid costs ~40 MB per page). */
-  const marks: Array<{ seq: number; box: Rect; grid: Grid }> = []
+  /** `scope`/`piece`: set on a cover mark drawn in a decoration scope's 'line'
+   * phase — the scope, and the 'text' phase that 'line' phase follows.
+   * `cap`/`capAxis`: the cap allowance inside `box` at each end of a single
+   * straight axis-aligned butt-capped stroke drawn under an unsheared, right-angle transform, and the device axis it lies along (0 = x);
+   * absent for every other mark and for a box that is no longer the stroke's
+   * own (cut by a clip or the surface, grown by a shadow). */
+  type Mark = { seq: number; box: Rect; grid: Grid; scope?: number; piece?: number; cap?: number; capAxis?: 0 | 1 }
+  const marks: Mark[] = []
+  // PAINT_DECORATION scopes: 'text' opens one; it then alternates 'text'
+  // (owned runs) and 'line' (owned decoration marks) any number of times
+  // until false. 'line' with no open scope, or any other value, is malformed:
+  // the open scope (if any) is void — its marks are ordinary — and nothing is
+  // owned until false (fail closed).
+  let phase: 'idle' | 'text' | 'line' | 'broken' = 'idle', scopeId = 0, pieceId = 0
+  const voidScopes = new Set<number>()
+  const announce = (v: unknown) => {
+    if (v === false) phase = 'idle'
+    else if (v === 'text' && phase === 'idle') { phase = 'text'; scopeId++; pieceId++ }
+    else if ((v === 'text' || v === 'line') && (phase === 'text' || phase === 'line')) { if (v === 'text') pieceId++; phase = v }
+    else { if (phase === 'text' || phase === 'line') voidScopes.add(scopeId); phase = 'broken' }
+  }
   const surface: Rect = [0, 0, width, height]
   const runs: Run[] = []
   let seq = 0
@@ -77,9 +190,14 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   let cur: [number, number] | undefined, start: [number, number] | undefined
   let pathRects = 0, pathOther = false, pathRect: Rect | undefined
 
-  const mark = (grid: Grid, r: Rect) => {
+  const same = (a: Rect, b: Rect) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3]
+  const mark = (grid: Grid, r: Rect, cap?: { px: number; axis: 0 | 1 }) => {
     const b = intersect(r, surface)
-    if (b[2] > b[0] && b[3] > b[1]) marks.push({ seq, box: b, grid })
+    if (!(b[2] > b[0] && b[3] > b[1])) return
+    charge(64)
+    const m: Mark = grid === 'cover' && phase === 'line' ? { seq, box: b, grid, scope: scopeId, piece: pieceId } : { seq, box: b, grid }
+    if (cap && m.scope !== undefined && same(b, r)) { m.cap = cap.px; m.capAxis = cap.axis }
+    marks.push(m)
   }
   const overlaps = (a: Rect, b: Rect) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 
@@ -89,9 +207,19 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
     for (const [x, y] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) r = grow(r, t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f)
     return r
   }
+  /** The device axis perpendicular to the text baseline under the current transform, if axis-aligned
+   * (a scale/translate, or a rotation by a multiple of 90°: b, c — or a, d — within 1e-6 of zero relative to the others). */
+  const baselineAcross = (ctx: CanvasRenderingContext2D): 0 | 1 | undefined => {
+    const t = ctx.getTransform()
+    const ad = Math.max(Math.abs(t.a), Math.abs(t.d)), bc = Math.max(Math.abs(t.b), Math.abs(t.c))
+    if (ad > 0 && bc <= 1e-6 * ad) return 1
+    if (bc > 0 && ad <= 1e-6 * bc) return 0
+    return undefined
+  }
   const axisAligned = (ctx: CanvasRenderingContext2D) => { const t = ctx.getTransform(); return Math.abs(t.b) < 1e-9 && Math.abs(t.c) < 1e-9 }
   /** Extend the current subpath through device points (one segment's hull). */
   const segment = (pts: Array<[number, number]>) => {
+    charge(192)
     let r = cur ? grow(EMPTY, cur[0], cur[1]) : EMPTY
     for (const p of pts) r = grow(r, p[0], p[1])
     if (!subpaths.length || !cur) { subpaths.push(r); start = pts[0]; segInSub = 0 }
@@ -104,11 +232,18 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   const pts = (ctx: CanvasRenderingContext2D, a: unknown[], n: number) => Array.from({ length: n }, (_, i) => devicePoint(ctx, a[i * 2] as number, a[i * 2 + 1] as number))
   const box = (ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) => [devicePoint(ctx, x0, y0), devicePoint(ctx, x1, y0), devicePoint(ctx, x1, y1), devicePoint(ctx, x0, y1)]
   const devicePoint = (ctx: CanvasRenderingContext2D, x: number, y: number): [number, number] => { const t = ctx.getTransform(); return [t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f] }
-  const maxScale = (ctx: CanvasRenderingContext2D) => { const t = ctx.getTransform(); return Math.max(Math.hypot(t.a, t.b), Math.hypot(t.c, t.d)) }
+  /** The transform's largest stretch of any direction (its operator norm, the larger singular value): a
+   * user-space vector of length r maps to a device vector no longer than maxScale × r. For a scale or a
+   * rotation this is the larger axis scale; under shear it exceeds both column norms. */
+  const maxScale = (ctx: CanvasRenderingContext2D) => {
+    const t = ctx.getTransform(), s = t.a * t.a + t.b * t.b + t.c * t.c + t.d * t.d, det = t.a * t.d - t.b * t.c
+    return Math.sqrt((s + Math.sqrt(Math.max(0, s * s - 4 * det * det))) / 2)
+  }
 
   /** One draw op with conservative device bounds `b`; `paint` = its fill/stroke style. */
-  function draw(ctx: CanvasRenderingContext2D, b: Rect, paint: unknown, opts: { erase?: boolean } = {}) {
+  function draw(ctx: CanvasRenderingContext2D, b: Rect, paint: unknown, opts: { erase?: boolean; cap?: { px: number; axis: 0 | 1 } } = {}) {
     seq++
+    const stroke = b
     const shadowAlpha = colorAlpha(ctx.shadowColor) ?? 1
     if (shadowAlpha > 0 && (ctx.shadowBlur > 0 || ctx.shadowOffsetX || ctx.shadowOffsetY)) {
       const d = ctx.shadowBlur * 2 + Math.max(Math.abs(ctx.shadowOffsetX), Math.abs(ctx.shadowOffsetY))
@@ -120,17 +255,43 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
     if (ctx.filter && ctx.filter !== 'none') { mark('filter', b); return }
     if (opts.erase || ctx.globalCompositeOperation !== 'source-over') { mark('erase', b); return }
     const alpha = ctx.globalAlpha * (colorAlpha(paint) ?? 1)
-    if (alpha >= 0.95) mark('cover', b)
+    // The cap allowance holds only while the box is still the stroke's own.
+    if (alpha >= 0.95) mark('cover', b, opts.cap && same(b, stroke) ? opts.cap : undefined)
   }
 
-  // Half the line width covers butt/round/square caps and round/bevel joins;
-  // a miter join can spike out to miterLimit × half the width at the join point.
+  // Every point of a stroke lies within √2 × half the line width of its path in
+  // user space (butt/round caps and round/bevel joins within half the width, a
+  // square cap's corner at √2 × that), so within strokeHalf of it in device
+  // space under any transform (maxScale is the operator norm). A miter join can
+  // spike out to miterLimit × half the width at the join point.
   const strokeHalf = (ctx: CanvasRenderingContext2D) => (ctx.lineWidth * maxScale(ctx)) / 2 * Math.SQRT2
   const joinPad = (ctx: CanvasRenderingContext2D) => strokeHalf(ctx) * (ctx.lineJoin === 'miter' ? Math.max(1, ctx.miterLimit) : 1)
-  /** One op painting several boxes (a multi-segment stroke): one sequence number. */
-  function draws(ctx: CanvasRenderingContext2D, boxes: Rect[], paint: unknown) {
+  /** The current path's stroke boxes; each contains the stroke's paint. One
+   * straight segment that is axis-aligned in device space (no joins), stroked
+   * under an axis-aligned scale/translate or a rotation by a multiple of 90°,
+   * is exact across the line: half the line width × the pen's scale on the
+   * device axis across the segment, each side (the pen is an axis-aligned
+   * ellipse there, its extent on device x is hypot(a, c) and on y hypot(b, d)
+   * per unit); along it the cap allowance stays, and is discountable (`cap`)
+   * when the caps are butt. Under any other transform (shear, other
+   * rotations) the pen leans, so the segment keeps the conservative
+   * strokeHalf box on every side and has no cap allowance. Every other path
+   * keeps the per-segment strokeHalf boxes plus join allowances. */
+  function strokeBoxes(ctx: CanvasRenderingContext2D): { boxes: Rect[]; cap?: { px: number; axis: 0 | 1 } } {
+    const along = strokeHalf(ctx)
+    if (segments.length === 1 && joins.length === 0 && baselineAcross(ctx) !== undefined) {
+      const r = segments[0]!, t = ctx.getTransform(), half = ctx.lineWidth / 2
+      // Square and round caps paint into the end padding: only a butt end leaves it empty.
+      const butt = ctx.lineCap === 'butt'
+      if (Math.abs(r[3] - r[1]) < 1e-9) { const across = half * Math.hypot(t.b, t.d); return { boxes: [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]], ...(butt ? { cap: { px: along, axis: 0 as const } } : {}) } }
+      if (Math.abs(r[2] - r[0]) < 1e-9) { const across = half * Math.hypot(t.a, t.c); return { boxes: [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]], ...(butt ? { cap: { px: along, axis: 1 as const } } : {}) } }
+    }
+    return { boxes: [...segments.map((r) => pad(r, along)), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(ctx)))] }
+  }
+  /** One op painting several boxes (a multi-segment stroke): one sequence number. `cap`: the one box's cap allowance (strokeBoxes). */
+  function draws(ctx: CanvasRenderingContext2D, boxes: Rect[], paint: unknown, cap?: { px: number; axis: 0 | 1 }) {
     if (!boxes.length) return
-    draw(ctx, boxes[0]!, paint)
+    draw(ctx, boxes[0]!, paint, boxes.length === 1 && cap ? { cap } : {})
     for (let i = 1; i < boxes.length; i++) { seq--; draw(ctx, boxes[i]!, paint) }
   }
 
@@ -141,14 +302,57 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
     if (stroke) ink = pad(ink, (ctx.lineWidth * maxScale(ctx)) / 2)
     const style = stroke ? ctx.strokeStyle : ctx.fillStyle
     const alpha = ctx.globalAlpha * (colorAlpha(style) ?? 1)
-    const run: Run = { seq: seq + 1, ink, text: str }
+    const run: Run = phase === 'text' ? { seq: seq + 1, ink, text: str, scope: scopeId, piece: pieceId } : { seq: seq + 1, ink, text: str }
+    const across = baselineAcross(ctx)
+    if (across !== undefined) {
+      run.across = across
+      // The glyphs' up direction is the text-space y axis: device length hypot(c, d) per px.
+      const t = ctx.getTransform(), px = fontSizePx(ctx.font), device = px === undefined ? NaN : px * Math.hypot(t.c, t.d)
+      if (device > 0 && Number.isFinite(device)) run.fontPx = device
+    }
     if (str.trim() === '' || !(ink[2] > ink[0])) { draw(ctx, ink, style); return }
     if (alpha <= 0.05) run.reason = 'transparent'
     else if (!inside(ink, surface)) run.reason = 'off-surface'
     else if (clip === 'nonrect') run.reason = 'nonrect-clip'
     else if (clip && !inside(ink, clip)) run.reason = 'clipped'
+    charge(96 + 2 * str.length)
     runs.push(run)
     draw(ctx, ink, style)
+  }
+
+  /** A run's withholding reason, or undefined when it is servable (the one verdict for evidence() and runDetails()). */
+  function verdict(r: Run): OcclusionReason | undefined {
+    if (r.reason) return r.reason
+    const later = new Set<Grid>()
+    // A decoration is judged on one axis: perpendicular to the run's baseline (a).
+    // No orientation or no font size: no exemption. The reference extent is
+    // the smaller of the ink's extent on that axis and the font size.
+    const a = r.fontPx === undefined ? undefined : r.across, b = a === 1 ? 0 : 1
+    const extent = a === undefined ? 0 : Math.min(r.ink[a + 2]! - r.ink[a]!, r.fontPx!)
+    const thin = Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * extent)
+    const bands: Array<[number, number]> = []
+    // The run's own lines: the marks of the 'line' phase after its 'text' phase.
+    const scoped = a !== undefined && r.scope !== undefined && !voidScopes.has(r.scope)
+    const own = scoped ? marks.filter((m) => m.scope === r.scope && m.piece === r.piece) : []
+    // A foreign mark is a continuation when it is collinear with an own line and beside every own line it is collinear with.
+    const collinear = (o: Mark, m: Mark) => Math.abs(o.box[a!]! - m.box[a!]!) <= DECORATION_COLLINEAR_PX && Math.abs(o.box[a! + 2]! - m.box[a! + 2]!) <= DECORATION_COLLINEAR_PX
+    /** A mark's extent along the run's baseline, without its stroke-cap allowance. */
+    const core = (m: Mark): [number, number] => { const c = m.capAxis === b ? m.cap! : 0; return [m.box[b]! + c, m.box[b + 2]! - c] }
+    const beside = (o: Mark, m: Mark) => { const p = core(o), q = core(m); return Math.min(p[1], q[1]) - Math.max(p[0], q[0]) <= DECORATION_BESIDE_PX }
+    const eligible = (m: Mark) => {
+      if (m.piece === r.piece) return true
+      const lines = own.filter((o) => collinear(o, m))
+      return lines.length > 0 && lines.every((o) => beside(o, m))
+    }
+    for (const m of marks) {
+      if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
+      const decoration = scoped && own.length > 0 && m.scope === r.scope && eligible(m)
+      const t = decoration ? m.box[a + 2]! - m.box[a]! : 0, along = decoration ? m.box[b + 2]! - m.box[b]! : 0
+      if (decoration && along >= DECORATION_ELONGATION * t && t <= thin) bands.push([Math.max(m.box[a]!, r.ink[a]!), Math.min(m.box[a + 2]!, r.ink[a + 2]!)])
+      else later.add(m.grid)
+    }
+    if (bands.length && unionLength(bands) > DECORATION_UNION * extent) later.add('cover')
+    return later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
   }
 
   function imageRect(args: unknown[]): [number, number, number, number] {
@@ -159,17 +363,17 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   }
 
   const hooks: Record<string, (ctx: CanvasRenderingContext2D, a: unknown[]) => void> = {
-    save: () => { clipStack.push(clip) },
+    save: () => { charge(16); clipStack.push(clip) },
     restore: () => { if (clipStack.length) clip = clipStack.pop() },
     beginPath: () => { subpaths = []; segments = []; joins = []; segInSub = 0; cur = start = undefined; pathRects = 0; pathOther = false; pathRect = undefined },
-    moveTo: (c, a) => { cur = start = devicePoint(c, a[0] as number, a[1] as number); subpaths.push(grow(EMPTY, cur[0], cur[1])); segInSub = 0 },
+    moveTo: (c, a) => { charge(64); cur = start = devicePoint(c, a[0] as number, a[1] as number); subpaths.push(grow(EMPTY, cur[0], cur[1])); segInSub = 0 },
     lineTo: (c, a) => segment(pts(c, a, 1)),
     quadraticCurveTo: (c, a) => segment(pts(c, a, 2)),
     bezierCurveTo: (c, a) => segment(pts(c, a, 3)),
     arcTo: (c, a) => segment(pts(c, a, 2)),
     arc: (c, a) => { const [x, y, r] = a as number[]; segment(box(c, x! - r!, y! - r!, x! + r!, y! + r!)) },
     ellipse: (c, a) => { const [x, y, rx, ry] = a as number[]; const r = Math.max(rx!, ry!); segment(box(c, x! - r, y! - r, x! + r, y! + r)) },
-    closePath: () => { if (cur && start) { segments.push(grow(grow(EMPTY, cur[0], cur[1]), start[0], start[1])); joins.push(cur, start); cur = start } },
+    closePath: () => { if (cur && start) { charge(192); segments.push(grow(grow(EMPTY, cur[0], cur[1]), start[0], start[1])); joins.push(cur, start); cur = start } },
     rect: (c, a) => {
       const [x, y, w, h] = a as number[]
       const [p0, p1, p2, p3] = box(c, x!, y!, x! + w!, y! + h!)
@@ -186,7 +390,7 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
     },
     // A Path2D argument has unknown geometry: the whole surface.
     fill: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : subpaths, c.fillStyle),
-    stroke: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : [...segments.map((r) => pad(r, strokeHalf(c))), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(c)))], c.strokeStyle),
+    stroke: (c, a) => { if (a.length && typeof a[0] === 'object') return draws(c, [surface], c.strokeStyle); const s = strokeBoxes(c); draws(c, s.boxes, c.strokeStyle, s.cap) },
     fillRect: (c, a) => { const [x, y, w, h] = a as number[]; draw(c, hull(c, x!, y!, x! + w!, y! + h!), c.fillStyle) },
     strokeRect: (c, a) => {
       const [x, y, w, h] = a as number[]
@@ -204,11 +408,15 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
   }
 
   return {
+    exceeded: () => over,
+    /** The recorded coverage marks' device boxes, in order (server-side only — tests check them against the raster). */
+    markBoxes: () => marks.map((m) => ({ seq: m.seq, grid: m.grid, box: [m.box[0], m.box[1], m.box[2], m.box[3]] as [number, number, number, number] })),
     beforeUnit() {},
     afterUnit() {},
     wrap(ctx) {
       return new Proxy(ctx, {
         get(target, key) {
+          if (key === PAINT_DECORATION) return announce
           const v = Reflect.get(target, key, target)
           if (typeof v !== 'function') return v
           const hook = typeof key === 'string' ? hooks[key] : undefined
@@ -225,16 +433,18 @@ export function occlusionObserver(width: number, height: number): PaintObserver 
       const reasons: OcclusionEvidence['reasons'] = {}
       const servableText: string[] = [], withheldRuns: OcclusionEvidence['withheldRuns'] = []
       for (const r of runs) {
-        let reason = r.reason
-        if (!reason) {
-          const later = new Set<Grid>()
-          for (const m of marks) if (m.seq > r.seq && overlaps(m.box, r.ink)) later.add(m.grid)
-          reason = later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
-        }
+        const reason = verdict(r)
         if (reason) { reasons[reason] = (reasons[reason] ?? 0) + 1; withheldRuns.push({ text: r.text, reason }) }
         else servableText.push(r.text)
       }
       return { runs: runs.length, servable: servableText.length, withheld: runs.length - servableText.length, reasons, servableText, withheldRuns }
+    },
+    runDetails() {
+      return runs.map((r) => {
+        const reason = verdict(r)
+        const ink = { x: r.ink[0], y: r.ink[1], width: r.ink[2] - r.ink[0], height: r.ink[3] - r.ink[1] }
+        return reason ? { seq: r.seq, text: r.text, ink, servable: false, reason } : { seq: r.seq, text: r.text, ink, servable: true }
+      })
     },
   }
 }

@@ -51,7 +51,23 @@ export interface LogicalTextRange {
   }
 }
 export type RecordText = (text: string, x: number, y: number, width: number, logical: LogicalTextRange) => void
-export type TextRecordingContext = CanvasRenderingContext2D & { [RECORD_TEXT]?: RecordText }
+/** Optional grouping hook: a painter about to paint one paragraph (DOCX) or
+ * one cell (XLSX) calls `ctx[RECORD_GROUP]?.(key)`; `key` is the same object
+ * for every line/segment of that paragraph or cell within one paint and
+ * distinct otherwise. `undefined` ends the group. The library's own
+ * recording context does not define it. */
+export const RECORD_GROUP = Symbol('officeview.recordGroup')
+export type RecordGroup = (key: object | undefined) => void
+/** Optional decoration-ownership hook. A painter opens one scope per
+ * decorated stretch of text: `ctx[PAINT_DECORATION]?.('text')` before each
+ * piece of that text and `?.('line')` before each of its underline /
+ * strike-through lines (alternating, in paint order), then `?.(false)` to
+ * end the scope (in a finally). The server's occlusion observer uses it to
+ * tie a decoration to the runs it decorates; the library's own recording
+ * context does not define it. */
+export const PAINT_DECORATION = Symbol('officeview.paintDecoration')
+export type PaintDecoration = (phase: 'text' | 'line' | false) => void
+export type TextRecordingContext = CanvasRenderingContext2D & { [RECORD_TEXT]?: RecordText; [RECORD_GROUP]?: RecordGroup; [PAINT_DECORATION]?: PaintDecoration }
 
 /** UTF-16 boundaries, shared by layout and public selection carets. */
 type GraphemeSegmenter = { segment(text: string): Iterable<{ segment: string; index: number }> }
