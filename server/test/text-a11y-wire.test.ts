@@ -190,15 +190,19 @@ describe('T2 over the wire: marker never in any a11y answer for the 13 construct
     u.stop()
     // 'focused' mode (no session cap): rects only, then every paragraph by index.
     const x = await session({ doc: f.withHidden, policy: { contentPolicy: 'visible-only', ...capped(1) } })
+    let read = ''
     for (let unit = 0; unit < x.m.units.count; unit++) {
       const r = await a11y(x.c, reqId++, unit)
+      expect(r.refused, `${f.id} focused unit ${unit}`).toBeUndefined()
       expect(leaks(r.raw, f.marker)).toBe(false)
       for (let k = 0; k < r.paragraphs.length; k++) {
         const one = await a11y(x.c, reqId++, unit, k)
         expect(one.refused).toBeUndefined()
         expect(leaks(one.raw, f.marker), `${f.id} unit ${unit} paragraph ${k}`).toBe(false)
+        read += `${one.paragraphs[k]!.text}\n`
       }
     }
+    if (f.kind !== 'xlsx') expect(read, `${f.id} focused control`).toContain(f.control)
     x.stop()
   }, 60_000)
 })
