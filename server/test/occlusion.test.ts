@@ -218,7 +218,7 @@ describe('text decorations (S3a Task 3c)', () => {
     expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1) })).toMatchObject({ servable: true })
   })
   it('a stroke()d line path over the word (strokes are recorded as cover marks) does not withhold it', () => {
-    // The observer records a stroke segment padded by lineWidth/2·√2: 1.41 px thick here.
+    // A single axis-aligned segment is recorded at its true width across the line: 1 px here.
     expect(verdict((c) => { word(c); c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(ink.x, ink.y + ink.height / 2); c.lineTo(ink.x1, ink.y + ink.height / 2); c.stroke() })).toMatchObject({ servable: true })
   })
   it('underline + strike + overline together (≤ 25 % of ink height) still served', () => {
@@ -255,6 +255,71 @@ describe('text decorations (S3a Task 3c)', () => {
   })
   it('evidence() agrees: the decorated word is servable text', () => {
     expect(run((c) => { word(c); bar(c, ink.height / 2, 1) })).toMatchObject({ servable: 1, withheld: 0, servableText: ['Typing'] })
+  })
+  // Ruling (a): exact stroke geometry for one straight axis-aligned segment.
+  const thin = Math.max(1.5, 0.12 * ink.height)
+  const line = (c: CanvasRenderingContext2D, lw: number, path: (c: CanvasRenderingContext2D) => void) => { c.strokeStyle = '#000'; c.lineWidth = lw; c.beginPath(); path(c); c.stroke() }
+  const mid = ink.y + ink.height / 2
+  it('one axis-aligned stroke segment is measured at its true width, not lineWidth·√2', () => {
+    const lw = thin * 0.9 // ≤ the threshold; lw·√2 is above it
+    expect(lw * Math.SQRT2).toBeGreaterThan(thin)
+    expect(verdict((c) => { word(c); line(c, lw, (p) => { p.moveTo(ink.x - 2, mid); p.lineTo(ink.x1 + 2, mid) }) })).toMatchObject({ servable: true })
+    // A vertical segment through a wide word: its thin axis is x.
+    expect(verdict((c) => { word(c); line(c, 1, (p) => { p.moveTo(ink.x + 10, ink.y - 2); p.lineTo(ink.x + 10, ink.y1 + 2) }) })).toMatchObject({ servable: true })
+  })
+  it('a true-width stroke thicker than the threshold still covers', () => {
+    expect(verdict((c) => { word(c); line(c, thin * 1.1, (p) => { p.moveTo(ink.x - 2, mid); p.lineTo(ink.x1 + 2, mid) }) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('two segments (separate subpaths, no joins) keep the inflated box', () => {
+    const lw = thin * 0.9
+    expect(verdict((c) => { word(c); line(c, lw, (p) => { p.moveTo(ink.x - 2, mid); p.lineTo(ink.x + 20, mid); p.moveTo(ink.x + 20, mid); p.lineTo(ink.x1 + 2, mid) }) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a rotated (non-axis-aligned) segment keeps the inflated box', () => {
+    const lw = thin * 0.9
+    expect(verdict((c) => { word(c); c.translate(ink.x - 2, mid); c.rotate(0.001); line(c, lw, (p) => { p.moveTo(0, 0); p.lineTo(ink.width + 4, 0) }) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a curve or a multi-segment polyline keeps the inflated box', () => {
+    const lw = thin * 0.9
+    expect(verdict((c) => { word(c); line(c, lw, (p) => { p.moveTo(ink.x - 2, mid); p.quadraticCurveTo(ink.x + 20, mid + 0.5, ink.x1 + 2, mid) }) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(verdict((c) => { word(c); c.lineJoin = 'round'; line(c, lw, (p) => { p.moveTo(ink.x - 2, mid); p.lineTo(ink.x + 20, mid); p.lineTo(ink.x1 + 2, mid) }) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+})
+
+describe("text decorations measured along the mark's own thin axis (Task 3c ruling b)", () => {
+  const inkOf = (s: string) => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    text(o.wrap(ctx), s, 20, 50)
+    const i = o.runDetails()[0]!.ink
+    return { ...i, x1: i.x + i.width, y1: i.y + i.height }
+  }
+  const verdictOf = (s: string, paint: (c: CanvasRenderingContext2D) => void) => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    const w = o.wrap(ctx)
+    text(w, s, 20, 50); w.fillStyle = '#000'; paint(w)
+    return o.runDetails()[0]!
+  }
+  const I = inkOf('I')
+  it('the I fixture is tall and narrow', () => {
+    expect(I.height).toBeGreaterThan(I.width)
+    expect(I.width).toBeLessThan(4)
+  })
+  it('a horizontal 1 px strike over a tall narrow run (I) is served', () => {
+    expect(verdictOf('I', (c) => c.fillRect(I.x - 3, I.y + I.height / 2, I.width + 6, 1))).toMatchObject({ servable: true })
+  })
+  it('a thin vertical bar through I is covered (its union across the ink width passes 25 %)', () => {
+    expect(verdictOf('I', (c) => c.fillRect(I.x + I.width / 2 - 0.5, I.y - 2, 1, I.height + 4))).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a square mark is never a decoration', () => {
+    expect(verdictOf('I', (c) => c.fillRect(I.x, I.y + 2, 1, 1))).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('the two axes are tracked separately: one thin bar on each axis is served; either axis past 25 % covers', () => {
+    const T = inkOf('Typing')
+    const h = (c: CanvasRenderingContext2D, at: number, t: number) => c.fillRect(T.x - 2, T.y + at, T.width + 4, t)
+    const v = (c: CanvasRenderingContext2D, at: number, t: number) => c.fillRect(T.x + at, T.y - 2, t, T.height + 4)
+    expect(verdictOf('Typing', (c) => { h(c, T.height / 2, 1); v(c, 10, 1) })).toMatchObject({ servable: true })
+    expect(verdictOf('Typing', (c) => { h(c, T.height / 2, 1); for (const at of [0, 0.25, 0.5, 0.75]) v(c, T.width * at, T.width * 0.1) })).toMatchObject({ servable: false, reason: 'covered' })
   })
 })
 

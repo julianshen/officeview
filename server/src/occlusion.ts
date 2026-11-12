@@ -15,14 +15,15 @@
  *   clip (tracked exactly only while every clip is an axis-aligned rect), is
  *   not fully transparent, and no ink cell was covered — or touched by a
  *   non-`source-over` op or a filter — after the run was drawn.
- * - Text decorations (S3a Task 3c): a later `cover` mark whose extent across
- *   the ink (perpendicular to the ink's longer side) is at most
- *   max(1.5 × scale px, 12 % of the ink's extent on that axis) is a thin
- *   decoration — an underline, strike or overline that leaves the word
- *   legible. Decorations are ignored while their merged extent over the ink
- *   stays ≤ 25 % of it; past that the run is `covered`. Erase and filter
- *   marks, and every thicker cover, withhold as before. Rotated text keeps
- *   its axis-aligned hull, so its decorations may not qualify (withheld).
+ * - Text decorations (S3a Task 3c): a later `cover` mark whose thickness
+ *   along its own thin axis (the smaller side of its box; a square box is
+ *   never one) is at most max(1.5 × scale px, 12 % of the ink's extent on
+ *   that axis) is a thin decoration — an underline, strike or overline that
+ *   leaves the word legible. Decorations are ignored while, on each axis,
+ *   their merged extent over the ink stays ≤ 25 % of the ink's extent;
+ *   past that the run is `covered`. Erase and filter marks, and every
+ *   thicker cover, withhold as before. Rotated text keeps its axis-aligned
+ *   hull, so its decorations may not qualify (withheld).
  */
 import type { PaintObserver } from './render'
 
@@ -175,6 +176,19 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   // a miter join can spike out to miterLimit × half the width at the join point.
   const strokeHalf = (ctx: CanvasRenderingContext2D) => (ctx.lineWidth * maxScale(ctx)) / 2 * Math.SQRT2
   const joinPad = (ctx: CanvasRenderingContext2D) => strokeHalf(ctx) * (ctx.lineJoin === 'miter' ? Math.max(1, ctx.miterLimit) : 1)
+  /** The current path's stroke boxes. One straight segment that is axis-aligned
+   * in device space (no joins) is exact across the line: half the device line
+   * width each side; along it the cap allowance stays. Every other path keeps
+   * the per-segment strokeHalf boxes plus join allowances. */
+  function strokeBoxes(ctx: CanvasRenderingContext2D): Rect[] {
+    const along = strokeHalf(ctx), across = (ctx.lineWidth * maxScale(ctx)) / 2
+    if (segments.length === 1 && joins.length === 0) {
+      const r = segments[0]!
+      if (Math.abs(r[3] - r[1]) < 1e-9) return [[r[0] - along, r[1] - across, r[2] + along, r[3] + across]]
+      if (Math.abs(r[2] - r[0]) < 1e-9) return [[r[0] - across, r[1] - along, r[2] + across, r[3] + along]]
+    }
+    return [...segments.map((r) => pad(r, along)), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(ctx)))]
+  }
   /** One op painting several boxes (a multi-segment stroke): one sequence number. */
   function draws(ctx: CanvasRenderingContext2D, boxes: Rect[], paint: unknown) {
     if (!boxes.length) return
@@ -204,16 +218,17 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   function verdict(r: Run): OcclusionReason | undefined {
     if (r.reason) return r.reason
     const later = new Set<Grid>()
-    // Decorations are measured across the ink: along y for a wide hull, x for a tall one.
-    const a = r.ink[2] - r.ink[0] >= r.ink[3] - r.ink[1] ? 1 : 0, lo = r.ink[a]!, hi = r.ink[a + 2]!
-    const thin = Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (hi - lo))
-    const bands: Array<[number, number]> = []
+    // A decoration is measured along its own thin axis (0 = x, 1 = y); the two axes are tracked separately.
+    const bands: [Array<[number, number]>, Array<[number, number]>] = [[], []]
     for (const m of marks) {
       if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
-      if (m.grid === 'cover' && m.box[a + 2]! - m.box[a]! <= thin) bands.push([Math.max(m.box[a]!, lo), Math.min(m.box[a + 2]!, hi)])
-      else later.add(m.grid)
+      const w = m.box[2] - m.box[0], h = m.box[3] - m.box[1]
+      const a = h < w ? 1 : 0, t = Math.min(w, h)
+      if (m.grid === 'cover' && w !== h && t <= Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (r.ink[a + 2]! - r.ink[a]!))) {
+        bands[a].push([Math.max(m.box[a]!, r.ink[a]!), Math.min(m.box[a + 2]!, r.ink[a + 2]!)])
+      } else later.add(m.grid)
     }
-    if (bands.length && unionLength(bands) > DECORATION_UNION * (hi - lo)) later.add('cover')
+    for (const a of [0, 1] as const) if (bands[a].length && unionLength(bands[a]) > DECORATION_UNION * (r.ink[a + 2]! - r.ink[a]!)) later.add('cover')
     return later.has('filter') ? 'filter' : later.has('erase') ? 'composite' : later.has('cover') ? 'covered' : undefined
   }
 
@@ -252,7 +267,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     },
     // A Path2D argument has unknown geometry: the whole surface.
     fill: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : subpaths, c.fillStyle),
-    stroke: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : [...segments.map((r) => pad(r, strokeHalf(c))), ...joins.map(([x, y]) => pad([x, y, x, y], joinPad(c)))], c.strokeStyle),
+    stroke: (c, a) => draws(c, a.length && typeof a[0] === 'object' ? [surface] : strokeBoxes(c), c.strokeStyle),
     fillRect: (c, a) => { const [x, y, w, h] = a as number[]; draw(c, hull(c, x!, y!, x! + w!, y! + h!), c.fillStyle) },
     strokeRect: (c, a) => {
       const [x, y, w, h] = a as number[]

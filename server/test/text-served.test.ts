@@ -618,4 +618,44 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
     const copy = await d.text(copyAll) as Extract<TextReply, { op: 'copy'; text: string }>
     expect(copy.text).toBe('Visit the typing guide today, not gone tomorrow.')
   }, 60_000)
+
+  /** `words` struck or underlined at `sz` half-points, between plain words; via the body painter or a text box. */
+  async function single(words: string, sz: number, deco: 'strike' | 'u', where: 'body' | 'textbox'): Promise<Uint8Array> {
+    const zip = await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'x' }] }]))
+    let xml = await zip.file('word/document.xml')!.async('string')
+    const rpr = `<w:rPr><w:sz w:val="${sz}"/>${deco === 'u' ? '<w:u w:val="single"/>' : '<w:strike/>'}</w:rPr>`
+    const plain = `<w:rPr><w:sz w:val="${sz}"/></w:rPr>`
+    const para = `<w:p><w:r>${plain}<w:t xml:space="preserve">x </w:t></w:r><w:r>${rpr}<w:t xml:space="preserve">${words}</w:t></w:r><w:r>${plain}<w:t xml:space="preserve"> x</w:t></w:r></w:p>`
+    const emu = (px: number) => Math.round(px * 9525)
+    const box = `<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${emu(500)}" cy="${emu(200)}"/><wp:docPr id="1" name="Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${emu(500)}" cy="${emu(200)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent>${para}</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+    xml = xml.replace(/<w:p>[^]*?<\/w:p>/, where === 'body' ? para : box)
+      .replace('<w:document ', '<w:document xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" ')
+    zip.file('word/document.xml', xml)
+    return zip.generateAsync({ type: 'uint8array' })
+  }
+  async function servedCopy(bytes: Uint8Array) {
+    const host = new DocumentHost()
+    const o = await host.open(`deco-${++refs}`, bytes, 'visible-only')
+    const prep = host.text(o.docKey, { op: 'prepare', unit: 0 }) as Extract<TextReply, { op: 'prepare' }>
+    const copy = host.text(o.docKey, copyAll) as { text: string }
+    host.drop(o.docKey)
+    return { withheld: prep.withheld, served: prep.served, text: copy.text }
+  }
+
+  test('struck words without ascenders or descenders are served at 8, 11, 18, 24 and 36 pt; struck I and a too', async () => {
+    const cases: Array<[string, number]> = [[16, 22, 36, 48, 72].map((sz) => ['some more', sz] as [string, number]), [['I', 22], ['I', 48], ['a', 48]] as Array<[string, number]>].flat()
+    for (const [words, sz] of cases) {
+      const r = await servedCopy(await single(words, sz, 'strike', 'body'))
+      expect({ words, sz, withheld: r.withheld, text: r.text }).toEqual({ words, sz, withheld: 0, text: `x ${words} x` })
+    }
+  }, 60_000)
+
+  // The text-box painter (src/docx/drawing.ts) strokes decorations BEFORE the
+  // glyphs, so they never cover them; this guards that path end to end.
+  test('the DOCX text-box painter: struck and underlined words are served', async () => {
+    for (const deco of ['strike', 'u'] as const) for (const [words, sz] of [['some more', 22], ['some more', 48], ['typing guide', 22], ['typing guide', 48], ['I', 48]] as Array<[string, number]>) {
+      const r = await servedCopy(await single(words, sz, deco, 'textbox'))
+      expect({ deco, words, sz, served: r.served > 0, withheld: r.withheld, text: r.text }).toEqual({ deco, words, sz, served: true, withheld: 0, text: `x ${words} x` })
+    }
+  }, 60_000)
 })
