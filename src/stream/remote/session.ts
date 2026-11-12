@@ -7,6 +7,8 @@
  * message is size-checked against the 1 MiB fragment cap BEFORE reassembly
  * (close 4007), only frames for an issued, still-awaited request are admitted,
  * and unit requests are admitted against the 8-outstanding / 96 MiB caps.
+ * Text requests (Stage 3a search/select/copy/a11y, `text()`) keep their own
+ * pending map; their answers are checked by `text-wire.ts`.
  */
 import { decodeAssets } from '../asset-wire'
 import { FRAGMENT_CAP, Kind, Reassembler, type FrameResult } from '../frame'
@@ -17,6 +19,9 @@ import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError } from './errors'
 import { Admission, ASSET_ALLOWANCE, unitCost } from './reservation'
+import { isTerminal, requestBody, TEXT_REFUSALS, textMessage, type TextMessage, type TextRefusalCode, type TextRequest } from './text-wire'
+
+export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 
 export type StreamClient = Pick<WebSocket, 'send' | 'close' | 'readyState' | 'addEventListener' | 'removeEventListener'> & { binaryType: BinaryType }
 export type StreamClientFactory = (source: StreamSource) => StreamClient
@@ -59,7 +64,22 @@ interface UnitReq {
   retried: boolean; rotatedRetry: boolean
 }
 
+interface TextReq {
+  request: TextRequest; reqId: number
+  on: (m: TextMessage) => void
+  resolve: () => void; reject: (e: unknown) => void
+  /** Sent on the current socket (false while it waits out a resume). */
+  sent: boolean
+  /** The next `seq` expected (copy/a11y answers). */
+  seq: number
+  rotatedRetry: boolean
+}
+/** Re-issued after a resume; copy and a11y are not (the server may already
+ * have counted them against the copy quota). */
+const REISSUED = new Set<TextRequest['type']>(['search', 'select'])
+
 const abortError = () => Object.assign(new Error('The stream session was closed.'), { name: 'AbortError' })
+const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0
 export function jtiOf(token: string): string | undefined {
   try {
     const part = token.split('.')[1]!
@@ -81,6 +101,7 @@ export class StreamSession {
   private nextReqId = 1
   private helloReqId = 0
   private readonly units = new Map<number, UnitReq>()
+  private readonly texts = new Map<number, TextReq>()
   private readonly admission = new Admission()
   private missingFaces: string[] = []
   private state: SessionState | 'opening' = 'opening'
@@ -134,6 +155,35 @@ export class StreamSession {
     })
   }
 
+  /**
+   * One text request (§4.1). `on` receives each checked answer message in order;
+   * the promise resolves after the terminal one (`search-done`, or the message
+   * with `last: true`) and rejects with a StreamSessionError on a refusal (with
+   * `limit`/`requested` when stated), a malformed answer or session end, and
+   * with the abort reason on abort, after which `on` receives nothing more.
+   *
+   * One select is answered at a time: issuing one rejects any pending older
+   * select with code 'closed' (the server sends it nothing more). On resume a
+   * sent search/select is re-issued — `on` first receives `{ type: 'restart' }`
+   * — while a sent copy/a11y rejects with 'session-rotated' and is never re-issued.
+   */
+  async text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    if (signal?.aborted) throw signal.reason ?? abortError()
+    return new Promise<void>((resolve, reject) => {
+      const req: TextReq = {
+        request, reqId: 0, on, sent: false, seq: 0, rotatedRetry: false,
+        resolve: () => { this.texts.delete(req.reqId); resolve() },
+        reject: (e) => { this.texts.delete(req.reqId); reject(e) },
+      }
+      signal?.addEventListener('abort', () => { if (this.texts.get(req.reqId) === req) req.reject(signal.reason ?? abortError()) }, { once: true })
+      if (request.type === 'select') {
+        for (const r of [...this.texts.values()]) if (r.request.type === 'select') r.reject(new StreamSessionError('closed', 'superseded by a newer select'))
+      }
+      this.issueText(req)
+    })
+  }
+
   /** Idempotent: closes the socket once (1000), rejects everything pending. */
   close(): void { this.end(undefined, 1000) }
 
@@ -151,6 +201,39 @@ export class StreamSession {
     this.send({ reqId: req.reqId, type: 'unit', token: this.token, unitIndex: req.index, scale: req.bucket })
     this.ensureSweeper()
   }
+  private issueText(req: TextReq) {
+    this.texts.delete(req.reqId)
+    req.reqId = this.allocId(); req.seq = 0; req.sent = false
+    this.texts.set(req.reqId, req)
+    if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
+    req.sent = true
+    this.send({ ...requestBody(req.request), reqId: req.reqId, type: req.request.type, token: this.token })
+  }
+  /** A re-issued request's consumer first learns its earlier answer is void. */
+  private reissueText(req: TextReq) {
+    if (req.sent && !this.deliver(req, { type: 'restart' })) return
+    this.issueText(req)
+  }
+  /** Hands `m` to the request's consumer; false once the request has settled
+   * (a throwing consumer rejects it, a consumer may abort it). */
+  private deliver(req: TextReq, m: TextMessage): boolean {
+    try { req.on(m) } catch (e) { req.reject(e) }
+    return this.texts.get(req.reqId) === req
+  }
+  private onTextAnswer(req: TextReq, m: Record<string, unknown>) {
+    if (m.type === 'refused') {
+      // A RENEW race (refused before the op ran): a search/select is retried once.
+      if (m.code === 'session-rotated' && REISSUED.has(req.request.type) && !req.rotatedRetry) { req.rotatedRetry = true; return this.reissueText(req) }
+      const code: TextRefusalCode = TEXT_REFUSALS.has(m.code as TextRefusalCode) ? m.code as TextRefusalCode : 'policy-refused'
+      const limit = isCount(m.limit) ? m.limit : undefined, requested = isCount(m.requested) ? m.requested : undefined
+      return req.reject(new StreamSessionError(code, code, { ...(limit !== undefined ? { limit } : {}), ...(requested !== undefined ? { requested } : {}) }))
+    }
+    const msg = textMessage(req.request.type, m, req.seq)
+    if (!msg) return req.reject(new StreamSessionError('policy-refused', `malformed ${String(m.type)} answer`))
+    if ('seq' in msg) req.seq++
+    if (this.deliver(req, msg) && isTerminal(msg)) req.resolve()
+  }
+
   private allocId() { const id = this.nextReqId; this.nextReqId = id >= 0xfffffffe ? 1 : id + 1; return id }
   private send(m: object) { this.sock?.send(JSON.stringify(m)) }
 
@@ -226,6 +309,8 @@ export class StreamSession {
       this.token = m.token
       return
     }
+    const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
+    if (text) return this.onTextAnswer(text, m)
     if (m.type === 'refused' && typeof m.reqId === 'number') {
       const req = this.units.get(m.reqId)
       if (!req) return
@@ -300,6 +385,10 @@ export class StreamSession {
     if (hs) { this.handshake = undefined; hs.reject(new StreamSessionError('connect-failed')) }
     this.sock = undefined
     this.setState('resuming')
+    // A sent copy/a11y may already have been answered and counted: never re-issued.
+    for (const req of [...this.texts.values()]) {
+      if (req.sent && !REISSUED.has(req.request.type)) req.reject(new StreamSessionError('session-rotated', 'the session resumed with this request in flight'))
+    }
     this.scheduleResume()
   }
 
@@ -325,6 +414,8 @@ export class StreamSession {
     this.setState('open')
     this.o.onNotice?.({ code: 'resumed' })
     for (const req of [...this.units.values()]) this.issue(req)
+    // In issue order, so the newest search is the one the server keeps.
+    for (const req of [...this.texts.values()]) this.reissueText(req)
   }
 
   private ensureSweeper() {
@@ -346,6 +437,7 @@ export class StreamSession {
     const err = error ?? abortError()
     if (this.handshake) { this.handshake.reject(err); this.handshake = undefined }
     for (const req of [...this.units.values()]) req.reject(err)
+    for (const req of [...this.texts.values()]) req.reject(err)
     this.admission.drain(err)
     this.setState('closed', error)
     this.settleEnded(error)
