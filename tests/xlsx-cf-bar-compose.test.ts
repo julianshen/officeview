@@ -63,13 +63,26 @@ describe('CF Stage 3 Task 20 — bar slot composition (S3-I, S3-J)', () => {
   })
 
   it('two matching bars → no bar, with unresolvedWrites containing dataBar', () => {
-    for (const evidence of [[], ['bar:composition-overlapping-bars']]) {
-      withExactCfEvidence(evidence, () => {
-        const st = composeCell([barRule(1, 1), barRule(2, 2)], [barOut, barOut])
-        expect(st.visual?.dataBar).toBeUndefined()
-        expect(st.unresolvedWrites?.has('dataBar')).toBe(true)
-      })
-    }
+    withExactCfEvidence([], () => {
+      const st = composeCell([barRule(1, 1), barRule(2, 2)], [barOut, barOut])
+      expect(st.visual?.dataBar).toBeUndefined()
+      expect(st.unresolvedWrites?.has('dataBar')).toBe(true)
+    })
+    // Ruling S3-I-OVERLAP: with bar:composition-overlapping-bars, the first matching bar in priority order paints (Excel
+    // paints stage3-bar-composition E2:E4 with the first bar's FF0000FF, never the second's FFFFA500); later bars are
+    // suppressed, not unresolved.
+    withExactCfEvidence(['bar:composition-overlapping-bars'], () => {
+      const second = { ...descriptor, fillColor: 0xffffa500 }
+      for (const rules of [[barRule(1, 1), barRule(2, 2), barRule(3, 3)], [barRule(1, 1), barRule(2, 2)]]) {
+        const st = composeCell(rules, rules.map((_, i) => i === 0 ? barOut : { kind: 'ready', value: second }))
+        expect(st.visual?.dataBar).toEqual({ ruleId: 1, ...descriptor })
+        expect(st.unresolvedWrites).toBeUndefined()
+      }
+      // The first MATCHING bar: a non-matching higher bar does not count.
+      expect(composeCell([barRule(1, 1), barRule(2, 2), barRule(3, 3)], [no, barOut, { kind: 'ready', value: second }]).visual?.dataBar?.ruleId).toBe(2)
+      // An unresolved higher bar still taints the slot.
+      expect(composeCell([barRule(1, 1), barRule(2, 2), barRule(3, 3)], [unknown, barOut, barOut]).visual?.dataBar).toBeUndefined()
+    })
     // One matching and one non-matching bar: the matching one paints.
     withExactCfEvidence([], () => {
       expect(composeCell([barRule(1, 1), barRule(2, 2)], [no, barOut]).visual?.dataBar?.ruleId).toBe(2)

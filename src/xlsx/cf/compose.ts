@@ -124,9 +124,10 @@ function* steps(
     // unreachable and must not participate in fill arbitration (bot P2).
     if (stopsHere) break
   }
-  // S3-I: two matching bars on one cell withhold both and taint the bar slot. `bar:composition-overlapping-bars` does
-  // not lift this: S3-I names no winner for it to select (the oracle's `first` hypothesis awaits a ruling).
-  const barsWithheld = matchingBars > 1
+  // S3-I: two matching bars on one cell withhold both and taint the bar slot, until bar:composition-overlapping-bars is
+  // verified. Then Ruling S3-I-OVERLAP: the first matching bar in priority order paints, and every later one is
+  // suppressed by the won slot (a known loser, so not reported as unresolved).
+  const barsWithheld = matchingBars > 1 && !checkEvidence('bar:composition-overlapping-bars')
   if (barsWithheld) tainted.add('dataBar')
   // S3-I coexistence: a bar never changes the fill slot, but paints over a scale or DXF fill only under evidence.
   const scaleFillPresent = matchingFills.some(f => f.isScale)
@@ -224,6 +225,7 @@ function* steps(
     if (isBar) {
       // Bar rule (S3-I): its own slot, exclusive, and over a fill only under evidence.
       const value = barDescriptorOf(outcome.value)
+      if (won.has('dataBar')) continue
       let blocked = barsWithheld || value === undefined
       for (const mask of tainted) { yield; if (conflicts(mask, 'dataBar')) { blocked = true; break } }
       // An earlier unresolved fill writer leaves the cell's fill unknown: treated as a possible DXF fill.
