@@ -14,6 +14,7 @@ import { isValueUnavailable, type ValuePolicy } from '../view/values'
 import { cfNeedsViewport, cfExplicitBounds } from '../cfLoader'
 import { STATIC_SHEET_BUDGET } from '../render'
 import { CfPageFault, cfRulesVersion, pagedStoreCfPages } from '../view/pagedSource'
+import { isDateNumberStyle } from '../dateNumberFormat'
 import type { SourceStore } from '../view/contracts'
 import { hostTask } from '../view/scheduler'
 
@@ -29,6 +30,8 @@ export interface CfPaintBatch {
 export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemory, policy: ValuePolicy): CfValueSource {
   let bounds: SourceRect | undefined, ordered = true
   return {
+    // Resident cells carry their resolved style, so every number is classified (data-bar S3-G).
+    numberFormats: 'resolved',
     stamp: () => stamp,
     async bounds(_id, budget, signal) {
       if (bounds) return bounds
@@ -75,7 +78,7 @@ export function residentSource(sheet: XlsxSheet, stamp: CfStamp, memory: CfMemor
           const v = cell.value
           const isErr = cell.valueIsError
           const value: CfLiteral = isErr ? { kind: 'error', value: String(v) } : v === null ? { kind: 'blank' }
-            : typeof v === 'number' ? { kind: 'number', value: v } : typeof v === 'boolean' ? { kind: 'boolean', value: v } : { kind: 'string', value: v }
+            : typeof v === 'number' ? (isDateNumberStyle(cell.style) ? { kind: 'number', value: v, dateSerial: true } : { kind: 'number', value: v }) : typeof v === 'boolean' ? { kind: 'boolean', value: v } : { kind: 'string', value: v }
           rows[0] = r; cols[0] = cell.col
           yield { value: { rows, cols, values: [value] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } }
         } }

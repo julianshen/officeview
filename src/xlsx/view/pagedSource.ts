@@ -10,6 +10,7 @@
  * without one is `unavailable`. Answers match ObjectXlsxSheetAdapter over the
  * same file parsed with valuePolicy 'cached' (adapter parity, §4.2).
  */
+import { isDateNumberStyle } from '../dateNumberFormat'
 import { defaultColumnWidthPx } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery, RangeCompletion,
@@ -987,6 +988,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         clockGen: request.stamp.clockGen,
       }),
       pages: this.cfPages(request, account, options?.signal),
+      ...(this.workbook.formatting?.styles ? { numberFormats: 'resolved' as const } : {}),
       }
       const dateContext = options?.dateContext ?? {
         dateSystem: this.workbook.formatting?.dateSystem ?? '1900',
@@ -1011,7 +1013,13 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private cfPages(request: CfReadRequest, memory: CfMemory, signal?: AbortSignal): CfValueSource['pages'] {
     const self = this
     void request
-    return pagedStoreCfPages({ readRows: (range, cursor, options) => self.readRows(range, cursor, options), get stamp() { return self.stamp } }, memory, signal)
+    const styles = this.workbook.formatting?.styles
+    // The displayed style, as Find resolves it: an overlay's own format, else the cell's.
+    const styleOf = styles ? (row: number, col: number, styleIndex: number): XlsxCellStyle | undefined => {
+      const overlay = self.overlayStyle({ row, col })
+      return overlay === null ? undefined : overlay ?? styles[styleIndex]
+    } : undefined
+    return pagedStoreCfPages({ readRows: (range, cursor, options) => self.readRows(range, cursor, options), get stamp() { return self.stamp }, ...(styleOf ? { styleOf } : {}) }, memory, signal)
   }
 
   /** S3: asynchronously snapshot only the source cells referenced by this
@@ -2239,6 +2247,9 @@ async function prepareCfRemoteOnce(
 export interface CfPagedReadHost {
   readonly stamp: SourceStamp
   readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
+  /** The style a cell displays with (overlays included). Present, numbers carry `dateSerial` (data-bar S3-G) and the
+   * source may declare `numberFormats: 'resolved'`; absent, formats stay unknown. */
+  styleOf?(row: number, col: number, styleIndex: number): XlsxCellStyle | undefined
 }
 
 /** Typed bridge failures: incomplete pages withhold as pending (data may
@@ -2292,7 +2303,7 @@ export function pagedStoreCfPages(
           const v = cell.value
           if (v.kind === 'string') bytes += 16 + v.value.length * 2
           else if (v.kind === 'error') bytes += 16 + String(v.value).length * 2
-          else if (v.kind === 'number') bytes += 92
+          else if (v.kind === 'number') bytes += 92 + (v.dateSerial ? 24 : 0)
           else if (v.kind === 'boolean') bytes += 94
           else bytes += 66
         }
@@ -2337,7 +2348,8 @@ export function pagedStoreCfPages(
             if (cell.unavailable) throw new CfPageFault('unavailable', store.stamp.sheetId, 'Conditional formatting scope contains values unavailable to the cached reader')
             const value: CfLiteral = cell.value === null ? { kind: 'blank' }
               : cell.valueIsError ? { kind: 'error', value: String(cell.value) }
-              : typeof cell.value === 'number' ? { kind: 'number', value: cell.value }
+              : typeof cell.value === 'number'
+                ? (store.styleOf && isDateNumberStyle(store.styleOf(row.row, cell.col, cell.styleIndex)) ? { kind: 'number', value: cell.value, dateSerial: true } : { kind: 'number', value: cell.value })
               : typeof cell.value === 'boolean' ? { kind: 'boolean', value: cell.value }
               : { kind: 'string', value: cell.value }
             chunk.push({ row: row.row, col: cell.col, value })

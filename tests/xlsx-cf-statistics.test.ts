@@ -1799,31 +1799,36 @@ describe('CF statistics reuse by data bars (Task 20)', () => {
     }
   }
 
-  it('bars reuse the shared statistics: a percentile bar, a min/max scale and top10 on one 50-row A:A scope', async () => {
+  it('bars reuse the shared statistics: a percentile bar, a min/max scale and top10 on one 50-row A:A scope, in any priority order', async () => {
     const cells: XlsxCell[] = []
     for (let r = 0; r < 50; r++) cells.push(cell(r, 0, r + 1))
-    const probed = arraySource(cells)
-    const { scanned, source } = scanCounting(probed.source as unknown as CfValueSource)
     const scope = [rect(0, 1048575, 0, 0)] // A:A
-    const rules = [
-      percentileBar(0, scope),
-      ruleOf(1, { kind: 'colorScale', dialect: 'base', formulas: [], points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] } as CfDefinition, scope, ['colorScale', 'fill']),
-      ruleOf(2, { kind: 'top10', dialect: 'base', formulas: [], rank: 10, bottom: false, percent: false } as CfDefinition, scope, ['fill'], { 'fill.pattern': 'solid', 'fill.bg': 'FFFFC7CE' }),
+    const scale = { kind: 'colorScale', dialect: 'base', formulas: [], points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] } as CfDefinition
+    const top10 = { kind: 'top10', dialect: 'base', formulas: [], rank: 10, bottom: false, percent: false } as CfDefinition
+    const orders: Array<(i: number) => CfRule>[] = [
+      [i => percentileBar(i, scope), i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => ruleOf(i, top10, scope, ['fill'], { 'fill.pattern': 'solid' })],
+      // The unsorted (min/max scale, min/max bar) rules prepare first: the scope is still scanned once.
+      [i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => minMaxBar(i, scope), i => percentileBar(i, scope), i => ruleOf(i, top10, scope, ['fill'], { 'fill.pattern': 'solid' })],
     ]
-    const session = createCfStatistics(probed.memory)
-    const first = await prepareWith(rules, source, session)
-    // The bar's percentile bound needs the sorted copy, and the scale and top10 share it: one scan.
-    const barStats = first.outcome(rules[0]!)
-    expect(barStats?.kind).toBe('ready')
-    if (barStats?.kind === 'ready') expect(barStats.value.value.sortedAsc.length).toBe(50)
-    expect(scanned.cells).toBeLessThanOrEqual(50)
-    expect(scanned.cells).toBe(50)
-    // A warm session hit does zero loops.
-    const warm = await prepareWith(rules, source, session)
-    expect(warm.outcome(rules[0]!)?.kind).toBe('ready')
-    expect(scanned.cells).toBe(50)
-    first.release(); warm.release()
-    session.dispose()
+    for (const order of orders) {
+      const probed = arraySource(cells)
+      const { scanned, source } = scanCounting(probed.source as unknown as CfValueSource)
+      const rules = order.map((make, i) => make(i))
+      const session = createCfStatistics(probed.memory)
+      const first = await prepareWith(rules, source, session)
+      for (const r of rules) expect(first.outcome(r)?.kind, `rule ${r.id}`).toBe('ready')
+      const bar = rules.find(r => r.definition.kind === 'dataBar' && r.definition.bounds[0].type === 'percentile')!
+      const barStats = first.outcome(bar)
+      if (barStats?.kind === 'ready') expect(barStats.value.value.sortedAsc.length).toBe(50)
+      expect(scanned.cells).toBeLessThanOrEqual(50)
+      expect(scanned.cells).toBe(50)
+      // A warm session hit does zero loops.
+      const warm = await prepareWith(rules, source, session)
+      expect(warm.outcome(bar)?.kind).toBe('ready')
+      expect(scanned.cells).toBe(50)
+      first.release(); warm.release()
+      session.dispose()
+    }
   })
 
   it('bar percentile copy reserves before allocation', async () => {
@@ -1852,6 +1857,20 @@ describe('CF statistics reuse by data bars (Task 20)', () => {
     expect(again.outcome(p)?.kind).toBe('unresolved')
     expect(scanned.cells).toBe(scannedAfterRefusal)
     refused.release(); again.release(); session.dispose()
+
+    // In one preparation, a min/max bar on the same scope stays ready: the shared sorted scan it would join is refused,
+    // so it falls back to streaming, and the refusal still reports exactly one diagnostic.
+    const shared = createCfStatistics(createCfMemory({ limitBytes: requiredBytes - 1 }))
+    const sharedDiagnostics: CfDiagnostic[] = []
+    for (const rules of [[minMaxBar(0, scope), percentileBar(1, scope)], [percentileBar(0, scope), minMaxBar(1, scope)]]) {
+      const both = await prepareWith(rules, source, shared, sharedDiagnostics)
+      const [mm, pc] = rules[0]!.definition.kind === 'dataBar' && rules[0]!.definition.bounds[0].type === 'min' ? rules : [rules[1]!, rules[0]!]
+      expect(both.outcome(mm!)?.kind).toBe('ready')
+      expect(both.outcome(pc!)).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+      both.release()
+    }
+    expect(sharedDiagnostics.filter(d => d.feature === 'cf-resource-limit')).toHaveLength(2) // one per preparation
+    shared.dispose()
 
     // A min/max bar on the same scope streams without the sorted copy and stays ready at the same cap.
     const minMaxSession = createCfStatistics(createCfMemory({ limitBytes: 1024 * 1024 }))

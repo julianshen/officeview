@@ -14,7 +14,7 @@
 import type { CfBarBound, CfBarDescriptor, CfDefinition, CfLiteral, CfOutcome, CfScaleBound } from './model'
 import type { CfRangeStatistics } from './statistics'
 import { resolveScaleThresholds, safeFraction } from './colorScale'
-import { hasEvidence as defaultHasEvidence } from './evidence'
+import { barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarLayout } from './evidence'
 
 type CfDataBarDefinition = Extract<CfDefinition, { kind: 'dataBar' }>
 
@@ -108,19 +108,22 @@ function shareOfSpan(magnitude: number, lo: number, hi: number): number {
 
 /**
  * Evaluates one cell's bar against resolved thresholds. Fractions are of the cell's inner width in reading order;
- * `startFraction <= endFraction`. Every branch is unresolved unless its evidence is present and `variant` is given
- * (Ruling S3-B); `stats` carries the scope's min/max for the whole-rule beyond-bounds check (Ruling S3-E).
+ * `startFraction <= endFraction`. Every branch is unresolved unless its evidence is present and a layout variant is
+ * enabled for the scope's sign (Ruling S3-B): `variant` (one variant for both signs) or `layout`, else the published
+ * selection through `barLayoutEvidence`. `stats` carries the scope's min/max for the whole-rule beyond-bounds check
+ * (Ruling S3-E).
  */
 export function evaluateDataBar(
   value: CfLiteral | number,
   def: CfDataBarDefinition,
   thresholds: readonly [number, number],
   stats: Pick<CfRangeStatistics, 'min' | 'max'>,
-  options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant } = {},
+  options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant; layout?: CfBarLayout } = {},
 ): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
   const checkEvidence = options.hasEvidence ?? defaultHasEvidence
-  const variant = options.variant
-  if (!variant) return unmeasured()
+  const layout: CfBarLayout | undefined = options.variant ? { allPositive: options.variant, mixedSign: options.variant }
+    : 'layout' in options ? options.layout : barLayoutEvidence(checkEvidence)
+  if (!layout || (!layout.allPositive && !layout.mixedSign)) return unmeasured()
   for (const cap of barEvaluationRequiredCapabilities(def)) if (!checkEvidence(cap)) return unmeasured()
   const direction = def.direction === 'context' ? (def.sheetRightToLeft === false ? 'leftToRight' : undefined) : def.direction
   if (direction === undefined) return unmeasured()
@@ -135,12 +138,27 @@ export function evaluateDataBar(
   // S3-G: only numbers draw; other kinds draw no bar only with evidence, else they are unresolved.
   const v = typeof value === 'number' ? value : value.kind === 'number' ? value.value : undefined
   if (v === undefined) return checkEvidence('bar:participation-types') ? { kind: 'no-match' } : { kind: 'unresolved', reason: 'cf-unmeasured-participation' }
+  // S3-G: a number displayed as a date evaluates as a number only with evidence.
+  if (typeof value !== 'number' && value.kind === 'number' && value.dateSerial && !checkEvidence('bar:participation-dateserial')) {
+    return { kind: 'unresolved', reason: 'cf-unmeasured-participation' }
+  }
   if (!Number.isFinite(v)) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
   if (v < lo || v > hi) return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
 
   const isNegative = v < 0
   const l0 = def.minLength / 100, l1 = def.maxLength / 100
   const length = (f: number): number => l0 + f * (l1 - l0)
+
+  const fullLengths = def.minLength === 0 && def.maxLength === 100
+  // All-negative thresholds under `automatic` (bar:lengths-all-negative, the oracle's `axis` hypothesis): the bar grows
+  // from the trailing edge, longest at v_min, as a share of the whole span. Measured at 0/100 lengths only; the capture
+  // records no axis line there, so the descriptor carries none.
+  if (def.axisPosition === 'automatic' && lo < 0 && hi <= 0) {
+    if (!checkEvidence('bar:lengths-all-negative') || !fullLengths) return unmeasured()
+    const f = safeFraction(v, lo, hi)
+    if (f === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
+    return finish(def, checkEvidence, { axisFraction: 1, startFraction: f, endFraction: 1, isNegative: v < 0, axisColor: undefined, direction })
+  }
 
   // Axis: `middle` always draws one; `automatic` only for mixed-sign thresholds; `none` never.
   let axis: number | undefined
@@ -151,8 +169,6 @@ export function evaluateDataBar(
     sideExtent = ext
     fullShare = shareOfSpan(Math.abs(v), -ext, ext)
   } else if (def.axisPosition === 'automatic' && lo < 0) {
-    // All-negative data has no layout hypothesis yet (bar:lengths-all-negative): withheld.
-    if (hi <= 0) return unmeasured()
     if (!checkEvidence('bar:axis-automatic')) return unmeasured()
     // Spec formula -v_min / (v_max - v_min), in halves when the span overflows.
     axis = safeFraction(0, lo, hi)
@@ -162,13 +178,16 @@ export function evaluateDataBar(
 
   let startFraction: number, endFraction: number, axisFraction = 0
   if (axis === undefined) {
+    // No axis drawn: the all-positive layout (every variant starts at the leading edge and spans the whole cell).
+    if (!layout.allPositive) return unmeasured()
     const f = safeFraction(v, lo, hi)
     if (f === undefined) return { kind: 'unresolved', reason: 'cf-non-finite-value' }
     startFraction = 0
     endFraction = length(f)
   } else {
-    // The span variant defines no axis layout.
-    if (variant.origin !== 'axis' || def.axisArgb === undefined) return unmeasured()
+    // The span variant defines no axis layout, and axes were measured at 0/100 lengths only.
+    const variant = layout.mixedSign
+    if (!variant || variant.origin !== 'axis' || !fullLengths || def.axisArgb === undefined) return unmeasured()
     const sideWidth = isNegative ? axis : 1 - axis
     const extent = variant.lengthBasis === 'side' ? length(Math.abs(v) / sideExtent) * sideWidth : Math.min(length(fullShare), sideWidth)
     axisFraction = axis
@@ -176,6 +195,16 @@ export function evaluateDataBar(
     endFraction = isNegative ? axis : axis + extent
   }
 
+  return finish(def, checkEvidence, { axisFraction, startFraction, endFraction, isNegative, axisColor: axis !== undefined ? def.axisArgb : undefined, direction })
+}
+
+/** Colours (S3-L, S3-F) and the finite-range check shared by every layout branch. */
+function finish(
+  def: CfDataBarDefinition,
+  checkEvidence: (cap: string) => boolean,
+  g: { axisFraction: number; startFraction: number; endFraction: number; isNegative: boolean; axisColor: number | undefined; direction: 'leftToRight' | 'rightToLeft' },
+): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
+  const { axisFraction, startFraction, endFraction, isNegative, axisColor, direction } = g
   // S3-L negative colours, each under its own evidence; colours never default (S3-F).
   let fillColor: number | undefined = def.fillArgb
   let borderColor: number | undefined = def.border ? def.borderArgb : undefined
@@ -206,7 +235,7 @@ export function evaluateDataBar(
       axisFraction, startFraction, endFraction, fillColor,
       ...(borderColor !== undefined ? { borderColor } : {}),
       isGradient: def.gradient, isNegative,
-      ...(axis !== undefined ? { axisColor: def.axisArgb! } : {}),
+      ...(axisColor !== undefined ? { axisColor } : {}),
       showValue: def.showValue, direction,
     }),
   }

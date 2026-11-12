@@ -3,7 +3,8 @@ import { hostTask } from '../view/scheduler'
 import { createCfCache, sameCfStamp } from './cache'
 import { composeCellAsync } from './compose'
 import { resolveScaleThresholds, safeFraction, scaleColorAt } from './colorScale'
-import { evaluateDataBar, resolveBarThresholds, type CfBarLayoutVariant } from './dataBar'
+import { evaluateDataBar, resolveBarThresholds } from './dataBar'
+import { barLayoutEvidence } from './evidence'
 import { resolveCfCellStyle } from './dxf'
 import { CF_BAR_CELL_BYTES, CF_LIMITS, createCfWorkBudget, type CfMemory, type CfWorkBudget } from './limits'
 import type { CfCellState, CfLease, CfLiteral, CfOutcome, CfPrepared, CfPrepareRequest, CfRule, CfSheetRules, CfValueSource, SourceRect } from './model'
@@ -65,9 +66,7 @@ export function estimateCfPrepareBytes(rules: CfSheetRules, sourceRects: readonl
 export function createCfService(sheet: CfSheetRules, memory: CfMemory,
   options: { evidence?: CfEvidenceGate; budget?: () => CfWorkBudget; statisticsBudget?: () => CfWorkBudget; statistics?: CfPaintStatistics; statisticsOptions?: CfStatisticsOptions; dateContext?: import('./predicates').CfDateContext;
     /** Merged regions of the sheet (final review I5): a scale scope that intersects one is an unmeasured shape. */
-    merges?: readonly SourceRect[]
-    /** Ruling S3-B: the one evidenced bar layout variant. Absent (production today), every resolved bar is withheld. */
-    barLayoutVariant?: CfBarLayoutVariant } = {}) {
+    merges?: readonly SourceRect[] } = {}) {
   const cache = createCfCache(memory)
   const evidence = options.evidence ?? cfRuntimeEvidence
   async function prepareCf(request: CfPrepareRequest, source: CfValueSource, account = memory): Promise<CfLease<CfPrepared>> {
@@ -162,17 +161,34 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             // An autofilter writes ordinary hidden-row records, so the two cases are indistinguishable here.
             if (prepared?.hasHiddenRows && (!allows('scope-hidden-row') || !allows('scope-autofilter-hidden-row'))) return unmeasured()
             if (prepared?.hasErrors && !allows('participation-error-presence')) return unmeasured()
+            // S3-G: date serials join a bar's statistics only with evidence; a source that cannot tell dates from
+            // numbers withholds every bar until then.
+            if (family === 'bar' && !allows('participation-dateserial') && (source.numberFormats !== 'resolved' || prepared?.hasDateSerials)) return unmeasured()
           }
+          // Only a percentile bound needs the sorted copy; min/max/num/percent scales and bars stream, and every other
+          // statistical rule (top10, duplicates, averages) takes the session default (sorted).
+          const ownSorted = (rule: CfRule): boolean => {
+            const d = rule.definition
+            return d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile')
+              : d.kind === 'dataBar' ? d.bounds.some(b => b.type === 'percentile') : true
+          }
+          // One scan per scope whatever the priority order: a sorted entry serves unsorted requests but not the reverse,
+          // so a streaming rule whose scope another rule needs sorted asks for the sorted copy too (Bounded work).
+          const scopeOf = (rule: CfRule): string => rule.ranges.map(r => `${r.firstRow},${r.lastRow},${r.firstCol},${r.lastCol}`).sort().join(';')
+          const sortedScopes = new Set<string>()
+          for (const rule of ordered) { await work(); if (statistical(rule) && ownSorted(rule)) sortedScopes.add(scopeOf(rule)) }
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
             const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, noTimeLimit: true })
-            const d = rule.definition
-            // Only a percentile bound needs the sorted copy; min/max/num/percent scales and bars stream.
-            const needsSorted = d.kind === 'colorScale' ? d.points.some(p => p.bound.type === 'percentile')
-              : d.kind === 'dataBar' ? d.bounds.some(b => b.type === 'percentile') : undefined
-            const statOpts = needsSorted !== undefined ? { ...options.statisticsOptions, sorted: needsSorted } : options.statisticsOptions
-            const [out] = await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, { signal, ...statOpts })
-            stats.set(rule, out!)
-            if (!options.statistics && out?.kind === 'ready') leases.push(out.value)
+            const own = ownSorted(rule)
+            const upgraded = !own && sortedScopes.has(scopeOf(rule))
+            const prepare = async (sorted: boolean, report: boolean) => (await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, {
+              signal, ...options.statisticsOptions, sorted, ...(report ? {} : { diagnostics: undefined }),
+            }))[0]!
+            let out = await prepare(own || upgraded, !upgraded)
+            // The shared sorted copy is a convenience for this rule: refused, it streams on its own instead.
+            if (upgraded && out.kind === 'unresolved' && out.reason === 'cf-resource-limit') out = await prepare(false, true)
+            stats.set(rule, out)
+            if (!options.statistics && out.kind === 'ready') leases.push(out.value)
           }
           budget.resume()
           for (const rule of ordered) if (rule.definition.kind === 'colorScale' || rule.definition.kind === 'dataBar') {
@@ -180,6 +196,8 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
             await blockScope(rule, prepared?.kind === 'ready' ? prepared.value.value : undefined, rule.definition.kind === 'colorScale' ? 'scale' : 'bar')
           }
           budget.resume()
+          // Ruling S3-B: the published layout, gated by this service's evidence; undefined withholds every bar.
+          const barLayout = barLayoutEvidence(cap => evidence.allows(cap))
           const evaluate = async (row: number, col: number, value: CfLiteral): Promise<CfOutcome<CfCellState>> => {
             const textBytes = value.kind === 'string' ? 256 + value.value.length * 8 : 0
             if (textBytes > CF_LIMITS.scratchBytes) return { kind: 'unresolved', reason: 'cf-resource-limit' }
@@ -238,10 +256,10 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
                     outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats : { kind: 'unresolved', reason: 'cf-no-statistics' })
                     continue
                   }
-                  const gate = { hasEvidence: (cap: string) => evidence.allows(cap) }
+                  const gate = { hasEvidence: (cap: string) => evidence.allows(cap), layout: barLayout }
                   const thresh = resolveBarThresholds(rule.definition, preparedStats.value.value, gate)
                   outcomes.push(thresh.kind !== 'ready' ? thresh
-                    : evaluateDataBar(value, rule.definition, thresh.value, preparedStats.value.value, { ...gate, variant: options.barLayoutVariant }))
+                    : evaluateDataBar(value, rule.definition, thresh.value, preparedStats.value.value, gate))
                 } else {
                   outcomes.push(preparedStats?.kind === 'unresolved' ? preparedStats
                     : evaluatePredicate(rule, { row, col }, value, preparedStats?.kind === 'ready' ? preparedStats.value.value : undefined, evidence, options.dateContext))

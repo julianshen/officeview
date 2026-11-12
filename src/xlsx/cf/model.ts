@@ -5,7 +5,9 @@ export type SourceRect = Readonly<{ firstRow: number; lastRow: number; firstCol:
 export type CfStamp = Readonly<{ owner: string; sheetId: string; workbookValueGen: number; cfGen: number; viewGen: number; structureGen: number; clockGen: number }>
 export type CfOutcome<T> = { kind: 'ready'; value: T } | { kind: 'no-match' } | { kind: 'unresolved'; reason: string; pendingSheetIds?: readonly string[] }
 export type CfWriteMask = ReadonlySet<string> // Property paths; singleton ALL for unknown writes.
-export type CfLiteral = { kind: 'number'; value: number } | { kind: 'string'; value: string } | { kind: 'boolean'; value: boolean } | { kind: 'error'; value: string } | { kind: 'blank' }
+/** `dateSerial` marks a number whose cell is displayed with a date or time format (S3-G); absent means a plain number,
+ * or a format the source did not resolve (see `CfValueSource.numberFormats`). */
+export type CfLiteral = { kind: 'number'; value: number; dateSerial?: true } | { kind: 'string'; value: string } | { kind: 'boolean'; value: boolean } | { kind: 'error'; value: string } | { kind: 'blank' }
 export type CfRuleType = 'cellIs' | 'containsText' | 'notContainsText' | 'beginsWith' | 'endsWith' | 'containsBlanks' | 'notContainsBlanks' | 'containsErrors' | 'notContainsErrors' | 'timePeriod' | 'top10' | 'aboveAverage' | 'duplicateValues' | 'uniqueValues' | 'colorScale' | 'dataBar' | 'iconSet' | 'expression'
 export type CfOperator = 'equal' | 'notEqual' | 'greaterThan' | 'lessThan' | 'greaterThanOrEqual' | 'lessThanOrEqual' | 'between' | 'notBetween'
 export type CfTimePeriod = 'today' | 'yesterday' | 'tomorrow' | 'last7Days' | 'thisWeek' | 'lastWeek' | 'nextWeek' | 'thisMonth' | 'lastMonth' | 'nextMonth'
@@ -72,6 +74,9 @@ export interface CfValueSource {
    * Never rescanned for warm hits (session memoizes per source identity).
    */
   bounds(sheetId: string, budget?: CfWorkBudget, signal?: AbortSignal): Promise<SourceRect | undefined>
+  /** `'resolved'` when every number literal carries `dateSerial` from its cell's format; absent, formats are unknown and
+   * consumers that depend on them (data-bar date participation, S3-G) fail closed. */
+  readonly numberFormats?: 'resolved'
   stamp(sheetId: string): CfStamp
   pages(sheetId: string, rects: readonly SourceRect[], budget: CfWorkBudget, signal: AbortSignal): AsyncIterable<CfLease<CfValuePage>>
 }

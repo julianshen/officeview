@@ -8,8 +8,13 @@ import {
   type CfBarLayoutVariant,
 } from '../src/xlsx/cf/dataBar'
 import { resolveScaleThresholds } from '../src/xlsx/cf/colorScale'
-import { withExactCfEvidence } from '../src/xlsx/cf/evidence'
-import { createCfMemory } from '../src/xlsx/cf/limits'
+import { injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
+import { createResidentCfSource } from '../src/xlsx/cf/statistics'
+import { residentSource } from '../src/xlsx/cf/render'
+import { pagedStoreCfPages, type CfPagedReadHost } from '../src/xlsx/view/pagedSource'
+import { isDateNumberStyle } from '../src/xlsx/dateNumberFormat'
+import type { XlsxCell, XlsxSheet } from '../src/xlsx/types'
 import { createCfService } from '../src/xlsx/cf/service'
 import type { CfRangeStatistics } from '../src/xlsx/cf/statistics'
 import type { CfDefinition, CfLease, CfLiteral, CfOutcome, CfRule, CfSheetRules, CfStamp, CfValuePage, CfValueSource, SourceRect } from '../src/xlsx/cf/model'
@@ -206,9 +211,49 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
       // All-positive data under automatic draws no axis, so it does not need the axis capability.
       expect(evalBar(50, bar(), range(0, 100), AXIS_SIDE).kind).toBe('ready')
     })
-    // All-negative data has no hypothesis yet: withheld (bar:lengths-all-negative).
+    // An axis was measured at 0/100 lengths only: other lengths with an axis withhold.
+    withExactCfEvidence(STUB_EVIDENCE, () => {
+      expect(evalBar(50, bar({ minLength: 10, maxLength: 90 }), scope, AXIS_SIDE).kind).toBe('unresolved')
+      expect(evalBar(50, bar({ minLength: 10, maxLength: 90, axisPosition: 'middle' }), range(0, 100), AXIS_SIDE).kind).toBe('unresolved')
+    })
+  })
+
+  it('all-negative data under bar:lengths-all-negative (the oracle\'s `axis` hypothesis)', () => {
+    // Bars grow from the trailing edge, longest at v_min, as a share of the span {-100..-20} (stage3-bar-lengths J2:J6).
+    const scope = [-100, -80, -60, -40, -20]
     withExactCfEvidence([...STUB_EVIDENCE, 'bar:lengths-all-negative'], () => {
-      expect(evalBar(-25, bar(), range(-100, -1), AXIS_SIDE).kind).toBe('unresolved')
+      for (const variant of [SPAN_CELL, AXIS_SIDE]) {
+        const longest = ready(evalBar(-100, bar(), scope, variant))
+        expect([longest.axisFraction, longest.startFraction, longest.endFraction]).toEqual([1, 0, 1])
+        expect(longest.isNegative).toBe(true)
+        expect(longest.fillColor).toBe(RED)
+        expect(longest.axisColor).toBeUndefined()
+        const b = ready(evalBar(-80, bar(), scope, variant))
+        expect(b.startFraction).toBeCloseTo(0.25, 12)
+        expect(b.endFraction).toBe(1)
+        const empty = ready(evalBar(-20, bar(), scope, variant))
+        expect([empty.startFraction, empty.endFraction]).toEqual([1, 1])
+      }
+      // Measured at 0/100 lengths only.
+      expect(evalBar(-60, bar({ minLength: 10, maxLength: 90 }), scope, SPAN_CELL).kind).toBe('unresolved')
+      // middle and none keep their own layouts.
+      expect(ready(evalBar(-60, bar({ axisPosition: 'none' }), scope, SPAN_CELL)).startFraction).toBe(0)
+    })
+    // Without its evidence: unresolved.
+    withExactCfEvidence(STUB_EVIDENCE, () => {
+      expect(evalBar(-60, bar(), scope, AXIS_SIDE)).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-capability' })
+    })
+  })
+
+  it('date serials evaluate as numbers only with bar:participation-dateserial (S3-G)', () => {
+    const scope = range(0, 100)
+    const date: CfLiteral = { kind: 'number', value: 25, dateSerial: true }
+    withExactCfEvidence(STUB_EVIDENCE, () => {
+      expect(evalBar(date, bar(), scope, SPAN_CELL)).toEqual({ kind: 'unresolved', reason: 'cf-unmeasured-participation' })
+      expect(evalBar(num(25), bar(), scope, SPAN_CELL).kind).toBe('ready')
+    })
+    withExactCfEvidence([...STUB_EVIDENCE, 'bar:participation-dateserial'], () => {
+      expect(ready(evalBar(date, bar(), scope, SPAN_CELL)).endFraction).toBe(0.25)
     })
   })
 
@@ -297,9 +342,10 @@ function barRule(order: number, def: BarDef, ranges: readonly SourceRect[] = [{ 
 }
 
 /** Column A values (row i holds values[i]); a literal or a number. */
-function columnSource(values: readonly (CfLiteral | number)[]): CfValueSource {
+function columnSource(values: readonly (CfLiteral | number)[], numberFormats: 'resolved' | 'unknown' = 'resolved'): CfValueSource {
   const lits = values.map(v => typeof v === 'number' ? num(v) : v)
   return {
+    ...(numberFormats === 'resolved' ? { numberFormats } : {}),
     bounds: async () => ({ firstRow: 0, lastRow: Math.max(0, lits.length - 1), firstCol: 0, lastCol: 0 }),
     stamp: () => stamp,
     pages: async function* (_id: string, rects: readonly SourceRect[]) {
@@ -312,19 +358,30 @@ function columnSource(values: readonly (CfLiteral | number)[]): CfValueSource {
   }
 }
 
+/** The layout the service reads from evidence (S3-B): injected the way Task 23's export would publish it, settled by
+ * capabilities the stub evidence verifies. */
+const injectLayout = (variant: CfBarLayoutVariant | undefined) => injectCfBarLayout(variant ? {
+  allPositive: { ...variant, settledBy: ['bar:lengths-explicit-0-100', 'bar:lengths-default-10-90'] },
+  mixedSign: { ...variant, settledBy: ['bar:axis-automatic'] },
+} : null)
+
 async function prepareBars(rules: CfRule[], values: readonly (CfLiteral | number)[], evidence: readonly string[], variant: CfBarLayoutVariant | undefined,
-  opts: { merges?: readonly SourceRect[]; hiddenRows?: readonly SourceRect[] } = {}) {
+  opts: { merges?: readonly SourceRect[]; hiddenRows?: readonly SourceRect[]; numberFormats?: 'resolved' | 'unknown' } = {}) {
   const memory = createCfMemory()
   const allowed = new Set(evidence)
   const sheet: CfSheetRules = { rules, diagnostics: [] }
+  injectLayout(variant)
   const service = createCfService(sheet, memory, {
     evidence: { allows: id => allowed.has(id) },
-    ...(variant ? { barLayoutVariant: variant } : {}),
     ...(opts.merges ? { merges: opts.merges } : {}),
     ...(opts.hiddenRows ? { statisticsOptions: { hiddenRows: opts.hiddenRows } } : {}),
   })
   const rect = { firstRow: 0, lastRow: Math.max(0, values.length - 1), firstCol: 0, lastCol: 0 }
-  const lease = await service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: 8 * 1024 * 1024 }, columnSource(values))
+  const source = columnSource(values, opts.numberFormats ?? 'resolved')
+  let lease: Awaited<ReturnType<typeof service.prepareCf>>
+  try {
+    lease = await service.prepareCf({ stamp, sourceRects: [rect], signal: new AbortController().signal, grantBytes: 8 * 1024 * 1024 }, source)
+  } finally { injectLayout(undefined) }
   return {
     at: (row: number) => lease.value.at(row, 0),
     release: () => { lease.release(); service.dispose(); expect(memory.currentBytes).toBe(0) },
@@ -388,5 +445,79 @@ describe('CF Stage 3 Task 20 — bar participation and scope gates (S3-G, S3-H)'
       expect(barAt(lifted.at(0)), `${cap} lifts with its evidence`).toBeDefined()
       lifted.release()
     }
+
+    // S3-G date serials: a date anywhere in the scope, or a source that cannot resolve formats, withholds the rule.
+    const dated: Array<CfLiteral | number> = [0, { kind: 'number', value: 50, dateSerial: true }, 100]
+    for (const [values, numberFormats] of [[dated, 'resolved'], [nums, 'unknown']] as const) {
+      const withheld = await prepareBars([barRule(0, bar())], values, STUB_EVIDENCE, SPAN_CELL, { numberFormats })
+      for (const row of [0, 1, 2]) expect(barAt(withheld.at(row)), `${numberFormats} row ${row}`).toBeUndefined()
+      withheld.release()
+      const lifted = await prepareBars([barRule(0, bar())], values, [...STUB_EVIDENCE, 'bar:participation-dateserial'], SPAN_CELL, { numberFormats })
+      expect(barAt(lifted.at(1))?.endFraction, numberFormats).toBe(0.5)
+      lifted.release()
+    }
+  })
+
+  it('the service takes its layout from evidence only (S3-B): no injected layout, or unverified settling capabilities, withhold', async () => {
+    const values = [0, 50, 100]
+    const none = await prepareBars([barRule(0, bar())], values, STUB_EVIDENCE, undefined)
+    expect(barAt(none.at(1))).toBeUndefined()
+    none.release()
+    const unsettled = await prepareBars([barRule(0, bar())], values, STUB_EVIDENCE.filter(c => c !== 'bar:lengths-default-10-90'), SPAN_CELL)
+    expect(barAt(unsettled.at(1))).toBeUndefined()
+    unsettled.release()
+    const ok = await prepareBars([barRule(0, bar())], values, STUB_EVIDENCE, SPAN_CELL)
+    expect(barAt(ok.at(1))?.endFraction).toBe(0.5)
+    ok.release()
+  })
+})
+
+describe('CF Stage 3 fix 1 — sources mark date serials for bar participation (S3-G)', () => {
+  const styles = [undefined, { numFmtId: 14 }, { numFmtId: 0, formatCode: 'yyyy-mm-dd' }, { numFmtId: 2, formatCode: '0.00' }, { numFmtId: 0 }, { numFmtId: 46 }]
+  const expected = [false, true, true, false, false, true]
+  const xcell = (row: number, style: (typeof styles)[number]): XlsxCell => ({ ref: `A${row + 1}`, row, col: 0, value: 45000 + row, styleIndex: row, ...(style ? { style } : {}) })
+  const dates = async (source: CfValueSource, n: number) => {
+    const out: boolean[] = []
+    for await (const page of source.pages(SHEET, [{ firstRow: 0, lastRow: n - 1, firstCol: 0, lastCol: 0 }], createCfWorkBudget({ now: () => 0 }), new AbortController().signal)) {
+      for (const v of page.value.values) out.push(v.kind === 'number' && v.dateSerial === true)
+      page.release()
+    }
+    return out
+  }
+
+  it('isDateNumberStyle classifies built-in ids and format codes', () => {
+    styles.forEach((s, i) => expect(isDateNumberStyle(s), JSON.stringify(s)).toBe(expected[i]))
+    expect(isDateNumberStyle({ numFmtId: 0, formatCode: '0.00E+00' })).toBe(false)
+    expect(isDateNumberStyle({ numFmtId: 0, formatCode: '[h]:mm' })).toBe(true)
+    expect(isDateNumberStyle({ numFmtId: 0, formatCode: '"day "0' })).toBe(false)
+  })
+
+  it('both resident sources resolve formats and mark date serials', async () => {
+    const cells = styles.map((s, i) => xcell(i, s))
+    const memory = createCfMemory()
+    const statsSource = createResidentCfSource(cells, SHEET, stamp, memory)
+    expect(statsSource.numberFormats).toBe('resolved')
+    expect(await dates(statsSource, cells.length)).toEqual(expected)
+    const sheet = { name: SHEET, rows: cells.map(c => ({ index: c.row, cells: [c] })), cols: [], merges: [] } as unknown as XlsxSheet
+    const paintSource = residentSource(sheet, stamp, memory, 'cached')
+    expect(paintSource.numberFormats).toBe('resolved')
+    expect(await dates(paintSource, cells.length)).toEqual(expected)
+    expect(memory.currentBytes).toBe(0)
+  })
+
+  it('the paged bridge marks date serials through the host style, and is unknown without one', async () => {
+    const memory = createCfMemory()
+    const host = (withStyles: boolean): CfPagedReadHost => ({
+      stamp: { docId: 'doc', sheetId: SHEET, valueGen: 1 },
+      readRows: async () => ({
+        items: styles.map((_, row) => ({ row, cells: [{ id: row * 16384, row, col: 0, value: 45000 + row, styleIndex: row }] })),
+        completeness: 'complete' as const, stamp: { docId: 'doc', sheetId: SHEET, valueGen: 1 },
+      }) as never,
+      ...(withStyles ? { styleOf: (_r: number, _c: number, styleIndex: number) => styles[styleIndex] } : {}),
+    })
+    const read = async (h: CfPagedReadHost) => dates({ bounds: async () => undefined, stamp: () => stamp, pages: pagedStoreCfPages(h, memory) }, styles.length)
+    expect(await read(host(true))).toEqual(expected)
+    expect(await read(host(false))).toEqual(styles.map(() => false))
+    expect(memory.currentBytes).toBe(0)
   })
 })

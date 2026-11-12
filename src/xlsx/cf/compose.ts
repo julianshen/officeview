@@ -124,7 +124,8 @@ function* steps(
     // unreachable and must not participate in fill arbitration (bot P2).
     if (stopsHere) break
   }
-  // S3-I: two matching bars on one cell withhold both (exclusivity is unmeasured) and taint the bar slot.
+  // S3-I: two matching bars on one cell withhold both and taint the bar slot. `bar:composition-overlapping-bars` does
+  // not lift this: S3-I names no winner for it to select (the oracle's `first` hypothesis awaits a ruling).
   const barsWithheld = matchingBars > 1
   if (barsWithheld) tainted.add('dataBar')
   // S3-I coexistence: a bar never changes the fill slot, but paints over a scale or DXF fill only under evidence.
