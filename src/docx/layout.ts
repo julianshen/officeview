@@ -1082,9 +1082,14 @@ export function renderPages(
     const paintLines = (allLines: LineBox[]) => {
       ctx.textAlign = 'left'
       const group = (ctx as TextRecordingContext)[RECORD_GROUP]
+      // Decoration scopes: one per maximal stretch of consecutive underlined or
+      // struck segments on a line ('text' before each segment's draw, 'line'
+      // before its line, false when the stretch ends), in today's paint order.
+      const decorate = (ctx as TextRecordingContext)[PAINT_DECORATION]
       for (const line of allLines) {
         group?.(line.paragraph)
         if (line.bidi) ctx.direction = 'rtl'
+        let stretch = false
         try {
           let offset = 0
           if (line.align === 'center') offset = (line.contentWidthPx - line.widthPx) / 2
@@ -1115,6 +1120,9 @@ export function renderPages(
             ctx.fillText(line.marker.text.trimEnd(), line.xPx - line.marker.widthPx, baseline)
           }
           for (const seg of line.segs) {
+            const decorated = !!(seg.run.underline || seg.run.strike)
+            if (stretch && !decorated) { stretch = false; decorate?.(false) }
+            if (decorated) { stretch = true; decorate?.('text') }
             const fontCssStr = fontCss(seg.style, resolveFamily)
             if (fontCssStr !== lastFont) {
               ctx.font = fontCssStr
@@ -1136,18 +1144,15 @@ export function renderPages(
                 ctx.fillStyle = seg.run.color ? resolveColor(seg.run.color) : '#000000'
                 if (record && seg.logical) record(seg.text, 0, 0, seg.widthPx, seg.logical)
                 else ctx.fillText(seg.text, 0, 0)
-                if (seg.run.underline || seg.run.strike) {
-                  const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
-                  decoration?.(true)
-                  try {
-                    ctx.strokeStyle = ctx.fillStyle
-                    ctx.lineWidth = Math.max(1, size * 0.06)
-                    ctx.beginPath()
-                    const yy = seg.run.underline ? size * 0.15 : -size * 0.3
-                    ctx.moveTo(0, yy)
-                    ctx.lineTo(seg.widthPx, yy)
-                    ctx.stroke()
-                  } finally { decoration?.(false) }
+                if (decorated) {
+                  decorate?.('line')
+                  ctx.strokeStyle = ctx.fillStyle
+                  ctx.lineWidth = Math.max(1, size * 0.06)
+                  ctx.beginPath()
+                  const yy = seg.run.underline ? size * 0.15 : -size * 0.3
+                  ctx.moveTo(0, yy)
+                  ctx.lineTo(seg.widthPx, yy)
+                  ctx.stroke()
                 }
               } finally {
                 ctx.restore()
@@ -1168,22 +1173,20 @@ export function renderPages(
             const vertDy = seg.run.vertAlign === 'superscript' ? -seg.style.fontSizePt * 0.35
               : seg.run.vertAlign === 'subscript' ? seg.style.fontSizePt * 0.25 : 0
             ctx.fillText(seg.text, segX, baseline + vertDy)
-            if (seg.run.underline || seg.run.strike) {
-              const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
-              decoration?.(true)
-              try {
-                ctx.strokeStyle = ctx.fillStyle
-                ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
-                ctx.beginPath()
-                const yy = seg.run.underline ? baseline + vertDy + seg.style.fontSizePt * 0.15 : baseline + vertDy - seg.style.fontSizePt * 0.3
-                ctx.moveTo(segX, yy)
-                ctx.lineTo(segX + seg.widthPx, yy)
-                ctx.stroke()
-              } finally { decoration?.(false) }
+            if (decorated) {
+              decorate?.('line')
+              ctx.strokeStyle = ctx.fillStyle
+              ctx.lineWidth = Math.max(1, seg.style.fontSizePt * 0.06)
+              ctx.beginPath()
+              const yy = seg.run.underline ? baseline + vertDy + seg.style.fontSizePt * 0.15 : baseline + vertDy - seg.style.fontSizePt * 0.3
+              ctx.moveTo(segX, yy)
+              ctx.lineTo(segX + seg.widthPx, yy)
+              ctx.stroke()
             }
             x = segX + seg.widthPx
           }
         } finally {
+          if (stretch) decorate?.(false)
           if (line.bidi) ctx.direction = 'ltr'
           group?.(undefined)
         }

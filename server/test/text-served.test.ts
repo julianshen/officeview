@@ -650,6 +650,34 @@ describe('text decorations do not withhold the decorated word (Task 3c)', () => 
     }
   }, 60_000)
 
+  test('a decorated stretch followed by undecorated text: another stretch\'s line over the plain word is ordinary cover', async () => {
+    // Struck "so", plain "me", struck "more", no spaces, 8 pt: the first
+    // stretch closes before "me"; the second stretch's strike (its cap
+    // allowance reaches back 0.7 px) overlaps the right edge of "me".
+    // Control: nothing struck leaves "me" servable, so the strike is what covers it.
+    const runsOf = async (strike: boolean) => {
+      const zip = await JSZip.loadAsync(await buildDocx([{ runs: [{ text: 'x' }] }]))
+      let xml = await zip.file('word/document.xml')!.async('string')
+      const plain = '<w:rPr><w:sz w:val="16"/></w:rPr>', struck = strike ? '<w:rPr><w:sz w:val="16"/><w:strike/></w:rPr>' : plain
+      const r = (rpr: string, t: string) => `<w:r>${rpr}<w:t xml:space="preserve">${t}</w:t></w:r>`
+      xml = xml.replace(/<w:p>[^]*?<\/w:p>/, `<w:p>${r(plain, 'x ')}${r(struck, 'so')}${r(plain, 'me')}${r(struck, 'more')}${r(plain, ' x')}</w:p>`)
+      zip.file('word/document.xml', xml)
+      const host = new DocumentHost()
+      const o = await host.open(`deco-${++refs}`, await zip.generateAsync({ type: 'uint8array' }), 'visible-only')
+      const paint = (host as unknown as { docs: Map<string, { paintables: Array<{ paint(c: CanvasRenderingContext2D): void }> }> }).docs.get(o.docKey)!.paintables[0]!
+      const { w, h } = o.units[0]!
+      const occ = occlusionObserver(w, h)
+      paint.paint(occ.wrap(host.backend.createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D))
+      host.drop(o.docKey)
+      return Object.fromEntries(occ.runDetails().map((d) => [d.text, d]))
+    }
+    const control = await runsOf(false)
+    expect(control['me']).toMatchObject({ servable: true })
+    const struck = await runsOf(true)
+    expect(struck['me']).toMatchObject({ servable: false, reason: 'covered' })
+    expect(struck['more']).toMatchObject({ servable: true })
+  }, 60_000)
+
   test('XLSX: underlined and struck cells are served through the real painter', async () => {
     const base = await buildXlsx([{ name: 'S', cols: '<col min="1" max="2" width="30" customWidth="1"/>', rows: [
       { r: 1, cells: [{ ref: 'A1', t: 's', v: 0, style: 3 }, { ref: 'B1', t: 's', v: 1, style: 4 }] },

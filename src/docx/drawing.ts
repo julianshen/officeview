@@ -2,7 +2,6 @@
 import { attrs, getChildren, orderedChildren, type XmlNode } from '../core/xml'
 import type { OfficePackage } from '../core/zip'
 import { emuToPx } from '../core/geometry'
-import { PAINT_DECORATION, type TextRecordingContext } from '../core/text-recording'
 import type { DocxDrawing, DocxDrawingShape, DocxImage, DocxParagraph, DocxTextRun } from './types'
 import { fontFamilyCss, type DocxTheme } from './styles'
 import { withFallbackFonts } from '../core/fonts/fallback'
@@ -237,23 +236,19 @@ function paintTextbox(drawing: Extract<DocxDrawing, { kind: 'textbox' }>, ctx: C
               else ctx.fillRect(x - size * 0.8, y, size, segment.width)
             }
             if (origin.underline || origin.strike) {
-              const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
-              decoration?.(true)
-              try {
-                ctx.strokeStyle = origin.color ? textColor(origin.color) : '#000000'
-                ctx.lineWidth = Math.max(1, size * 0.06)
-                ctx.beginPath()
-                if (horizontal) {
-                  const yy = y + (origin.underline ? size * 0.15 : -size * 0.3)
-                  ctx.moveTo(x, yy)
-                  ctx.lineTo(x + segment.width, yy)
-                } else {
-                  const xx = x + (origin.underline ? size * 0.15 : -size * 0.3)
-                  ctx.moveTo(xx, y)
-                  ctx.lineTo(xx, y + segment.width)
-                }
-                ctx.stroke()
-              } finally { decoration?.(false) }
+              ctx.strokeStyle = origin.color ? textColor(origin.color) : '#000000'
+              ctx.lineWidth = Math.max(1, size * 0.06)
+              ctx.beginPath()
+              if (horizontal) {
+                const yy = y + (origin.underline ? size * 0.15 : -size * 0.3)
+                ctx.moveTo(x, yy)
+                ctx.lineTo(x + segment.width, yy)
+              } else {
+                const xx = x + (origin.underline ? size * 0.15 : -size * 0.3)
+                ctx.moveTo(xx, y)
+                ctx.lineTo(xx, y + segment.width)
+              }
+              ctx.stroke()
             }
           }
           if (segment.transform) {

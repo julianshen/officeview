@@ -1,8 +1,10 @@
 /**
- * PAINT_DECORATION contract (Streaming Stage 3a, Task 3c fix round 1): the
- * DOCX and XLSX painters announce each underline / strike-through they draw
- * to a context that defines the hook. The library's own recording context
- * does not define it, and paint output is identical with or without it.
+ * PAINT_DECORATION contract (Streaming Stage 3a, Task 3c fix rounds 1–3): the
+ * DOCX body painter brackets each stretch of consecutive decorated segments
+ * on a line, and the XLSX painter each decorated cell, in one scope —
+ * 'text' / 'line' alternating, then false — on a context that defines the hook. The library's own
+ * recording context does not define it, and paint output is identical with
+ * or without it.
  */
 import { describe, expect, test } from 'vitest'
 import JSZip from 'jszip'
@@ -47,18 +49,19 @@ function surface(p: Paintable) {
   return { canvas, ctx: canvas.getContext('2d') as unknown as CanvasRenderingContext2D }
 }
 
-/** Paints through a wrapper that defines PAINT_DECORATION; logs the hook calls and the ops made while it is on. */
+type Phase = 'text' | 'line' | false
+/** Paints through a wrapper that defines PAINT_DECORATION; logs the hook calls and the ops made in each phase. */
 function hooked(p: Paintable) {
   const { canvas, ctx } = surface(p)
-  const calls: boolean[] = [], during: string[] = []
-  let on = false
+  const calls: Phase[] = [], during: Record<'text' | 'line', string[]> = { text: [], line: [] }
+  let on: Phase = false
   const target = ctx as unknown as Record<string | symbol, unknown>
   const wrapped = new Proxy(target, {
     get(t, prop) {
-      if (prop === PAINT_DECORATION) return (v: boolean) => { calls.push(v); on = v }
+      if (prop === PAINT_DECORATION) return (v: Phase) => { calls.push(v); on = v }
       const v = t[prop]
       if (typeof v !== 'function') return v
-      return (...args: unknown[]) => { if (on) during.push(String(prop)); return (v as (...a: unknown[]) => unknown).apply(t, args) }
+      return (...args: unknown[]) => { if (on) during[on].push(String(prop)); return (v as (...a: unknown[]) => unknown).apply(t, args) }
     },
     set(t, prop, value) { t[prop] = value; return true },
   }) as unknown as CanvasRenderingContext2D
@@ -73,14 +76,22 @@ describe('PAINT_DECORATION', () => {
   })
 
   for (const [kind, load] of [['docx', docxPaintables], ['xlsx', xlsxPaintables]] as const) {
-    test(`${kind}: each underline and strike is announced (balanced on/off, no text drawn while on)`, async () => {
+    test(`${kind}: each decorated stretch is one scope ('text', 'line' alternating, then false)`, async () => {
       const [p] = await load()
       const r = hooked(p!)
-      expect(r.calls.length).toBeGreaterThanOrEqual(4) // one underline and one strike, each on + off
-      expect(r.calls.length % 2).toBe(0)
-      r.calls.forEach((v, i) => expect(v).toBe(i % 2 === 0))
-      expect(r.during.length).toBeGreaterThan(0)
-      expect(r.during.filter((op) => op === 'fillText' || op === 'strokeText' || op === 'drawImage')).toEqual([])
+      // Split into scopes at false; each must be text (line text)* line … i.e. start with text, alternate, end with line.
+      const scopes: Phase[][] = [[]]
+      for (const v of r.calls) { if (v === false) scopes.push([]); else scopes[scopes.length - 1]!.push(v) }
+      expect(r.calls[r.calls.length - 1]).toBe(false)
+      expect(scopes.pop()).toEqual([])
+      expect(scopes.length).toBeGreaterThanOrEqual(2) // an underlined and a struck stretch
+      for (const scope of scopes) {
+        expect(scope.length % 2).toBe(0)
+        scope.forEach((v, i) => expect(v).toBe(i % 2 === 0 ? 'text' : 'line'))
+      }
+      expect(r.during.text).toContain('fillText')
+      expect(r.during.line.length).toBeGreaterThan(0)
+      expect(r.during.line.filter((op) => op === 'fillText' || op === 'strokeText' || op === 'drawImage')).toEqual([])
     })
 
     test(`${kind}: paint output is identical with and without the hook`, async () => {

@@ -1431,10 +1431,13 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
   const text = layout.text
   if (text) {
     const group = (ctx as TextRecordingContext)[RECORD_GROUP]
+    // One decoration scope per decorated cell: its text, then its own lines.
+    const decorated = text.decoration && !(text.kind === 'layout' && text.stacked) ? (ctx as TextRecordingContext)[PAINT_DECORATION] : undefined
     group?.(layout)
     try {
       ctx.fillStyle = text.color
       ctx.font = text.font
+      decorated?.('text')
       if (text.kind === 'layout') paintCellText(ctx, text)
       else if (text.clipX) {
         // Horizontal clip only: plain text keeps its unclipped vertical extent.
@@ -1444,14 +1447,16 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
         ctx.clip()
         ctx.textBaseline = 'alphabetic'
         ctx.fillText(text.text, text.tx, text.ty)
+        decorated?.('line')
         if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
         ctx.restore()
       } else {
         ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty)
+        decorated?.('line')
         if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
       }
-      if (text.kind === 'layout' && text.decoration && !text.stacked) paintLayoutDecoration(ctx, text, x, w)
-    } finally { group?.(undefined) }
+      if (text.kind === 'layout' && text.decoration && !text.stacked) { decorated?.('line'); paintLayoutDecoration(ctx, text, x, w) }
+    } finally { decorated?.(false); group?.(undefined) }
   }
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders
@@ -1498,11 +1503,6 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
  * (tx, ty) and spans `width`, in the current transform. Accounting underlines
  * sit below the descenders and span the cell box [cellX, cellX + cellW]. */
 function paintDecoration(ctx: CanvasRenderingContext2D, d: CellTextDecoration, tx: number, ty: number, width: number, cellX?: number, cellW?: number): void {
-  const decoration = (ctx as TextRecordingContext)[PAINT_DECORATION]
-  decoration?.(true)
-  try { paintDecorationLines(ctx, d, tx, ty, width, cellX, cellW) } finally { decoration?.(false) }
-}
-function paintDecorationLines(ctx: CanvasRenderingContext2D, d: CellTextDecoration, tx: number, ty: number, width: number, cellX?: number, cellW?: number): void {
   const t = Math.max(1, Math.round(d.sizePx / 16))
   const line = (x0: number, w: number, y: number) => ctx.fillRect(x0, Math.round(y), w, t)
   if (d.strike) line(tx, width, ty - d.sizePx * 0.27)

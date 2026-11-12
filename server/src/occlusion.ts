@@ -15,9 +15,13 @@
  *   clip (tracked exactly only while every clip is an axis-aligned rect), is
  *   not fully transparent, and no ink cell was covered — or touched by a
  *   non-`source-over` op or a filter — after the run was drawn.
- * - Text decorations (S3a Task 3c): a later `cover` mark recorded while the
- *   painter announced a decoration (`ctx[PAINT_DECORATION]`, provenance —
- *   geometry alone never exempts a mark) and whose thickness
+ * - Text decorations (S3a Task 3c): the painter brackets a decorated piece of
+ *   text and its own lines in one scope (`ctx[PAINT_DECORATION]`: 'text' and
+ *   'line' alternating, then false). A `cover` mark drawn in a scope's 'line'
+ *   phases may be exempted only for runs drawn in that same scope's 'text' phases
+ *   (provenance and ownership — geometry alone never exempts a mark, and a
+ *   decoration over any other run is ordinary cover; malformed sequences
+ *   record ordinary marks), and only when its thickness
  *   along its own thin axis (the smaller side of its box; a square box is
  *   never one) is at most max(1.5 × scale px, 12 % of the ink's extent on
  *   that axis) is a thin decoration — an underline, strike or overline that
@@ -54,7 +58,8 @@ export interface RunDetail {
 
 type Rect = [x0: number, y0: number, x1: number, y1: number]
 type Clip = Rect | 'nonrect' | undefined
-interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason }
+/** `scope`: the decoration scope (PAINT_DECORATION 'text' phase) that drew this run. */
+interface Run { seq: number; ink: Rect; text: string; reason?: OcclusionReason; scope?: number }
 
 /** Canvas composite modes whose effect is not bounded by the source shape. */
 const UNBOUNDED_COMPOSITES = new Set(['copy', 'source-in', 'source-out', 'destination-in', 'destination-atop'])
@@ -115,10 +120,21 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
   /** The coverage "grid" at full precision: every painting op's device box, in
    * sequence order (a 4 px cell grid withheld every spreadsheet cell next to a
    * gridline; a 1 px grid costs ~40 MB per page). */
-  const marks: Array<{ seq: number; box: Rect; grid: Grid; decoration?: true }> = []
-  /** Set while the painter announces an underline/strike (PAINT_DECORATION). */
-  let decorating = false
-  const announce = (on: boolean) => { decorating = on === true }
+  /** `scope`: set on a cover mark drawn in a decoration scope's 'line' phase. */
+  const marks: Array<{ seq: number; box: Rect; grid: Grid; scope?: number }> = []
+  // PAINT_DECORATION scopes: 'text' opens one; it then alternates 'text'
+  // (owned runs) and 'line' (owned decoration marks) any number of times
+  // until false. 'line' with no open scope, or any other value, is malformed:
+  // the open scope (if any) is void — its marks are ordinary — and nothing is
+  // owned until false (fail closed).
+  let phase: 'idle' | 'text' | 'line' | 'broken' = 'idle', scopeId = 0
+  const voidScopes = new Set<number>()
+  const announce = (v: unknown) => {
+    if (v === false) phase = 'idle'
+    else if (v === 'text' && phase === 'idle') { phase = 'text'; scopeId++ }
+    else if ((v === 'text' || v === 'line') && (phase === 'text' || phase === 'line')) phase = v
+    else { if (phase === 'text' || phase === 'line') voidScopes.add(scopeId); phase = 'broken' }
+  }
   const surface: Rect = [0, 0, width, height]
   const runs: Run[] = []
   let seq = 0
@@ -133,7 +149,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
 
   const mark = (grid: Grid, r: Rect) => {
     const b = intersect(r, surface)
-    if (b[2] > b[0] && b[3] > b[1]) { charge(64); marks.push(grid === 'cover' && decorating ? { seq, box: b, grid, decoration: true } : { seq, box: b, grid }) }
+    if (b[2] > b[0] && b[3] > b[1]) { charge(64); marks.push(grid === 'cover' && phase === 'line' ? { seq, box: b, grid, scope: scopeId } : { seq, box: b, grid }) }
   }
   const overlaps = (a: Rect, b: Rect) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 
@@ -209,7 +225,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
     if (stroke) ink = pad(ink, (ctx.lineWidth * maxScale(ctx)) / 2)
     const style = stroke ? ctx.strokeStyle : ctx.fillStyle
     const alpha = ctx.globalAlpha * (colorAlpha(style) ?? 1)
-    const run: Run = { seq: seq + 1, ink, text: str }
+    const run: Run = phase === 'text' ? { seq: seq + 1, ink, text: str, scope: scopeId } : { seq: seq + 1, ink, text: str }
     if (str.trim() === '' || !(ink[2] > ink[0])) { draw(ctx, ink, style); return }
     if (alpha <= 0.05) run.reason = 'transparent'
     else if (!inside(ink, surface)) run.reason = 'off-surface'
@@ -230,7 +246,7 @@ export function occlusionObserver(width: number, height: number, maxBytes = Numb
       if (!(m.seq > r.seq && overlaps(m.box, r.ink))) continue
       const w = m.box[2] - m.box[0], h = m.box[3] - m.box[1]
       const a = h < w ? 1 : 0, t = Math.min(w, h)
-      if (m.decoration && m.grid === 'cover' && w !== h && t <= Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (r.ink[a + 2]! - r.ink[a]!))) {
+      if (m.scope !== undefined && m.scope === r.scope && !voidScopes.has(m.scope) && m.grid === 'cover' && w !== h && t <= Math.max(DECORATION_FLOOR_PX * scale, DECORATION_RATIO * (r.ink[a + 2]! - r.ink[a]!))) {
         bands[a].push([Math.max(m.box[a]!, r.ink[a]!), Math.min(m.box[a + 2]!, r.ink[a + 2]!)])
       } else later.add(m.grid)
     }

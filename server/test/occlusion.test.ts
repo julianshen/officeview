@@ -8,13 +8,13 @@ import { hiddenFixtures } from '../../scripts/stream-s0/hidden-fixtures'
 import { projectPackage } from '../src/policy'
 import { occlusionObserver } from '../src/occlusion'
 import { PAINT_DECORATION } from '../../src/core/text-recording'
+import { paintCellLayout } from '../../src/xlsx/render'
+import type { CellBodyLayout } from '../../src/xlsx/view/textLayout'
 
-/** Paint `f` as a painter-announced text decoration (the PAINT_DECORATION hook). */
-function deco(c: CanvasRenderingContext2D, f: () => void) {
-  const hook = (c as unknown as Record<symbol, ((on: boolean) => void) | undefined>)[PAINT_DECORATION]
-  hook?.(true)
-  try { f() } finally { hook?.(false) }
-}
+/** The PAINT_DECORATION hook as the painters call it: 'text' opens a scope, 'line' starts its lines, false ends it. */
+const phase = (c: CanvasRenderingContext2D, v: unknown) => (c as unknown as Record<symbol, ((v: unknown) => void) | undefined>)[PAINT_DECORATION]?.(v)
+/** Paint `f` as the line phase of the open decoration scope. */
+function deco(c: CanvasRenderingContext2D, f: () => void) { phase(c, 'line'); f() }
 
 function run(paint: (ctx: CanvasRenderingContext2D) => void, w = 200, h = 100) {
   const ctx = createCanvas(w, h).getContext('2d') as unknown as CanvasRenderingContext2D
@@ -196,7 +196,8 @@ describe('stroke bounds', () => {
 
 describe('text decorations (S3a Task 3c)', () => {
   // 'Typing' has a descender, so an underline below the baseline overlaps its ink.
-  const word = (c: CanvasRenderingContext2D) => text(c, 'Typing', 20, 50)
+  /** Draws the word as the text of a decoration scope (its lines follow via deco/bar/line). */
+  const word = (c: CanvasRenderingContext2D) => { phase(c, 'text'); text(c, 'Typing', 20, 50) }
   const ink = (() => {
     const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
     const o = occlusionObserver(200, 100)
@@ -279,7 +280,7 @@ describe('text decorations (S3a Task 3c)', () => {
     expect(verdict((c) => { word(c); c.strokeStyle = '#000'; c.lineWidth = 1; c.beginPath(); c.moveTo(ink.x, ink.y + ink.height / 2); c.lineTo(ink.x1, ink.y + ink.height / 2); c.stroke() })).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('the flag ends with the hook: a plain bar after an announced one is covered', () => {
-    expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1); plainBar(c, 2, 1) })).toMatchObject({ servable: false, reason: 'covered' })
+    expect(verdict((c) => { word(c); bar(c, ink.height / 2, 1); phase(c, false); plainBar(c, 2, 1) })).toMatchObject({ servable: false, reason: 'covered' })
   })
   it('review counterexample: a sparse run whose glyphs are fully painted out by plain fillRects is withheld', () => {
     const ctx = createCanvas(500, 100).getContext('2d') as unknown as CanvasRenderingContext2D
@@ -290,6 +291,87 @@ describe('text decorations (S3a Task 3c)', () => {
     c.fillStyle = '#fff'; c.fillRect(20, 0, 16, 100); c.fillRect(237, 0, 14, 100)
     expect(o.runDetails()).toMatchObject([{ servable: false, reason: 'covered' }])
     expect(o.evidence().servableText).toEqual([])
+  })
+
+  // Fix round 2: a decoration exempts only the runs of its own scope.
+  const other = (c: CanvasRenderingContext2D) => text(c, 'Elsewhere', 20, 90)
+  const runOf = (paint: (c: CanvasRenderingContext2D) => void, t = 'Typing') => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    paint(o.wrap(ctx))
+    return o.runDetails().find((r) => r.text === t)!
+  }
+  it("another scope's decoration over the word is ordinary cover", () => {
+    expect(runOf((c) => { word(c); phase(c, false); phase(c, 'text'); other(c); bar(c, ink.height / 2, 1); phase(c, false) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a decoration over an unscoped word is ordinary cover', () => {
+    expect(runOf((c) => { text(c, 'Typing', 20, 50); phase(c, 'text'); other(c); bar(c, ink.height / 2, 1); phase(c, false) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a line phase with no owned runs yields ordinary cover', () => {
+    expect(runOf((c) => { text(c, 'Typing', 20, 50); phase(c, 'text'); bar(c, ink.height / 2, 1); phase(c, false) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('a run drawn during the line phase is not owned', () => {
+    expect(runOf((c) => { phase(c, 'text'); phase(c, 'line'); text(c, 'Typing', 20, 50); plainBar(c, ink.height / 2, 1); phase(c, false) })).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it("the scope's own decoration still exempts its run, and the other run is unaffected", () => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    const c = o.wrap(ctx)
+    other(c); word(c); bar(c, ink.height / 2, 1); phase(c, false)
+    expect(o.runDetails().map((r) => r.servable)).toEqual([true, true])
+  })
+  it('a scope may alternate text and line phases: a later line of the scope still exempts an earlier owned run', () => {
+    const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(200, 100)
+    const c = o.wrap(ctx)
+    word(c); bar(c, 0, 1); phase(c, 'text'); other(c); bar(c, ink.height / 2, 1); phase(c, false)
+    expect(o.runDetails().map((r) => [r.text, r.servable])).toEqual([['Typing', true], ['Elsewhere', true]])
+  })
+  it('malformed sequences fail closed', () => {
+    const cases: Array<(c: CanvasRenderingContext2D) => void> = [
+      (c) => { text(c, 'Typing', 20, 50); phase(c, 'line'); plainBar(c, ink.height / 2, 1); phase(c, false) }, // line without text
+      (c) => { word(c); deco(c, () => plainBar(c, ink.height / 2, 1)); phase(c, 'bogus'); phase(c, false) }, // a bad call voids the scope's earlier marks
+      (c) => { word(c); phase(c, false); phase(c, 'line'); plainBar(c, ink.height / 2, 1); phase(c, false) }, // line after false (no open scope)
+      (c) => { phase(c, true); text(c, 'Typing', 20, 50); plainBar(c, ink.height / 2, 1); phase(c, false) }, // the old boolean form
+      (c) => { word(c); phase(c, 'bogus'); deco(c, () => plainBar(c, ink.height / 2, 1)); phase(c, false) }, // unknown phase
+    ]
+    for (const paint of cases) expect(runOf(paint)).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('review counterexample through the real XLSX paintCellLayout: foreign strike decorations erasing a sparse run withhold it', () => {
+    const ctx = createCanvas(500, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(500, 100)
+    const c = o.wrap(ctx)
+    c.fillStyle = '#fff'; c.fillRect(0, 0, 500, 100)
+    const extent = { width: 500, height: 100 }
+    const cell = (text: string, color: string, decoration: { strike?: boolean; underline?: 'single'; sizePx: number }): CellBodyLayout =>
+      ({ x: 0, y: 0, w: 500, h: 100, formattedText: text, text: { kind: 'plain', text, font: '24px sans-serif', color, tx: 0, ty: 0, width: 100, decoration } }) as CellBodyLayout
+    const victim = cell('A' + ' '.repeat(30) + 'B', '#000', { underline: 'single', sizePx: 24 })
+    ;(victim.text as { tx: number; ty: number }).tx = 20; (victim.text as { tx: number; ty: number }).ty = 50
+    paintCellLayout(c, victim, extent, 'content')
+    // Strike at sizePx 256 is a 16 px bar at y −69..−53; rotated by π/2 it is
+    // a vertical bar at x 53..69 (+ translation), y 0..100.
+    for (const tx of [-33, 184]) {
+      c.save(); c.translate(tx, 0); c.rotate(Math.PI / 2)
+      paintCellLayout(c, cell(' ', '#fff', { strike: true, sizePx: 256 }), extent, 'content')
+      c.restore()
+    }
+    // No glyph pixel remains: everything above the baseline is blank (the
+    // victim's own underline sits below it, at y 53–55).
+    const px = ctx.getImageData(0, 0, 500, 51).data
+    let dark = 0
+    for (let i = 0; i < px.length; i += 4) if (px[i]! < 128) dark++
+    expect(dark).toBe(0)
+    const d = o.runDetails()
+    expect(d).toHaveLength(1)
+    expect(d[0]).toMatchObject({ servable: false, reason: 'covered' })
+  })
+  it('the real XLSX paintCellLayout: a cell\'s own strike exempts its own text', () => {
+    const ctx = createCanvas(300, 100).getContext('2d') as unknown as CanvasRenderingContext2D
+    const o = occlusionObserver(300, 100)
+    const cellText = { kind: 'plain', text: 'some more', font: '24px sans-serif', color: '#000', tx: 20, ty: 50, width: 0, decoration: { strike: true, sizePx: 16 } }
+    const m = (createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D); m.font = cellText.font; cellText.width = m.measureText(cellText.text).width
+    paintCellLayout(o.wrap(ctx), { x: 0, y: 0, w: 300, h: 100, formattedText: cellText.text, text: cellText } as CellBodyLayout, { width: 300, height: 100 }, 'content')
+    expect(o.runDetails()).toMatchObject([{ text: 'some more', servable: true }])
   })
 
   // Ruling (a): exact stroke geometry for one straight axis-aligned segment.
@@ -333,7 +415,7 @@ describe("text decorations measured along the mark's own thin axis (Task 3c ruli
     const ctx = createCanvas(200, 100).getContext('2d') as unknown as CanvasRenderingContext2D
     const o = occlusionObserver(200, 100)
     const w = o.wrap(ctx)
-    text(w, s, 20, 50); w.fillStyle = '#000'; deco(w, () => paint(w))
+    phase(w, 'text'); text(w, s, 20, 50); w.fillStyle = '#000'; deco(w, () => paint(w)); phase(w, false)
     return o.runDetails()[0]!
   }
   const I = inkOf('I')
