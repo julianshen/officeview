@@ -1,7 +1,7 @@
 /**
- * Verified conditional formatting capabilities for Stage 1 and Stage 2.
- * Generated via bun scripts/cf-refs/audit.ts --stage 2 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts and tests/xlsx-cf-stage2.test.ts.
+ * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
+ * Generated via bun scripts/cf-refs/audit.ts --write (any --stage; --publish-stage3 publishes Stage 3).
+ * Checked by tests/xlsx-cf-stage1.test.ts, tests/xlsx-cf-stage2.test.ts and tests/xlsx-cf-oracle.test.ts.
  */
 export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
   'aboveAverage:above',
