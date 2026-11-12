@@ -338,65 +338,41 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
  * so the write is testable and idempotent (Lesson 4): the same manifest always renders the same bytes, and the Stage 1/2
  * sets never change when Stage 3 is rendered.
  */
-export function renderVerifiedCapabilitiesSource(manifest: CfManifest, stage: 1 | 2 | 3, rootDir: string = REPO_ROOT): string {
+export interface RenderVerifiedOptions {
+  /** Ruling S3-WRITE: publish the audited Stage 3 set (Task 23 only). Without it the committed Stage 3 export stays as is. */
+  publishStage3?: boolean
+  /** The current `verifiedCapabilities.ts`, whose Stage 3 export is carried over verbatim unless `publishStage3`. */
+  committedSource?: string
+}
+
+const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
+  const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
+  return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
+}
+
+/**
+ * Every `--write`, whatever `--stage`, renders ALL stages' exports, each from its own audit (Task 18c fix 1: a
+ * Stage-1-only rendering once dropped `VERIFIED_STAGE2_CAPABILITIES` and broke `evidence.ts`). Stage 3 is published only
+ * with `publishStage3` (Ruling S3-WRITE, Task 23); otherwise its committed export, or its absence, is kept verbatim.
+ */
+export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: string = REPO_ROOT, options: RenderVerifiedOptions = {}): string {
   const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
   const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
-  const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
-  if (stage === 1) {
-    return `/**
- * Verified conditional formatting capabilities for Stage 1.
- * Generated via bun scripts/cf-refs/audit.ts --stage 1 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts.
- */
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(stage1Verified)}
-])
-`
-  }
   const stage2Verified = verifiedOf(auditStage2Manifest(manifest, { rootDir }))
-  if (stage === 2) {
-    const allVerified = [...new Set([...stage1Verified, ...stage2Verified])].sort()
-    return `/**
- * Verified conditional formatting capabilities for Stage 1 and Stage 2.
- * Generated via bun scripts/cf-refs/audit.ts --stage 2 --write.
- * Checked by tests/xlsx-cf-stage1.test.ts and tests/xlsx-cf-stage2.test.ts.
- */
-export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(stage1Verified)}
-])
-
-export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(stage2Verified)}
-])
-
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(allVerified)}
-])
-`
-  }
-  const stage3Verified = verifiedOf(auditStage3Manifest(manifest, { rootDir }))
-  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...stage3Verified])].sort()
+  const stage3Verified = options.publishStage3
+    ? verifiedOf(auditStage3Manifest(manifest, { rootDir }))
+    : exportedSet(options.committedSource, 'VERIFIED_STAGE3_CAPABILITIES')
+  const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
+  const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
+  const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
   return `/**
- * Verified conditional formatting capabilities for Stage 1, Stage 2 and Stage 3.
- * Generated via bun scripts/cf-refs/audit.ts --stage 3 --write.
+ * Verified conditional formatting capabilities, every stage from its own audit (Stage 3 only once published, Ruling S3-WRITE).
+ * Generated via bun scripts/cf-refs/audit.ts --write (any --stage; --publish-stage3 publishes Stage 3).
  * Checked by tests/xlsx-cf-stage1.test.ts, tests/xlsx-cf-stage2.test.ts and tests/xlsx-cf-oracle.test.ts.
  */
-export const VERIFIED_STAGE1_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(stage1Verified)}
-])
-
-export const VERIFIED_STAGE2_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(stage2Verified)}
-])
-
-export const VERIFIED_STAGE3_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(stage3Verified)}
-])
-
-export const VERIFIED_CAPABILITIES: ReadonlySet<string> = new Set([
-${list(allVerified)}
-])
-`
+${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
+${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -1078,14 +1054,15 @@ async function main(): Promise<void> {
       ? auditStage2Manifest(manifest, { rootDir: REPO_ROOT })
       : auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
   if (args.includes('--write')) {
-    const content = renderVerifiedCapabilitiesSource(manifest, stage, REPO_ROOT)
-    writeFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), content, 'utf8')
+    const target = resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts')
+    const content = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, {
+      committedSource: existsSync(target) ? readFileSync(target, 'utf8') : undefined,
+      publishStage3: args.includes('--publish-stage3'),
+    })
+    writeFileSync(target, content, 'utf8')
     const count = (name: string): number => (new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(content)?.[1]?.match(/'[^']+'/g) ?? []).length
-    const detail = stage === 1
-      ? ''
-      : stage === 2
-        ? ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2)`
-        : ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3)`
+    const s3 = content.includes('VERIFIED_STAGE3_CAPABILITIES') ? `, ${count('VERIFIED_STAGE3_CAPABILITIES')} S3${args.includes('--publish-stage3') ? ' published' : ' as committed'}` : ', S3 unpublished'
+    const detail = ` (${count('VERIFIED_STAGE1_CAPABILITIES')} S1, ${count('VERIFIED_STAGE2_CAPABILITIES')} S2${s3})`
     // eslint-disable-next-line no-console
     console.log(`wrote ${count('VERIFIED_CAPABILITIES')} verified capabilities${detail} to src/xlsx/cf/verifiedCapabilities.ts`)
   }

@@ -1794,13 +1794,13 @@ describe('CF oracle verifier', () => {
     const textSavedBytes = new Uint8Array(readFileSync(resolve(REPO_ROOT, textCase.saved)))
     const zText = await JSZip.loadAsync(textSavedBytes)
     const textSheetXml = await zText.file('xl/worksheets/sheet1.xml')!.async('string')
-    zText.file(
-      'xl/worksheets/sheet1.xml',
-      textSheetXml.replace(
-        '<cfRule type="containsText" dxfId="1" priority="8" operator="containsText" text="ab"/>',
-        '<cfRule type="containsText" dxfId="1" priority="8" operator="containsText" text="ab"><formula>NOT(ISERROR(SEARCH("ab",I2)))</formula></cfRule>',
-      ),
-    )
+    // A counterexample must actually mutate the saved workbook (Task 18c fix 1: Excel's resave renumbered the dxfIds,
+    // so a literal search for dxfId="1" silently changed nothing).
+    const absentRule = /<cfRule type="containsText" dxfId="(\d+)" priority="8" operator="containsText" text="ab"\/>/
+    expect(textSheetXml).toMatch(absentRule)
+    const mutatedAbsentXml = textSheetXml.replace(absentRule, (_m, dxfId: string) => `<cfRule type="containsText" dxfId="${dxfId}" priority="8" operator="containsText" text="ab"><formula>NOT(ISERROR(SEARCH("ab",I2)))</formula></cfRule>`)
+    expect(mutatedAbsentXml).not.toBe(textSheetXml)
+    zText.file('xl/worksheets/sheet1.xml', mutatedAbsentXml)
     const mutatedAbsentBytes = await zText.generateAsync({ type: 'uint8array' })
     const mutatedAbsentPath = join(dir, 'mutated-absent-formula.xlsx')
     writeFileSync(mutatedAbsentPath, mutatedAbsentBytes)
@@ -3729,37 +3729,40 @@ describe('CF oracle verifier', () => {
     expect(parseDataBarSettingsReadback('')).toEqual([])
   })
 
-  it('audit --stage 3 --write is idempotent (Lesson 4)', () => {
+  it('audit --write renders every stage from its own audit, whatever --stage, and is idempotent (Lesson 4)', () => {
     const manifest = JSON.parse(readFileSync(CF_MANIFEST_PATH, 'utf8')) as CfManifest
-    const first = renderVerifiedCapabilitiesSource(manifest, 3, REPO_ROOT)
-    const second = renderVerifiedCapabilitiesSource(manifest, 3, REPO_ROOT)
-    expect(second).toBe(first)
-    // Stage 1/2 sets are exactly what is committed; Stage 3 holds nothing without captures.
-    const listed = (name: string): string[] => {
-      const m = new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(first)
-      expect(m, name).not.toBeNull()
-      return [...m![1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!)
-    }
-    expect(listed('VERIFIED_STAGE1_CAPABILITIES')).toEqual([...VERIFIED_STAGE1_CAPABILITIES].sort())
-    expect(listed('VERIFIED_STAGE2_CAPABILITIES')).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
-    const reported = auditStage3Manifest(manifest, { rootDir: REPO_ROOT }).perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
-    expect(listed('VERIFIED_STAGE3_CAPABILITIES')).toEqual(reported)
-    expect(listed('VERIFIED_CAPABILITIES')).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...reported])].sort())
-    // Idempotence is about rendering, not the committed file: the test never writes verifiedCapabilities.ts.
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
-    for (const name of ['VERIFIED_STAGE1_CAPABILITIES', 'VERIFIED_STAGE2_CAPABILITIES']) {
-      const block = (text: string): string => new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[[\\s\\S]*?\\]\\)`).exec(text)![0]
-      expect(block(first), name).toBe(block(committed))
+    const first = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })
+    const second = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: committed })
+    expect(second).toBe(first)
+    const listed = (text: string, name: string): string[] | undefined => {
+      const m = new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
+      return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
     }
-    // Stage 2's own rendering is unchanged by the Stage 3 work (no VERIFIED_STAGE3 export).
-    expect(renderVerifiedCapabilitiesSource(manifest, 2, REPO_ROOT)).not.toContain('VERIFIED_STAGE3_CAPABILITIES')
+    // Task 18c fix 1: a Stage-1-only rendering dropped VERIFIED_STAGE2_CAPABILITIES and broke evidence.ts. Every
+    // rendering now carries the Stage 1 and Stage 2 exports, each from its own audit, and they equal what is committed.
+    expect(listed(first, 'VERIFIED_STAGE1_CAPABILITIES')).toEqual([...VERIFIED_STAGE1_CAPABILITIES].sort())
+    expect(listed(first, 'VERIFIED_STAGE2_CAPABILITIES')).toEqual([...VERIFIED_STAGE2_CAPABILITIES].sort())
+    // Ruling S3-WRITE: without --publish-stage3 the Stage 3 export stays as committed (none today), so the write
+    // reproduces the committed file byte for byte.
+    expect(listed(first, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(listed(committed, 'VERIFIED_STAGE3_CAPABILITIES'))
+    expect(listed(first, 'VERIFIED_CAPABILITIES')).toEqual([...VERIFIED_CAPABILITIES].sort())
+    expect(first).toBe(committed)
+    // A committed Stage 3 export is carried over verbatim, never re-derived, without --publish-stage3.
+    const withS3 = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { publishStage3: true })
+    const reported = auditStage3Manifest(manifest, { rootDir: REPO_ROOT }).perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
+    expect(reported.length).toBeGreaterThan(0)
+    expect(listed(withS3, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(reported)
+    expect(listed(withS3, 'VERIFIED_CAPABILITIES')).toEqual([...new Set([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...reported])].sort())
+    const keptS3 = renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { committedSource: withS3.replace(`  '${reported[0]}',\n`, '') })
+    expect(listed(keptS3, 'VERIFIED_STAGE3_CAPABILITIES')).toEqual(reported.slice(1))
+    expect(renderVerifiedCapabilitiesSource(manifest, REPO_ROOT, { publishStage3: true })).toBe(withS3)
 
     const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(false)
     expect(report.summary.cases).toBe(12)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
-    expect(report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()).toEqual(reported)
     expect(report.blockedCapabilities.length).toBeGreaterThan(0)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-'))).toBe(true)
   })
