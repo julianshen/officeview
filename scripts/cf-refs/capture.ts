@@ -429,7 +429,7 @@ export function buildBarSidecarExtras(
   geom: WorksheetRangeGeometry,
   opts: { lockBefore: 'locked' | 'unlocked'; lockAfter: 'locked' | 'unlocked'; readback?: BarSettingsRow[] },
 ): { extras: Record<string, unknown>; observed: ReadonlyMap<string, CfObservedBar> | undefined; evaluation?: Record<string, BarCapabilityEvaluation>; refusal?: string } {
-  const measured = measureCaseBars(c, decoded, geom)
+  const measured = measureCaseBars(c, decoded, geom, parts)
   const base = {
     zoom: 100,
     dpr: 1,

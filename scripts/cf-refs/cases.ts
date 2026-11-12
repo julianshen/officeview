@@ -4277,6 +4277,24 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
       ],
     },
   ),
+  // 13. stage3-bar-auto-colors
+  rect(
+    'stage3-bar-auto-colors',
+    'Ruling S3-F as amended (owner, 2026-11-12): what Excel draws for the automatic colours it writes on resave. Each bar is authored with its positive fill only, the shape Excel resaves with <x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>, on mixed-sign data {-50,-25,0,50,100} so the negative fill and the axis are drawn: B automatic axis, C middle axis, D no axis (negative fill only). The zero cells show the axis alone; the negative cells show the negative fill. The verifier samples only colour elements the resaved workbook carries as auto="1".',
+    {
+      n: 5,
+      cols: [
+        col('B', 'AutoAxis', [-50, -25, 0, 50, 100]),
+        col('C', 'AutoMiddle', [-50, -25, 0, 50, 100]),
+        col('D', 'AutoNegative', [-50, -25, 0, 50, 100]),
+      ],
+      rules: [
+        bar('bar:color-auto-axis', 'B2:B6', 1, { x14Attrs: SOLID_0_100, colors: { fill: BLUE } }),
+        bar('bar:color-auto-axis', 'C2:C6', 2, { x14Attrs: { ...SOLID_0_100, axisPosition: 'middle' }, colors: { fill: BLUE } }),
+        bar('bar:color-auto-negative-fill', 'D2:D6', 3, { x14Attrs: { ...SOLID_0_100, axisPosition: 'none' }, colors: { fill: BLUE } }),
+      ],
+    },
+  ),
 ]
 
 // ---- fixture -> oracle case ----
@@ -4510,7 +4528,9 @@ const S3_RULINGS: Record<string, string> = {
   'bar:unresolved-three-cfvo': 'Always unsupported per S3-C (a bar needs exactly two cfvo)',
   'bar:unresolved-cfvo-no-type': 'Always unsupported per S3-C (cfvo without type gives cf-invalid-cfvo)',
   'bar:unresolved-automin-base': 'Always unsupported per S3-C (autoMin resolves only on x14 cfvo)',
-  'bar:unresolved-auto-color': 'Always unsupported per S3-F (auto colours are unresolved)',
+  'bar:unresolved-auto-color': 'Always unsupported per S3-F as amended (2026-11-12): an automatic POSITIVE fill (base <color auto="1"/>) has no measured colour and no capability, so it stays unresolved; the automatic axis and negative fill Excel writes on resave are settled by bar:color-auto-axis and bar:color-auto-negative-fill instead',
+  'bar:color-auto-axis': 'S3-F as amended (2026-11-12): an automatic axis colour resolves only to the ARGB measured from the zero cells of mixed-sign bars, consistent across every capture that draws it; until published the bar is withheld',
+  'bar:color-auto-negative-fill': 'S3-F as amended (2026-11-12): an automatic negative fill resolves only to the ARGB measured from the negative cells of solid bars, consistent across every capture that draws it; until published the bar is withheld',
   'bar:unresolved-alpha-00-color': 'Always unsupported per S3-F (alpha other than FF is unresolved)',
 }
 

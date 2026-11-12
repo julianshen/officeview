@@ -2825,10 +2825,13 @@ export function evaluateBarPixelProbe(
 }
 
 /** Measures the case's designated bar cells (black axis colour, the fixtures' authored axis) for the verifier and the capture. */
-export function measureCaseBars(c: CfOracleCase, png: DecodedPng, geom: WorksheetRangeGeometry): ReadonlyMap<string, CfObservedBar> | Refusal {
+/** Measures the case's designated bar cells. With the saved workbook's `parts`, an automatic axis is located in the
+ * colour Excel drew it (`measurementAxisArgb`), so a non-black automatic axis is never read as bar ink. */
+export function measureCaseBars(c: CfOracleCase, png: DecodedPng, geom: WorksheetRangeGeometry, parts?: Map<string, Uint8Array>): ReadonlyMap<string, CfObservedBar> | Refusal {
   const refs = c.expected.cells.filter(cell => cell.matched).map(cell => cell.ref)
   const controlOf = (ref: string): string => c.expected.cells.find(x => x.ref === ref)!.controlRef
-  return measureBarGeometry(png, geom, refs, { controlOf, axisArgb: 'FF000000', tolerancePx: 1, caseId: c.id })
+  const axisArgb = parts ? measurementAxisArgb(c, parts, png, geom) : 'FF000000'
+  return measureBarGeometry(png, geom, refs, { controlOf, axisArgb, tolerancePx: 1, caseId: c.id })
 }
 
 /**
@@ -2849,6 +2852,10 @@ export function evaluateBarCapabilities(
     if (kind === 'none' || kind === 'calibration') continue
     if (cap === 'bar:settings-precondition-probe') {
       out[cap] = evaluateBarPixelProbe(c, png, geom, measured)
+      continue
+    }
+    if (isBarAutoColourCapability(cap)) {
+      out[cap] = judgeBarAutoColour(sampleBarAutoColours(c, parts, png, geom, measured)[cap])
       continue
     }
     const b = built[cap]
@@ -2874,6 +2881,243 @@ export function evaluateBarCapabilities(
       : { status: disc.status, reason: disc.reason, hypotheses: b.hypotheses }
   }
   return out
+}
+
+/* ---------------- Stage 3: automatic bar colours (Ruling S3-F as amended by the owner, 2026-11-12) ---------------- */
+
+/**
+ * Capabilities that record what Excel draws for an automatic (`auto="1"`) x14 bar colour, by the colour element they
+ * settle. Excel writes `<x14:axisColor auto="1"/>` and `<x14:negativeFillColor auto="1"/>` on every bar it resaves
+ * without an authored colour (the Stage 3 resave inventory; no automatic negative border occurs, so none is defined).
+ * The answer is a measured ARGB, never a guessed system colour.
+ */
+export const BAR_AUTO_COLOUR_CAPABILITIES: Readonly<Record<string, 'axis' | 'negativeFill'>> = {
+  'bar:color-auto-axis': 'axis',
+  'bar:color-auto-negative-fill': 'negativeFill',
+}
+export const isBarAutoColourCapability = (cap: string): boolean => BAR_AUTO_COLOUR_CAPABILITIES[cap] !== undefined
+
+/** One x14 bar of the saved workbook as its colour list reads (paired companions joined to their base `<color>`). */
+interface SavedBarColours {
+  sqref: string
+  axisAuto: boolean
+  axisExplicit: boolean
+  negativeFillAuto: boolean
+  negativeSameAsPositive: boolean
+  solid: boolean
+  /** Explicit colours the bar draws besides the automatic ones (ARGB), or undefined when one is not an rgb colour. */
+  others: string[] | undefined
+}
+
+function savedBarColours(parts: Map<string, Uint8Array>): SavedBarColours[] {
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return []
+  const root = parseXml(new TextDecoder().decode(raw)) as XmlNode
+  const { base, x14 } = indexBarRules(root)
+  const docRoot = asNode(root.worksheet) ?? root
+  const x14Sqref = new Map<XmlNode, string>()
+  for (const ext of asArray(asNode(docRoot.extLst)?.ext).map(asNode)) {
+    for (const cf of asArray(asNode(ext?.conditionalFormattings)?.conditionalFormatting).map(asNode)) {
+      const sq = textOf(cf?.sqref) ?? ''
+      for (const rule of asArray(cf?.cfRule).map(asNode)) if (rule) x14Sqref.set(rule, sq)
+    }
+  }
+  const rgbOf = (node: XmlNode | undefined): string | undefined => {
+    const v = attr(node, 'rgb')
+    return v !== undefined && /^[0-9A-F]{8}$/i.test(v) && attr(node, 'tint') === undefined ? v.toUpperCase() : undefined
+  }
+  const isAuto = (node: XmlNode | undefined): boolean => node !== undefined && (attr(node, 'auto') === '1' || attr(node, 'auto') === 'true')
+  const out: SavedBarColours[] = []
+  for (const rule of x14) {
+    const bar = asNode(rule.dataBar)
+    if (!bar) continue
+    const guid = x14RuleGuid(rule)
+    const partner = attr(rule, 'priority') === undefined ? base.find(b => baseRuleGuid(b) === guid) : undefined
+    const fillNode = partner ? asNode(asNode(partner.dataBar)?.color) : asNode(bar.fillColor)
+    const flag = (name: string, def: boolean): boolean => {
+      const v = attr(bar, name)
+      return v === undefined ? def : v === '1' || v === 'true'
+    }
+    const border = flag('border', false)
+    const negSame = flag('negativeBarColorSameAsPositive', false)
+    const axisNode = asNode(bar.axisColor)
+    const negNode = asNode(bar.negativeFillColor)
+    const drawnExplicit = [fillNode, border ? asNode(bar.borderColor) : undefined, negSame || isAuto(negNode) ? undefined : negNode]
+    const others: string[] = []
+    let resolvable = true
+    for (const node of drawnExplicit) {
+      if (node === undefined || isAuto(node)) continue
+      const rgb = rgbOf(node)
+      if (rgb) others.push(rgb)
+      else resolvable = false
+    }
+    out.push({
+      sqref: x14Sqref.get(rule) ?? '',
+      axisAuto: isAuto(axisNode) && attr(bar, 'axisPosition') !== 'none',
+      axisExplicit: axisNode !== undefined && !isAuto(axisNode) && attr(bar, 'axisPosition') !== 'none',
+      negativeFillAuto: isAuto(negNode) && !negSame,
+      negativeSameAsPositive: negSame,
+      solid: flag('gradient', true) === false,
+      others: resolvable ? others : undefined,
+    })
+  }
+  return out
+}
+
+/** Scope extremes of a bar's sqref (numbers only), to tell whether its axis is drawn at all. */
+function scopeHasMixedSigns(sqref: string, facts: BarSheetFacts): boolean {
+  const nums = expandSqrefRefs(sqref, facts.maxRow).flat().map(r => facts.values.get(r)).filter((v): v is Extract<BarCellValue, { kind: 'num' }> => v?.kind === 'num').map(v => v.v)
+  return nums.length > 0 && Math.min(...nums) < 0 && Math.max(...nums) > 0
+}
+
+/**
+ * The axis ink of a zero-valued cell, where Excel draws the axis and no bar: every pixel that differs from the cell's
+ * background and from the control cell at the same offset by `BAR_STRONG_DELTA`. The ink must be one run of at most
+ * 2 columns covering at least half the cell's inner rows (Excel's dotted axis is 3 on, 1 off), and every ink pixel must
+ * lie within `BAR_COLOR_TOLERANCE` of the per-channel median, or the cell is not sampled (with a reason).
+ */
+export function sampleZeroCellAxis(
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  ref: string,
+  controlRef: string,
+): { argb: string; axisPx: number } | { reason: string } {
+  const box = cellPixelBox(png, geom, ref)
+  const ctrl = cellPixelBox(png, geom, controlRef)
+  if (!box || !ctrl) return { reason: `${ref} or its control is outside the capture` }
+  const bg = sampleCellBackgroundRgb(png, ctrl)
+  const w = Math.min(box.x1 - box.x0, ctrl.x1 - ctrl.x0)
+  const h = Math.min(box.y1 - box.y0, ctrl.y1 - ctrl.y0)
+  const cols = new Map<number, Array<[number, number, number]>>()
+  for (let dx = 1; dx < w - 1; dx++) {
+    for (let dy = 1; dy < h - 1; dy++) {
+      const p = pixelAt(png, box.x0 + dx, box.y0 + dy)
+      if (rgbMaxDelta(p, bg) < BAR_STRONG_DELTA || rgbMaxDelta(p, pixelAt(png, ctrl.x0 + dx, ctrl.y0 + dy)) < BAR_STRONG_DELTA) continue
+      const list = cols.get(dx) ?? []
+      list.push(p)
+      cols.set(dx, list)
+    }
+  }
+  const xs = [...cols.keys()].sort((a, b) => a - b)
+  if (xs.length === 0) return { reason: `${ref} shows no axis ink` }
+  if (xs.length > 2 || xs[xs.length - 1]! - xs[0]! > 1) return { reason: `${ref} ink spans columns ${xs.map(x => box.x0 + x).join(',')}, not one axis line` }
+  const rows = Math.max(1, h - 2)
+  const pixels = xs.flatMap(x => cols.get(x)!)
+  if (Math.max(...xs.map(x => cols.get(x)!.length)) * 2 < rows) return { reason: `${ref} ink covers fewer than half the cell's rows` }
+  const med: [number, number, number] = [0, 1, 2].map(k => median3(pixels.map(p => p[k]!))) as [number, number, number]
+  if (pixels.some(p => rgbMaxDelta(p, med) > BAR_COLOR_TOLERANCE)) return { reason: `${ref} axis pixels disagree beyond ${BAR_COLOR_TOLERANCE} per channel` }
+  return { argb: toArgb(med), axisPx: box.x0 + xs[0]! }
+}
+
+export interface BarAutoColourSample { ref: string; argb: string }
+export interface BarAutoColourObservation {
+  samples: BarAutoColourSample[]
+  /** Cells that draw the colour but could not be sampled, with the reason (never counted as evidence). */
+  unsampled: string[]
+  /** Explicit colours of the bars that draw it (ARGB); undefined when one cannot be resolved to rgb. */
+  others: string[] | undefined
+}
+
+/**
+ * Samples every automatic bar colour this capture draws (Ruling S3-F as amended). Only colour elements the saved
+ * (Excel-resaved) workbook carries as `auto="1"` are sampled, on the cells that draw them:
+ * - the automatic axis on the zero-valued cells of a bar whose scope holds both signs (`sampleZeroCellAxis`);
+ * - the automatic negative fill on the negative cells of a solid bar that does not reuse the positive colour, as the
+ *   measured bar's fill (`observeBarTraits`).
+ */
+export function sampleBarAutoColours(
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  measured: ReadonlyMap<string, CfObservedBar> | undefined,
+): Record<string, BarAutoColourObservation> {
+  const facts = readBarSheetFacts(parts)
+  const bars = savedBarColours(parts)
+  const out: Record<string, BarAutoColourObservation> = {}
+  const obs = (cap: string): BarAutoColourObservation => (out[cap] ??= { samples: [], unsampled: [], others: [] })
+  const addOthers = (o: BarAutoColourObservation, others: string[] | undefined): void => {
+    if (others === undefined || o.others === undefined) o.others = undefined
+    else for (const x of others) if (!o.others.includes(x)) o.others.push(x)
+  }
+  for (const cell of c.expected.cells) {
+    const v = facts.values.get(cell.ref.toUpperCase())
+    if (v?.kind !== 'num') continue
+    for (const b of bars) {
+      if (!isCellInSqref(cell.ref, b.sqref)) continue
+      if (b.axisAuto && v.v === 0 && scopeHasMixedSigns(b.sqref, facts)) {
+        const o = obs('bar:color-auto-axis')
+        addOthers(o, b.others)
+        const s = sampleZeroCellAxis(png, geom, cell.ref, cell.controlRef)
+        if ('argb' in s) o.samples.push({ ref: cell.ref, argb: s.argb })
+        else o.unsampled.push(s.reason)
+      }
+      if (b.negativeFillAuto && b.solid && v.v < 0) {
+        const o = obs('bar:color-auto-negative-fill')
+        addOthers(o, b.others)
+        const m = measured?.get(cell.ref)
+        const t = m?.bar ? observeBarTraits(png, geom, cell.ref, cell.controlRef, m) : undefined
+        if (t?.rgb && t.traits.fill === 'solid') o.samples.push({ ref: cell.ref, argb: t.rgb })
+        else o.unsampled.push(`${cell.ref} shows no solid negative bar to sample`)
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Judges one automatic colour from its samples (one capture, or every capture for the audit's cross-case check):
+ * - no sample: no evidence (`no-hypotheses`);
+ * - samples further than `BAR_COLOR_TOLERANCE` per channel from their median: Excel's answer is not one colour (`none`,
+ *   refused);
+ * - a median within `BAR_COLOR_SEPARATION` - 1 of another colour the bar draws, or an unresolvable other colour: the
+ *   sample cannot be told apart from that colour (`non-discriminating`);
+ * - otherwise discriminating, and `matched` is the measured ARGB.
+ * The tolerance is the calibration cell's 8 per channel (Ruling S3-A step 6), and the separation twice that plus one,
+ * as for every other bar colour; the background is excluded by construction (every sample is ink, `BAR_STRONG_DELTA`).
+ */
+export function judgeBarAutoColour(o: BarAutoColourObservation | undefined, others: readonly string[] = []): BarCapabilityEvaluation {
+  if (!o || o.samples.length === 0) {
+    return { status: 'no-hypotheses', reason: `no cell of the capture draws this automatic colour${o?.unsampled.length ? ` (${o.unsampled.join('; ')})` : ''}` }
+  }
+  const px = o.samples.map(s => hexRgb(s.argb))
+  const med = toArgb([0, 1, 2].map(k => median3(px.map(p => p[k]!))))
+  const off = o.samples.filter(s => rgbHexDelta(s.argb, med) > BAR_COLOR_TOLERANCE)
+  if (off.length > 0) {
+    return { status: 'none', reason: `the automatic colour is not one colour: ${o.samples.map(s => `${s.ref} ${s.argb}`).join(', ')} (median ${med}, tolerance ${BAR_COLOR_TOLERANCE})` }
+  }
+  if (o.others === undefined) return { status: 'non-discriminating', reason: 'a colour the same bar draws is not an rgb colour, so the sample cannot be separated from it' }
+  const near = [...o.others, ...others].find(x => rgbHexDelta(x, med) < BAR_COLOR_SEPARATION)
+  if (near) return { status: 'non-discriminating', reason: `the measured automatic colour ${med} is within ${BAR_COLOR_SEPARATION - 1} per channel of ${near}, another colour of the bar` }
+  return { status: 'discriminating', reason: `measured ${med} on ${o.samples.map(s => s.ref).join(', ')}`, matched: med }
+}
+
+/**
+ * The axis colour the measurer must look for: Excel's automatic axis colour as the zero-valued cells of this capture
+ * show it, when every axis the capture draws is automatic; otherwise the fixtures' explicit black.
+ */
+export function measurementAxisArgb(c: CfOracleCase, parts: Map<string, Uint8Array>, png: DecodedPng, geom: WorksheetRangeGeometry): string {
+  const bars = savedBarColours(parts)
+  if (!bars.some(b => b.axisAuto) || bars.some(b => b.axisExplicit)) return 'FF000000'
+  const judged = judgeBarAutoColour(sampleBarAutoColours(c, parts, png, geom, undefined)['bar:color-auto-axis'])
+  return judged.status === 'discriminating' && judged.matched ? judged.matched : 'FF000000'
+}
+
+/**
+ * A measured case's screen capture as the audit re-reads it: the saved workbook's parts, the decoded PNG and the
+ * geometry from the sidecar's Excel-measured widths. Undefined when any of them is missing (the case's own verification
+ * reports why); never a fallback geometry.
+ */
+export function loadBarScreenCapture(c: CfOracleCase, rootDir: string): { parts: Map<string, Uint8Array>; png: DecodedPng; geom: WorksheetRangeGeometry } | undefined {
+  const cap = c.captures.find(x => x.appearance === 'screen')
+  const saved = resolve(rootDir, c.saved)
+  if (!cap || !existsSync(saved) || !existsSync(resolve(rootDir, cap.pngPath)) || !existsSync(resolve(rootDir, cap.sidecarPath))) return undefined
+  const parts = readZipPartsSync(new Uint8Array(readFileSync(saved)))
+  const png = decodePngSync(new Uint8Array(readFileSync(resolve(rootDir, cap.pngPath))))
+  const sidecar = JSON.parse(readFileSync(resolve(rootDir, cap.sidecarPath), 'utf8')) as Record<string, unknown>
+  if (!parts || !png || !Array.isArray(sidecar.colWidthsPt) || !Array.isArray(sidecar.rowHeightsPt)) return undefined
+  const geom = computeWorksheetRangeGeometry(parts, c.range, { colWidthsPt: sidecar.colWidthsPt as number[], rowHeightsPt: sidecar.rowHeightsPt as number[] })
+  return geom ? { parts, png, geom } : undefined
 }
 
 export interface BarCalibrationResult {
@@ -3046,7 +3290,7 @@ function verifyBarCapture(
   const capIds = [...new Set(c.markers.map(m => m.capabilityId))]
   const coveredCells = (cap: string) =>
     c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref)))
-  const measuredAll = measureCaseBars(c, decoded, geom)
+  const measuredAll = measureCaseBars(c, decoded, geom, parts)
   const recorded = Array.isArray(sidecar.observedBars) ? (sidecar.observedBars as Array<Record<string, any>>) : []
   let evaluation: Record<string, BarCapabilityEvaluation> | undefined
   const evaluate = (): Record<string, BarCapabilityEvaluation> | { ok: false; code: CfRefusalCode; reason: string } => {
@@ -3102,7 +3346,8 @@ function verifyBarCapture(
       const same = sameBar && (r.axisPx ?? null) === (m.axisPx ?? null)
       if (!same) return fail('sidecar-mismatch', `Sidecar observedBars for ${cell.ref} disagrees with the PNG measurement`)
     }
-    if (cap !== 'bar:settings-precondition-probe') {
+    // The probe and the automatic colours are observations, not hypothesis families: they are recomputed above.
+    if (cap !== 'bar:settings-precondition-probe' && !isBarAutoColourCapability(cap)) {
       const hyps = recordedHyps?.[cap]
       if (!hyps) return fail('unobserved-expectation', `Capability ${cap} claims ${label} but the sidecar records no hypotheses to discriminate`)
       if (JSON.stringify(hyps) !== JSON.stringify(rec.hypotheses ?? null)) {

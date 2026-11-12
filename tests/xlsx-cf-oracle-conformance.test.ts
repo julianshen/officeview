@@ -584,7 +584,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
 
     const stage3 = manifest.cases.filter(c => c.stage === 3)
-    expect(stage3.map(c => c.id)).toHaveLength(12)
+    expect(stage3.map(c => c.id)).toHaveLength(13)
     let checked = 0
     let barCells = 0
     for (const c of stage3) {

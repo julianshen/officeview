@@ -24,7 +24,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isCapabilityVerified, verifyCfCase } from './verify'
+import {
+  BAR_AUTO_COLOUR_CAPABILITIES,
+  isBarAutoColourCapability,
+  isCapabilityVerified,
+  judgeBarAutoColour,
+  loadBarScreenCapture,
+  measureCaseBars,
+  sampleBarAutoColours,
+  verifyCfCase,
+  type BarAutoColourObservation,
+} from './verify'
 import {
   CF_STAGE1_CAPABILITIES,
   CF_STAGE1_CASES,
@@ -265,7 +275,52 @@ export function auditStage2Manifest(manifest: CfManifest, options: { rootDir?: s
 
 export type Stage3CaseAudit = Stage1CaseAudit
 export type Stage3CapabilityAudit = Stage1CapabilityAudit
-export type Stage3AuditReport = Stage1AuditReport
+export interface Stage3AuditReport extends Stage1AuditReport {
+  /** Ruling S3-F as amended: the measured ARGB of each VERIFIED automatic-colour capability (empty until one verifies). */
+  autoBarColours: Readonly<Record<string, string>>
+}
+
+/**
+ * Every automatic bar colour that any measured Stage 3 capture draws, pooled across cases (refs are `<case>:<ref>`):
+ * the cross-case half of Ruling S3-F as amended. Recomputed from each hash-bound PNG and Excel-resaved workbook.
+ */
+export function barAutoColoursAcrossCases(manifest: CfManifest, rootDir: string = REPO_ROOT): Record<string, BarAutoColourObservation> {
+  const pooled: Record<string, BarAutoColourObservation> = {}
+  for (const c of manifest.cases.filter(x => (x.stage === 3 || x.id.startsWith('stage3')) && x.status === 'measured')) {
+    const capture = loadBarScreenCapture(c, rootDir)
+    if (!capture) continue
+    const measured = measureCaseBars(c, capture.png, capture.geom, capture.parts)
+    const observed = sampleBarAutoColours(c, capture.parts, capture.png, capture.geom, measured instanceof Map ? measured : undefined)
+    for (const [cap, o] of Object.entries(observed)) {
+      const into = (pooled[cap] ??= { samples: [], unsampled: [], others: [] })
+      into.samples.push(...o.samples.map(s => ({ ref: `${c.id}:${s.ref}`, argb: s.argb })))
+      into.unsampled.push(...o.unsampled.map(u => `${c.id}: ${u}`))
+      if (o.others === undefined || into.others === undefined) into.others = undefined
+      else for (const x of o.others) if (!into.others.includes(x)) into.others.push(x)
+    }
+  }
+  return pooled
+}
+
+/** The colours production may consume: only a capability the audit reports verified AND whose pooled captures agree. */
+export function verifiedAutoBarColours(
+  perCapability: readonly Stage3CapabilityAudit[],
+  pooled: Readonly<Record<string, BarAutoColourObservation>>,
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES).sort()) {
+    if (perCapability.find(p => p.capabilityId === cap)?.disposition !== 'verified') continue
+    const judged = judgeBarAutoColour(pooled[cap])
+    if (judged.status === 'discriminating' && judged.matched) out[cap] = judged.matched
+  }
+  return out
+}
+
+/** The generated export of the measured automatic colours (sorted, so `--write` stays idempotent). */
+export function renderAutoBarColoursBlock(colours: Readonly<Record<string, string>>): string {
+  const rows = Object.keys(colours).sort().map(cap => `  '${cap}': '${colours[cap]}',\n`).join('')
+  return `export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n${rows}}\n`
+}
 
 /**
  * Stage 3 (data bars). Unlike Stages 1/2 a measured case can verify only some of its capabilities, so each capability's
@@ -302,6 +357,20 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
     }
     return { capabilityId: entry.capabilityId, caseId: entry.caseId, disposition }
   })
+  // An automatic colour verifies only when every capture that draws it agrees with the owning case's measurement.
+  const pooled = perCapability.some(p => isBarAutoColourCapability(p.capabilityId) && p.disposition === 'verified')
+    ? barAutoColoursAcrossCases(manifest, rootDir)
+    : {}
+  for (const p of perCapability) {
+    if (!isBarAutoColourCapability(p.capabilityId) || p.disposition !== 'verified') continue
+    const own = evidence.get(p.caseId)
+    const owned = own?.kind === 'verified' ? own.matchedHypotheses?.[p.capabilityId] : undefined
+    const judged = judgeBarAutoColour(pooled[p.capabilityId])
+    if (judged.status !== 'discriminating' || judged.matched === undefined || owned === undefined || !sameArgbWithin(owned, judged.matched)) {
+      p.disposition = 'supported-structural'
+    }
+  }
+  const autoBarColours = verifiedAutoBarColours(perCapability, pooled)
   const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
   const unknownNonDiscriminating = Object.keys(CF_STAGE3_NONDISCRIMINATING).filter(id => !stage3Ids.has(id) || !CF_STAGE3_NONDISCRIMINATING[id]!.trim())
   const caseOk = (p: Stage3CaseAudit): boolean => {
@@ -312,6 +381,7 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   const ok = missingCases.length === 0 && perCase.length > 0 && perCase.every(caseOk) && perCapability.every(p => p.disposition !== 'unaccounted') && unknownNonDiscriminating.length === 0
   const gate = stageGateStatus(perCapability)
   return {
+    autoBarColours,
     ok,
     perCase,
     perCapability,
@@ -345,6 +415,14 @@ export interface RenderVerifiedOptions {
   committedSource?: string
 }
 
+/** Per-channel ARGB agreement within the bar colour tolerance (8, the calibration cell's). */
+const sameArgbWithin = (a: string, b: string, tol = 8): boolean => [2, 4, 6].every(k => Math.abs(parseInt(a.slice(k, k + 2), 16) - parseInt(b.slice(k, k + 2), 16)) <= tol)
+
+const exportedColours = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
 const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
   const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
   return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
@@ -359,9 +437,12 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const verifiedOf = (report: Stage1AuditReport): string[] => report.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
   const stage1Verified = verifiedOf(auditStage1Manifest(manifest, { rootDir }))
   const stage2Verified = verifiedOf(auditStage2Manifest(manifest, { rootDir }))
-  const stage3Verified = options.publishStage3
-    ? verifiedOf(auditStage3Manifest(manifest, { rootDir }))
+  const stage3Report = options.publishStage3 ? auditStage3Manifest(manifest, { rootDir }) : undefined
+  const stage3Verified = stage3Report
+    ? verifiedOf(stage3Report)
     : exportedSet(options.committedSource, 'VERIFIED_STAGE3_CAPABILITIES')
+  // Ruling S3-F as amended: the measured automatic colours travel only beside a published Stage 3 set.
+  const autoColoursBlock = stage3Report ? renderAutoBarColoursBlock(stage3Report.autoBarColours) : exportedColours(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -372,7 +453,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */

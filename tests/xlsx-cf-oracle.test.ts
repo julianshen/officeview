@@ -3189,6 +3189,8 @@ describe('CF oracle verifier', () => {
       'stage3-bar-composition',
       'stage3-bar-pairing',
       'stage3-bar-unresolved-shapes',
+      // Task 19b: the automatic colours Excel writes on resave (Ruling S3-F as amended), recipe-pending until captured.
+      'stage3-bar-auto-colors',
     ])
     for (const c of manifest.cases.filter(x => x.stage === 3)) {
       // Invariants that hold before, during and after capture, as the harness writes the manifest.
@@ -3763,7 +3765,7 @@ describe('CF oracle verifier', () => {
     const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(false)
-    expect(report.summary.cases).toBe(12)
+    expect(report.summary.cases).toBe(13)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
     expect(report.blockedCapabilities.length).toBeGreaterThan(0)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-'))).toBe(true)
