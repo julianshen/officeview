@@ -77,19 +77,31 @@ const failure = (p: Promise<unknown>) => p.then(() => { throw new Error('expecte
 /** A canvas + backend pair recording what was painted. */
 function surface() {
   const draws: unknown[] = []
-  const ctx = { setTransform() {}, clearRect() {}, drawImage: (img: unknown) => { draws.push(img) } }
+  const life = { closed: 0, drawThrows: false }
+  const ctx = { setTransform() {}, clearRect() {}, drawImage: (img: unknown) => { if (life.drawThrows) throw new Error('draw failed'); draws.push(img) } }
   const canvas = { width: 7, height: 7, getContext: () => ctx } as unknown as CanvasLike
   const decoded: Array<{ w: number; h: number }> = []
   const backend = {
     name: 'fake',
     createCanvas: () => canvas,
     decodeImage: async (png: Uint8Array) => {
-      const v = new DataView(png.buffer, png.byteOffset, png.byteLength), img = { width: v.getUint32(16), height: v.getUint32(20) }
+      const v = new DataView(png.buffer, png.byteOffset, png.byteLength)
+      // An ImageBitmap-like: its native surface is freed by close().
+      const img = { width: v.getUint32(16), height: v.getUint32(20), close: () => { life.closed++ } }
       decoded.push({ w: img.width, h: img.height })
       return img
     },
   } as unknown as CanvasBackend
-  return { canvas, backend, draws, decoded }
+  return { canvas, backend, draws, decoded, life }
+}
+/** Holds decodeImage until `go()` (the decoded image is then resolved). */
+function deferDecode(backend: CanvasBackend) {
+  const decode = backend.decodeImage.bind(backend)
+  let go: () => void = () => { throw new Error('decode not reached') }
+  const reached = new Promise<void>((ready) => {
+    backend.decodeImage = (png, mime) => new Promise((resolve, reject) => { go = () => { decode(png, mime).then(resolve, reject) }; ready() })
+  })
+  return { reached, go: () => go() }
 }
 
 /** Starts a paintNotes and returns its promise (observed) and the sent request. */
@@ -443,6 +455,146 @@ describe('StreamSession.notes / RemoteOfficeDoc.paintNotes (scripted socket)', (
     lease.release()
     await settle()
     expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('end after the decode resolves but before its continuation runs → nothing paints; the image is closed', async () => {
+    const { s, sock } = await opened()
+    const sf = surface()
+    const d = deferDecode(sf.backend)
+    const doc = createRemoteDoc(s, { backend: sf.backend })
+    const p = doc.paintNotes(0, 1, sf.canvas)
+    await settle()
+    const reqId = sock.of('notes')[0]!.reqId
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    sock.frame(7, reqId, notesBody(0, 720, 48))
+    await d.reached
+    d.go()
+    // Synchronously after the decode settles: the paint continuation is still queued.
+    await Promise.resolve()
+    sock.drop(4005)
+    await p.catch(() => {})
+    expect((await s.ended)?.code).toBe('revoked')
+    expect(sf.draws).toEqual([])
+    expect(sf.life.closed).toBe(1)
+  })
+
+  it('end before the decode resolves → nothing paints; the image is closed', async () => {
+    const { s, sock } = await opened()
+    const sf = surface()
+    const d = deferDecode(sf.backend)
+    const doc = createRemoteDoc(s, { backend: sf.backend })
+    const p = doc.paintNotes(0, 1, sf.canvas)
+    await settle()
+    const reqId = sock.of('notes')[0]!.reqId
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    sock.frame(7, reqId, notesBody(0, 720, 48))
+    await d.reached
+    sock.drop(4005)
+    d.go()
+    await p.catch(() => {})
+    expect(sf.draws).toEqual([])
+    expect(sf.life.closed).toBe(1)
+  })
+
+  it('the decoded image is closed after a successful paint', async () => {
+    const { s, sock } = await opened()
+    const { p, reqId, draws, life } = await painting(s, sock, 0, 1)
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    sock.frame(7, reqId, notesBody(0, 720, 48))
+    await p
+    expect(draws.length).toBe(1)
+    expect(life.closed).toBe(1)
+  })
+
+  it('the decoded image is closed when an abort suppresses the paint', async () => {
+    const { s, sock } = await opened()
+    const ac = new AbortController()
+    const sf = surface()
+    const d = deferDecode(sf.backend)
+    const doc = createRemoteDoc(s, { backend: sf.backend })
+    const p = doc.paintNotes(0, 1, sf.canvas, ac.signal)
+    await settle()
+    const reqId = sock.of('notes')[0]!.reqId
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    sock.frame(7, reqId, notesBody(0, 720, 48))
+    await d.reached
+    ac.abort()
+    d.go()
+    await p.catch(() => {})
+    expect(sf.draws).toEqual([])
+    expect(sf.life.closed).toBe(1)
+  })
+
+  it('the decoded image is closed when drawing throws (the paint rejects)', async () => {
+    const { s, sock } = await opened()
+    const { p, reqId, life } = await painting(s, sock, 0, 1)
+    life.drawThrows = true
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    sock.frame(7, reqId, notesBody(0, 720, 48))
+    expect(((await failure(p)) as Error).message).toBe('draw failed')
+    expect(life.closed).toBe(1)
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('a declaration followed by silence times out: the grant is refunded and a queued unit proceeds', async () => {
+    let t = 0
+    const { s, sock } = await opened({ now: () => t })
+    const p = s.notes(0, 2)
+    void p.catch(() => {})
+    await settle()
+    const reqId = sock.of('notes')[0]!.reqId
+    sock.text({ reqId, type: 'notes-start', w: 1440, h: 8192, scale: 2 })
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: 96 * MiB })
+    const u = s.unit(0, 1)
+    void u.catch(() => {})
+    await settle()
+    expect(sock.of('unit')).toEqual([])
+    t = 4_999
+    await settle(1100)
+    expect(s.stats()).toMatchObject({ notesPending: 1 })
+    t = 5_000
+    await settle(1100)
+    expect((await failure(p) as StreamSessionError).code).toBe('policy-refused')
+    await settle()
+    expect(s.stats()).toMatchObject({ notesPending: 0 })
+    expect(sock.of('unit').length).toBe(1)
+  }, 15_000)
+
+  it('a request with no notes-start at all times out and is dropped', async () => {
+    let t = 0
+    const { s, sock } = await opened({ now: () => t })
+    const p = s.notes(0, 1)
+    void p.catch(() => {})
+    await settle()
+    expect(s.stats()).toMatchObject({ notesPending: 1 })
+    t = 5_000
+    await settle(1100)
+    expect((await failure(p) as StreamSessionError).code).toBe('policy-refused')
+    expect(s.stats()).toMatchObject({ notesPending: 0, inFlight: 0, inFlightBytes: 0 })
+    // A late answer for it is dropped silently.
+    sock.text({ reqId: sock.of('notes')[0]!.reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('the notes-start deadline restarts the clock; a frame in reassembly is left to the reassembler', async () => {
+    let t = 0
+    const { s, sock } = await opened({ now: () => t })
+    const sf = surface()
+    const doc = createRemoteDoc(s, { backend: sf.backend })
+    const p = doc.paintNotes(0, 1, sf.canvas)
+    await settle()
+    const reqId = sock.of('notes')[0]!.reqId
+    t = 4_000
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    t = 8_999
+    await settle(1100)
+    expect(s.stats()).toMatchObject({ notesPending: 1 })
+    sock.frame(7, reqId, notesBody(0, 720, 48))
+    await p
+    expect(sf.draws.length).toBe(1)
   })
 
   it('a session without notes support refuses paintNotes policy-refused', async () => {

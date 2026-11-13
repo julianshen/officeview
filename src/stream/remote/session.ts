@@ -14,7 +14,7 @@
  * request, admitted only for that live, sent request.
  */
 import { decodeAssets } from '../asset-wire'
-import { FRAGMENT_CAP, Kind, Reassembler, type FrameResult } from '../frame'
+import { FRAGMENT_CAP, Kind, Reassembler, REASSEMBLY_MS, type FrameResult } from '../frame'
 import { validateManifest, type Manifest } from '../manifest'
 import type { Asset } from '../ops'
 import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
@@ -49,6 +49,8 @@ export interface SessionOptions {
   signal?: AbortSignal
   onNotice?: (n: StreamNotice) => void
   onState?: (s: SessionState, error?: StreamSessionError) => void
+  /** The monotonic ms clock of reassembly and request deadlines (tests); default performance.now. */
+  now?: () => number
   /** Tightens a print job's held-blob ceiling (tests); it never rises past PRINT_JOB_MAX_BLOB_BYTES. */
   printMaxBlobBytes?: number
 }
@@ -163,6 +165,9 @@ interface NotesReq {
   /** The checked `notes-start` size, once it has arrived. */
   start?: { w: number; h: number }
   rotatedRetry: boolean
+  /** While no message for it is in reassembly, it fails at this time (`now()`):
+   * REASSEMBLY_MS after the send, restarted at `notes-start`. */
+  deadline: number
   resolve: (img: { w: number; h: number; png: Uint8Array }) => void
   fail: (e: unknown) => void
 }
@@ -408,7 +413,7 @@ export class StreamSession {
       }
       const onAbort = () => req.fail(signal!.reason ?? abortError())
       const req: NotesReq = {
-        unit, scale, reqId: 0, bodyCap: 0, sent: false, rotatedRetry: false,
+        unit, scale, reqId: 0, bodyCap: 0, sent: false, rotatedRetry: false, deadline: 0,
         hold: (r) => { if (settled) r(); else release = r },
         resolve: (img) => settle(() => {
           const r = release!
@@ -521,6 +526,7 @@ export class StreamSession {
       this.send({ reqId: req.reqId, type: 'notes', token: this.token, unit: req.unit, scale: req.scale })
     } catch { return req.fail(new StreamSessionError('policy-refused', 'the notes request could not be sent')) }
     req.sent = true
+    req.deadline = this.now() + REASSEMBLY_MS
     this.ensureSweeper()
   }
   /** The sent notes request `reqId` names on the current socket. */
@@ -550,6 +556,8 @@ export class StreamSession {
     req.hold(release)
     req.start = { w, h: h as number }
     req.bodyCap = notesBodyCap(w, h as number)
+    // A declared image holds its grant: its frame must start arriving in time too.
+    req.deadline = this.now() + REASSEMBLY_MS
   }
   /** The one NOTES_RASTER of a notes request: the unit asked, at the announced size. */
   private onNotesFrame(req: NotesReq, payload: Uint8Array) {
@@ -593,6 +601,10 @@ export class StreamSession {
     if (this.deliver(req, msg) && isTerminal(msg)) req.resolve()
   }
 
+  private now() { return (this.o.now ?? (() => performance.now()))() }
+  /** True once the session has ended: read synchronously at paint time (nothing paints after end). */
+  isEnded(): boolean { return this.state === 'closed' }
+
   private allocId() { const id = this.nextReqId; this.nextReqId = id >= 0xfffffffe ? 1 : id + 1; return id }
   private send(m: object) { this.sock?.send(JSON.stringify(m)) }
 
@@ -600,6 +612,7 @@ export class StreamSession {
     const gen = ++this.gen
     this.reasm = new Reassembler({
       acceptedVersions: new Set([1]),
+      now: () => this.now(),
       expects: (reqId, kind) => (kind === Kind.MANIFEST ? reqId === this.helloReqId && !!this.handshake
         // PRINT_RASTER only ever for the running, sent print job.
         : kind === Kind.PRINT_RASTER ? this.livePrint(reqId) !== undefined
@@ -831,6 +844,11 @@ export class StreamSession {
         if (notes) { notes.fail(new StreamSessionError('policy-refused', 'a notes image timed out in reassembly')); continue }
         const req = r.reqId !== undefined ? this.units.get(r.reqId) : undefined
         if (req) this.retryOrFail(req)
+      }
+      // A notes request with nothing in reassembly (no declaration, or a declaration and silence) expires on its own deadline.
+      const now = this.now()
+      for (const req of [...this.notesReqs.values()]) {
+        if (req.sent && now >= req.deadline && !this.reasm.has(req.reqId)) req.fail(new StreamSessionError('policy-refused', 'the notes request timed out'))
       }
       if (!this.units.size && !this.printJob && !this.notesReqs.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)

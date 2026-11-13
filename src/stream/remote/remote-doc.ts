@@ -30,6 +30,8 @@ export interface SessionLike {
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
   onManifestChange?(cb: () => void): () => void
+  /** True once the session has ended (a synchronous barrier; `ended` settles later). */
+  isEnded?(): boolean
 }
 
 export interface RemoteOfficeDoc {
@@ -181,12 +183,18 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       let image: CanvasImageSource
       // The admission lease covers the decode; release it once that work is done.
       try { image = await backend().decodeImage(lease.png, 'image/png') } finally { lease.release() }
-      if (closed || signal?.aborted || !can().notes) return
-      canvas.width = lease.w; canvas.height = lease.h
-      const ctx = canvas.getContext('2d')!
-      ctx.setTransform(1, 0, 0, 1, 0, 0)
-      ctx.clearRect(0, 0, lease.w, lease.h)
-      ctx.drawImage(image, 0, 0)
+      try {
+        // Read synchronously: `ended.then` may not have run yet when the decode resolves.
+        if (closed || session.isEnded?.() || signal?.aborted || !can().notes) return
+        canvas.width = lease.w; canvas.height = lease.h
+        const ctx = canvas.getContext('2d')!
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, lease.w, lease.h)
+        ctx.drawImage(image, 0, 0)
+      } finally {
+        // An ImageBitmap's native surface is freed now, not at GC.
+        (image as { close?: () => void }).close?.()
+      }
     },
     onManifestChange(cb) { return session.onManifestChange?.(cb) ?? (() => {}) },
     close() { if (closed) return; closed = true; session.close() },
