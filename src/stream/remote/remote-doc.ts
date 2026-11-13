@@ -12,6 +12,7 @@ import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
 import type { NotesLease, PrintOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
+import type { UnitBudgetView } from './unit-budget'
 
 export type { RemoteRange } from './text-wire'
 export type { PrintedPage } from './print-wire'
@@ -33,6 +34,8 @@ export interface SessionLike {
   onManifestChange?(cb: () => void): () => void
   /** True once the session has ended (a synchronous barrier; `ended` settles later). */
   isEnded?(): boolean
+  /** R28: the session's unit send budget. */
+  readonly unitBudget?: UnitBudgetView
 }
 
 export interface RemoteOfficeDoc {
@@ -72,6 +75,8 @@ export interface RemoteOfficeDoc {
   close(): void
   /** Settles once when the session ends: its typed error, or undefined after close(). */
   readonly ended: Promise<StreamSessionError | undefined>
+  /** R28: the session's unit send budget (every paint's sends are stamped on it). */
+  readonly unitBudget?: UnitBudgetView
 }
 
 /** Rects of one unit, in page px at scale 1 relative to the unit. */
@@ -111,6 +116,7 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     kind: 'remote',
     session,
     get manifest() { return session.manifest },
+    get unitBudget() { return session.unitBudget },
     async units() { return session.manifest.units.list.map((u) => ({ widthPx: u.w, heightPx: u.h })) },
     async paint(unit, scale, dpr, canvas, signal, po) {
       if (closed) throw new StreamSessionError('closed')

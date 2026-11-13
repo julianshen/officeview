@@ -12,6 +12,10 @@
  * (Stage 3b, `print()`) runs at a time; its pages are checked by `print-wire.ts`.
  * A presenter's notes image (Stage 3c, `notes()`) is one NOTES_RASTER per
  * request, admitted only for that live, sent request.
+ * Unit sends (R28) are held to the session's one send log (`unitBudget`), which
+ * lives as long as the server sid: a first send waits, first in first out, for
+ * room under UNIT_FIRST_CAP; a re-send for room under UNIT_RESEND_CAP; nothing
+ * charged is sent while a `rate-limited` refusal blocks the log.
  */
 import { decodeAssets } from '../asset-wire'
 import { FRAGMENT_CAP, Kind, Reassembler, REASSEMBLY_MS, type FrameResult } from '../frame'
@@ -23,6 +27,7 @@ import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
 import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
+import { UNIT_FIRST_CAP, UNIT_RESEND_CAP, UNIT_SPAN_MS, UnitSendLog, type UnitBudgetView } from './unit-budget'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
@@ -122,6 +127,8 @@ interface UnitReq {
   retried: boolean; rotatedRetry: boolean
   /** R16: called once per server-charged send (not the stale-jti re-send). */
   onSend?: () => void
+  /** A charged send of it has gone out (later ones are re-sends, R28). */
+  sent: boolean
 }
 
 interface TextReq {
@@ -216,6 +223,20 @@ export class StreamSession {
    * hashing must finish before the UNIT_COMMANDS that references it). */
   private inbox: Promise<void> = Promise.resolve()
   private readonly manifestListeners = new Set<() => void>()
+  /** R28: every server-charged unit send of this sid, whoever asked (survives resume). */
+  private readonly sendLog = new UnitSendLog(() => this.now(), UNIT_FIRST_CAP, UNIT_SPAN_MS)
+  /** Unit requests waiting for log room, oldest first (each still in `units`). */
+  private readonly waiting = new Set<UnitReq>()
+  private drainTimer?: ReturnType<typeof setTimeout>
+  /**
+   * R28: the session's unit send budget, for callers that pace themselves (the
+   * show fetcher). Room is UNIT_FIRST_CAP less the window's charged sends and
+   * the first sends already waiting here; `pending` is the caller's own share.
+   */
+  readonly unitBudget: UnitBudgetView = {
+    room: (pending = 0) => this.sendLog.room(pending + this.waitingFirst()),
+    waitMs: (pending = 0) => this.sendLog.waitMs(pending + this.waitingFirst()),
+  }
 
   private constructor(private readonly source: StreamSource, private readonly o: SessionOptions) {
     this.ended = new Promise((r) => { this.settleEnded = r })
@@ -255,7 +276,8 @@ export class StreamSession {
    * Request one unit at a scale bucket. Settles once: payload, typed error, or abort.
    * `onSend` (R16) is called on every send the server charges to the `'unit'` rate
    * class: the first, a validation re-send and a resume re-send — never the
-   * stale-jti re-send (refused before it was charged).
+   * stale-jti re-send (refused before it was charged). Every such send is also
+   * stamped on the session's send log (R28); over budget, the request waits for room.
    */
   async unit(index: number, bucket: number, signal?: AbortSignal, onSend?: () => void): Promise<UnitLease> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
@@ -265,12 +287,12 @@ export class StreamSession {
     const release = await this.admission.acquire(grant, signal)
     if (this.isClosed()) { release(); throw this.failure ?? new StreamSessionError('closed') }
     return new Promise<UnitLease>((resolve, reject) => {
-      const req: UnitReq = { index, bucket, reqId: 0, grant, assets: new Map(), assetBytes: 0, resolve: () => {}, reject, retried: false, rotatedRetry: false, ...(onSend ? { onSend } : {}) }
+      const req: UnitReq = { index, bucket, reqId: 0, grant, assets: new Map(), assetBytes: 0, resolve: () => {}, reject, retried: false, rotatedRetry: false, sent: false, ...(onSend ? { onSend } : {}) }
       // A delivered payload keeps the lease (its consumer releases it after
       // decode/replay); a failed or aborted request releases it here, after
       // any message for it that is still being processed (the inbox is serial).
-      req.resolve = (u) => { this.units.delete(req.reqId); resolve(Object.assign(u, { release })) }
-      req.reject = (e) => { this.units.delete(req.reqId); void this.inbox.then(release); reject(e) }
+      req.resolve = (u) => { this.units.delete(req.reqId); this.waiting.delete(req); resolve(Object.assign(u, { release })) }
+      req.reject = (e) => { this.units.delete(req.reqId); this.waiting.delete(req); void this.inbox.then(release); reject(e) }
       signal?.addEventListener('abort', () => { if (this.units.get(req.reqId) === req) req.reject(signal.reason ?? abortError()) }, { once: true })
       if (signal?.aborted) return req.reject(signal.reason ?? abortError())
       this.issue(req)
@@ -448,9 +470,39 @@ export class StreamSession {
     this.units.set(req.reqId, req)
     // While resuming, the request waits; resume() re-issues it on the new socket.
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
+    // R28: a first send queues behind any already waiting; a re-send needs only room.
+    if (charged && ((!req.sent && this.waiting.size) || !this.hasRoom(req))) { this.waiting.add(req); return this.scheduleDrain() }
+    this.transmit(req, charged)
+  }
+  private transmit(req: UnitReq, charged: boolean) {
+    this.waiting.delete(req)
     this.send({ reqId: req.reqId, type: 'unit', token: this.token, unitIndex: req.index, scale: req.bucket })
-    if (charged) { try { req.onSend?.() } catch { /* a hook never breaks the send */ } }
+    if (charged) {
+      req.sent = true
+      this.sendLog.record()
+      try { req.onSend?.() } catch { /* a hook never breaks the send */ }
+    }
     this.ensureSweeper()
+  }
+  private hasRoom(req: UnitReq) { return this.sendLog.room(0, req.sent ? UNIT_RESEND_CAP : UNIT_FIRST_CAP) > 0 }
+  private waitingFirst() { let n = 0; for (const r of this.waiting) if (!r.sent) n++; return n }
+  /** Sends what the log now has room for, oldest first, then waits for the next slot. */
+  private drain() {
+    this.drainTimer = undefined
+    // While resuming, resume() re-issues every request (waiting ones included).
+    if (this.state !== 'open' || !this.sock || this.sock.readyState !== 1) return
+    for (const req of this.waiting) {
+      if (this.units.get(req.reqId) !== req) { this.waiting.delete(req); continue }
+      if (!this.hasRoom(req)) break
+      this.transmit(req, true)
+    }
+    this.scheduleDrain()
+  }
+  private scheduleDrain() {
+    const head = this.waiting.values().next().value
+    if (this.drainTimer || !head) return
+    const ms = this.sendLog.waitMs(0, head.sent ? UNIT_RESEND_CAP : UNIT_FIRST_CAP)
+    this.drainTimer = setTimeout(() => this.drain(), Number.isFinite(ms) ? ms : 1_000)
   }
   private issueText(req: TextReq) {
     this.texts.delete(req.reqId)
@@ -715,6 +767,8 @@ export class StreamSession {
       const req = this.units.get(m.reqId)
       if (!req) return
       if (m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issue(req, false) }
+      // R28: the log blocks every charged unit send (any caller) before the caller hears of it.
+      if (m.code === 'rate-limited') this.sendLog.refused()
       const code = m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused'
       req.reject(new StreamSessionError(code))
     }
@@ -868,6 +922,7 @@ export class StreamSession {
     this.gen++
     this.failure = error
     if (this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
+    if (this.drainTimer) { clearTimeout(this.drainTimer); this.drainTimer = undefined }
     const sock = this.sock
     this.sock = undefined
     if (sock && closeCode !== undefined && sock.readyState < 2) sock.close(closeCode, reason)

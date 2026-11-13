@@ -654,3 +654,18 @@ describe('remote show: the notes pane copy is owned with its bytes', () => {
     expect([pane.width, pane.height]).toEqual([0, 0])
   })
 })
+
+describe('R28: the show paces against the session\'s unit budget', () => {
+  it('a doc whose session budget has no room paints nothing; once it has room the target goes out', async () => {
+    const fd = fakeDoc({ count: 3 })
+    let room = 0
+    Object.assign(fd.doc, { unitBudget: { room: (pending = 0) => Math.max(0, room - pending), waitMs: () => (room > 0 ? 0 : 1_000) } })
+    const { s } = await show(fd, { popup: null })
+    await clock.advance(5_000)
+    expect(units(fd)).toEqual([])
+    room = 48
+    await clock.advance(1_000)
+    expect(units(fd)).toEqual([0])
+    s.exit()
+  })
+})

@@ -239,6 +239,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         settledOne()
       }
     },
+    // R28: the session's one unit send budget (it outlives this show and stamps every charged send).
+    ...(doc.unitBudget ? { budget: doc.unitBudget } : {}),
   }, clock, { maxCached })
   /** Units whose last request failed (cleared once a bitmap lands). */
   const failed = new Map<number, RemoteErrorCode>()

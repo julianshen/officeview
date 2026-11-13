@@ -1,27 +1,31 @@
 /**
  * §12a.7 show slide cache and request budget (pure; lazy remote path only).
  *
- * A show paces its own unit requests so the server's `'unit'` rate class
- * (60/min; third breach in 60 s closes 4008) is never tripped: at most
- * `budgetPerMin` (48) requests are issued in any 60 s window (a sliding
- * window of server-charged sends: the io calls `charge()` once per unit send,
- * the first and any validation/replay re-send (ruling R16); never refunded).
- * A request is issued only while the window, counting requests issued but not
- * yet charged, has room; re-sends of requests in flight may take the window
- * past the budget, within the server's 60. The first `want` entry (the navigation target) is always next
+ * A show paces its unit requests against the server's `'unit'` rate class
+ * (60/min per sid; third breach in 60 s closes 4008). The budget is the
+ * session's (R28, `io.budget`): one sliding log per StreamSession, stamped by
+ * the session on every server-charged unit send of any caller (viewer paints,
+ * this and earlier shows, validation and resume re-sends), so a show restart
+ * or a resume never starts from an empty window. `charge()` (R16, once per
+ * charged send) only tells the fetcher a request has gone out: a request
+ * issued but not yet charged holds a share of the budget until it does.
+ * Without `io.budget` (standalone use) the fetcher keeps a private log of its
+ * own charges, `budgetPerMin` (48) per 60 s. The first `want` entry (the navigation target) is always next
  * in line, paced (ruling R14): a new target goes out at once when no target
  * went out in the last TARGET_GAP_MS, else once it has been unchanged for
  * TARGET_SETTLE_MS, so a held arrow costs about one request per 400 ms and
  * the slide it stops on goes out within 250 ms. Prefetch waits until the
  * target is cached or has failed and the wanted set has been unchanged for
  * PREFETCH_SETTLE_MS, and is issued only while more than RESERVE requests
- * remain in the window.
+ * remain in the budget. A `rate-limited` refusal pauses issuing BACKOFF_MS;
+ * the session's log then holds every send until the server window has room.
  * Units no longer wanted, or requested at a replaced bucket, are aborted; a
  * result that still arrives is closed, never kept. Bitmaps live in an LRU of
  * `maxCached`; a bucket change keeps old bitmaps as fallbacks until replaced.
  * Every bitmap removed (evicted, replaced, dropped, disposed) is closed.
  */
 import { StreamSessionError, type StreamErrorCode } from './errors'
+import { UnitSendLog, type UnitBudgetView } from './unit-budget'
 
 /** The error codes `onError` reports (the session's typed codes). */
 export type RemoteErrorCode = StreamErrorCode
@@ -36,6 +40,8 @@ export interface ImageBitmapLike {
 export interface ShowFetchIo {
   /** Paints `unit`; calls `charge()` once per unit request it sends (the server charges each). */
   paint(unit: number, scale: number, dpr: number, signal: AbortSignal, charge: () => void): Promise<ImageBitmapLike>
+  /** R28: the session's unit send budget (it stamps every charged send itself). */
+  budget?: UnitBudgetView
 }
 
 export interface ShowFetchClock {
@@ -86,8 +92,9 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
   let lastTargetIssue = -Infinity
   /** No bucket ⇒ nothing is issued (the caller sets one before the first paint). */
   let bucket: { scale: number; dpr: number; key: string } | undefined
-  /** Charged send times inside the current window, oldest first. */
-  const stamps: number[] = []
+  /** Standalone only: a private log of this fetcher's own charges. */
+  const own = io.budget ? undefined : new UnitSendLog(() => clock.now(), budget, WINDOW_MS)
+  const shared: UnitBudgetView = io.budget ?? own!
   /** `${unit}|${bucketKey}` → entry; Map order is LRU order (oldest first). */
   const cache = new Map<string, Entry>()
   const inflight = new Map<number, Req>()
@@ -126,8 +133,9 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     const b = bucket!
     const req: Req = { key: b.key, ctl: new AbortController(), charged: false }
     inflight.set(unit, req)
-    // Stamped even after an abort: a send that went out was charged by the server.
-    const charge = () => { req.charged = true; if (!disposed) stamps.push(clock.now()) }
+    // The session stamps its own log; a private log is stamped even after an abort
+    // (a send that went out was charged by the server).
+    const charge = () => { req.charged = true; if (!disposed) own?.record() }
     let p: Promise<ImageBitmapLike>
     try { p = io.paint(unit, b.scale, b.dpr, req.ctl.signal, charge) } catch (e) { p = Promise.reject(e) }
     // An aborted request is already out of `inflight`; whatever it settles with is ours to drop.
@@ -161,8 +169,6 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
   function pump() {
     if (disposed) return
     const now = clock.now()
-    // A stamp at t counts through t + WINDOW_MS inclusive (conservative at the boundary).
-    while (stamps.length && stamps[0]! + WINDOW_MS < now) stamps.shift()
     for (const [unit, req] of inflight) {
       if (req.key !== bucket?.key || !wanted.includes(unit)) { inflight.delete(unit); req.ctl.abort() }
     }
@@ -173,8 +179,11 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     const outOfBudget = (reserve: number) => {
       let unsent = 0 // issued, not yet sent: their first send is spoken for
       for (const req of inflight.values()) if (!req.charged) unsent++
-      if (budget - stamps.length - unsent > reserve) return false
-      if (stamps.length) schedule(now, stamps[0]! + WINDOW_MS + 1)
+      if (shared.room(unsent) > reserve) return false
+      const ms = shared.waitMs(unsent + reserve)
+      // Shared: requests waiting in the session free room without telling the fetcher, so look again.
+      if (Number.isFinite(ms)) schedule(now, now + ms)
+      else if (!own) schedule(now, now + BACKOFF_MS)
       return true
     }
     const target = wanted[0]!
