@@ -334,53 +334,70 @@ export function createStreamServer(o: StreamServerOptions) {
     if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
     // Every request re-charges its parse: an evicted document re-enters the ledger on reparse.
     if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
-    const p = sd.policy, mark = markOf(p, sd.decision)
+    const p = sd.policy
     const missing = p.projection === 'commands' ? [...ws.data.missingFaces].sort() : undefined
-    const job = { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex: unitIndex as number, scale: scale as number, mark }
-    const estimate = (() => { const size = sd.doc.units[unitIndex as number]!; return size.w * size.h * 4 * (scale as number) ** 2 * 2 })()
-    const fields = (projectionMode: 'final-raster' | 'commands') => keyFields(sd.doc, mark, unitIndex as number, scale as number, projectionMode, missing)
-    const obtain = async (projection: 'final-raster' | 'commands'): Promise<RenderedUnit | RefusalCode> => {
-      const key = renderKey(fields(projection))
-      const hit = renderCache.get(key)
-      if (hit) return hit
-      try {
-        const unit = await o.pool.render(s.sid, { ...job, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
-        renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
-        return unit
-      } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
-    }
-    const first = await obtain(p.projection)
-    if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+    const alive = () => owns(ws, s.sid) && ws.data.phase === 'stream'
+    const ui = unitIndex as number, sc = scale as number
+    const first = await obtainUnit(s.sid, sd, ui, sc, p.projection, missing)
+    if (!alive()) return
     if (typeof first === 'string') return refuse(ws, reqId, first)
     let unit: RenderedUnit = first
-    let messages = unit.kind === 'commands' ? prepareUnit(reqId, unitIndex as number, unit) : undefined
+    let messages = unit.kind === 'commands' ? prepareUnit(reqId, ui, unit) : undefined
     if (!messages && unit.kind === 'commands') {
       // Assets too large for ASSET_DEFINE's caps: ship the unit as a raster (Task 7).
-      const raster = await obtain('final-raster')
-      if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+      const raster = await obtainUnit(s.sid, sd, ui, sc, 'final-raster', missing)
+      if (!alive()) return
       if (typeof raster === 'string') return refuse(ws, reqId, raster)
       unit = raster
     }
-    let unmarked: string | undefined, canonical: Uint8Array | undefined
+    let unmarked: string | undefined
     if (unit.kind === 'raster') {
-      // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
-      if (sd.forensic) {
-        canonical = unit.png
-        const m = await markUnit(s.sid, sd, unitIndex as number, scale as number, unit)
-        if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
-        if (typeof m === 'string') return refuse(ws, reqId, m)
-        unit = m.unit; unmarked = m.unmarked
-      }
-      messages = prepareUnit(reqId, unitIndex as number, unit)
+      const d = await deliverRaster(alive, s.sid, sd, ui, sc, unit, (u) => prepareUnit(reqId, ui, u))
+      if (d === undefined) return
+      if (typeof d === 'string') return refuse(ws, reqId, d)
+      messages = d.messages; unmarked = d.unmarked
     }
     if (!messages) return refuse(ws, reqId, 'policy-refused')
-    // Durable before anything about this unit goes out (never a delivered mark without a record); a failed write refuses it.
-    if (canonical) {
-      try { audit.recordDelivery({ sid: s.sid, unitIndex: unitIndex as number, scale: scale as number, status: unmarked ? 'unmarked' : 'l1', ...(unmarked ? { reason: unmarked } : {}), refSha256: createHash('sha256').update(canonical).digest('hex') }) } catch { return refuse(ws, reqId, 'policy-refused') }
-    }
     if (unit.kind === 'raster' && unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
     if (unmarked) send(ws, { reqId, type: 'diag', code: 'forensic-unmarked', unitIndex, reason: unmarked })
     sendFrames(ws, messages)
+  }
+
+  /** The canonical unit for a session: the render cache, else the pool (then cached). */
+  async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[]): Promise<RenderedUnit | RefusalCode> {
+    const p = sd.policy, mark = markOf(p, sd.decision)
+    const key = renderKey(keyFields(sd.doc, mark, unitIndex, scale, projection, missing))
+    const hit = renderCache.get(key)
+    if (hit) return hit
+    const size = sd.doc.units[unitIndex]!, estimate = size.w * size.h * 4 * scale ** 2 * 2
+    try {
+      const unit = await o.pool.render(sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex, scale, mark, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
+      renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
+      return unit
+    } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
+  }
+
+  /** The shared per-unit tail (unit and print): Layer-1 over the canonical
+   * raster, frame it with `pack`, then the durable delivery record — in that
+   * order, so a unit over its frame cap leaves no delivery row, and nothing
+   * goes out unrecorded. `undefined`: the caller died meanwhile (send nothing). */
+  async function deliverRaster(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }, pack: (u: RenderedUnit & { kind: 'raster' }) => Uint8Array[][] | undefined): Promise<{ messages: Uint8Array[][]; unmarked?: string } | RefusalCode | undefined> {
+    // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
+    let unmarked: string | undefined
+    const canonical = sd.forensic ? unit.png : undefined
+    if (sd.forensic) {
+      const m = await markUnit(sid, sd, unitIndex, scale, unit)
+      if (!alive()) return undefined
+      if (typeof m === 'string') return m
+      unit = m.unit; unmarked = m.unmarked
+    }
+    const messages = pack(unit)
+    if (!messages) return 'policy-refused'
+    // Durable before anything about this unit goes out (never a delivered mark without a record); a failed write refuses it.
+    if (canonical) {
+      try { audit.recordDelivery({ sid, unitIndex, scale, status: unmarked ? 'unmarked' : 'l1', ...(unmarked ? { reason: unmarked } : {}), refSha256: createHash('sha256').update(canonical).digest('hex') }) } catch { return 'policy-refused' }
+    }
+    return { messages, ...(unmarked ? { unmarked } : {}) }
   }
 
   /** The onUnit preamble for a text op: stream phase, reqId, token, ownership
