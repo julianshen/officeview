@@ -6,15 +6,16 @@ import { encodeMessage, Reassembler } from '../../src/stream/frame'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
 import { encodeRasterBody } from '../../src/stream/raster'
 import { encodeUnit } from '../../src/stream/unit'
-import { StreamSession, type SessionOptions } from '../../src/stream/remote/session'
+import { PRINT_PAGE_BODY_MAX, printPageCap, StreamSession, type SessionOptions } from '../../src/stream/remote/session'
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, printSizeOk } from '../../src/stream/remote/print-wire'
 import { createRemoteDoc } from '../../src/stream/remote/remote-doc'
 import { SESSION_TRANSIENT_BYTES, unitCost } from '../../src/stream/remote/reservation'
 
 const MiB = 1024 * 1024
-/** The grant a print job over units of this size holds (fix round 1). */
-const printGrant = (w: number, h: number) => 8 * MiB + Math.min(64 * MiB, 16 + unitCost(w, h, 2, false))
+/** The page-body cap and grant of a print job over units of this size (fix round 2: encoded + 2 × body). */
+const pageCapOf = (w: number, h: number) => Math.min(64 * MiB, Math.floor((SESSION_TRANSIENT_BYTES - 8 * MiB) / 2), 16 + unitCost(w, h, 2, false))
+const printGrant = (w: number, h: number) => 8 * MiB + 2 * pageCapOf(w, h)
 /** An incompressible page body big enough to span several 1 MiB fragments. */
 function bigPage(unitIndex: number, w = 1920, h = 1080) {
   const png = new Uint8Array(randomBytes(1_500_000))
@@ -486,7 +487,7 @@ describe('StreamSession.print — fix round 1 (admission, reassembly, throwing s
     const { p, reqId } = await started(s, sock, 0)
     sock.text({ reqId, type: 'print-start', pages: 1, scale: 2 })
     // A body over the job's page cap (but well under 64 MiB) is a decoded-cap rejection.
-    const over = new Uint8Array(Math.min(64 * MiB, 16 + unitCost(960, 540, 2, false)) + 1)
+    const over = new Uint8Array(pageCapOf(960, 540) + 1)
     const push = vi.spyOn(Reassembler.prototype, 'push')
     sock.frame(8, reqId, over)
     const e = await failure(p) as StreamSessionError
@@ -571,4 +572,25 @@ describe('StreamSession.print — fix round 1 (admission, reassembly, throwing s
     expect((await failure(b.p) as StreamSessionError).code).toBe('policy-refused')
     expect(s.stats().printing).toBe(false)
   })
+
+  it('fix round 2: the grant is encoded + 2 × pageCap; a 4096×4096 page body is clamped so the grant fits the aggregate', async () => {
+    expect(PRINT_PAGE_BODY_MAX).toBe(44 * MiB)
+    const list = [{ w: 4096, h: 4096 }, { w: 960, h: 540 }]
+    expect(printPageCap(list, 1, 1)).toBe(16 + unitCost(960, 540, 2, false))
+    expect(printPageCap(list, 0, 1)).toBe(PRINT_PAGE_BODY_MAX)
+    const { s, sock } = await opened({}, { units: { count: 2, list } })
+    const { p, reqId } = await started(s, sock, 1)
+    expect(s.stats().inFlightBytes).toBe(8 * MiB + 2 * PRINT_PAGE_BODY_MAX)
+    expect(s.stats().inFlightBytes).toBeLessThanOrEqual(SESSION_TRANSIENT_BYTES)
+    // A body over the clamped cap is a decoded-cap rejection: the job fails and its grant is released.
+    sock.text({ reqId, type: 'print-start', pages: 2, scale: 2 })
+    const push = vi.spyOn(Reassembler.prototype, 'push')
+    sock.frame(8, reqId, new Uint8Array(PRINT_PAGE_BODY_MAX + 1))
+    expect((await failure(p) as StreamSessionError).code).toBe('policy-refused')
+    const results = (await Promise.all(push.mock.results.map((r) => r.value))).filter(Boolean)
+    expect(results.at(-1)).toEqual({ ok: false, reqId, reason: 'decoded-cap' })
+    push.mockRestore()
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, inFlight: 0, inFlightBytes: 0 })
+  }, 30_000)
 })

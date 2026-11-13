@@ -20,7 +20,7 @@ import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError } from './errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_REFUSALS, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
-import { Admission, ASSET_ALLOWANCE, unitCost } from './reservation'
+import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
@@ -60,13 +60,25 @@ const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.UNIT_RASTER]: [8 << 20, 64 << 20], [Kind.UNIT_COMMANDS]: [8 << 20, 8 << 20],
   [Kind.PRINT_RASTER]: [PRINT_ENCODED_CAP, 64 << 20],
 }
+/**
+ * A print job's peak transient bytes for one page are its encoded fragments
+ * (`Reassembler.push`, src/stream/frame.ts:124, ≤ PRINT_ENCODED_CAP) plus the
+ * inflated chunks (frame.ts:161) plus their contiguous copy (frame.ts:164-165):
+ * encoded + 2 × decoded. The job's grant is that peak, so the decoded page
+ * body is clamped to keep the grant inside the session's aggregate admission.
+ * A page whose body is larger (a PNG over ~44 MiB) cannot print on the stream path.
+ */
+export const PRINT_PAGE_BODY_MAX = Math.floor((SESSION_TRANSIENT_BYTES - PRINT_ENCODED_CAP) / 2)
+/** The admission grant of a job whose page bodies may decode to `pageCap` bytes (see PRINT_PAGE_BODY_MAX). */
+export const printGrant = (pageCap: number) => PRINT_ENCODED_CAP + 2 * pageCap
 /** The decoded bytes one page message of `from..to` may inflate to: the u32
  * unit index and 12-byte raster header plus the PNG, bounded as a unit raster
- * is (`unitCost` of the range's largest unit at scale 2), never over 64 MiB. */
-function printPageCap(units: ReadonlyArray<{ w: number; h: number }>, from: number, to: number): number {
+ * is (`unitCost` of the range's largest unit at scale 2), never over 64 MiB
+ * nor PRINT_PAGE_BODY_MAX. */
+export function printPageCap(units: ReadonlyArray<{ w: number; h: number }>, from: number, to: number): number {
   let worst = 0
   for (let i = from; i <= to; i++) worst = Math.max(worst, unitCost(units[i]!.w, units[i]!.h, 2, false))
-  return Math.min(UNIT_RASTER_DECODED_CAP, 16 + worst)
+  return Math.min(UNIT_RASTER_DECODED_CAP, PRINT_PAGE_BODY_MAX, 16 + worst)
 }
 const UNIT_KINDS = new Set<Kind>([Kind.ASSET_DEFINE, Kind.UNIT_RASTER, Kind.UNIT_COMMANDS])
 const defaultClient: StreamClientFactory = (s) => new WebSocket(s.url)
@@ -290,7 +302,7 @@ export class StreamSession {
       }
       const onAbort = () => job.fail(signal!.reason ?? abortError(), true)
       const job: PrintJob = {
-        from, n: to - from + 1, reqId: 0, pageCap, grant: PRINT_ENCODED_CAP + pageCap, granted: false,
+        from, n: to - from + 1, reqId: 0, pageCap, grant: printGrant(pageCap), granted: false,
         sent: false, pages: [], bytes: 0, rotatedRetry: false,
         ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
         resolve: () => settle(resolve),
