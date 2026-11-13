@@ -39,17 +39,15 @@ img { display: block; width: ${w}px; height: ${h}px; object-fit: contain; break-
 }
 export interface PrintJob { frame: HTMLIFrameElement; dispose(): void }
 const TOO_LARGE = 'This document is too large to print from the viewer.'
-export async function printDocument(pages: readonly Paintable[], themeRoot: HTMLElement, opts: {
+/** The shared hidden-iframe print surface. Pages arrive one at a time through
+ * `produce` so a caller can rasterize lazily (one canvas) while a caller that
+ * already holds blobs just hands them over; abort and the blob ceiling are
+ * checked here after every page either way. */
+async function printSurface(specs: readonly PageSpec[], themeRoot: HTMLElement, opts: {
   signal: AbortSignal; title?: string; onNotice(text: string): void
-  rasterize?: (page: Paintable, scale: 1 | 2, canvas: HTMLCanvasElement) => Promise<Blob | null>
-}): Promise<PrintJob | null> {
-  if (opts.signal.aborted || !pages.length) return null
-  const specs = pages.map(p => p.spec), plan = planPrintJob(specs)
-  if (plan.kind === 'refused') { opts.onNotice(TOO_LARGE); return null }
+}, produce: (index: number) => Promise<Blob | null>, release?: () => void): Promise<PrintJob | null> {
   const doc = themeRoot.ownerDocument, host = doc.defaultView!
-  const canvas = doc.createElement('canvas'), frame = doc.createElement('iframe')
-  // A detached canvas otherwise loses the viewer's inherited font language.
-  canvas.lang = themeRoot.closest('[lang]')?.getAttribute('lang') ?? ''
+  const frame = doc.createElement('iframe')
   frame.setAttribute('aria-hidden', 'true'); frame.tabIndex = -1
   frame.setAttribute('data-officeview-print-frame', '')
   frame.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;border:0'
@@ -65,7 +63,7 @@ export async function printDocument(pages: readonly Paintable[], themeRoot: HTML
     frame.remove()
     for (const url of urls) URL.revokeObjectURL(url)
     urls.length = 0
-    canvas.width = canvas.height = 0
+    release?.()
   }
   opts.signal.addEventListener('abort', dispose, {once: true})
   const job = {frame, dispose}
@@ -81,21 +79,9 @@ export async function printDocument(pages: readonly Paintable[], themeRoot: HTML
     inner.head.append(style)
     const pageNames = new Map(sizes(specs).map((s, n) => [`${s.widthPx},${s.heightPx}`, `p${n}`]))
     let blobBytes = 0
-    for (const page of pages) {
+    for (const [index, spec] of specs.entries()) {
       if (disposed || opts.signal.aborted) { dispose(); return null }
-      canvas.width = Math.ceil(page.spec.widthPx * plan.scale)
-      canvas.height = Math.ceil(page.spec.heightPx * plan.scale)
-      let blob: Blob | null
-      if (opts.rasterize) blob = await opts.rasterize(page, plan.scale, canvas)
-      else {
-        const ctx = canvas.getContext('2d')!
-        ctx.scale(plan.scale, plan.scale)
-        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, page.spec.widthPx, page.spec.heightPx)
-        page.paint(ctx)
-        blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
-      }
-      // Reset state and pixels even if a signal-ignoring rasterizer refilled it.
-      canvas.width = canvas.height = 0
+      const blob = await produce(index)
       if (disposed || opts.signal.aborted) { dispose(); return null }
       if (!blob) throw new Error('Page rasterization failed')
       blobBytes += blob.size
@@ -103,7 +89,7 @@ export async function printDocument(pages: readonly Paintable[], themeRoot: HTML
       const url = URL.createObjectURL(blob)
       urls.push(url)
       const img = inner.createElement('img')
-      img.dataset.page = pageNames.get(`${page.spec.widthPx},${page.spec.heightPx}`)!
+      img.dataset.page = pageNames.get(`${spec.widthPx},${spec.heightPx}`)!
       await new Promise<void>((resolve, reject) => {
         const done = (error?: Error) => {
           img.removeEventListener('load', loaded); img.removeEventListener('error', failed)
@@ -125,6 +111,49 @@ export async function printDocument(pages: readonly Paintable[], themeRoot: HTML
     dispose()
     if (!cancelled) opts.onNotice('The document could not be printed. Please try again.')
     return null
+  }
+}
+
+/** Prints already-rasterized pages (for example server-drawn PNGs) through the
+ * same hidden frame, page rules, ceiling and cleanup as `printDocument`. */
+export async function printRasters(
+  pages: readonly { widthPx: number; heightPx: number; png: Blob }[],
+  themeRoot: HTMLElement,
+  opts: { signal: AbortSignal; title?: string; onNotice(text: string): void },
+): Promise<PrintJob | null> {
+  if (opts.signal.aborted || !pages.length) return null
+  return printSurface(pages, themeRoot, opts, async index => pages[index]!.png)
+}
+
+export async function printDocument(pages: readonly Paintable[], themeRoot: HTMLElement, opts: {
+  signal: AbortSignal; title?: string; onNotice(text: string): void
+  rasterize?: (page: Paintable, scale: 1 | 2, canvas: HTMLCanvasElement) => Promise<Blob | null>
+}): Promise<PrintJob | null> {
+  if (opts.signal.aborted || !pages.length) return null
+  const specs = pages.map(p => p.spec), plan = planPrintJob(specs)
+  if (plan.kind === 'refused') { opts.onNotice(TOO_LARGE); return null }
+  const canvas = themeRoot.ownerDocument.createElement('canvas')
+  // A detached canvas otherwise loses the viewer's inherited font language.
+  canvas.lang = themeRoot.closest('[lang]')?.getAttribute('lang') ?? ''
+  const rasterize = async (index: number): Promise<Blob | null> => {
+    const page = pages[index]!
+    canvas.width = Math.ceil(page.spec.widthPx * plan.scale)
+    canvas.height = Math.ceil(page.spec.heightPx * plan.scale)
+    let blob: Blob | null
+    if (opts.rasterize) blob = await opts.rasterize(page, plan.scale, canvas)
+    else {
+      const ctx = canvas.getContext('2d')!
+      ctx.scale(plan.scale, plan.scale)
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, page.spec.widthPx, page.spec.heightPx)
+      page.paint(ctx)
+      blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+    }
+    // Reset state and pixels even if a signal-ignoring rasterizer refilled it.
+    canvas.width = canvas.height = 0
+    return blob
+  }
+  try {
+    return await printSurface(specs, themeRoot, opts, rasterize, () => { canvas.width = canvas.height = 0 })
   } finally {
     canvas.width = canvas.height = 0
   }
