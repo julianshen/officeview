@@ -211,7 +211,7 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
       sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, ...(forensic ? { forensic } : {}) })
@@ -238,7 +238,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const tokenProof = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
     const d = await o.authorize({ ...req, resume: { sid: s.sid }, ...(tokenProof ? {} : { token: resume.resumeProof }) })
     if (gone(ws)) return
-    // R3: copy and textA11y may change on resume; every other field is exact-match.
+    // R3: copy, textA11y and the print caps (Stage 3b P4) may change on resume; every other field is exact-match.
     const policy = d ? effectivePolicy(d) : undefined
     const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
@@ -247,8 +247,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     // A change of the mutable text services is durable before it takes effect
     // (the open row stays write-once); a failed write refuses the resume.
-    if (JSON.stringify([policy!.copy, policy!.textA11y]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y])) {
-      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y }) } catch { return close(ws, 'policy-refused') }
+    if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print])) {
+      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print }) } catch { return close(ws, 'policy-refused') }
     }
     const old = s.activeSocket as unknown as WS | undefined
     if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
@@ -293,8 +293,8 @@ export function createStreamServer(o: StreamServerOptions) {
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
       // Presentation, notes and links land later in Stage 3.
-      can: { search: true, copy: p.copy !== false, print: p.print, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
-      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y },
+      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
+      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y, print: p.print === false ? null : { ...p.print } },
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
       notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],

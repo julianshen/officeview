@@ -16,7 +16,7 @@ function fakeDoc(name = 'deck.pptx'): RemoteOfficeDoc & { close: Mock; paint: Mo
   const manifest = {
     name, kind: 'pptx', units: { count: 2, list: [{ w: 100, h: 50 }, { w: 100, h: 50 }] },
     can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
-    caps: { copy: null, a11y: 'off' },
+    caps: { copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } },
     recorder: { scalesBuckets: [1, 2] }, notices: [],
   }
   return {

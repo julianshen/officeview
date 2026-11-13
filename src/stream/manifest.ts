@@ -11,8 +11,8 @@ export interface Manifest {
   session: { sid: string; token: string; expiresSec: number; resume: 'session' }
   policy: { contentPolicy: 'visible-only' | 'full'; protection: 'final-raster' | 'culled-commands' | 'commands'; semantic: 'visible-only' | 'off'; contentPolicyId: string; viewerMarkId: string }
   can: { search: boolean; copy: boolean; print: boolean; textA11y: boolean; present: boolean; notes: boolean; links: boolean }
-  /** Text-service caps (Stage 3a). `copy` null = copy off; a null cap = uncapped. */
-  caps: { copy: null | { maxParagraphs: number | null; maxSessionParagraphs: number | null }; a11y: 'off' | 'unit' | 'focused' }
+  /** Service caps. `copy` null = copy off (Stage 3a); `print` null = print off (Stage 3b); a null cap = uncapped. */
+  caps: { copy: null | { maxParagraphs: number | null; maxSessionParagraphs: number | null }; a11y: 'off' | 'unit' | 'focused'; print: null | { maxPages: number | null; maxSessionPages: number | null } }
   recorder: { commands: 'ovsd-1'; textMode: 'text'; scalesBuckets: number[]; requiredFaces: Array<{ id: string; hash: string; alias?: string }>; projection: 'final-raster' | 'culled-commands' | 'commands' }
   limits: { maxUnitPx: number; maxAssetBytes: number; wsFrameBytes: number; tilePx: number }
   notices: string[]
@@ -29,6 +29,7 @@ const int = (v: unknown, f: string, min: number, max: number): number => { if (!
 const bool = (v: unknown, f: string): boolean => { if (typeof v !== 'boolean') throw new Bad(f); return v }
 const oneOf = <T extends string>(v: unknown, f: string, set: readonly T[]): T => { if (!set.includes(v as T)) throw new Bad(f); return v as T }
 const cap = (v: unknown, f: string): number | null => v === null ? null : int(v, f, 1, Number.MAX_SAFE_INTEGER)
+const printCaps = (o: Record<string, unknown>) => ({ maxPages: cap(o.maxPages, 'caps.print.maxPages'), maxSessionPages: cap(o.maxSessionPages, 'caps.print.maxSessionPages') })
 const arr = (v: unknown, f: string, max: number): unknown[] => { if (!Array.isArray(v) || v.length > max) throw new Bad(f); return v }
 
 const HEX = /^[0-9a-f]+$/
@@ -62,6 +63,7 @@ export function validateManifest(json: unknown): ManifestResult {
       caps: {
         copy: kc && { maxParagraphs: cap(kc.maxParagraphs, 'caps.copy.maxParagraphs'), maxSessionParagraphs: cap(kc.maxSessionParagraphs, 'caps.copy.maxSessionParagraphs') },
         a11y: oneOf(k.a11y, 'caps.a11y', ['off', 'unit', 'focused'] as const),
+        print: k.print === null ? null : printCaps(obj(k.print, 'caps.print')),
       },
       recorder: {
         commands: oneOf(r.commands, 'recorder.commands', ['ovsd-1'] as const),

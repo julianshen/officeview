@@ -10,7 +10,7 @@ export const exampleManifest = (): Manifest => ({
   session: { sid: '0123456789ab', token: 'x.y.z', expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
   can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
-  caps: { copy: null, a11y: 'off' },
+  caps: { copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [{ id: 'carlito-regular', hash: 'f6418f708baede9789daef5d', alias: 'Calibri' }], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
   notices: ['forensic-off'],
@@ -42,14 +42,19 @@ describe('MANIFEST', () => {
     ['caps.copy.maxParagraphs', { caps: { copy: { maxParagraphs: 1.5, maxSessionParagraphs: null }, a11y: 'focused' } }],
     ['caps.copy.maxSessionParagraphs', { caps: { copy: { maxParagraphs: 3, maxSessionParagraphs: 0 }, a11y: 'focused' } }],
     ['caps.copy', { caps: { copy: 'full', a11y: 'unit' } }],
-    ['caps.a11y', { caps: { copy: null, a11y: 'everything' } }],
+    ['caps.a11y', { caps: { copy: null, a11y: 'everything', print: null } }],
+    ['caps.print', { caps: { copy: null, a11y: 'off' } }],
+    ['caps.print', { caps: { copy: null, a11y: 'off', print: 'full' } }],
+    ['caps.print.maxPages', { caps: { copy: null, a11y: 'off', print: { maxPages: 0, maxSessionPages: null } } }],
+    ['caps.print.maxPages', { caps: { copy: null, a11y: 'off', print: { maxPages: 'x', maxSessionPages: null } } }],
+    ['caps.print.maxSessionPages', { caps: { copy: null, a11y: 'off', print: { maxPages: 2, maxSessionPages: -1 } } }],
   ])('rejects %s', (field, patch) => {
     expect(validateManifest({ ...exampleManifest(), ...patch })).toEqual({ ok: false, field })
   })
   it.each([
-    [{ copy: null, a11y: 'off' }],
-    [{ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit' }],
-    [{ copy: { maxParagraphs: 3, maxSessionParagraphs: 20 }, a11y: 'focused' }],
+    [{ copy: null, a11y: 'off', print: null }],
+    [{ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit', print: { maxPages: null, maxSessionPages: null } }],
+    [{ copy: { maxParagraphs: 3, maxSessionParagraphs: 20 }, a11y: 'focused', print: { maxPages: 2, maxSessionPages: null } }],
   ])('keeps caps %j', (caps) => {
     const r = validateManifest({ ...exampleManifest(), caps: { ...caps, extra: 1 } })
     expect(r).toEqual({ ok: true, manifest: { ...exampleManifest(), caps } })

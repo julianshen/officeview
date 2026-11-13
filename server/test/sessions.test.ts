@@ -34,7 +34,7 @@ describe('session table', () => {
 
 describe('effective policy (§2 item 5 defaults; Stage-2a forensic)', () => {
   it('defaults are protected and apply the forensic mark', () => {
-    expect(effectivePolicy({ policy: {} })).toEqual({ contentPolicy: 'visible-only', projection: 'final-raster', visibleMark: 'fixed', forensicMark: true, forensicRequested: true, print: true, role: 'audience', relaxed: false, copy: false, textA11y: 'off' })
+    expect(effectivePolicy({ policy: {} })).toEqual({ contentPolicy: 'visible-only', projection: 'final-raster', visibleMark: 'fixed', forensicMark: true, forensicRequested: true, print: { maxPages: null, maxSessionPages: null }, role: 'audience', relaxed: false, copy: false, textA11y: 'off' })
   })
   it('relaxations are flagged', () => {
     expect(effectivePolicy({ policy: { projection: 'relaxed' } }).projection).toBe('commands')
@@ -48,7 +48,7 @@ describe('effective policy (§2 item 5 defaults; Stage-2a forensic)', () => {
 })
 
 describe('audit table', () => {
-  const row = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off' as const, forensic: false, forensicRequested: false }, relaxed: true, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const }, services: { copy: false as const, textA11y: 'off' as const } }
+  const row = { ip: '1.2.3.4', startedAt: 0, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'off' as const, forensic: false, forensicRequested: false }, relaxed: true, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const }, services: { copy: false as const, textA11y: 'off' as const, print: false as const } }
   it('is write-once', () => {
     const a = new AuditTable(); a.record('s1', row)
     expect(() => a.record('s1', row)).toThrow(/write-once/)

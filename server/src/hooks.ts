@@ -13,7 +13,9 @@ export interface AuthDecision {
     projection?: 'protected' | 'relaxed'
     visibleMark?: 'fixed' | 'viewer' | 'off'
     forensicMark?: boolean
-    print?: boolean
+    /** Print service (Stage 3b). On by default; `false` turns it off. A cap
+     * that is not a positive safe integer turns print off (fail closed). */
+    print?: boolean | { maxPages: number; maxSessionPages?: number }
     /** Copy service (Stage 3a). Off by default; `'full'` is uncapped; a cap
      * that is not a positive safe integer turns copy off (fail closed). */
     copy?: false | 'full' | { maxParagraphs: number; maxSessionParagraphs?: number }
@@ -36,7 +38,8 @@ export interface EffectivePolicy {
   forensicMark: boolean
   /** What the developer asked for, recorded in the audit row. */
   forensicRequested: boolean
-  print: boolean
+  /** Resolved print caps; `true`/unset ⇒ both null. Mutable on resume. */
+  print: PrintPolicy
   role: 'presenter' | 'audience'
   /** Any departure from the protected defaults (audited, §6.1). Copy and
    * a11y do not count (R4): the audit row records the resolved services at
@@ -49,6 +52,7 @@ export interface EffectivePolicy {
   textA11y: A11yMode
 }
 export type CopyPolicy = false | { maxParagraphs: number | null; maxSessionParagraphs: number | null }
+export type PrintPolicy = false | { maxPages: number | null; maxSessionPages: number | null }
 export type A11yMode = 'off' | 'unit' | 'focused'
 
 const isCap = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0
@@ -62,6 +66,17 @@ function copyPolicy(c: unknown): CopyPolicy {
   return { maxParagraphs, maxSessionParagraphs: maxSessionParagraphs ?? null }
 }
 
+/** `true`/unset ⇒ uncapped; a cap object needs a positive safe-integer
+ * `maxPages` (and `maxSessionPages` when given); anything else is off. */
+export function printPolicy(p: unknown): PrintPolicy {
+  if (p === undefined || p === true) return { maxPages: null, maxSessionPages: null }
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return false
+  const { maxPages, maxSessionPages } = p as Record<string, unknown>
+  if (!isCap(maxPages)) return false
+  if (maxSessionPages !== undefined && !isCap(maxSessionPages)) return false
+  return { maxPages, maxSessionPages: maxSessionPages ?? null }
+}
+
 /** 'unit' when copy is uncapped or a11y is asked for with copy off; 'focused'
  * when copy is capped; an explicit `textA11y: false` is always 'off'. */
 function a11yMode(copy: CopyPolicy, textA11y: unknown): A11yMode {
@@ -71,9 +86,9 @@ function a11yMode(copy: CopyPolicy, textA11y: unknown): A11yMode {
 }
 
 /** The policy fields a resume must match exactly (R3): every field but the
- * mutable text services. */
-export function resumeInvariant(p: EffectivePolicy): Omit<EffectivePolicy, 'copy' | 'textA11y'> {
-  const { copy: _c, textA11y: _a, ...rest } = p
+ * mutable services (text, and print caps per Stage 3b P4). */
+export function resumeInvariant(p: EffectivePolicy): Omit<EffectivePolicy, 'copy' | 'textA11y' | 'print'> {
+  const { copy: _c, textA11y: _a, print: _p, ...rest } = p
   return rest
 }
 
@@ -92,7 +107,7 @@ export function effectivePolicy(d: AuthDecision): EffectivePolicy {
   const copy = copyPolicy(p.copy)
   return {
     contentPolicy, projection, visibleMark, forensicMark: forensicRequested, forensicRequested,
-    print: p.print !== false, role: d.role === 'presenter' ? 'presenter' : 'audience',
+    print: printPolicy(p.print), role: d.role === 'presenter' ? 'presenter' : 'audience',
     relaxed: contentPolicy !== 'visible-only' || projection !== 'final-raster' || visibleMark === 'off' || !forensicRequested,
     copy, textA11y: a11yMode(copy, p.textA11y),
   }

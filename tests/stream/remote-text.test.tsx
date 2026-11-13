@@ -10,7 +10,9 @@ import type { RemoteOfficeDoc, RemoteRange, RemoteSearchHit } from '../../src/st
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 type Can = { search?: boolean; copy?: boolean; textA11y?: boolean }
-function fakeDoc(can: Can = {}, caps: RemoteOfficeDoc['manifest']['caps'] = { copy: null, a11y: 'off' }) {
+type TextCaps = Omit<RemoteOfficeDoc['manifest']['caps'], 'print'>
+function fakeDoc(can: Can = {}, textCaps: TextCaps = { copy: null, a11y: 'off' }) {
+  const caps: RemoteOfficeDoc['manifest']['caps'] = { ...textCaps, print: { maxPages: null, maxSessionPages: null } }
   const manifest = {
     name: 'deck.pptx', kind: 'pptx', units: { count: 2, list: [{ w: 200, h: 100 }, { w: 200, h: 100 }] },
     can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false, ...can },
@@ -21,7 +23,8 @@ function fakeDoc(can: Can = {}, caps: RemoteOfficeDoc['manifest']['caps'] = { co
     kind: 'remote', manifest,
     onManifestChange: vi.fn((cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb) } }),
     /** A resume replacing the manifest (R3): new `can`/`caps`, then the listeners. */
-    resume(can: Can, caps: RemoteOfficeDoc['manifest']['caps']) {
+    resume(can: Can, textCaps: TextCaps) {
+      const caps: RemoteOfficeDoc['manifest']['caps'] = { ...textCaps, print: { maxPages: null, maxSessionPages: null } }
       doc.manifest = { ...doc.manifest, can: { ...doc.manifest.can, ...can }, caps }
       act(() => { for (const l of [...listeners]) l() })
     },
