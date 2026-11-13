@@ -464,6 +464,58 @@ set a new `notes?: false`; the default for a presenter is true.
 
 **Done when:** parent §12a.8 3b list green.
 
+> **Amendment (2026-11-14, Stage 3c as built).** Owner calls C1–C4 come
+> from plan `docs/superpowers/plans/2026-11-14-streaming-s3c-present.md`.
+> The rulings (R1–R26) were taken while building and are listed in
+> `docs/validation/streaming-s3c.md`, together with the §12a.8 test map.
+>
+> - **Policy.** `notes?: boolean` sits in the `authorize` policy. Only
+>   `undefined` or `true` is on; anything else is off (fail closed).
+>   - `can.notes` = presenter role ∧ notes on.
+>   - `can.present` = PPTX.
+>   - `notes` may change on resume, recorded in `services.notes`. `role`
+>     may not.
+> - **C1 — hidden slides under `'full'`** are units flagged
+>   `units.list[i].hidden: true`. The show skips them. Under
+>   `visible-only` they are not units at all. The flags are read once from
+>   the package at session open (`p:sld/@show` and the presentation's own
+>   slide-list entry, the projection's rule).
+> - **C2 — the notes look.** The image is the notes body text, drawn as
+>   plain text on white.
+>   - Width: 720 CSS px × scale (1 or 2).
+>   - Height: up to 8,192 device px. Longer text ends with "Notes continue
+>     — too long to show in full." (no `truncated` flag on the wire).
+>   - Empty notes: a white image with the marks.
+>   - Marks: both on every image. One that cannot carry Layer-1 is
+>     refused.
+> - **C3 — `presenterId` is the session id.** **C4 — no notes cache**:
+>   every request is rendered and audited (`notes_deliveries`, and with
+>   the forensic mark `notes_marks`, which `trace({target: 'notes'})` and
+>   `detect --notes` use).
+> - **Wire and limits.** Parent §12a.5, §14 and §6.2 amendments of the
+>   same date: the `notes` op, `notes-start`, NOTES_RASTER (kind 7, 8 MiB
+>   / 64 MiB) and the `'notes'` rate class (30/min, refuse-only). The new
+>   refusal code `invalid-unit` is in the parent §6.2 registry.
+> - **The show (client).**
+>   - `present()` on a streamed deck runs the local synchronous prologue,
+>     with document checks from the manifest.
+>   - `presenterView: true` without `can.notes` is `not-presentable`, and
+>     `'auto'` then opens no window.
+>   - The show itself is lazy (+72 B eager in all, R26).
+>   - Slides come through a fetcher held to 48 unit requests in any 60 s,
+>     with target-first pacing and prefetch of 2 next + 1 previous.
+>   - Indices count shown slides only.
+>   - A failed slide shows "Slide n could not be shown (code)", and the
+>     show stays navigable.
+>   - `doc.ended` (revocation, expiry) exits the show.
+> - **Presenter View over a stream.** Slide thumbnails and Next come from
+>   the show's cache, never fetched for the view. Notes are a canvas in the
+>   notes pane, asked for after the slide has been current for 300 ms.
+>   They are never on the audience surface.
+> - **Out of this piece:** notes accessibility (no text alternative),
+>   animations, transitions and media (pieces 4–5). Honest limits are in
+>   parent §19 item 12.
+
 ### 4.4 Piece 4 — animations, transitions, Morph (parent 3c)
 
 Show plans (`OVSP`, parent §12a.2) and server-drawn layer bitmaps drive

@@ -1,6 +1,7 @@
 /**
  * Stage 1d browser harness page: <OfficeFile data={{ kind: 'stream', url }}>
- * against server/test/app.ts. Query: ?doc=<corpus file>&relaxed=1&srv=short&fonts=1&copy=full|cap3|off&a11y=unit|focused|off&print=on|off|cap2|session3&role=presenter&notes=off.
+ * against server/test/app.ts. Query: ?doc=<corpus file>&relaxed=1&srv=short&fonts=1&copy=full|cap3|off&a11y=unit|focused|off&print=on|off|cap2|session3&role=presenter&notes=off&present=off.
+ * present=off sets allowPresent={false} (no Present button in the view; the harness buttons are then refused).
  * Assertions read window.__ovStream (notices, error) and the DOM. The Present and
  * Presenter View buttons call the ref's present() (Stage 3c).
  */
@@ -38,6 +39,7 @@ function App() {
         data={source}
         style={{ height: '100%' }}
         watermark={{ text: 'HOSTMARK' }}
+        {...(q.get('present') === 'off' ? { allowPresent: false } : {})}
         {...(q.get('fonts') ? { streamFonts: { baseUrl: `http://127.0.0.1:${P + 1}/fontpack` } } : {})}
         onStreamNotice={(n) => state.notices.push(n)}
         error={(m) => { state.error = m; return <div role="alert" data-stream-error={m}>{m}</div> }}

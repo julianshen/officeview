@@ -188,8 +188,8 @@ test("a11y=unit: page 1's accessibility tree holds the document text; the canvas
 
 test("a11y=focused: page 1's accessibility tree offers named read buttons and no document text until one is activated; a re-press does not re-request", async ({ page }) => {
   const sent = a11ySent(page)
-  // print=off: no Print button ahead of the read buttons in the tab order (Stage 3b).
-  await open(page, 'doc=pypptx-test.pptx&a11y=focused&print=off')
+  // print=off, present=off: no Print or Present button ahead of the read buttons in the tab order (Stages 3b, 3c).
+  await open(page, 'doc=pypptx-test.pptx&a11y=focused&print=off&present=off')
   await expect(painted(page)).toHaveCount(1)
   const group = pageGroup(page)
   const first = group.getByRole('button', { name: 'Paragraph 1 of 2. Press Enter to read.', exact: true })

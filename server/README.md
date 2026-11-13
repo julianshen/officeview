@@ -403,6 +403,114 @@ ended" line is the only message.
 limit printing, not capture: what the viewer sees can be screenshotted, and
 the marks trace it. See parent spec §19 item 11.
 
+## Presenting (Stage 3c)
+
+Spec: `docs/superpowers/specs/2026-11-11-streaming-s3-design.md` §4.3 and
+its 2026-11-14 amendment; test map and measurements:
+`docs/validation/streaming-s3c.md`.
+
+**What it does.** `present()` on a streamed PPTX, or the view's Present
+button and F5, runs a full-screen show from the server's marked slide
+bitmaps:
+
+- forward, back, `goTo()`, black and white screens, and Esc;
+- single-screen Presenter View (Alt+F5) or a presenter window.
+
+Hidden slides never appear and are not counted: `slideIndex`, `goTo()` and
+the counter count shown slides only. There are no animations, transitions
+or media yet; each slide shows its final image. A slide that fails to
+stream shows "Slide n could not be shown (code)" and the show stays
+navigable. Revocation or expiry ends the show (`ended` resolves). The show
+never renders the file locally.
+
+**Speaker notes** — only for a presenter, in your `authorize` hook:
+
+```ts
+authorize: async (req) => ({
+  viewerId: 'alice@example.com',
+  role: 'presenter',          // the default is 'audience': no notes, ever
+  policy: { notes: true },    // the default; false (or any value but true/undefined) turns notes off
+})
+```
+
+- The manifest carries `can.present` (true for every PPTX session) and
+  `can.notes` (`role === 'presenter'` and notes on).
+- A resume may change `notes`, recorded in `services.notes`, but not
+  `role`, which closes `auth-failed`.
+- `present({ presenterView: true })` without `can.notes` is refused
+  `not-presentable` before anything opens, and `'auto'` then opens no
+  presenter window.
+- Under audited `contentPolicy: 'full'`, hidden slides are units flagged
+  `hidden: true` in the manifest, and the show skips them. Under
+  `visible-only` they are not units.
+
+**What notes look like.** The notes are an image drawn by the server: the
+notes body text (what local Presenter View shows) as plain text on white.
+
+- Width: 720 CSS px × scale (1 or 2, by the viewer's DPR).
+- Height: up to 8,192 device px. Longer notes end with the drawn line
+  "Notes continue — too long to show in full.".
+- A slide with no notes gets a white image.
+- Every image carries both marks; one that cannot carry the forensic mark
+  is refused.
+- Notes show only in Presenter View's notes pane, never on the audience
+  surface.
+- They are asked for once a slide has been current for 300 ms.
+- They are never cached on the server: each request is drawn and audited
+  again.
+- No notes text, PPTX bytes or media bytes go over the wire.
+
+**Wire** (client → server, with `reqId` and `token`):
+
+| message | meaning |
+|---|---|
+| `{ type: 'notes', unit, scale }` | the notes image of `unit` at `scale` (a server scale bucket) |
+
+Server → client on the `reqId`: `notes-start { w, h, scale }`, then one
+NOTES_RASTER (kind 7) message (`u32 LE unitIndex` + the UNIT_RASTER body);
+or one `{ reqId, type: 'error', code }` and nothing more:
+
+| code | when |
+|---|---|
+| `policy-refused` | no `can.notes` (an audience viewer, `notes` off, a resume that turned it off), not a deck, a bad scale or token, an image that cannot carry the forensic mark or is over the cap, an audit write failure |
+| `invalid-unit` | a unit out of range, not an integer, or a hidden slide |
+| `rate-limited` | over the `'notes'` rate, or the render pool is full |
+| `session-rotated` | a superseded token: the viewer re-issues once |
+
+**Rates and limits.**
+- **Notes rate.** Rate class `'notes'`: 30 requests per minute per session.
+  An overflow is refused `rate-limited` and never counts toward the 4008
+  breach window.
+- **Slide rate.** Slides ride the `'unit'` rate (60 per minute; a third
+  breach inside 60 s closes 4008). The show holds itself to 48 unit
+  requests in any 60 s and prefetches 2 next + 1 previous. A held arrow key
+  slows its fetching ("Loading slide n") instead of tripping 4008.
+- **NOTES_RASTER caps.** 8 MiB encoded and 64 MiB decoded. Per request,
+  the viewer admits exactly the declared image (`notes-start`'s `w × h`),
+  and a frame of any other size is rejected.
+- **Tallest images.** The tallest scale-2 notes need about 98 MiB of
+  admission, which is clamped to the viewer's 96 MiB, so they load only
+  when nothing else is in flight.
+- **Workspace.** The viewer also reserves about 45 MiB of the show
+  workspace per notes request at scale 2, and refuses the notes ("Notes
+  could not be loaded") when there is less.
+
+**Audit.**
+- `notes_deliveries (sid, unit_index, scale, chars_drawn, at)`: one row per
+  answered request (`chars_drawn: 0` for empty notes), durable before the
+  draw. Refusals write none.
+- With the forensic mark on, `notes_marks` records each marked image, so a
+  leaked notes image traces like a slide (`detect --notes`).
+- `services` gains a `notes` column. A store from before Stage 3c is
+  migrated with `ALTER TABLE`; its older rows read `notes: false`, which
+  means "not recorded".
+
+**Honest limits** (parent spec §19 item 12):
+- notes have no text alternative for screen readers;
+- a presenter can retype what the notes show (the marks trace screenshots,
+  not retyping);
+- hidden flags are fixed when the session opens.
+
 ## The browser side (Stage 1d)
 
 ```tsx
