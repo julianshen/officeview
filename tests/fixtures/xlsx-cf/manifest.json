@@ -10688,8 +10688,8 @@
       ],
       "expected": {
         "inputSha256": "14ae56909d33339f09d26e18076f59558709bee26261ec3d51ee692b74778df6",
-        "savedSha256": "14ae56909d33339f09d26e18076f59558709bee26261ec3d51ee692b74778df6",
-        "provenance": "seed-hypothesis",
+        "savedSha256": "4c8de7a35319f59c6832f503e97363a2fa8213f823fd3df66478a32532615953",
+        "provenance": "excel-observed",
         "positiveRefs": [
           "B2",
           "B3",
@@ -11213,7 +11213,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11224,7 +11224,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11235,7 +11235,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11246,7 +11246,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11257,7 +11257,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11268,7 +11268,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11279,7 +11279,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11290,7 +11290,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11301,7 +11301,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11312,7 +11312,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11323,7 +11323,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11334,7 +11334,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11345,7 +11345,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11356,7 +11356,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11367,7 +11367,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11378,7 +11378,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11389,7 +11389,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11400,7 +11400,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11411,7 +11411,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11422,7 +11422,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11433,7 +11433,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11444,7 +11444,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11455,7 +11455,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11466,7 +11466,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11477,7 +11477,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11488,7 +11488,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11499,7 +11499,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11510,7 +11510,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11521,7 +11521,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11532,7 +11532,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11543,7 +11543,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11554,7 +11554,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11565,7 +11565,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11576,7 +11576,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11587,7 +11587,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11598,7 +11598,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11609,7 +11609,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11620,7 +11620,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11631,7 +11631,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11642,7 +11642,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11653,7 +11653,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11664,7 +11664,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11675,7 +11675,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11686,7 +11686,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11697,7 +11697,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11708,7 +11708,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11719,7 +11719,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11730,7 +11730,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11741,7 +11741,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11752,7 +11752,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11763,7 +11763,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11774,7 +11774,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11785,7 +11785,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11796,7 +11796,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11807,7 +11807,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11818,7 +11818,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11829,7 +11829,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11840,7 +11840,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11851,7 +11851,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11862,7 +11862,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11873,7 +11873,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11884,7 +11884,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11895,7 +11895,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11906,7 +11906,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11917,7 +11917,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11928,7 +11928,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11939,7 +11939,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11950,7 +11950,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11961,7 +11961,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11972,7 +11972,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11983,7 +11983,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -11994,7 +11994,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12005,7 +12005,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12016,7 +12016,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12027,7 +12027,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12038,7 +12038,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12049,7 +12049,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12060,7 +12060,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12071,7 +12071,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12082,7 +12082,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12093,7 +12093,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12104,7 +12104,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12115,7 +12115,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12126,7 +12126,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12137,7 +12137,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12148,7 +12148,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12159,7 +12159,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12170,7 +12170,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12181,7 +12181,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12192,7 +12192,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12203,7 +12203,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12214,7 +12214,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12225,7 +12225,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12236,7 +12236,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12247,7 +12247,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12258,7 +12258,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12269,7 +12269,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12280,7 +12280,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12291,18 +12291,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "K2",
             "controlRef": "K16",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12313,7 +12313,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12324,7 +12324,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12335,7 +12335,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12346,7 +12346,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12357,7 +12357,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12368,7 +12368,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12379,7 +12379,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12390,7 +12390,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12401,7 +12401,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12412,7 +12412,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12423,7 +12423,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12434,18 +12434,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "L2",
             "controlRef": "L16",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12456,7 +12456,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12467,7 +12467,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12478,7 +12478,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12489,7 +12489,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12500,7 +12500,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12511,7 +12511,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12522,7 +12522,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12533,7 +12533,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12544,7 +12544,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12555,7 +12555,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12566,7 +12566,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12577,18 +12577,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "M2",
             "controlRef": "M16",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12599,7 +12599,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12610,7 +12610,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12621,7 +12621,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12632,7 +12632,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12643,7 +12643,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12654,7 +12654,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12665,7 +12665,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12676,7 +12676,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12687,7 +12687,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12698,7 +12698,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12709,7 +12709,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12720,18 +12720,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "N2",
             "controlRef": "N16",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12742,7 +12742,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12753,7 +12753,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12764,7 +12764,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12775,7 +12775,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12786,7 +12786,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12797,7 +12797,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12808,7 +12808,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12819,7 +12819,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12830,7 +12830,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12841,7 +12841,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12852,7 +12852,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12863,18 +12863,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "O2",
             "controlRef": "O16",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12885,7 +12885,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12896,7 +12896,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12907,7 +12907,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12918,7 +12918,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12929,7 +12929,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12940,7 +12940,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12951,7 +12951,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12962,7 +12962,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12973,7 +12973,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12984,7 +12984,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -12995,7 +12995,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13006,18 +13006,18 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
             "ref": "P2",
             "controlRef": "P16",
             "matched": true,
-            "barApplied": true,
+            "barApplied": false,
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13028,7 +13028,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13039,7 +13039,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13050,7 +13050,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13061,7 +13061,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13072,7 +13072,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13083,7 +13083,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13094,7 +13094,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13105,7 +13105,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13116,7 +13116,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13127,7 +13127,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13138,7 +13138,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13149,7 +13149,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13160,7 +13160,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13171,7 +13171,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13182,7 +13182,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13193,7 +13193,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13204,7 +13204,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13215,7 +13215,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13226,7 +13226,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13237,7 +13237,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13248,7 +13248,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13259,7 +13259,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13270,7 +13270,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13281,7 +13281,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13292,7 +13292,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13303,7 +13303,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13314,7 +13314,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13325,7 +13325,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13336,7 +13336,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13347,7 +13347,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13358,7 +13358,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13369,7 +13369,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13380,7 +13380,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13391,7 +13391,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13402,7 +13402,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13413,7 +13413,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13424,7 +13424,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13435,7 +13435,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13446,7 +13446,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13457,7 +13457,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13468,7 +13468,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13479,7 +13479,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13490,7 +13490,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13501,7 +13501,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13512,7 +13512,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13523,7 +13523,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13534,7 +13534,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13545,7 +13545,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13556,7 +13556,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13567,7 +13567,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13578,7 +13578,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13589,7 +13589,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13600,7 +13600,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13611,7 +13611,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13622,7 +13622,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13633,7 +13633,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13644,7 +13644,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13655,7 +13655,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13666,7 +13666,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13677,7 +13677,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13688,7 +13688,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13699,7 +13699,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13710,7 +13710,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13721,7 +13721,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13732,7 +13732,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13743,7 +13743,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13754,7 +13754,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13765,7 +13765,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13776,7 +13776,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13787,7 +13787,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13798,7 +13798,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13809,7 +13809,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13820,7 +13820,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13831,7 +13831,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13842,7 +13842,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13853,7 +13853,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13864,7 +13864,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13875,7 +13875,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13886,7 +13886,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13897,7 +13897,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13908,7 +13908,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13919,7 +13919,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13930,7 +13930,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13941,7 +13941,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13952,7 +13952,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13963,7 +13963,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13974,7 +13974,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13985,7 +13985,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -13996,7 +13996,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -14007,7 +14007,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -16056,17 +16056,24 @@
         {
           "appearance": "screen",
           "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-lengths-default.png",
-          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-lengths-default.json"
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-lengths-default.json",
+          "pngSha256": "d52b51ce549aafa53a89958a4e56bb2e37be99264c89a8484daeee9460b1dc04"
         }
       ],
-      "status": "recipe-pending",
-      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "status": "measured",
       "tolerance": {
         "meanAbs": 0.015,
         "rowMax": 0.08,
         "strong": 12
       },
-      "resavedByExcel": false
+      "resavedByExcel": true,
+      "resaveReceipt": {
+        "resavedAt": "2026-11-13T17:28:35.606Z",
+        "excelVersion": "16.114",
+        "inputSha256": "14ae56909d33339f09d26e18076f59558709bee26261ec3d51ee692b74778df6",
+        "savedSha256": "4c8de7a35319f59c6832f503e97363a2fa8213f823fd3df66478a32532615953",
+        "openedRepairFree": true
+      }
     },
     {
       "id": "stage3-bar-lengths",

@@ -1,0 +1,8600 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "scale": 1,
+  "pxPerPt": 1,
+  "width": 5755,
+  "height": 841,
+  "colWidthsPt": [
+    84,
+    180,
+    270,
+    360,
+    180,
+    270,
+    360,
+    180,
+    270,
+    360,
+    180,
+    270,
+    360,
+    180,
+    270,
+    360,
+    180,
+    270,
+    360,
+    180,
+    270,
+    360
+  ],
+  "rowHeightsPt": [
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30,
+    30
+  ],
+  "geometrySource": "excel-measured",
+  "resavedByExcel": true,
+  "resaveSavedSha256": "4c8de7a35319f59c6832f503e97363a2fa8213f823fd3df66478a32532615953",
+  "sheet": "Sheet1",
+  "range": "A1:V28",
+  "hostTimeZone": "Asia/Taipei",
+  "savedSha256": "4c8de7a35319f59c6832f503e97363a2fa8213f823fd3df66478a32532615953",
+  "pngSha256": "d52b51ce549aafa53a89958a4e56bb2e37be99264c89a8484daeee9460b1dc04",
+  "capturedAt": "2026-11-13T17:28:37.879Z",
+  "zoom": 100,
+  "dpr": 1,
+  "lockBefore": "unlocked",
+  "lockAfter": "unlocked",
+  "barSettingsReadback": [],
+  "observedBars": [
+    {
+      "ref": "B2",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 94,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "B3",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 108,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "B4",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 122,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "B5",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 136,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "B6",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 150,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "B7",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 165,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "B8",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 179,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "B9",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 193,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "B10",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 207,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "B11",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 221,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "B12",
+      "cellLeftPx": 84,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 86,
+        "rightPx": 235,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "C2",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 278,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "C3",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 300,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "C4",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 321,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "C5",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 342,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "C6",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 364,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "C7",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 385,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "C8",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 407,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "C9",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 428,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "C10",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 449,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "C11",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 471,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "C12",
+      "cellLeftPx": 264,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 266,
+        "rightPx": 492,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "D2",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 553,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "D3",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 581,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "D4",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 610,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "D5",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 639,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "D6",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 667,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "D7",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 696,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "D8",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 724,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "D9",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 753,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "D10",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 781,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "D11",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 810,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "D12",
+      "cellLeftPx": 534,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 536,
+        "rightPx": 838,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "E2",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 903,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "E3",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 916,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "E4",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 928,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "E5",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 940,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "E6",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 953,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "E7",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 966,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "E8",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 978,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "E9",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 991,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "E10",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 1003,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "E11",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 1016,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "E12",
+      "cellLeftPx": 894,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 896,
+        "rightPx": 1028,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "F2",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1086,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "F3",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1106,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "F4",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1125,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "F5",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1143,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "F6",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1163,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "F7",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1182,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "F8",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1201,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "F9",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1219,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "F10",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1238,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "F11",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1258,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "F12",
+      "cellLeftPx": 1074,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1076,
+        "rightPx": 1276,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "G2",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1361,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "G3",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1386,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "G4",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1411,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "G5",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1438,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "G6",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1462,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "G7",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1487,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "G8",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1513,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "G9",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1538,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "G10",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1563,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "G11",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1589,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "G12",
+      "cellLeftPx": 1344,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 1346,
+        "rightPx": 1614,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "H2",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1721,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "H3",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1734,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "H4",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1746,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "H5",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1758,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "H6",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1770,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "H7",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1784,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "H8",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1797,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "H9",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1809,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "H10",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1821,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "H11",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1833,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "H12",
+      "cellLeftPx": 1704,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 1706,
+        "rightPx": 1846,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "I2",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 1909,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "I3",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 1928,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "I4",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 1946,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "I5",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 1965,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "I6",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 1985,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "I7",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 2004,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "I8",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 2022,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "I9",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 2041,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "I10",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 2061,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "I11",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 2079,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "I12",
+      "cellLeftPx": 1884,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 1886,
+        "rightPx": 2098,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "J2",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2187,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "J3",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2212,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "J4",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2237,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "J5",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2263,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "J6",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2288,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "J7",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2313,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "J8",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2339,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "J9",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2364,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "J10",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2389,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "J11",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2415,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "J12",
+      "cellLeftPx": 2154,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2156,
+        "rightPx": 2439,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "K2",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": null
+    },
+    {
+      "ref": "K3",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2533,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "K4",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2550,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "K5",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2568,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "K6",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2586,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "K7",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2604,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "K8",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2621,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "K9",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2639,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "K10",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2657,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "K11",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2674,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "K12",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2692,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "K13",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2520,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "K14",
+      "cellLeftPx": 2514,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 2516,
+        "rightPx": 2524,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "L2",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": null
+    },
+    {
+      "ref": "L3",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2722,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "L4",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2748,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "L5",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2775,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "L6",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2802,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "L7",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2829,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "L8",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2855,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "L9",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2882,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "L10",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2909,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "L11",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2935,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "L12",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2962,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "L13",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2703,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "L14",
+      "cellLeftPx": 2694,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 2696,
+        "rightPx": 2708,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "M2",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": null
+    },
+    {
+      "ref": "M3",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3001,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "M4",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3036,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "M5",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3072,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "M6",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3108,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "M7",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3144,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "M8",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3179,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "M9",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3215,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "M10",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3251,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "M11",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3286,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "M12",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 3322,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "M13",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 2976,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "M14",
+      "cellLeftPx": 2964,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 2966,
+        "rightPx": 2983,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "N2",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": null
+    },
+    {
+      "ref": "N3",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3343,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "N4",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3360,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "N5",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3378,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "N6",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3396,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "N7",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3414,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "N8",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3431,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "N9",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3449,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "N10",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3467,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "N11",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3484,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "N12",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3502,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "N13",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3330,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "N14",
+      "cellLeftPx": 3324,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 3326,
+        "rightPx": 3334,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "O2",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": null
+    },
+    {
+      "ref": "O3",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3532,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "O4",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3558,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "O5",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3585,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "O6",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3612,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "O7",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3639,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "O8",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3665,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "O9",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3692,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "O10",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3719,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "O11",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3745,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "O12",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3772,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "O13",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3513,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "O14",
+      "cellLeftPx": 3504,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 3506,
+        "rightPx": 3518,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "P2",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": null
+    },
+    {
+      "ref": "P3",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3811,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "P4",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3846,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "P5",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3882,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "P6",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3918,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "P7",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3954,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "P8",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3989,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "P9",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 4025,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "P10",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 4061,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "P11",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 4096,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "P12",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 4132,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "P13",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3786,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "P14",
+      "cellLeftPx": 3774,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 3776,
+        "rightPx": 3793,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "Q2",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4144,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "Q3",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4158,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "Q4",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4172,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "Q5",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4186,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "Q6",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4200,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "Q7",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4215,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "Q8",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4229,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "Q9",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4243,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "Q10",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4257,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "Q11",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4271,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "Q12",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4285,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "Q13",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4148,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "Q14",
+      "cellLeftPx": 4134,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4136,
+        "rightPx": 4151,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "R2",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4328,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "R3",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4350,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "R4",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4371,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "R5",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4392,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "R6",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4414,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "R7",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4435,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "R8",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4457,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "R9",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4478,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "R10",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4499,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "R11",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4521,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "R12",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4542,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "R13",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4335,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "R14",
+      "cellLeftPx": 4314,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 4316,
+        "rightPx": 4339,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "S2",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4603,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "S3",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4631,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "S4",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4660,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "S5",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4689,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "S6",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4717,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "S7",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4746,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "S8",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4774,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "S9",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4803,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "S10",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4831,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "S11",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4860,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "S12",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4888,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "S13",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4611,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "S14",
+      "cellLeftPx": 4584,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 4586,
+        "rightPx": 4617,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "T2",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 4954,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "T3",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 4968,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "T4",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 4982,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "T5",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 4996,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "T6",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5010,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "T7",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5025,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "T8",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5039,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "T9",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5053,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "T10",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5067,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "T11",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5081,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "T12",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 5095,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "T13",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 4958,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "T14",
+      "cellLeftPx": 4944,
+      "cellWidthPx": 180,
+      "bar": {
+        "leftPx": 4946,
+        "rightPx": 4961,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "U2",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5138,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "U3",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5160,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "U4",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5181,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "U5",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5202,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "U6",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5224,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "U7",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5245,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "U8",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5267,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "U9",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5288,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "U10",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5309,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "U11",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5331,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "U12",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5352,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "U13",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5145,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "U14",
+      "cellLeftPx": 5124,
+      "cellWidthPx": 270,
+      "bar": {
+        "leftPx": 5126,
+        "rightPx": 5149,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    },
+    {
+      "ref": "V2",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5413,
+        "topPx": 32,
+        "bottomPx": 57
+      }
+    },
+    {
+      "ref": "V3",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5441,
+        "topPx": 62,
+        "bottomPx": 87
+      }
+    },
+    {
+      "ref": "V4",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5470,
+        "topPx": 92,
+        "bottomPx": 117
+      }
+    },
+    {
+      "ref": "V5",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5499,
+        "topPx": 122,
+        "bottomPx": 147
+      }
+    },
+    {
+      "ref": "V6",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5527,
+        "topPx": 152,
+        "bottomPx": 177
+      }
+    },
+    {
+      "ref": "V7",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5556,
+        "topPx": 182,
+        "bottomPx": 207
+      }
+    },
+    {
+      "ref": "V8",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5584,
+        "topPx": 212,
+        "bottomPx": 237
+      }
+    },
+    {
+      "ref": "V9",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5613,
+        "topPx": 242,
+        "bottomPx": 267
+      }
+    },
+    {
+      "ref": "V10",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5641,
+        "topPx": 272,
+        "bottomPx": 297
+      }
+    },
+    {
+      "ref": "V11",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5670,
+        "topPx": 302,
+        "bottomPx": 327
+      }
+    },
+    {
+      "ref": "V12",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5698,
+        "topPx": 332,
+        "bottomPx": 357
+      }
+    },
+    {
+      "ref": "V13",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5421,
+        "topPx": 362,
+        "bottomPx": 387
+      }
+    },
+    {
+      "ref": "V14",
+      "cellLeftPx": 5394,
+      "cellWidthPx": 360,
+      "bar": {
+        "leftPx": 5396,
+        "rightPx": 5427,
+        "topPx": 392,
+        "bottomPx": 417
+      }
+    }
+  ],
+  "barHypotheses": {
+    "bar:lengths-default-10-90": {
+      "B2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 103
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 94
+        }
+      ],
+      "B3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 117
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 108
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 108
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 108
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 108
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 108
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 108
+        }
+      ],
+      "B4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 131
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 122
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 122
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 122
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 122
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 122
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 122
+        }
+      ],
+      "B5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 145
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 136
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 136
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 136
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 136
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 136
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 136
+        }
+      ],
+      "B6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 159
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 150
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 150
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 150
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 150
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 150
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 150
+        }
+      ],
+      "B7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 174
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 165
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 165
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 165
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 165
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 165
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 165
+        }
+      ],
+      "B8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 188
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 179
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 179
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 179
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 179
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 179
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 179
+        }
+      ],
+      "B9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 202
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 193
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 193
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 193
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 193
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 193
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 193
+        }
+      ],
+      "B10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 216
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 207
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 207
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 207
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 207
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 207
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 207
+        }
+      ],
+      "B11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 230
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 221
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 221
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 221
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 221
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 221
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 221
+        }
+      ],
+      "B12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 86,
+          "rightPx": 244
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 235
+        }
+      ],
+      "C2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 292
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 278
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 278
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 278
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 283
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 283
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 283
+        }
+      ],
+      "C3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 313
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 300
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 300
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 300
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 304
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 304
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 304
+        }
+      ],
+      "C4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 334
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 321
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 321
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 321
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 325
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 325
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 325
+        }
+      ],
+      "C5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 356
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 342
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 342
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 342
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 347
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 347
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 347
+        }
+      ],
+      "C6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 377
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 364
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 364
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 364
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 368
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 368
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 368
+        }
+      ],
+      "C7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 399
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 385
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 385
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 385
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 390
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 390
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 390
+        }
+      ],
+      "C8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 420
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 407
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 407
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 407
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 411
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 411
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 411
+        }
+      ],
+      "C9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 441
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 428
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 428
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 428
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 432
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 432
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 432
+        }
+      ],
+      "C10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 463
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 449
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 449
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 449
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 454
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 454
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 454
+        }
+      ],
+      "C11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 484
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 471
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 471
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 471
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 475
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 475
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 475
+        }
+      ],
+      "C12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 266,
+          "rightPx": 505
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 266,
+          "rightPx": 492
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 266,
+          "rightPx": 492
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 266,
+          "rightPx": 492
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 266,
+          "rightPx": 496
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 266,
+          "rightPx": 496
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 266,
+          "rightPx": 496
+        }
+      ],
+      "D2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 571
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 553
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 553
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 553
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 562
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 562
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 562
+        }
+      ],
+      "D3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 599
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 581
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 581
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 581
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 590
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 590
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 590
+        }
+      ],
+      "D4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 628
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 610
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 610
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 610
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 619
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 619
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 619
+        }
+      ],
+      "D5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 656
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 639
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 639
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 639
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 647
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 647
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 647
+        }
+      ],
+      "D6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 685
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 667
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 667
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 667
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 676
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 676
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 676
+        }
+      ],
+      "D7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 714
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 696
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 696
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 696
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 705
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 705
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 705
+        }
+      ],
+      "D8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 742
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 724
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 724
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 724
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 733
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 733
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 733
+        }
+      ],
+      "D9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 771
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 753
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 753
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 753
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 762
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 762
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 762
+        }
+      ],
+      "D10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 799
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 781
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 781
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 781
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 790
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 790
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 790
+        }
+      ],
+      "D11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 828
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 810
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 810
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 810
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 819
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 819
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 819
+        }
+      ],
+      "D12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 536,
+          "rightPx": 856
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 536,
+          "rightPx": 838
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 536,
+          "rightPx": 838
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 536,
+          "rightPx": 838
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 536,
+          "rightPx": 847
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 536,
+          "rightPx": 847
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 536,
+          "rightPx": 847
+        }
+      ],
+      "E2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 913,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 904,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 904,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 913,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 904,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 904,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 913,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 927,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 918,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 918,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 927,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 918,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 918,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 927,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 941,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 932,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 932,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 941,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 932,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 932,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 941,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 955,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 946,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 946,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 955,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 946,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 946,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 955,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 969,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 960,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 960,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 969,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 960,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 960,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 969,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 984,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 975,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 975,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 984,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 975,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 975,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 984,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 998,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 989,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 989,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 998,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 989,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 989,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 998,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 1012,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 1003,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 1003,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 1012,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 1003,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 1003,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 1012,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 1026,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 1017,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 1017,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 1026,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 1017,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 1017,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 1026,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 1040,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 1031,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 1031,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 1040,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 1031,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 1031,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 1040,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "E12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 896,
+          "rightPx": 1054,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 896,
+          "rightPx": 1045,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 896,
+          "rightPx": 1045,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 896,
+          "rightPx": 1054,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 896,
+          "rightPx": 1045,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 896,
+          "rightPx": 1045,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 896,
+          "rightPx": 1054,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1102,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1088,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1088,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1102,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1093,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1093,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1102,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1123,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1110,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1110,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1123,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1114,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1114,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1123,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1144,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1131,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1131,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1144,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1135,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1135,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1144,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1166,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1152,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1152,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1166,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1157,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1157,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1166,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1187,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1174,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1174,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1187,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1178,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1178,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1187,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1209,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1195,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1195,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1209,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1200,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1200,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1209,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1230,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1217,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1217,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1230,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1221,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1221,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1230,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1251,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1238,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1238,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1251,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1242,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1242,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1251,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1273,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1259,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1259,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1273,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1264,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1264,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1273,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1294,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1281,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1281,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1294,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1285,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1285,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1294,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "F12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1076,
+          "rightPx": 1315,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1076,
+          "rightPx": 1302,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1076,
+          "rightPx": 1302,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1076,
+          "rightPx": 1315,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1076,
+          "rightPx": 1306,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1076,
+          "rightPx": 1306,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1076,
+          "rightPx": 1315,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1381,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1363,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1363,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1381,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1372,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1372,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1381,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1409,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1391,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1391,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1409,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1400,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1400,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1409,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1438,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1420,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1420,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1438,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1429,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1429,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1438,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1466,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1449,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1449,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1466,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1457,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1457,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1466,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1495,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1477,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1477,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1495,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1486,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1486,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1495,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1524,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1506,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1506,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1524,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1515,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1515,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1524,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1552,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1534,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1534,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1552,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1543,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1543,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1552,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1581,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1563,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1563,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1581,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1572,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1572,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1581,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1609,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1591,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1591,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1609,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1600,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1600,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1609,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1638,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1620,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1620,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1638,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1629,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1629,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1638,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "G12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1346,
+          "rightPx": 1666,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1346,
+          "rightPx": 1648,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1346,
+          "rightPx": 1648,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1346,
+          "rightPx": 1666,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1346,
+          "rightPx": 1657,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1346,
+          "rightPx": 1657,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1346,
+          "rightPx": 1666,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1723,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1714,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1723,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1723,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1714,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1723,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1723,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1737,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1728,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1737,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1737,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1728,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1737,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1737,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1751,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1742,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1751,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1751,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1742,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1751,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1751,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1765,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1756,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1765,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1765,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1756,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1765,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1765,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1779,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1770,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1779,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1779,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1770,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1779,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1779,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1794,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1785,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1794,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1794,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1785,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1794,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1794,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1808,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1799,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1808,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1808,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1799,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1808,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1808,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1822,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1813,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1822,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1822,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1813,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1822,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1822,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1836,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1827,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1836,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1836,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1827,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1836,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1836,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1850,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1841,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1850,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1850,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1841,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1850,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1850,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "H12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1706,
+          "rightPx": 1864,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1706,
+          "rightPx": 1855,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1706,
+          "rightPx": 1864,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1706,
+          "rightPx": 1864,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1706,
+          "rightPx": 1855,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1706,
+          "rightPx": 1864,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1706,
+          "rightPx": 1864,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 1912,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 1898,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 1912,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 1912,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 1903,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 1912,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 1912,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 1933,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 1920,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 1933,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 1933,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 1924,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 1933,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 1933,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 1954,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 1941,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 1954,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 1954,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 1945,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 1954,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 1954,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 1976,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 1962,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 1976,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 1976,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 1967,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 1976,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 1976,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 1997,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 1984,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 1997,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 1997,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 1988,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 1997,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 1997,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 2019,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 2005,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 2019,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 2019,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 2010,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 2019,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 2019,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 2040,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 2027,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 2040,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 2040,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 2031,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 2040,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 2040,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 2061,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 2048,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 2061,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 2061,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 2052,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 2061,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 2061,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 2083,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 2069,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 2083,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 2083,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 2074,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 2083,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 2083,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 2104,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 2091,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 2104,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 2104,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 2095,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 2104,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 2104,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "I12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 1886,
+          "rightPx": 2125,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 1886,
+          "rightPx": 2112,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 1886,
+          "rightPx": 2125,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 1886,
+          "rightPx": 2125,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 1886,
+          "rightPx": 2116,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 1886,
+          "rightPx": 2125,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 1886,
+          "rightPx": 2125,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J2": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2191,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2173,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2191,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2191,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2182,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2191,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2191,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J3": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2219,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2201,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2219,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2219,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2210,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2219,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2219,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J4": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2248,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2230,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2248,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2248,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2239,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2248,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2248,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J5": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2276,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2259,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2276,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2276,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2267,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2276,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2276,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J6": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2305,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2287,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2305,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2305,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2296,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2305,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2305,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J7": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2334,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2316,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2334,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2334,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2325,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2334,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2334,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J8": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2362,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2344,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2362,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2362,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2353,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2362,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2362,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J9": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2391,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2373,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2391,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2391,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2382,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2391,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2391,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J10": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2419,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2401,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2419,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2419,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2410,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2419,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2419,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J11": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2448,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2430,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2448,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2448,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2439,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2448,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2448,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ],
+      "J12": [
+        {
+          "id": "linear",
+          "question": "linear",
+          "leftPx": 2156,
+          "rightPx": 2476,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 2156,
+          "rightPx": 2458,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 2156,
+          "rightPx": 2476,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 2156,
+          "rightPx": 2476,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 2156,
+          "rightPx": 2467,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 2156,
+          "rightPx": 2476,
+          "traits": {
+            "fill": "gradient"
+          }
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 2156,
+          "rightPx": 2476,
+          "traits": {
+            "fill": "gradient"
+          }
+        }
+      ]
+    }
+  }
+}
