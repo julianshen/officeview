@@ -1,5 +1,7 @@
 /** Stage 3b Task 4 — evidence: a printed page carries both marks and no hidden content. */
 import { afterAll, describe, expect, it } from 'bun:test'
+import { createCanvas, loadImage } from '@napi-rs/canvas'
+import JSZip from 'jszip'
 import { decodeRasterBody } from '../../src/stream/raster'
 import { decideScores, scoreCapture } from '../../scripts/stream-s0/mark/detect'
 import { AuditTable } from '../src/audit'
@@ -13,7 +15,8 @@ import { messageFor } from '../src/mark/message'
 import { DEFAULT_PARAMS } from '../src/mark/params'
 import { decodePng } from '../src/mark/png'
 import { augmentedFixtures } from './fixtures'
-import { Client, corpus, disposePool, start } from './harness'
+import type { Pool } from '../src/pool'
+import { Client, corpus, disposePool, pool, start } from './harness'
 
 afterAll(() => disposePool())
 const TAU = { abs: 7.99, margin: 3.85 }
@@ -25,6 +28,19 @@ function page(body: Uint8Array) {
   return { unitIndex, ...decodeRasterBody(body.subarray(4)) }
 }
 const bmp = (png: Uint8Array) => { const d = decodePng(png); return { width: d.w, height: d.h, data: d.rgba } }
+
+/** First differing RGBA pixel of two PNGs (decoded), or undefined when size and pixels are equal. */
+function firstPixelDiff(a: Uint8Array, b: Uint8Array): string | undefined {
+  const x = decodePng(a), y = decodePng(b)
+  if (x.w !== y.w || x.h !== y.h) return `size ${x.w}x${x.h} vs ${y.w}x${y.h}`
+  for (let i = 0; i < x.rgba.length; i++) {
+    if (x.rgba[i] !== y.rgba[i]) {
+      const px = i >> 2
+      return `pixel (${px % x.w},${Math.floor(px / x.w)}) channel ${i & 3}: ${x.rgba[i]} vs ${y.rgba[i]}`
+    }
+  }
+  return undefined
+}
 
 describe('print evidence: the Layer-1 forensic mark', () => {
   it('a printed page detects to its own session at print resolution, and trace() resolves the stored delivery', async () => {
@@ -80,38 +96,92 @@ describe('print evidence: the visible mark', () => {
     const c2 = new Client(hOff.url); await c2.hello(); await c2.ready()
     const bare = page((await c2.print(10, 0, 0)).pages[0]!)
     expect([bare.w, bare.h]).toEqual([printed.w, printed.h])
-    expect(Buffer.from(bare.png).equals(Buffer.from(printed.png))).toBe(false)
+    expect(firstPixelDiff(bare.png, printed.png)).toBeDefined()
     c.close(); c2.close(); h.stop(); hOff.stop()
   }, 60_000)
 })
 
+/** Prints every unit of `doc` (visible-only, forensic off, default visible mark) through `p`. */
+async function printAll(doc: Uint8Array, p: Pool = pool()) {
+  const h = await start({ doc, pool: p, policy: { contentPolicy: 'visible-only', forensicMark: false } })
+  const c = new Client(h.url), m = await c.hello(); await c.ready()
+  const count = m.units.count
+  const job = await c.print(10, 0, count - 1)
+  const pages = job.pages.map(page)
+  const canon = pages.map((q) => h.stream.canonicalOf(m.session.sid, q.unitIndex, job.start!.scale))
+  return { count, job, pages, canon, scale: job.start!.scale as number, stop: () => { c.close(); h.stop() } }
+}
+type Printed = Awaited<ReturnType<typeof printAll>>
+
+/** Per page: same scale, same size, equal decoded pixels. Returns the first mismatch, or undefined. */
+function comparePrints(a: Printed, b: Printed): string | undefined {
+  if (a.scale !== b.scale) return `scale ${a.scale} vs ${b.scale}`
+  if (a.count !== b.count) return `count ${a.count} vs ${b.count}`
+  for (let i = 0; i < a.pages.length; i++) {
+    const d = firstPixelDiff(a.pages[i]!.png, b.pages[i]!.png)
+    if (d) return `unit ${i}: ${d}`
+  }
+  return undefined
+}
+
+/** `doc` with every occurrence of `from` swapped for the same-length `to` in its XML parts. */
+async function swapText(doc: Uint8Array, from: string, to: string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(doc)
+  for (const [name, entry] of Object.entries(zip.files)) {
+    if (entry.dir || !/\.xml$/.test(name)) continue
+    const x = await entry.async('string')
+    if (x.includes(from)) zip.file(name, x.split(from).join(to))
+  }
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+
 describe('print evidence: T2 hidden constructs never reach a printed page', async () => {
   const fixtures = await augmentedFixtures()
   for (const f of fixtures) it(`${f.id}`, async () => {
-    const run = async (doc: Uint8Array) => {
-      const h = await start({ doc, policy: { contentPolicy: 'visible-only', forensicMark: false } })
-      const c = new Client(h.url), m = await c.hello(); await c.ready()
-      const count = m.units.count
-      const job = await c.print(10, 0, count - 1)
-      const pages = job.pages.map(page)
-      const canon = pages.map((p) => h.stream.canonicalOf(m.session.sid, p.unitIndex, job.start!.scale))
-      const stop = () => { c.close(); h.stop() }
-      return { count, job, pages, canon, stop }
-    }
-    const r = await run(f.withHidden)
-    // The job covers exactly the manifest's units, in order, and no more.
-    expect(r.job.start).toMatchObject({ type: 'print-start', pages: r.count })
-    expect(r.job.end).toMatchObject({ type: 'print-done', pages: r.count })
-    expect(r.pages.map((p) => p.unitIndex)).toEqual(Array.from({ length: r.count }, (_, i) => i))
-    // Each printed page is the canonical render of that unit at that scale, which the T2 raster tests
-    // establish as hidden-free (ops.test.ts).
-    r.pages.forEach((p, i) => {
-      expect(r.canon[i], `${f.id} unit ${i} canonical present`).toBeDefined()
-      expect(Buffer.from(p.png).equals(Buffer.from(r.canon[i]!)), `${f.id} unit ${i} printed == canonical`).toBe(true)
+    const r = await printAll(f.withHidden), w = await printAll(f.withoutHidden)
+    try {
+      // The job covers exactly the manifest's units, in order, and no more.
+      expect(r.job.start).toMatchObject({ type: 'print-start', pages: r.count })
+      expect(r.job.end).toMatchObject({ type: 'print-done', pages: r.count })
+      expect(r.pages.map((p) => p.unitIndex)).toEqual(Array.from({ length: r.count }, (_, i) => i))
+      // Each printed page is the canonical render of that unit at that scale.
+      r.pages.forEach((p, i) => {
+        expect(r.canon[i], `${f.id} unit ${i} canonical present`).toBeDefined()
+        expect(Buffer.from(p.png).equals(Buffer.from(r.canon[i]!)), `${f.id} unit ${i} printed == canonical`).toBe(true)
+      })
+      // The decisive check: against the hidden-free control, the same scale, size and decoded pixels, per page.
+      expect(comparePrints(r, w), `${f.id}: with-hidden print differs from the hidden-free print`).toBeUndefined()
+      // Non-vacuous: the control's visible text is really drawn (change it and the pixels change).
+      const other = await printAll(await swapText(f.withoutHidden, f.control, f.control.replace(/^VIS/, 'XYZ')))
+      try {
+        expect(other.count).toBe(w.count)
+        expect(comparePrints(w, other), `${f.id}: visible control ${f.control} must show in the print`).toBeDefined()
+      } finally { other.stop() }
+    } finally { r.stop(); w.stop() }
+  }, 60_000)
+
+  it('mutation: a marker painted into the with-hidden scale-2 raster fails the comparison', async () => {
+    const f = fixtures[0]!, real = pool()
+    const painted: Pool = new Proxy(real, {
+      get(t, k) {
+        if (k === 'render') return async (sid: string, job: { scale: number }, est: never) => {
+          const out = await (t.render as Pool['render'])(sid, job as never, est)
+          if (job.scale !== 2 || out.kind !== 'raster') return out
+          const cv = createCanvas(out.w, out.h), ctx = cv.getContext('2d')
+          ctx.drawImage(await loadImage(Buffer.from(out.png)), 0, 0)
+          ctx.fillStyle = 'red'; ctx.font = '24px sans-serif'; ctx.fillText(f.marker, 20, 40)
+          return { ...out, png: new Uint8Array(cv.toBuffer('image/png')) }
+        }
+        const v = Reflect.get(t, k); return typeof v === 'function' ? v.bind(t) : v
+      },
     })
-    // The hidden construct is not a page: the unit count matches the document without it.
-    const w = await run(f.withoutHidden)
-    expect(r.count, `${f.id} unit count equals the visible-only document`).toBe(w.count)
-    r.stop(); w.stop()
+    const r = await printAll(f.withHidden, painted), w = await printAll(f.withoutHidden)
+    try {
+      // Everything the old evidence asserted still passes under this mutation ...
+      r.pages.forEach((p, i) => expect(Buffer.from(p.png).equals(Buffer.from(r.canon[i]!))).toBe(true))
+      expect(r.count).toBe(w.count)
+      // ... and only the control comparison catches it.
+      expect(comparePrints(r, w)).toMatch(/^unit 0: pixel \(/)
+    } finally { r.stop(); w.stop() }
   }, 60_000)
 })
