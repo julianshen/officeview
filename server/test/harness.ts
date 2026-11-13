@@ -32,7 +32,7 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
 }
 
 export type Msg = { text: Record<string, any>; /** UTF-8 bytes as received. */ bytes?: number } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
-const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 8: [8 << 20, 64 << 20] }
+const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 7: [8 << 20, 64 << 20], 8: [8 << 20, 64 << 20] }
 
 export class Client {
   ws: WebSocket
@@ -123,5 +123,22 @@ export class Client {
       return { start, pages, end: m.text }
     }
   }
+  /** Sends `notes` and collects its reqId: the `notes-start` and the kind-7
+   * body, or the refusal (`{type: 'error'}`) as `end`; any other text on the
+   * reqId is kept in `extra`. */
+  async notes(unit: unknown, scale: unknown, o: { reqId?: number; token?: string; ms?: number } = {}) {
+    const reqId = o.reqId ?? 700 + (this.notesSeq++)
+    this.send({ reqId, type: 'notes', token: o.token ?? this.manifest!.session.token, unit, scale })
+    let start: Record<string, any> | undefined
+    const extra: Array<Record<string, any>> = []
+    for (;;) {
+      const m = await this.next((m) => ('text' in m && m.text.reqId === reqId) || ('binary' in m && m.binary.reqId === reqId), o.ms)
+      if ('binary' in m) { if (m.binary.kind !== 7) throw new Error(`unexpected kind ${m.binary.kind} on notes`); return { reqId, start, body: m.binary.payload, extra } }
+      if (m.text.type === 'notes-start' && !start) { start = m.text; continue }
+      if (m.text.type === 'error') return { reqId, start, end: m.text, extra }
+      extra.push(m.text)
+    }
+  }
+  private notesSeq = 0
   close() { this.ws.close() }
 }

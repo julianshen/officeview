@@ -12,7 +12,7 @@ import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
 import type { MarkRasterResult } from './mark/mark-raster'
-import type { MarkSpec, OpenResult, Projection, RenderedUnit } from './render'
+import type { MarkSpec, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
 
@@ -23,6 +23,8 @@ export class RenderFailed extends Error { constructor(m: string, readonly refusa
 export class TextTooLarge extends Error { constructor(readonly missing: number[]) { super(`text range exceeds the served-index cache (${missing.length} units missing)`); this.name = 'TextTooLarge' } }
 
 export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'full'; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
+/** A notes plan or draw (Stage 3c) on the docRef's worker. */
+export type PoolNotesJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & NotesJob
 /** A per-session Layer-1 encode (§9.4); no document affinity. */
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
 export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & TextJob
@@ -188,6 +190,26 @@ export class Pool {
     const slot = this.pick(job.docRef)
     try {
       return await this.exclusive(slot, () => this.renderOn(slot, admitted, job))
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  /** A notes job (Stage 3c): the same affinity, admission, deadline and recycle paths as `render`. */
+  async notes(sessionId: string, job: PoolNotesJob, bytesEstimate: number): Promise<NotesPlan | NotesRaster> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    const slot = this.pick(job.docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        const { docKey } = await this.ensureOpen(slot, job.docRef, job.contentPolicy)
+        const r = await this.runJob(slot, admitted, { type: 'notes', id: this.nextId++, docKey, unitIndex: job.unitIndex, scale: job.scale, mark: job.mark, draw: job.draw })
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r as NotesPlan | NotesRaster
+      })
     } finally {
       if (admitted.state === 'running') this.finish(admitted)
     }

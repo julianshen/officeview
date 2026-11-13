@@ -1,12 +1,14 @@
 /** Render worker (§9.2): one DocumentHost per Bun Worker; one job at a time. */
 import { markRaster } from '../mark/mark-raster'
-import { DocumentHost, RenderRefusal, type MarkSpec, type Projection } from '../render'
+import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
 import type { TextJob } from '../text/served'
 
 export type WorkerRequest =
   | { type: 'open'; id: number; docRef: string; bytes: Uint8Array; contentPolicy: 'visible-only' | 'full'; servedCacheBytes?: number }
   | { type: 'render'; id: number; docKey: string; unitIndex: number; scale: number; projection: Projection; mark: MarkSpec; missingFaces?: string[]; hangMs?: number; crash?: boolean }
   | { type: 'drop'; id: number; docKey: string }
+  /** Stage 3c notes job: plan or draw unit i's notes image. */
+  | ({ type: 'notes'; id: number; docKey: string } & NotesJob)
   /** Stage 3a text job against the worker's served index (§4.1). */
   | { type: 'text'; id: number; docKey: string; job: TextJob; /** Admission bytes reserved for a prepare. */ grant?: number }
   /** Layer-1 encode job (§9.4): canonical PNG → session-marked PNG. */
@@ -25,6 +27,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     else if (m.type === 'drop') { host.drop(m.docKey); result = null }
     // A prepare without a grant is refused (grant 0) — the pool always sends one.
     else if (m.type === 'text') result = host.text(m.docKey, m.job, m.grant ?? 0)
+    else if (m.type === 'notes') result = await host.notes(m.docKey, m)
     else {
       // Test hook: the worker dies mid-job (Bun defers a worker exit, so never reply).
       if (m.crash) { process.exit(1); await new Promise(() => {}) }
