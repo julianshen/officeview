@@ -21,6 +21,8 @@ export interface StoredRow extends AuditRowInput {
 export interface DeliveryRecord { sid: string; unitIndex: number; scale: number; status: 'l1' | 'unmarked'; reason?: string; refSha256: string; at: number }
 /** One text-service answer to a sid (Stage 3a): a copy, or a counted a11y paragraph (Task 8). Never deduplicated. */
 export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: number; fromUnit: number; toUnit: number; at: number }
+/** One print job answered to a sid (Stage 3b): its page count, unit range and render scale. Never deduplicated. */
+export interface PrintRecord { sid: string; pages: number; fromUnit: number; toUnit: number; scale: 1 | 2; at: number }
 /** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). */
 export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; at: number }
 export interface DetectionLog { at: number; osUser: string; investigator?: string; imageSha256: string; docRefs: string[]; unitIndex: number; answer: string; sid?: string }
@@ -33,6 +35,8 @@ CREATE TABLE IF NOT EXISTS deliveries (sid TEXT NOT NULL REFERENCES rows (sid), 
 CREATE INDEX IF NOT EXISTS deliveries_unit ON deliveries (unit_index);
 CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind TEXT NOT NULL, paragraphs INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
+CREATE TABLE IF NOT EXISTS prints (sid TEXT NOT NULL REFERENCES rows (sid), pages INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, scale REAL NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS prints_sid ON prints (sid);
 CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS services_sid ON services (sid);
 CREATE TABLE IF NOT EXISTS counters (gen INTEGER PRIMARY KEY, next INTEGER NOT NULL);
@@ -113,6 +117,15 @@ export class AuditStore {
     return this.db.query<{ sid: string; kind: CopyRecord['kind']; paragraphs: number; from_unit: number; to_unit: number; at: number }, [string]>('SELECT * FROM copies WHERE sid = ? ORDER BY rowid').all(sid)
       .map((r) => ({ sid: r.sid, kind: r.kind, paragraphs: r.paragraphs, fromUnit: r.from_unit, toUnit: r.to_unit, at: r.at }))
   }
+  /** Appends one print job record (repeats are kept); throws for a sid with no row. */
+  putPrint(r: PrintRecord): void {
+    this.writable()
+    this.db.query('INSERT INTO prints (sid, pages, from_unit, to_unit, scale, at) VALUES (?, ?, ?, ?, ?, ?)').run(r.sid, r.pages, r.fromUnit, r.toUnit, r.scale, r.at)
+  }
+  prints(sid: string): PrintRecord[] {
+    return this.db.query<{ sid: string; pages: number; from_unit: number; to_unit: number; scale: 1 | 2; at: number }, [string]>('SELECT * FROM prints WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, pages: r.pages, fromUnit: r.from_unit, toUnit: r.to_unit, scale: r.scale, at: r.at }))
+  }
   /** Appends one services change; throws for a sid with no row. */
   putServices(r: ServicesRecord): void {
     this.writable()
@@ -147,12 +160,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries, copies and services changes (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, copies, prints and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      for (const t of ['deliveries', 'copies', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
+      for (const t of ['deliveries', 'copies', 'prints', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }

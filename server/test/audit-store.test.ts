@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { AUDIT_RETENTION_SEC, AuditTable, msgHex } from '../src/audit'
-import { AuditStore, type CopyRecord, type DeliveryRecord, type StoredRow } from '../src/audit-store'
+import { AuditStore, type CopyRecord, type DeliveryRecord, type PrintRecord, type StoredRow } from '../src/audit-store'
 import { messageFor } from '../src/mark/message'
 import { Client, corpus, disposePool, start } from './harness'
 
@@ -279,6 +279,60 @@ describe('text services audit (Stage 3a Task 5)', () => {
     const r = AuditStore.openReadOnlyForTrace(path)
     expect(() => r.putCopy({ ...copyRec('s1', 1), at: 1 })).toThrow(/read-only/)
     expect(() => r.putServices({ sid: 's1', copy: false, textA11y: 'off', print: false, at: 1 })).toThrow(/read-only/)
+    r.close()
+  })
+})
+
+describe('print audit (Stage 3b Task 2)', () => {
+  const printRec = (sid: string, pages: number, scale: 1 | 2 = 1): Omit<PrintRecord, 'at'> => ({ sid, pages, fromUnit: 0, toUnit: pages - 1, scale })
+
+  it('prints are their own rows: kept in order with when, get() totals jobs and pages', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('s1', row())
+    t.recordPrint(printRec('s1', 2)); t.recordPrint(printRec('s1', 3, 2))
+    expect(s.prints('s1')).toEqual([{ ...printRec('s1', 2), at: expect.any(Number) }, { ...printRec('s1', 3, 2), at: expect.any(Number) }])
+    expect(s.prints('s1')[0]!.at).toBeGreaterThan(0)
+    expect(t.get('s1')!.printed).toEqual({ jobs: 2, pages: 5 })
+    s.close()
+  })
+
+  it('a fresh row has printed {jobs: 0, pages: 0}', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('s1', row())
+    expect(t.get('s1')!.printed).toEqual({ jobs: 0, pages: 0 })
+    s.close()
+  })
+
+  it('recordPrint for an unknown sid throws', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    expect(() => t.recordPrint(printRec('nope', 1))).toThrow(/no audit row/)
+    expect(s.prints('nope')).toEqual([])
+    s.close()
+  })
+
+  it('expire() removes prints with their row', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('old', row({ startedAt: 0 })); t.record('new', row({ startedAt: 100 }))
+    t.recordPrint(printRec('old', 1)); t.recordPrint(printRec('new', 1))
+    expect(t.expire(AUDIT_RETENTION_SEC)).toBe(1)
+    expect(s.prints('old')).toEqual([]); expect(s.prints('new').length).toBe(1)
+    s.close()
+  })
+
+  it('a store created before the prints table gains it on open', () => {
+    const path = dbPath()
+    const raw = new Database(path, { create: true }); raw.exec('CREATE TABLE rows (sid TEXT PRIMARY KEY, started_at INTEGER NOT NULL, key_generation INTEGER NOT NULL, doc_ref TEXT NOT NULL, msg40 TEXT, row TEXT NOT NULL)'); raw.close()
+    const s = AuditStore.open(path); s.putRow('s1', row())
+    s.putPrint({ ...printRec('s1', 1), at: 7 })
+    expect(s.prints('s1')).toEqual([{ ...printRec('s1', 1), at: 7 }])
+    s.close()
+  })
+
+  it('trace store refuses print writes', () => {
+    const path = dbPath()
+    const s = AuditStore.open(path); s.putRow('s1', row()); s.close()
+    const r = AuditStore.openReadOnlyForTrace(path)
+    expect(() => r.putPrint({ ...printRec('s1', 1), at: 1 })).toThrow(/read-only/)
     r.close()
   })
 })
