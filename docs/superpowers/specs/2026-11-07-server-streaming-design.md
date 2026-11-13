@@ -2003,9 +2003,10 @@ render pipeline.
       session's 48/min budget. Viewer paints and an earlier show in the
       same minute share it (R28). The show then waits for the window,
       showing "Loading slide n". The client never sends into its own full
-      window. After a refusal it holds every unit send for 62 s, so it
-      does not supply a second or third breach. Clock skew between client
-      and server beyond the 2 s margin can still cause one refusal.
+      window, and after a refusal it sends no new unit request for 62 s.
+      A network delay swing of more than the 2 s margin can still cause
+      refusals. Up to 8 requests already in flight can each be refused,
+      so 4008 remains possible in that case, though not in normal use.
     - (e) The show's charge accounting is conservative, not exact. Every
       server-charged send is counted, so it may hold back while the server
       would still accept.

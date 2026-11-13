@@ -70,6 +70,7 @@ class ServerSocket extends EventTarget {
 /** Answers every unit at once (a raster), after the real 'unit' rate gate; 'close' closes 4008. */
 class FakeServer {
   readonly sends: number[] = []
+  readonly unitMsgs: Record<string, any>[] = []
   readonly verdicts: { at: number; result: string }[] = []
   /** Units answered with a raster too large for the request (a validation failure → one re-send). */
   invalidOnce = new Set<number>()
@@ -84,6 +85,7 @@ class FakeServer {
     if (m.type !== 'unit') return
     const now = Date.now()
     this.sends.push(now)
+    this.unitMsgs.push(m)
     const result = this.rates.check('unit', now)
     if (result !== 'ok') this.verdicts.push({ at: now, result })
     if (result === 'close') return sock.end(4008)
@@ -233,6 +235,26 @@ describe('R28: the unit budget is the session\'s (real StreamSession, real Sessi
     expect(srv.sends[1]! - refusedAt).toBeGreaterThanOrEqual(62_000)
     expect(s.isEnded()).toBe(false)
     f.dispose(); s.close()
+  })
+
+  it('a rate-limited refusal for a request aborted meanwhile still blocks the log', async () => {
+    const { s, srv } = await open()
+    srv.hold = true
+    const ac = new AbortController()
+    const p = s.unit(3, 1, ac.signal).catch((e: unknown) => e)
+    await advance(100)
+    ac.abort() // the fetcher aborts the old target on every navigation step
+    await p
+    const sent = srv.unitMsgs[0]!
+    srv.live.deliver(JSON.stringify({ reqId: sent.reqId, type: 'refused', code: 'rate-limited' }))
+    await advance(100)
+    expect(s.unitBudget.room()).toBe(0)
+    // A late refusal for an id that was never a unit send blocks nothing.
+    const t = await open()
+    t.srv.live.deliver(JSON.stringify({ reqId: 999, type: 'refused', code: 'rate-limited' }))
+    await advance(100)
+    expect(t.s.unitBudget.room()).toBe(48)
+    s.close(); t.s.close()
   })
 
   it('createRemoteDoc exposes the session budget', async () => {

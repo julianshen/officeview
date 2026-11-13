@@ -257,12 +257,21 @@ In plain words; the ledger has the full list (R1–R26).
   send for a whole window. The tests above show no close with the real
   rate gate. What they cannot show: the client's clock is not the
   server's. The 2 s receipt margin and the 8-send gap between 48 and 56
-  absorb normal latency. A delay longer than that, followed by a burst,
-  can still produce one refusal. That refusal starts the 62 s hold, so a
-  second and third breach would need the server to count sends the client
-  never made.
+  absorb normal latency. If the network delay changes by more than about
+  2 s between two bursts, the server can count more sends in its window
+  than the client did, and refuse. The first refusal starts the 62 s
+  hold, and no new unit request is sent after it. But up to 8 unit
+  requests (the admission limit) may already be on the wire. Each of them
+  can be refused too, and a third refusal inside 60 s closes the session
+  4008. So 4008 is not impossible. It needs a delay swing of more than
+  2 s at a full window with at least 3 requests in flight.
 - **R28 — a refusal costs a minute.** One `rate-limited` unit refusal
-  stalls all unit painting (viewer and show) for 62 s.
+  stalls all unit painting (viewer and show) for 62 s. A refusal for a
+  request that was aborted meanwhile counts too.
+- **R28 — waiting holds admission.** A unit request waiting for budget
+  room keeps its admission grant (one of the 8 outstanding, and its bytes)
+  for up to 62 s. Meanwhile it can hold back other unit requests, notes and
+  print.
 - **R16 — accounting.** Charge accounting is conservative, not exact.
   Every server-charged send is counted, retries included, so the show may
   hold back when the server would still accept.
