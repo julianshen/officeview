@@ -10,6 +10,8 @@
  * Text requests (Stage 3a search/select/copy/a11y, `text()`) keep their own
  * pending map; their answers are checked by `text-wire.ts`. One print job
  * (Stage 3b, `print()`) runs at a time; its pages are checked by `print-wire.ts`.
+ * A presenter's notes image (Stage 3c, `notes()`) is one NOTES_RASTER per
+ * request, admitted only for that live, sent request.
  */
 import { decodeAssets } from '../asset-wire'
 import { FRAGMENT_CAP, Kind, Reassembler, type FrameResult } from '../frame'
@@ -18,7 +20,7 @@ import type { Asset } from '../ops'
 import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
-import { closeName, StreamSessionError } from './errors'
+import { closeName, StreamSessionError, type StreamErrorCode } from './errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
 import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
@@ -35,6 +37,8 @@ export type UnitPayload =
  * once it has decoded/replayed the payload (idempotent). Until then the
  * request's §14 reservation stays charged. */
 export type UnitLease = UnitPayload & { release(): void }
+/** A checked notes image plus its admission lease (released once decoded; idempotent). */
+export type NotesLease = { w: number; h: number; png: Uint8Array; release(): void }
 /** Manifest notices, plus 'face-missing', 'text-unavailable', 'resumed', 'unit-failed'. */
 export type StreamNotice = { code: string; unit?: number }
 export type SessionState = 'open' | 'resuming' | 'closed'
@@ -55,11 +59,29 @@ export const READY_FACE_BUDGET_MS = 1500
 const RESUME_BACKOFF_MS = [250, 500, 1000]
 /** PRINT_RASTER encoded cap (§14; twin of the server's PRINT_ENCODED_CAP). */
 const PRINT_ENCODED_CAP = 8 << 20
+/** NOTES_RASTER encoded cap (§14; twin of the server's NOTES_ENCODED_CAP). */
+const NOTES_ENCODED_CAP = 8 << 20
 const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.MANIFEST]: [256 << 10, 256 << 10], [Kind.ASSET_DEFINE]: [1 << 20, 8 << 20],
   [Kind.UNIT_RASTER]: [8 << 20, 64 << 20], [Kind.UNIT_COMMANDS]: [8 << 20, 8 << 20],
   [Kind.PRINT_RASTER]: [PRINT_ENCODED_CAP, 64 << 20],
+  [Kind.NOTES_RASTER]: [NOTES_ENCODED_CAP, 64 << 20],
 }
+/** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
+ * wide, 1..NOTES_MAX_PX device px tall. */
+const NOTES_WIDTH_CSS = 720, NOTES_MAX_PX = 8192
+/** The decoded cap of one NOTES_RASTER at `scale`: the u32 unit index and the
+ * 12-byte raster header plus the largest notes image's RGBA at that scale (a
+ * PNG of text on white is far smaller; one that does not compress fails
+ * closed), never over 64 MiB. */
+export const notesBodyCap = (scale: 1 | 2) => Math.min(UNIT_RASTER_DECODED_CAP, 16 + NOTES_WIDTH_CSS * scale * NOTES_MAX_PX * 4)
+/** A notes request's admission grant: the encoded cap plus the decoded body,
+ * as a unit raster's (`unitCost`). Print reserves encoded + 2 × decoded, but
+ * that would clamp a scale-2 notes grant to the whole 96 MiB aggregate and
+ * stall the show's slide units behind it. */
+export const notesGrant = (scale: 1 | 2) => NOTES_ENCODED_CAP + notesBodyCap(scale)
+/** The refusal codes a notes request rejects with; any other is `policy-refused`. */
+const NOTES_REFUSALS = new Set<StreamErrorCode>(['policy-refused', 'invalid-unit', 'rate-limited', 'session-rotated'])
 /**
  * A print job's peak transient bytes for one page are its encoded fragments
  * (`Reassembler.push`, src/stream/frame.ts:124, ≤ PRINT_ENCODED_CAP) plus the
@@ -125,6 +147,19 @@ interface PrintJob {
   fail: (e: unknown, cancel: boolean) => void
 }
 
+interface NotesReq {
+  unit: number; scale: 1 | 2; reqId: number
+  /** The decoded cap of its one NOTES_RASTER (see notesBodyCap). */
+  bodyCap: number
+  /** Sent on the current socket (false while it waits out a resume). */
+  sent: boolean
+  /** The checked `notes-start` size, once it has arrived. */
+  start?: { w: number; h: number }
+  rotatedRetry: boolean
+  resolve: (img: { w: number; h: number; png: Uint8Array }) => void
+  fail: (e: unknown) => void
+}
+
 /** Re-issued after a resume; copy and a11y are not (the server may already
  * have counted them against the copy quota). */
 const REISSUED = new Set<TextRequest['type']>(['search', 'select'])
@@ -154,6 +189,8 @@ export class StreamSession {
   private readonly units = new Map<number, UnitReq>()
   private readonly texts = new Map<number, TextReq>()
   private printJob?: PrintJob
+  /** Granted notes requests by their current reqId. */
+  private readonly notesReqs = new Map<number, NotesReq>()
   private readonly admission = new Admission()
   private missingFaces: string[] = []
   private state: SessionState | 'opening' = 'opening'
@@ -194,7 +231,7 @@ export class StreamSession {
   stats() {
     return {
       inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size,
-      printing: !!this.printJob, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
+      printing: !!this.printJob, notesPending: this.notesReqs.size, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
       /** Encoded bytes held in partial reassembly. */
       reassemblyBytes: this.reasm.bufferedBytes,
     }
@@ -325,6 +362,63 @@ export class StreamSession {
     })
   }
 
+  /**
+   * A presenter's notes image of one streamed slide at scale 1 or 2 (§12a.5,
+   * §12a.8): `notes-start {w, h, scale}` then one NOTES_RASTER for the unit,
+   * both checked against the request (width exactly 720 × scale, height
+   * 1..8192, the unit asked, the announced size); anything else rejects
+   * `policy-refused`. Refuses without sending when `can.notes` is off
+   * (`policy-refused`) or the unit is out of range or hidden (`invalid-unit`).
+   * A refusal rejects with its code; a `session-rotated` one (stale jti) is
+   * re-issued once. Abort rejects with its reason; a drop with the request
+   * sent rejects `session-rotated` (never re-issued: the server audits each);
+   * a session end rejects with the session failure. The lease keeps the
+   * admission grant until `release()`.
+   */
+  async notes(unit: number, scale: 1 | 2, signal?: AbortSignal): Promise<NotesLease> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    if (signal?.aborted) throw signal.reason ?? abortError()
+    const m = this.manifest
+    if (!m.can.notes) throw new StreamSessionError('policy-refused', 'notes are off for this session')
+    if ((scale !== 1 && scale !== 2) || !m.recorder.scalesBuckets.includes(scale)) throw new StreamSessionError('policy-refused', `no notes scale ${scale}`)
+    const dims = Number.isInteger(unit) && unit >= 0 ? m.units.list[unit] : undefined
+    if (!dims || dims.hidden) throw new StreamSessionError('invalid-unit', `no notes for unit ${unit}`)
+    const bodyCap = notesBodyCap(scale)
+    return new Promise<NotesLease>((resolve, reject) => {
+      // The one settlement path: idempotent, drops the request, its abort
+      // listener, its partial reassembly and — unless leased out — its grant.
+      let settled = false, release: (() => void) | undefined
+      const queued = new AbortController()
+      const settle = (done: () => void, keepGrant = false) => {
+        if (settled) return
+        settled = true
+        if (this.notesReqs.get(req.reqId) === req) this.notesReqs.delete(req.reqId)
+        signal?.removeEventListener('abort', onAbort)
+        queued.abort()
+        if (req.reqId) this.reasm.drop(req.reqId)
+        // After any message for it that is still being processed (the inbox is serial).
+        if (release && !keepGrant) { const r = release; release = undefined; void this.inbox.then(r) }
+        done()
+      }
+      const onAbort = () => req.fail(signal!.reason ?? abortError())
+      const req: NotesReq = {
+        unit, scale, reqId: 0, bodyCap, sent: false, rotatedRetry: false,
+        resolve: (img) => settle(() => {
+          const r = release!
+          resolve({ ...img, release: () => { void this.inbox.then(r) } })
+        }, true),
+        fail: (e) => settle(() => reject(e)),
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      // §14: the request's receive/inflate/decode workspace comes out of the session's aggregate.
+      this.admission.acquire(notesGrant(scale), queued.signal).then((r) => {
+        if (settled) return r()
+        release = r
+        this.issueNotes(req)
+      }, (e) => req.fail(e))
+    })
+  }
+
   /** Idempotent: closes the socket once (1000), rejects everything pending. */
   close(): void { this.end(undefined, 1000) }
 
@@ -412,6 +506,55 @@ export class StreamSession {
     try { job.onProgress?.(job.pages.length, job.n) } catch (e) { job.fail(e, true) }
   }
 
+  /** Sends the notes request under a fresh reqId (the retired one's partial
+   * reassembly is dropped), unless `can.notes` went off meanwhile. A send that
+   * throws fails it `policy-refused`. */
+  private issueNotes(req: NotesReq) {
+    if (req.reqId) { if (this.notesReqs.get(req.reqId) === req) this.notesReqs.delete(req.reqId); this.reasm.drop(req.reqId) }
+    req.reqId = this.allocId(); req.sent = false; req.start = undefined
+    this.notesReqs.set(req.reqId, req)
+    if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
+    if (!this.manifest.can.notes) return req.fail(new StreamSessionError('policy-refused', 'notes are off for this session'))
+    try {
+      this.send({ reqId: req.reqId, type: 'notes', token: this.token, unit: req.unit, scale: req.scale })
+    } catch { return req.fail(new StreamSessionError('policy-refused', 'the notes request could not be sent')) }
+    req.sent = true
+    this.ensureSweeper()
+  }
+  /** The sent notes request `reqId` names on the current socket. */
+  private liveNotes(reqId: unknown): NotesReq | undefined {
+    const req = typeof reqId === 'number' ? this.notesReqs.get(reqId) : undefined
+    return req?.sent ? req : undefined
+  }
+  /** The text messages of a notes request: a refusal (`error`, or the rate gate's `refused`), `notes-start`. */
+  private onNotesText(req: NotesReq, m: Record<string, unknown>, data: string) {
+    if (m.type === 'error' || m.type === 'refused') {
+      // A RENEW race (stale jti, refused before anything was charged): re-issued once.
+      if (m.code === 'session-rotated' && !req.start && !req.rotatedRetry) { req.rotatedRetry = true; return this.issueNotes(req) }
+      const code = NOTES_REFUSALS.has(m.code as StreamErrorCode) ? m.code as StreamErrorCode : 'policy-refused'
+      return req.fail(new StreamSessionError(code))
+    }
+    const hostile = (why: string) => req.fail(new StreamSessionError('policy-refused', why))
+    if (utf8Bytes(data) > TEXT_MESSAGE_BYTES) return hostile(`${String(m.type)} message over 48 KiB of UTF-8`)
+    if (m.type !== 'notes-start') return hostile(`unexpected ${String(m.type)} on a notes request`)
+    if (req.start) return hostile('a second notes-start')
+    const h = m.h
+    if (m.scale !== req.scale || m.w !== NOTES_WIDTH_CSS * req.scale || !Number.isInteger(h) || (h as number) < 1 || (h as number) > NOTES_MAX_PX) return hostile('notes-start does not match the request')
+    req.start = { w: m.w as number, h: h as number }
+  }
+  /** The one NOTES_RASTER of a notes request: the unit asked, at the announced size. */
+  private onNotesFrame(req: NotesReq, payload: Uint8Array) {
+    const hostile = (why: string) => req.fail(new StreamSessionError('policy-refused', why))
+    if (!req.start) return hostile('a notes image before notes-start')
+    if (payload.length < 4) return hostile('truncated notes image')
+    const unitIndex = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true)
+    if (unitIndex !== req.unit) return hostile(`notes image for unit ${unitIndex}, expected ${req.unit}`)
+    let r: ReturnType<typeof decodeRasterBody>
+    try { r = decodeRasterBody(payload.subarray(4), { maxRgbaBytes: UNIT_RASTER_DECODED_CAP }) } catch (e) { return hostile(`notes raster: ${(e as Error).message}`) }
+    if (r.w !== req.start.w || r.h !== req.start.h) return hostile('notes image size is not the announced one')
+    req.resolve(r)
+  }
+
   /** A re-issued request's consumer first learns its earlier answer is void. */
   private reissueText(req: TextReq) {
     if (req.sent && !this.deliver(req, { type: 'restart' })) return
@@ -451,11 +594,14 @@ export class StreamSession {
       expects: (reqId, kind) => (kind === Kind.MANIFEST ? reqId === this.helloReqId && !!this.handshake
         // PRINT_RASTER only ever for the running, sent print job.
         : kind === Kind.PRINT_RASTER ? this.livePrint(reqId) !== undefined
+        // NOTES_RASTER only ever for a live, sent notes request.
+        : kind === Kind.NOTES_RASTER ? this.liveNotes(reqId) !== undefined
         : this.units.has(reqId) && UNIT_KINDS.has(kind)),
       encodedCap: (k) => CAPS[k]?.[0] ?? 0,
       // A unit response may never decode past the bytes its request was admitted for.
       decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity
         : k === Kind.PRINT_RASTER ? this.livePrint(reqId)?.pageCap ?? 0
+        : k === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.bodyCap ?? 0
         : this.units.get(reqId)?.grant ?? 0),
     })
     return new Promise<Manifest>((resolve, reject) => {
@@ -529,6 +675,8 @@ export class StreamSession {
     }
     const job = this.livePrint(m.reqId)
     if (job) return this.onPrintText(job, m, data)
+    const notes = this.liveNotes(m.reqId)
+    if (notes) return this.onNotesText(notes, m, data)
     const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
     // Only text-service answers are held to 48 KiB (refused/diag are control messages).
     if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) ? utf8Bytes(data) : 0)
@@ -546,6 +694,8 @@ export class StreamSession {
       // Fail closed: any rejected frame on the print job fails the job.
       const job = this.livePrint(res.reqId)
       if (job) return job.fail(new StreamSessionError('policy-refused', `print frame rejected: ${res.reason}`), true)
+      const notes = this.liveNotes(res.reqId)
+      if (notes) return notes.fail(new StreamSessionError('policy-refused', `notes frame rejected: ${res.reason}`))
       const req = res.reqId !== undefined ? this.units.get(res.reqId) : undefined
       if (req) this.retryOrFail(req)
       else if (res.reqId !== undefined && res.reqId === this.helloReqId && this.handshake) this.end(new StreamSessionError('manifest-invalid'), 1000)
@@ -556,6 +706,11 @@ export class StreamSession {
       // A message that completed after its job settled is dropped.
       const job = this.livePrint(res.reqId)
       return job && this.onPrintPage(job, res.payload)
+    }
+    if (res.kind === Kind.NOTES_RASTER) {
+      // A message that completed after its request settled is dropped.
+      const notes = this.liveNotes(res.reqId)
+      return notes && this.onNotesFrame(notes, res.payload)
     }
     const req = this.units.get(res.reqId)
     if (!req) return
@@ -620,6 +775,8 @@ export class StreamSession {
     }
     // The server stops (and keeps charged) a job whose socket went: never re-issued.
     if (this.printJob?.sent) this.printJob.fail(new StreamSessionError('session-rotated', 'the session resumed with a print job in flight'), false)
+    // Likewise a sent notes request (the server audits each one): never re-issued.
+    for (const req of [...this.notesReqs.values()]) if (req.sent) req.fail(new StreamSessionError('session-rotated', 'the session resumed with a notes request in flight'))
     this.scheduleResume()
   }
 
@@ -651,6 +808,8 @@ export class StreamSession {
     for (const req of [...this.texts.values()]) this.reissueText(req)
     // A job called while resuming was never sent: it goes out now.
     if (this.printJob?.granted && !this.printJob.sent) this.issuePrint(this.printJob)
+    // Notes requested while resuming go out now, if the new manifest still offers notes.
+    for (const req of [...this.notesReqs.values()]) if (!req.sent) this.issueNotes(req)
   }
 
   private ensureSweeper() {
@@ -659,10 +818,12 @@ export class StreamSession {
       for (const r of this.reasm.sweep()) {
         const job = this.livePrint(r.reqId)
         if (job) { job.fail(new StreamSessionError('policy-refused', 'a print page timed out in reassembly'), true); continue }
+        const notes = this.liveNotes(r.reqId)
+        if (notes) { notes.fail(new StreamSessionError('policy-refused', 'a notes image timed out in reassembly')); continue }
         const req = r.reqId !== undefined ? this.units.get(r.reqId) : undefined
         if (req) this.retryOrFail(req)
       }
-      if (!this.units.size && !this.printJob && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
+      if (!this.units.size && !this.printJob && !this.notesReqs.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)
   }
 
@@ -679,6 +840,7 @@ export class StreamSession {
     for (const req of [...this.units.values()]) req.reject(err)
     for (const req of [...this.texts.values()]) req.reject(err)
     this.printJob?.fail(err, false)
+    for (const req of [...this.notesReqs.values()]) req.fail(err)
     this.admission.drain(err)
     this.setState('closed', error)
     this.settleEnded(error)

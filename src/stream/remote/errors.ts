@@ -17,6 +17,8 @@ export type StreamErrorCode =
   /** Print refusals (Stage 3b): a job over the per-job cap (or too large to
    * plan, or over the client's blob ceiling: no `limit`), or over the session total. */
   | 'print-too-large' | 'print-quota-exhausted'
+  /** Notes refusal (Stage 3c): the unit is out of range or hidden. */
+  | 'invalid-unit'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'

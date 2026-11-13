@@ -10,7 +10,7 @@ import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
 import type { PrintedPage } from './print-wire'
-import type { PrintOptions, StreamNotice, UnitLease, UnitPayload } from './session'
+import type { NotesLease, PrintOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 
 export type { RemoteRange } from './text-wire'
@@ -24,6 +24,8 @@ export interface SessionLike {
   text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void>
   /** One checked print job (see StreamSession.print); absent ⇒ print is unavailable. */
   print?(from: number, to: number, opts: PrintOptions): Promise<PrintedPage[]>
+  /** One checked notes image (see StreamSession.notes); absent ⇒ notes are unavailable. */
+  notes?(unit: number, scale: 1 | 2, signal?: AbortSignal): Promise<NotesLease>
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
@@ -53,6 +55,11 @@ export interface RemoteOfficeDoc {
   /** Server-drawn print pages for units `from..to` (inclusive), every page
    * checked against the job (see StreamSession.print for the rejections). */
   print(range: { from: number; to: number }, opts?: PrintOptions): Promise<PrintedPage[]>
+  /** Paints the presenter's server-drawn, marked notes image of `unit` at the
+   * notes scale for `dpr` (1 or 2); the canvas is resized to the image. Rejects
+   * `policy-refused` without sending when `can.notes` is off; otherwise as
+   * StreamSession.notes. Nothing is painted after an abort, a close or a refusal. */
+  paintNotes(unit: number, dpr: number, canvas: CanvasLike, signal?: AbortSignal): Promise<void>
   /** Calls `cb` after a resume has replaced `manifest` (R3: `can.copy`, `caps` and
    * `can.textA11y` may change); returns the unsubscribe. */
   onManifestChange(cb: () => void): () => void
@@ -163,6 +170,23 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
       if (closed) throw new StreamSessionError('closed')
       if (!session.print) throw new StreamSessionError('policy-refused', 'print unavailable')
       return session.print(range.from, range.to, po)
+    },
+    async paintNotes(unit, dpr, canvas, signal) {
+      if (closed) throw new StreamSessionError('closed')
+      if (!can().notes || !session.notes) throw new StreamSessionError('policy-refused', 'notes unavailable')
+      // The server takes scale 1 or 2 only; the notes are 720 × scale device px wide.
+      const scale = bucketFor(1, dpr, session.manifest.recorder.scalesBuckets.filter((b) => b === 1 || b === 2)) as 1 | 2 | undefined
+      if (scale === undefined) throw new StreamSessionError('policy-refused', 'no notes scale')
+      const lease = await session.notes(unit, scale, signal)
+      let image: CanvasImageSource
+      // The admission lease covers the decode; release it once that work is done.
+      try { image = await backend().decodeImage(lease.png, 'image/png') } finally { lease.release() }
+      if (closed || signal?.aborted || !can().notes) return
+      canvas.width = lease.w; canvas.height = lease.h
+      const ctx = canvas.getContext('2d')!
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, lease.w, lease.h)
+      ctx.drawImage(image, 0, 0)
     },
     onManifestChange(cb) { return session.onManifestChange?.(cb) ?? (() => {}) },
     close() { if (closed) return; closed = true; session.close() },
