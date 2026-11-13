@@ -217,7 +217,7 @@ describe('notes over the wire: refusals send no frame and write no audit row', (
 /** Notes text of `unit` in the original deck. */
 async function notesText(doc: Uint8Array, unit: number) {
   const pkg = await OfficePackage.load(doc)
-  return readSlideNotes(pkg, `ppt/slides/slide${unit + 1}.xml`, unit)
+  return (await readSlideNotes(pkg, `ppt/slides/slide${unit + 1}.xml`, unit)).paragraphs
 }
 
 describe('notes wire audit: no notes text on the wire', () => {
@@ -281,6 +281,38 @@ describe('long notes', () => {
     const row = s.store.notesDeliveries(s.sid)[0]!
     expect(row.charsDrawn).toBeGreaterThan(0)
     expect(row.charsDrawn).toBeLessThan(paragraphs.reduce((n, [t]) => n + t!.length, 0))
+    s.stop()
+  }, 60_000)
+})
+
+describe('reader-cap truncation (separate from the height cap)', () => {
+  // 65,536 spaces fill the reader's character cap: the paragraph after them is cut by the reader, not by the image height.
+  const capped = () => buildPptxDeck({ slides: [{ notes: [[' '.repeat(65536)], ['IMPORTANT OMITTED NOTE']], shapes: [] }] })
+
+  test('the reader reports the cut; the plan is truncated and ends with the continuation line though it fits', async () => {
+    const pkg = await OfficePackage.load(await capped())
+    const read = await readSlideNotes(pkg, 'ppt/slides/slide1.xml', 0)
+    expect(read.truncated).toBe(true)
+    expect(read.paragraphs.map((p) => p.text.length)).toEqual([65536])
+    const l = layoutNotes(read.paragraphs, 1, (s) => s.length * 8, read.truncated)
+    expect(l.truncated).toBe(true)
+    expect(l.h).toBeLessThan(NOTES_MAX_PX)
+    expect(l.lines.at(-1)!.text).toBe(NOTES_CONTINUATION)
+    // Without the reader's signal the same paragraphs would read as complete.
+    expect(layoutNotes(read.paragraphs, 1, (s) => s.length * 8).truncated).toBe(false)
+  })
+
+  test('over the wire: a short image whose continuation line is drawn (pixel probe), marks off', async () => {
+    const s = await session({ doc: await capped(), decision: presenter({ visibleMark: 'off', forensicMark: false }) })
+    const r = await s.c.notes(0, 1)
+    expect(r.end).toBeUndefined()
+    expect(r.start).toMatchObject({ type: 'notes-start', w: 720, scale: 1 })
+    expect(r.start!.h).toBeLessThan(NOTES_MAX_PX)
+    const png = decodePng(body(r.body!).png)
+    const nonWhite = (from: number, to: number) => { let n = 0; for (let y = from; y < to; y++) for (let x = 0; x < png.w; x++) { const i = (y * png.w + x) * 4; if (png.rgba[i]! < 250 || png.rgba[i + 1]! < 250 || png.rgba[i + 2]! < 250) n++ } return n }
+    // Line 1 is the (blank) spaces paragraph; line 2 is the continuation notice.
+    expect(nonWhite(24, 48)).toBe(0)
+    expect(nonWhite(48, 72)).toBeGreaterThan(50)
     s.stop()
   }, 60_000)
 })

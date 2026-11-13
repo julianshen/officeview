@@ -14,11 +14,13 @@ import { DEFAULT_PARAMS } from '../mark/params'
 import { decodePng } from '../mark/png'
 import { GEOMETRY_ERROR_MAX, register, type Registration } from '../mark/register'
 import type { Bitmap } from '../mark/types'
+import { notesBasisLabel } from '../notes'
 import { DocumentHost, type MarkSpec } from '../render'
 import { MAX_CANDIDATES, tauFor } from './tau'
 
 export type TraceAnswer =
-  | { kind: 'traced'; sid: string; viewerId?: string; ip: string; startedAt: number; keyGeneration: number; unitIndex: number; scale: number; z: number; margin: number }
+  /** `target: 'notes'`: the capture was traced as the page's speaker-notes image (Stage 3c). */
+  | { kind: 'traced'; sid: string; viewerId?: string; ip: string; startedAt: number; keyGeneration: number; unitIndex: number; scale: number; z: number; margin: number; target?: 'notes' }
   | { kind: 'collusion'; candidates: Array<{ sid: string; viewerId?: string; z: number }> }
   | { kind: 'no-match'; zBest: number }
   | { kind: 'no-signal'; reason: 'flat' | 'geometry' | 'never-marked' | 'no-candidates' | 'reference-mismatch' }
@@ -38,7 +40,9 @@ export interface TraceObservation {
   geometry?: 'unsupported'
   poses: Array<{ contentPolicy: string; scale: number; keyGeneration: number; residual: number | null; inScope: boolean; band?: Registration['band'] }>
 }
-export interface TraceInput { capture: Bitmap; doc: Uint8Array; unitIndex: number; keys: ReadonlyMap<number, Keys>; store: AuditStore; host?: DocumentHost; observe?: (o: TraceObservation) => void }
+/** `target`: what the capture shows — the page itself (default) or its speaker-notes image. The two
+ * never mix: a notes target sees only marked notes deliveries, re-drawn as notes on the notes basis. */
+export interface TraceInput { capture: Bitmap; doc: Uint8Array; unitIndex: number; keys: ReadonlyMap<number, Keys>; store: AuditStore; host?: DocumentHost; target?: 'slide' | 'notes'; observe?: (o: TraceObservation) => void }
 
 interface Candidate { sid: string; row: StoredRow; delivery: DeliveryRecord; gen: number; docRef: string }
 
@@ -52,6 +56,7 @@ const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex')
 
 export async function trace(input: TraceInput): Promise<TraceAnswer> {
   const { capture, doc, unitIndex, keys, store } = input
+  const notes = input.target === 'notes'
 
   // Candidates: every delivery of this page under every generation's docRef.
   const all: Candidate[] = []
@@ -59,7 +64,7 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     if (k.keyGeneration !== gen) throw new Error(`keyring entry ${gen} carries generation ${k.keyGeneration}`)
     const docRef = await docRefOf(k.kDoc, doc)
     // The row's generation picks the basis and message keys; never decode under another.
-    for (const c of store.candidates(docRef, unitIndex)) if (c.row.keyGeneration === gen) all.push({ ...c, gen, docRef })
+    for (const c of notes ? store.notesCandidates(docRef, unitIndex) : store.candidates(docRef, unitIndex)) if (c.row.keyGeneration === gen) all.push({ ...c, gen, docRef })
   }
   const marked = all.filter((c) => c.delivery.status === 'l1')
   if (!marked.length) return { kind: 'no-signal', reason: all.length ? 'never-marked' : 'no-candidates' }
@@ -96,7 +101,9 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     const head = gens.values().next().value![0]!
     let docKey = docKeys.get(head.row.contentPolicy)
     if (!docKey) docKeys.set(head.row.contentPolicy, docKey = (await host.open(marked[0]!.docRef, doc, head.row.contentPolicy)).docKey)
-    const unit = host.render(docKey, { unitIndex, scale: head.delivery.scale, projection: 'final-raster', mark: head.row.visibleMark })
+    const unit = notes
+      ? await host.notes(docKey, { unitIndex, scale: head.delivery.scale, mark: head.row.visibleMark, draw: true })
+      : host.render(docKey, { unitIndex, scale: head.delivery.scale, projection: 'final-raster', mark: head.row.visibleMark })
     if (unit.kind !== 'raster') throw new Error('final-raster render returned commands')
     // Every delivery under this key, of every generation, must have been marked from these same bytes.
     const hash = sha256(unit.png)
@@ -106,7 +113,7 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     for (const [gen, group] of gens) {
       const first = group[0]!
       // Chips depend on (generation, scale) and the reference size.
-      const chips = basis(deriveBasisKey(keys.get(gen)!.kBasisRoot, first.docRef, `${unitIndex}@${first.delivery.scale}`), reference.width, reference.height, DEFAULT_PARAMS)
+      const chips = basis(deriveBasisKey(keys.get(gen)!.kBasisRoot, first.docRef, notes ? notesBasisLabel(unitIndex, first.delivery.scale) : `${unitIndex}@${first.delivery.scale}`), reference.width, reference.height, DEFAULT_PARAMS)
       const poseKey = JSON.stringify([first.row.contentPolicy, first.delivery.scale, gen])
       let pose = poses.get(poseKey)
       if (pose === undefined) {
@@ -136,7 +143,7 @@ export async function trace(input: TraceInput): Promise<TraceAnswer> {
     case 'none': return { kind: 'no-match', zBest: decision.zBest }
     case 'attributed': {
       const c = owners[decision.index]!
-      return { kind: 'traced', sid: c.sid, ...viewer(c), ip: c.row.ip, startedAt: c.row.startedAt, keyGeneration: c.gen, unitIndex, scale: c.delivery.scale, z: decision.z, margin: decision.margin }
+      return { kind: 'traced', sid: c.sid, ...viewer(c), ip: c.row.ip, startedAt: c.row.startedAt, keyGeneration: c.gen, unitIndex, scale: c.delivery.scale, z: decision.z, margin: decision.margin, ...(notes ? { target: 'notes' as const } : {}) }
     }
     case 'collusion-suspected': {
       // One entry per session (a sid delivered at two scales is one viewer), its highest Z.

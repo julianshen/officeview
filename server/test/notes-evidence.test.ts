@@ -1,7 +1,14 @@
 /** Stage 3c Task 2 — evidence: a notes image carries both marks (Layer-1 decodes to the session; the visible mark is in the pixels). */
 import { afterAll, describe, expect, it } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { decodeRasterBody } from '../../src/stream/raster'
 import { decideScores, scoreCapture } from '../../scripts/stream-s0/mark/detect'
+import { AuditTable } from '../src/audit'
+import { AuditStore } from '../src/audit-store'
+import { decodeImage } from '../src/detect/image'
+import { trace } from '../src/detect/trace'
 import type { AuthDecision } from '../src/hooks'
 import { deriveKeys } from '../src/keys'
 import { basis, deriveBasisKey } from '../src/mark/basis'
@@ -75,4 +82,50 @@ describe('notes evidence', () => {
       } finally { on.stop(); off.stop() }
     }
   }, 60_000)
+})
+
+describe('notes evidence: production trace attributes a leaked notes image', () => {
+  it('trace({target: \'notes\'}) names the session; as a slide the notes image matches nothing', async () => {
+    const store = AuditStore.open(':memory:')
+    const h = await start({ doc: corpus(DECK), audit: new AuditTable({ store }), authorize: async () => presenter() })
+    const c = new Client(h.url), m = await c.hello(); await c.ready()
+    try {
+      const r = await c.notes(4, 1)
+      const png = image(r.body!).png
+      const keys = new Map([[1, await deriveKeys(new Uint8Array(32).fill(9), 1)]])
+      // A typed marked notes delivery, distinct from the pre-draw audit row and from slide deliveries.
+      expect(store.notesMarks(m.session.sid)).toEqual([{ sid: m.session.sid, unitIndex: 4, scale: 1, refSha256: expect.stringMatching(/^[0-9a-f]{64}$/), at: expect.any(Number) }])
+      expect(store.deliveries(m.session.sid)).toEqual([])
+      expect(h.stream.audit.get(m.session.sid)!).toMatchObject({ forensicLayers: ['l1'], delivered: { marked: 1, unmarked: 0 }, markSettings: { forensic: true } })
+      const answer = await trace({ capture: await decodeImage(png), doc: corpus(DECK), unitIndex: 4, keys, store, target: 'notes' })
+      expect(answer).toMatchObject({ kind: 'traced', sid: m.session.sid, viewerId: 'alice', unitIndex: 4, scale: 1, target: 'notes' })
+      // Never matched as a slide: the slide trace of the same page has no candidates.
+      expect(await trace({ capture: await decodeImage(png), doc: corpus(DECK), unitIndex: 4, keys, store })).toEqual({ kind: 'no-signal', reason: 'no-candidates' })
+    } finally { c.close(); h.stop(); store.close() }
+  }, 60_000)
+
+  it('the detect CLI traces a notes image with --notes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ov-notes-cli-')), db = join(dir, 'audit.db'), docPath = join(dir, 'deck.pptx'), img = join(dir, 'notes.png')
+    writeFileSync(docPath, corpus(DECK))
+    const store = AuditStore.open(db)
+    const h = await start({ doc: corpus(DECK), audit: new AuditTable({ store }), authorize: async () => presenter() })
+    const c = new Client(h.url), m = await c.hello(); await c.ready()
+    try {
+      writeFileSync(img, image((await c.notes(5, 2)).body!).png)
+      const run = async (extra: string[]) => {
+        const p = Bun.spawn([process.execPath, '--preload', resolve(import.meta.dir, '../../scripts/stream-s0/napi-preload.ts'), resolve(import.meta.dir, '../scripts/detect.ts'), '--image', img, '--doc', docPath, '--page', '6', '--audit-db', db, ...extra],
+          { env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', USER: process.env.USER ?? '', OV_STREAM_KEY: Buffer.from(new Uint8Array(32).fill(9)).toString('base64') }, stdout: 'pipe', stderr: 'pipe' })
+        const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
+        return { stdout, stderr, code }
+      }
+      const notes = await run(['--notes'])
+      expect(notes.stderr).toBe('')
+      expect(notes.code).toBe(0)
+      expect(notes.stdout).toContain(`TRACED — session ${m.session.sid}, viewer alice`)
+      expect(notes.stdout).toContain('page 6 notes (z ')
+      const slide = await run([])
+      expect(slide.code).toBe(0)
+      expect(slide.stdout).toContain('NO USABLE SIGNAL — no audit record of this page being viewed')
+    } finally { c.close(); h.stop(); store.close(); rmSync(dir, { recursive: true, force: true }) }
+  }, 120_000)
 })

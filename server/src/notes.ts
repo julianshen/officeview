@@ -37,20 +37,27 @@ export function encodeNotesBody(unitIndex: number, w: number, h: number, png: Ui
   return out
 }
 
+/** Slide notes as read: `truncated` when the reader's 65,536-character cap cut them. */
+export interface SlideNotes { paragraphs: NoteParagraph[]; truncated: boolean }
+
 /** The notes of the slide at `slidePart` in `pkg` (the original package): its
  * non-external notesSlide relationship, read under the reader's byte caps.
- * No relationship or no notes part ⇒ no paragraphs. */
-export async function readSlideNotes(pkg: OfficePackage, slidePart: string, index: number): Promise<NoteParagraph[]> {
+ * No relationship or no notes part ⇒ no paragraphs. The reader's
+ * `notes-truncated` diagnostic is kept, so a cut is never silent. */
+export async function readSlideNotes(pkg: OfficePackage, slidePart: string, index: number): Promise<SlideNotes> {
+  const none = { paragraphs: [], truncated: false }
   const dir = posix.dirname(slidePart)
   const rels = await pkg.boundedText(posix.join(dir, '_rels', `${posix.basename(slidePart)}.rels`), READER_LIMITS.relsBytes)
-  if (rels === undefined) return []
+  if (rels === undefined) return none
   const rel = all(readTree(rels), 'Relationship').find((r) => attr(r, 'TargetMode') !== 'External' && (attr(r, 'Type') ?? '').endsWith('/notesSlide'))
   const target = rel && attr(rel, 'Target')
-  if (!target) return []
+  if (!target) return none
   const path = target.startsWith('/') ? target.slice(1) : posix.normalize(posix.join(dir, target))
   const xml = await pkg.boundedText(path, READER_LIMITS.notesBytes)
-  if (xml === undefined) return []
-  return readNotes(parseXmlOrdered(xml), index, { add() {}, list: () => [] })
+  if (xml === undefined) return none
+  let truncated = false
+  const paragraphs = readNotes(parseXmlOrdered(xml), index, { add(d) { if (d.code === 'notes-truncated') truncated = true }, list: () => [] })
+  return { paragraphs, truncated }
 }
 
 /** Local Presenter View's bullet rule: an authored character, or a plain bullet for an auto-number scheme. */
@@ -60,11 +67,22 @@ const prefixOf = (n: NoteParagraph) => (n.bullet ? `${n.bullet.length <= 2 ? n.b
 interface Line { x: number; y: number; text: string; chars: number }
 export interface NotesLayout { w: number; h: number; truncated: boolean; chars: number; lines: Line[] }
 
+/** Code points per measured piece: every measured string stays short (shaping one 65,536-character
+ * run takes seconds, past the render deadline). A piece of visible glyphs is wider than a line, so it
+ * breaks by code points as before; only zero-width runs can see a break move to a piece boundary. */
+const PIECE = 200
+const pieces = (token: string): string[] => {
+  if (token.length <= PIECE) return [token]
+  const cps = [...token], out: string[] = []
+  for (let i = 0; i < cps.length; i += PIECE) out.push(cps.slice(i, i + PIECE).join(''))
+  return out
+}
+
 /** Greedy word wrap of one hard line into `width`; a word wider than the line breaks by code points. */
 function wrap(text: string, width: number, measure: (s: string) => number, out: (text: string) => boolean): boolean {
   if (text === '') return out('')
   let line = ''
-  for (const token of text.split(/(\s+)/).filter(Boolean)) {
+  for (const token of text.split(/(\s+)/).filter(Boolean).flatMap(pieces)) {
     if (measure(line + token) <= width) { line += token; continue }
     if (line && !out(line.trimEnd())) return false
     line = ''
@@ -83,9 +101,11 @@ function wrap(text: string, width: number, measure: (s: string) => number, out: 
 
 /** The notes laid out in CSS px at `scale`: every line that fits under
  * NOTES_MAX_PX device px; when some do not, the last line is the continuation
- * line and the image is exactly NOTES_MAX_PX tall. `chars` counts the notes
+ * line and the image is exactly NOTES_MAX_PX tall. `readerTruncated` (the
+ * reader's character cap cut the notes) ends the image with the continuation
+ * line too, right after the retained text. `chars` counts the notes
  * characters on drawn lines (prefixes and the continuation line excluded). */
-export function layoutNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, measure: (s: string) => number): NotesLayout {
+export function layoutNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, measure: (s: string) => number, readerTruncated = false): NotesLayout {
   const maxH = Math.floor(NOTES_MAX_PX / scale), room = Math.floor((maxH - 2 * PAD) / LINE)
   const lines: Line[] = []
   let truncated = false
@@ -106,12 +126,18 @@ export function layoutNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, 
     }
     if (truncated) break
   }
-  if (truncated) {
+  const heightCut = truncated
+  if (heightCut) {
     lines.splice(room - 1)
     // Anchored to the bottom edge: the image's last rows always show that the notes go on.
     lines.push({ x: PAD, y: maxH - PAD - LINE, text: NOTES_CONTINUATION, chars: 0 })
+  } else if (readerTruncated) {
+    // Every retained line fits; the notice takes the next line (or the last one when the image is full).
+    if (lines.length >= room) lines.splice(room - 1)
+    lines.push({ x: PAD, y: PAD + lines.length * LINE, text: NOTES_CONTINUATION, chars: 0 })
+    truncated = true
   }
-  const h = truncated ? maxH : 2 * PAD + Math.max(1, lines.length) * LINE
+  const h = heightCut ? maxH : 2 * PAD + Math.max(1, lines.length) * LINE
   return { w: NOTES_WIDTH_CSS * scale, h: h * scale, truncated, chars: lines.reduce((n, l) => n + l.chars, 0), lines }
 }
 
@@ -122,14 +148,14 @@ const measurer = (backend: CanvasBackend) => {
 }
 
 /** Plans the image without allocating it (the audit row is written between plan and draw). */
-export function planNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, backend: CanvasBackend): Omit<NotesLayout, 'lines'> {
-  const { lines: _, ...plan } = layoutNotes(paragraphs, scale, measurer(backend))
+export function planNotes(notes: SlideNotes, scale: 1 | 2, backend: CanvasBackend): Omit<NotesLayout, 'lines'> {
+  const { lines: _, ...plan } = layoutNotes(notes.paragraphs, scale, measurer(backend), notes.truncated)
   return plan
 }
 
 /** Draws the notes on white (device size `w × h`); the caller paints the visible mark on `ctx` (CSS units). */
-export function drawNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, backend: CanvasBackend): NotesLayout & { canvas: ReturnType<CanvasBackend['createCanvas']>; ctx: CanvasRenderingContext2D } {
-  const layout = layoutNotes(paragraphs, scale, measurer(backend))
+export function drawNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, backend: CanvasBackend, readerTruncated = false): NotesLayout & { canvas: ReturnType<CanvasBackend['createCanvas']>; ctx: CanvasRenderingContext2D } {
+  const layout = layoutNotes(paragraphs, scale, measurer(backend), readerTruncated)
   const canvas = backend.createCanvas(layout.w, layout.h)
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   ctx.scale(scale, scale)

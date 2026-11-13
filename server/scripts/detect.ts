@@ -4,9 +4,9 @@
  *
  *   bun --preload ../scripts/stream-s0/napi-preload.ts scripts/detect.ts \
  *     --image <file> [--image <file> …] --doc <file> --page <N> --audit-db <path> \
- *     [--keyring <path>] [--investigator <label>] [--json]
+ *     [--notes] [--keyring <path>] [--investigator <label>] [--json]
  *
- * `--page` is 1-based. Keys: `--keyring` file, else OV_STREAM_KEYRING / OV_STREAM_KEY.
+ * `--page` is 1-based. `--notes`: the images show that page's speaker-notes image (Stage 3c), not the page. Keys: `--keyring` file, else OV_STREAM_KEYRING / OV_STREAM_KEY.
  * Exit codes: 0 every image answered; 2 usage or config error; 1 internal error. */
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -22,7 +22,7 @@ import { deriveKeyring, loadKeyring } from '../src/keyring'
 import { DocumentHost } from '../src/render'
 import type { Bitmap } from '../src/mark/types'
 
-const USAGE = 'usage: detect --image <file> [--image <file> …] --doc <file> --page <N> --audit-db <path> [--keyring <path>] [--investigator <label>] [--json]'
+const USAGE = 'usage: detect --image <file> [--image <file> …] --doc <file> --page <N> --audit-db <path> [--notes] [--keyring <path>] [--investigator <label>] [--json]'
 
 class UsageError extends Error {}
 
@@ -40,7 +40,7 @@ function describe(a: TraceAnswer): string {
   switch (a.kind) {
     case 'traced': {
       const started = new Date(a.startedAt * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')
-      return `TRACED — session ${a.sid}, viewer ${a.viewerId ?? 'unknown'}, ip ${a.ip}, started ${started}, key generation ${a.keyGeneration}, page ${a.unitIndex + 1} (z ${num(a.z)}, margin ${num(a.margin)})`
+      return `TRACED — session ${a.sid}, viewer ${a.viewerId ?? 'unknown'}, ip ${a.ip}, started ${started}, key generation ${a.keyGeneration}, page ${a.unitIndex + 1}${a.target === 'notes' ? ' notes' : ''} (z ${num(a.z)}, margin ${num(a.margin)})`
     }
     case 'collusion': return `POSSIBLE COLLUSION — candidates ${a.candidates.map((c) => `${c.sid} (z ${num(c.z)})`).join(', ')}; no single viewer named`
     case 'no-match': return `NO MATCH — mark below threshold (best z ${num(a.zBest)}); nothing attributed`
@@ -62,7 +62,7 @@ async function main(argv: string[], env: Record<string, string | undefined>): Pr
       args: argv, strict: true,
       options: {
         image: { type: 'string', multiple: true }, doc: { type: 'string' }, page: { type: 'string' }, 'audit-db': { type: 'string' },
-        keyring: { type: 'string' }, investigator: { type: 'string' }, json: { type: 'boolean' },
+        keyring: { type: 'string' }, investigator: { type: 'string' }, json: { type: 'boolean' }, notes: { type: 'boolean' },
       },
     }))
   } catch (e) { throw new UsageError((e as Error).message) }
@@ -93,7 +93,7 @@ async function main(argv: string[], env: Record<string, string | undefined>): Pr
   const osUser = userInfo().username
   try {
     for (const [i, f] of files.entries()) {
-      const answer = await trace({ capture: captures[i]!, doc, unitIndex, keys, store, host })
+      const answer = await trace({ capture: captures[i]!, doc, unitIndex, keys, store, host, ...(values.notes ? { target: 'notes' as const } : {}) })
       // Logged before shown: an answer that cannot be logged is not given.
       store.putDetection({
         at: Math.floor(Date.now() / 1000), osUser, ...(values.investigator ? { investigator: values.investigator } : {}),

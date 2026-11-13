@@ -5,7 +5,7 @@
 import { extendedCodeword } from './mark/bch'
 import { insertMessage } from './mark/message'
 import { CODEC_ID } from './mark/params'
-import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type NotesRecord, type PrintRecord, type StoredRow } from './audit-store'
+import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type StoredRow } from './audit-store'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 
 export { AUDIT_RETENTION_SEC }
@@ -25,7 +25,7 @@ export interface AuditRow {
   forensic: ForensicRecord | null
   /** Layers actually delivered on ≥ 1 unit (append-only, never from issuance alone). */
   forensicLayers: Array<'l1'>
-  /** Raster units delivered marked / shipped unmarked (capacity, all-masked). */
+  /** Raster units (and notes images, Stage 3c) delivered marked / shipped unmarked (capacity, all-masked). */
   delivered: { marked: number; unmarked: number }
   /** Both marks off (§19.2): visible off and no forensic layer delivered. */
   untraceable: boolean
@@ -106,6 +106,11 @@ export class AuditTable {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putNotes({ ...r, at: Math.floor(Date.now() / 1000) })
   }
+  /** One notes image is about to go to `sid` Layer-1 marked: durable before the send. Throws for an unknown or expired sid. */
+  recordNotesMark(r: Omit<NotesMarkRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putNotesMark({ ...r, at: Math.floor(Date.now() / 1000) })
+  }
   /** A resume changed `sid`'s resolved text services: durable before they take effect. Throws for an unknown or expired sid. */
   recordServices(sid: string, s: TextServices): void {
     if (!this.store.getRow(sid)) throw new Error(`no audit row for ${sid}`)
@@ -116,7 +121,9 @@ export class AuditTable {
     const r = this.store.getRow(sid)
     if (!r) return undefined
     const ds = this.store.deliveries(sid)
-    const marked = ds.filter((d) => d.status === 'l1').length
+    // Marked notes images count as marked deliveries (they are always marked: an unmarkable one is never sent).
+    const notesMarked = this.store.notesMarks(sid).length
+    const marked = ds.filter((d) => d.status === 'l1').length + notesMarked
     const forensicLayers: Array<'l1'> = marked ? ['l1'] : []
     const copies = this.store.copies(sid).filter((c) => c.kind === 'copy')
     const prints = this.store.prints(sid)
@@ -127,7 +134,7 @@ export class AuditTable {
     const services: TextServices = stored ? { ...stored as TextServices, print: stored.print ?? false, notes: stored.notes ?? false } : { copy: false, textA11y: 'off', print: false, notes: false }
     return Object.freeze({
       ...r, visibleMark: Object.freeze({ ...r.visibleMark }), markSettings: Object.freeze({ ...r.markSettings, forensic: forensicLayers.length > 0 }), forensic: r.forensic && Object.freeze({ ...r.forensic }),
-      forensicLayers: Object.freeze(forensicLayers) as Array<'l1'>, delivered: Object.freeze({ marked, unmarked: ds.length - marked }),
+      forensicLayers: Object.freeze(forensicLayers) as Array<'l1'>, delivered: Object.freeze({ marked, unmarked: ds.length + notesMarked - marked }),
       untraceable: r.markSettings.visible === 'off' && forensicLayers.length === 0,
       services: Object.freeze({ ...services }),
       servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, print: x.print, notes: x.notes, at: x.at }))) as AuditRow['servicesChanged'],

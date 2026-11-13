@@ -676,6 +676,11 @@ export function createStreamServer(o: StreamServerOptions) {
     }
     const f = frame(KIND.NOTES_RASTER, reqId, encodeNotesBody(ui, img.w, img.h, img.png))
     if (!f) return deny(reqId, 'policy-refused')
+    // The marked delivery trace attributes (its notes basis and canonical): durable before the send, after the frame
+    // (an image over its cap leaves no delivery row); a failed write refuses it.
+    if (sd.forensic) {
+      try { audit.recordNotesMark({ sid: s.sid, unitIndex: ui, scale: sc, refSha256: createHash('sha256').update(drawn.png).digest('hex') }) } catch { return deny(reqId, 'policy-refused') }
+    }
     send(ws, { reqId, type: 'notes-start', w: img.w, h: img.h, scale: sc })
     sendFrames(ws, [f])
   }

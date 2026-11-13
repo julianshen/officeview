@@ -210,10 +210,10 @@ export class DocumentHost {
     if (!Number.isInteger(job.unitIndex) || job.unitIndex < 0 || job.unitIndex >= doc.notes.slideParts.length) throw new RenderRefusal('unit-range')
     if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
     const scale = job.scale
-    let paragraphs
-    try { paragraphs = await readSlideNotes(doc.notes.pkg, doc.notes.slideParts[job.unitIndex]!, job.unitIndex) } finally { doc.notes.pkg.dropCache() }
-    if (!job.draw) return { kind: 'notes-plan', ...planNotes(paragraphs, scale, this.backend) }
-    const d = drawNotes(paragraphs, scale, this.backend)
+    let notes
+    try { notes = await readSlideNotes(doc.notes.pkg, doc.notes.slideParts[job.unitIndex]!, job.unitIndex) } finally { doc.notes.pkg.dropCache() }
+    if (!job.draw) return { kind: 'notes-plan', ...planNotes(notes, scale, this.backend) }
+    const d = drawNotes(notes.paragraphs, scale, this.backend, notes.truncated)
     if (!unitSurfaceAllowed(d.w, d.h)) throw new RenderRefusal('oversize')
     const mark = markOptions(job.mark)
     if (mark) paintMark(d.ctx, { widthPx: NOTES_WIDTH_CSS, heightPx: d.h / scale }, mark)
