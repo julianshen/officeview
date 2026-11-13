@@ -119,13 +119,19 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
         try { out = await render(unit, bucket, payload) } catch { /* retry once */ } finally { payload.release() }
       }
       if (!out) { o.onNotice?.({ code: 'unit-failed', unit }); throw new StreamSessionError('unit-failed') }
-      if (closed || signal?.aborted) return
-      const w = 'image' in out ? out.w : out.width, h = 'image' in out ? out.h : out.height
-      canvas.width = w; canvas.height = h
-      const ctx = canvas.getContext('2d')!
-      ctx.setTransform(1, 0, 0, 1, 0, 0)
-      ctx.clearRect(0, 0, w, h)
-      ctx.drawImage(('image' in out ? out.image : out) as CanvasImageSource, 0, 0)
+      try {
+        // Read synchronously: `ended.then` may not have run yet when the render resolves.
+        if (closed || session.isEnded?.() || signal?.aborted) return
+        const w = 'image' in out ? out.w : out.width, h = 'image' in out ? out.h : out.height
+        canvas.width = w; canvas.height = h
+        const ctx = canvas.getContext('2d')!
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, w, h)
+        ctx.drawImage(('image' in out ? out.image : out) as CanvasImageSource, 0, 0)
+      } finally {
+        // A decoded raster's ImageBitmap frees its native surface now, not at GC.
+        if ('image' in out) (out.image as { close?: () => void }).close?.()
+      }
     },
     async search(query, so = {}) {
       if (!can().search) return textUnavailable()

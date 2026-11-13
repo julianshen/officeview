@@ -604,3 +604,79 @@ describe('StreamSession.notes / RemoteOfficeDoc.paintNotes (scripted socket)', (
     expect((await failure(doc.paintNotes(0, 1, sf.canvas)) as StreamSessionError).code).toBe('policy-refused')
   })
 })
+
+/** R13: the unit paint path gets the notes path's two lifetime fixes. */
+describe('RemoteOfficeDoc.paint lifetime (R13)', () => {
+  async function unitPainting(dpr = 1, signal?: AbortSignal, defer = false) {
+    const { s, sock } = await opened()
+    const sf = surface()
+    const d = defer ? deferDecode(sf.backend) : undefined
+    const doc = createRemoteDoc(s, { backend: sf.backend })
+    const p = doc.paint(0, 'fit', dpr, sf.canvas, signal)
+    void p.catch(() => {})
+    await settle()
+    const reqId = sock.of('unit')[0]!.reqId
+    sock.frame(3, reqId, encodeUnit({ unitId: 0, discriminator: 2, body: encodeRasterBody(960, 540, pngHeader(960, 540)) }))
+    return { s, sock, p, d, ...sf }
+  }
+
+  // The unit path awaits through render() and the retry loop: the end lands k microtasks after the decode settles
+  // (k ≤ 2 is inside the window before the paint continuation; later, the paint has legitimately finished).
+  for (const k of [1, 2]) {
+    it(`end ${k} microtask(s) after the decode resolves, before the paint continuation → nothing paints; the image is closed`, async () => {
+      const { s, sock, p, d, draws, life } = await unitPainting(1, undefined, true)
+      await d!.reached
+      d!.go()
+      for (let i = 0; i < k; i++) await Promise.resolve()
+      sock.drop(4005)
+      await p.catch(() => {})
+      expect((await s.ended)?.code).toBe('revoked')
+      expect(draws).toEqual([])
+      expect(life.closed).toBe(1)
+    })
+  }
+
+  it('end before the decode resolves → nothing paints; the image is closed', async () => {
+    const { sock, p, d, draws, life } = await unitPainting(1, undefined, true)
+    await d!.reached
+    sock.drop(4005)
+    d!.go()
+    await p.catch(() => {})
+    expect(draws).toEqual([])
+    expect(life.closed).toBe(1)
+  })
+
+  it('the decoded image is closed after a successful paint', async () => {
+    const { p, draws, life, canvas } = await unitPainting()
+    await p
+    expect(draws.length).toBe(1)
+    expect([canvas.width, canvas.height]).toEqual([960, 540])
+    expect(life.closed).toBe(1)
+  })
+
+  it('the decoded image is closed when an abort suppresses the paint', async () => {
+    const ac = new AbortController()
+    const { p, d, draws, life } = await unitPainting(1, ac.signal, true)
+    await d!.reached
+    ac.abort()
+    d!.go()
+    await p.catch(() => {})
+    expect(draws).toEqual([])
+    expect(life.closed).toBe(1)
+  })
+
+  it('the decoded image is closed when drawing throws (the paint rejects)', async () => {
+    const { s, sock } = await opened()
+    const sf = surface()
+    sf.life.drawThrows = true
+    const doc = createRemoteDoc(s, { backend: sf.backend })
+    const p = doc.paint(0, 'fit', 1, sf.canvas)
+    void p.catch(() => {})
+    await settle()
+    sock.frame(3, sock.of('unit')[0]!.reqId, encodeUnit({ unitId: 0, discriminator: 2, body: encodeRasterBody(960, 540, pngHeader(960, 540)) }))
+    expect(((await failure(p)) as Error).message).toBe('draw failed')
+    expect(sf.life.closed).toBe(1)
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+})
