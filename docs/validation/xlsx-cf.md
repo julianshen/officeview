@@ -832,3 +832,64 @@ No Excel was run. A bordered gradient is probably what Excel's UI gradient prese
 - **Export.** `VERIFIED_STAGE3_BAR_GRADIENT_BORDER`, rendered only with `--publish-stage3`.
 - **Production.** A bordered gradient paints only the exported shape (`barGradientBorderEvidence`, gated by the capability) and needs `bar:render-gradient-border` at evaluation. Without the export it withholds, as now. Painted pixels equal the harness prediction within 2 per channel for every shape at lengths 5 to 177.
 - **Probes.** The case now has 510 cells, and the unrolled per-cell AppleScript probes overflow osacompile ("Internal table overflow", -2707). `capture.ts` therefore runs them in chunks of 100 cells (`PROBE_CHUNK_CELLS`). Every earlier case has at most 88 cells, so it runs as one chunk, exactly as before.
+
+### Stage 3 capture run 7 (2026-11-14): the default lengths and the bordered gradient, and Stage 3 complete
+
+The orchestrator built and captured `stage3-bar-lengths-default` in Excel 16.114 (cd463780). The capture is `measured`, and its committed files were not edited. `capture.ts --stage 3 --verify-only` relabelled nothing.
+
+**Default 10/90 lengths: `half-min@x14`, verified.**
+- Paired x14 bars draw `(min/2 + (max − min)·t)` of the span (5/85 for the default 10/90), whether solid (B:D) or gradient (E:G). This holds at all three widths.
+- Base-only bars (H:J) draw 10/90 linear.
+- Every other candidate misses at least one designated cell by more than 1 px, and every pair of candidates is at least 3 px apart. For example, `half-min@all` predicts the 180 pt base-only bar at 0 9 px shorter than `half-min@x14`, and `offset-9pt@x14` predicts the 270 pt solid bar at 0 5 px longer than the measured one.
+- Gradient cells were compared by their gradient run.
+
+**Ruling S3-LEN-X14 (production).**
+- The parsed bar definition now records `pairing` (`x14` or `base-only`). Both parse paths share the parser, and resident and streamed results stay deep-equal.
+- The evaluator applies half-min to the x14 form only. A base-only bar keeps the linear reading that the same capture verified on it.
+- A bar of unknown form stays unresolved under an x14-scoped rule.
+
+**Gradient fill: unchanged and confirmed.** The pooled judgement now covers 90 bars: the 24 earlier ones plus 66 from E:J. Bars run from 9 to 321 px long, 275,142 pixels in all. The blend is still t = 0.847, and the largest error is 8 per channel.
+
+| Alternative | Max error |
+|---|---|
+| `cell-span` | 202 |
+| `white-end` | 44 |
+| `linear-light` | 67 |
+| `solid` | 216 |
+| `fixed-end` | 27 |
+
+**Bordered gradient (Excel's UI preset shape): `frame-over-ramp`, verified.**
+- The ramp runs over the bar's outer length at the borderless blend 0.847, and a 1 px solid frame in the border colour is drawn over it.
+- 150 bars were judged (the six zeros of K:P draw none), 5 to 321 px long, 444,892 pixels. The largest error is 8.
+
+| Alternative | Max error | Note |
+|---|---|---|
+| `frame-inner-ramp` | 34 | Refuted by the 3 and 5 bars |
+| `gradient-frame` | 216 | |
+| `no-frame` | 216 | |
+| `frame-solid-fill` | 215 | |
+
+- The 0/100 extents (K:P) equal the solid model.
+- Production paints a bordered gradient only from `VERIFIED_STAGE3_BAR_GRADIENT_BORDER`, which is published only by Task 23.
+
+**`audit.ts --stage 3`:** ok=true, 14/14 structural, pending 0, **stageComplete=true**, with no blocked or unaccounted capability.
+
+| Disposition | Count |
+|---|---|
+| verified | 50 |
+| unverified-nondiscriminating | 8 |
+| refused-unsupported | 15 |
+
+The `--publish-stage3` exports would carry:
+- the gradient (`bar-length`, 0.847);
+- the bordered gradient (`frame-over-ramp`, 0.847);
+- the 10/90 rule (`half-min@x14`);
+- the layout, with allPositive settled by `bar:lengths-default-10-90` and `bar:lengths-explicit-0-100`.
+
+**Lesson 1 under the audit's evidence.** 414 bars paint; 378 of them are pixel-measured. 231 are gradient bars, compared with their gradient runs. The colour conformance paints 240 gradient bars on a real canvas (150 of them bordered) and compares every pixel with Excel's, within 8. A solid fill misses all 240.
+
+These columns now paint although no geometry capability designates them. They are listed in the test:
+- probe C;
+- lengths B;
+- degenerate G;
+- pairing D.

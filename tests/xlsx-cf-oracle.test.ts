@@ -3790,7 +3790,7 @@ describe('CF oracle verifier', () => {
     expect(report.blockedCapabilities).toEqual([])
     expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(50)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
-  }, 30_000) // about ten whole-stage audits: 6–8.5 s under load, over the 5 s default
+  }, 90_000) // about ten whole-stage audits: 15–25 s alone since capture run 7 (a 510-cell case), up to 50 s beside the full parallel suite
   it('stage3ObservedBars reads the recorded px and ignores malformed entries', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-observed-'))
     dirs.push(dir)
