@@ -122,6 +122,13 @@ export async function printRasters(
   opts: { signal: AbortSignal; title?: string; onNotice(text: string): void },
 ): Promise<PrintJob | null> {
   if (opts.signal.aborted || !pages.length) return null
+  // These pages were never planned here: a size that is not a finite, positive
+  // length within the axis ceiling fails the job before any frame exists.
+  const axisOk = (v: number) => Number.isFinite(v) && v > 0 && v <= PRINT_MAX_AXIS
+  if (!pages.every(p => axisOk(p.widthPx) && axisOk(p.heightPx))) {
+    opts.onNotice('The document could not be printed. Please try again.')
+    return null
+  }
   return printSurface(pages, themeRoot, opts, async index => pages[index]!.png)
 }
 

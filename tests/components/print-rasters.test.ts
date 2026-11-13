@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PRINT_JOB_MAX_BLOB_BYTES, printRasters } from '../../src/components/paged/printDocument'
+import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_MAX_AXIS, printRasters } from '../../src/components/paged/printDocument'
 
 const TOO_LARGE = 'This document is too large to print from the viewer.'
 const FAILED = 'The document could not be printed. Please try again.'
@@ -113,5 +113,20 @@ describe('printRasters', () => {
     job!.frame.contentWindow!.dispatchEvent(new Event('afterprint'))
     expect(root.querySelector('iframe')).toBeNull()
     expect(revoke).toHaveBeenCalledWith('blob:raster-1')
+  })
+
+  for (const bad of [NaN, Infinity, -1, 0, 1e20, PRINT_MAX_AXIS + 1]) for (const axis of ['widthPx', 'heightPx'] as const) {
+    it(`refuses a page with ${axis} ${bad} before any frame exists`, async () => {
+      const pages = [{...letter, png: png()}, {...letter, [axis]: bad, png: png()}]
+      expect(await printRasters(pages, root, opts())).toBeNull()
+      expect(notice).toHaveBeenCalledExactlyOnceWith(FAILED)
+      expect(root.querySelector('[data-officeview-print-frame]')).toBeNull()
+      expect(framePrint).not.toHaveBeenCalled()
+    })
+  }
+
+  it('accepts a page at exactly the axis ceiling', async () => {
+    expect(await printRasters([{widthPx: PRINT_MAX_AXIS, heightPx: 1, png: png()}], root, opts())).not.toBeNull()
+    expect(notice).not.toHaveBeenCalled()
   })
 })
