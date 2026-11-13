@@ -1108,33 +1108,40 @@ the capability lifts):
 | refused percentile bar (-10) beside a min/max bar | the percentile bar announces unavailable and reports no bar; the min/max bar paints 10/10; net 0 |
 | whole-column bar extents | `computeMetrics` keeps 10 rows; the bar paints its 10 stored cells; net 0 |
 | distinct ranges | 150 bars over distinct 2-cell ranges: 10 rects admit and paint 10; 300 rects refuse before enumeration (0 reads, net 0) |
-| 1,000,000-unit cap on a bar's statistics scan (default service budget) | 10,000 cells admit (662,221 units, about 66 per cell); 100,000 refuse `cf-resource-limit` after 58,369 reads at 999,939 units; net 0 |
+| 1,000,000-unit cap on a bar's statistics scan (a bare service's default statistics budget, synthetic one-cell pages) | 10,000 cells admit (662,221 units); 100,000 refuse `cf-resource-limit` after 58,369 reads at 999,939 units; net 0. The units per cell grow with the scan (about 45 to 78 measured), so this bounds the bare budget, not a product path: the resident text scope admitted a bar over 30,000 populated cells, and the paint path's statistics budget is 10,000,000 units |
 | 20 open/read/cancel/close cycles over B2:B12 of the default-lengths case | 80 reads, 220 bar states, final net 0 |
 | no-CF baseline | 0 reserves, 0 reads, no scope |
 | module graph | eager graph clean (fresh build) |
 
 **`CF_LIMITS.activeMs` (50 ms wall clock, owner risk; behaviour unchanged).** Measured through the production
 service with the published evidence and an instrumented budget that counts active time exactly as
-`createCfWorkBudget` does (`.superpowers/t23/activems.ts`, not committed). This machine (14 cores) already ran at a
-load average of about 5 in the "idle" runs; "loaded" adds 14 busy processes.
+`createCfWorkBudget` does (`.superpowers/t23/activems.ts`, not committed). Each row is ONE `prepareCf` call; production
+issues at most 1,000 cells per call on the text path (`CHUNK_CELLS`) and at most 256 cells of one row per call on
+the paint path, each call with its own 50 ms budget. This 14-core machine ran at a load average of about 3 to 5 in
+the "idle" runs; "loaded" adds 14 busy processes.
 
-| Scope | Cells | Idle median / max ms | Loaded median / max ms |
+| Scope (one call) | Cells | Idle median / max ms | Loaded median / max ms |
 |---|---|---|---|
 | `stage3-bar-lengths-default` A1:V28 (largest fixture) | 616 | 5.9 / 13.8 | 6.9 / 24.4 |
 | `stage3-bar-auto-bounds` | 132 | 1.0 / 1.4 | 1.2 / 2.8 |
 | sparse 1M-row declared A:A, 200 rules, 40-cell request | 40 | 8.8 / 11.5 | 6.8 / 23.3 |
-| populated 100,000-row column, 1 bar, one 5,000-cell batch | 5,000 | 24.0 / 27.2 | 43.8 / 76.1 |
-| populated 1,048,576-row column | 5,000 | refused before activeMs matters: the 1,000,000-unit bounds scan (`CF work limit`) | same |
+| populated 100,000-row column, 1 bar | 1,000 (text-path maximum) | 11.2 / 18.8 | 14.2 / 33.2 |
+| populated 100,000-row column, 1 bar | 256 (paint-path maximum) | 9.0 / 11.5 | 18.5 / 22.1 |
+| populated 100,000-row column, 1 bar (not a production call size) | 5,000 | 21.2 to 24.0 / 27.2 | 37.2 to 43.8 / 76.1 |
+| populated 1,048,576-row column | any | refused before activeMs matters: the 1,000,000-unit bounds scan (`CF work limit`) | same |
 
-The Stage 3 fixtures keep a 2x-8x margin even under load; a 5,000-cell batch over a 100,000-row column has under 2x
-idle and exceeds 50 ms under load (max 76 ms), so its CF would intermittently refuse. Options for the owner:
-(1) raise `activeMs` (simple; weakens the main-thread guard proportionally); (2) split the budget per paint batch or
-per checkpoint slice (keeps the guard per unit of work; more plumbing, and total time is no longer bounded);
-(3) count work units instead of wall time (deterministic and load-independent; needs a calibrated unit cap per
-device class and loses the wall-clock guarantee on slow devices).
+At production call sizes the margin is about 2.7x to 4.5x idle and 1.5x to 2.3x under this load (worst 33 ms of 50);
+slower devices or heavier contention would shrink it further, and the one-call 5,000-cell shape already exceeds
+50 ms under load. Two new checks run through this budget and are load-sensitive in the same way: the shared-scan
+pressure scenario (9 ms idle, 23 ms loaded) in `tests/xlsx-cf-stage3.test.ts` and `audit.ts --stage 3`. Options for
+the owner: (1) raise `activeMs` (simple; weakens the main-thread guard proportionally); (2) split the budget per
+checkpoint slice (keeps the guard per unit of work; more plumbing, and total time is no longer bounded); (3) count
+work units instead of wall time (deterministic and load-independent; needs a calibrated unit cap per device class and
+loses the wall-clock guarantee on slow devices).
 
 **Browser** (`.superpowers/t22/pw.config.ts`: the stock config's second webServer needs `@napi-rs/canvas`):
-chromium 18/18 passed and Playwright WebKit (`webkit-2370`) 18/18 passed. The Stage 3 tests (bars paint and the
+chromium and Playwright WebKit (`webkit-2370`) each 17 passed plus the 1 expected failure (forced-paged bar
+descriptor) reported as expected. The Stage 3 tests (bars paint and the
 resident, worker and forced-paged legs agree within 0.2 % of pixels; six zoom/DPR pairs; frozen panes; a live max
 edit that rescales the bars; print capture with bar pixels on the prepared page) pass on every leg; the bar
 descriptor is asserted on the resident and worker legs, and the forced-paged descriptor by the expected-failure test
@@ -1166,7 +1173,9 @@ clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 
 - **`measureBarGeometry` no-workbook fallback** treats a 1 px run in the axis colour as the axis; test-only path.
 - **Text scope estimate.** The resident text scope (copy, find, accessibility) prices every rule's properties per
   cell, so many rules over one column refuse requests the paint path (which sizes its batches) admits.
-- **Default statistics unit cap.** The text path's statistics scan costs about 66 units per cell, so a bar over more
-  than roughly 15,000 populated cells refuses there at 1,000,000 units (the paint path allows 10,000,000).
+- **Whole-column work.** A populated column of about a million rows refuses its CF at the 1,000,000-unit bounds scan
+  on the resident path, before any bar is evaluated.
+- **Refusal column.** For the 22 non-verified rows the table gives the refusal reasons that can apply (several codes
+  where the path differs), not a single code per row.
 - **zh-TW label.** 「資料橫條」 is the exact name in Excel 16.114 zh-TW's Conditional Formatting style menu (the orchestrator
   selected it by that name when authoring `excel-authored-databar.xlsx`); no change needed.

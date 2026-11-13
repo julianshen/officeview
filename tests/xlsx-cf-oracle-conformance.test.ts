@@ -687,7 +687,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) {
             const col = exp.ref.replace(/\d+/, '')
             if (!barWithheld(outcome)) {
-              if (MARKER_ONLY[`${c.id}:${col}`]) markerOnlyPainted.add(`${c.id}:${col}`)
+              // axis-negative H: only its POSITIVE cells may paint; a negative bar needs the unverified capability.
+              const negativeUnderNegCap = c.id === 'stage3-bar-axis-negative' && col === 'H' && outcome.kind === 'ready' && outcome.value.visual?.dataBar?.isNegative === true
+              if (MARKER_ONLY[`${c.id}:${col}`] && !negativeUnderNegCap) markerOnlyPainted.add(`${c.id}:${col}`)
               else violations.push(`${exp.ref} of ${c.id}: ${caps.filter(id => !VERIFIED_CAPABILITIES.has(id)).join(', ')}`)
             } else unevidencedWithheld++
           }
