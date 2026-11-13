@@ -12,11 +12,13 @@ import { remoteShowDeps, runRemoteShow, type RemoteShowStart } from '../../src/s
 import { StreamSessionError, type StreamErrorCode } from '../../src/stream/remote/errors'
 import type { Manifest } from '../../src/stream/manifest'
 import type { RemoteOfficeDoc } from '../../src/stream/remote/remote-doc'
+import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 
 const UNIT = { w: 960, h: 540 }
 
 interface Held {
   unit: number; scale: number | 'fit'; dpr: number; canvas: HTMLCanvasElement; signal?: AbortSignal; onSend?: () => void
+  settled: boolean
   ok(color?: string): Promise<void>
   fail(code: StreamErrorCode): Promise<void>
 }
@@ -38,8 +40,9 @@ function fakeDoc(o: { count?: number; hidden?: readonly number[]; notes?: boolea
   const hold = (into: Held[], unit: number, scale: number | 'fit', dpr: number, canvas: HTMLCanvasElement, signal?: AbortSignal, onSend?: () => void, w = UNIT.w, h = UNIT.h) =>
     new Promise<void>((resolve, reject) => {
       into.push({
-        unit, scale, dpr, canvas, signal, onSend,
+        unit, scale, dpr, canvas, signal, onSend, settled: false,
         async ok(color = '#f00') {
+          this.settled = true
           if (!signal?.aborted) {
             canvas.width = w; canvas.height = h
             const ctx = canvas.getContext('2d')!
@@ -49,7 +52,7 @@ function fakeDoc(o: { count?: number; hidden?: readonly number[]; notes?: boolea
           resolve()
           await flush()
         },
-        async fail(code) { reject(new StreamSessionError(code)); await flush() },
+        async fail(code) { this.settled = true; reject(new StreamSessionError(code)); await flush() },
       })
     })
   const doc = {
@@ -57,7 +60,8 @@ function fakeDoc(o: { count?: number; hidden?: readonly number[]; notes?: boolea
     get manifest() { return manifest },
     paint: vi.fn((unit: number, scale: number | 'fit', dpr: number, canvas: HTMLCanvasElement, signal?: AbortSignal, po?: { onSend?: () => void }) => {
       po?.onSend?.()
-      return hold(paints, unit, scale, dpr, canvas, signal, po?.onSend)
+      const k = typeof scale === 'number' ? scale * dpr : dpr
+      return hold(paints, unit, scale, dpr, canvas, signal, po?.onSend, UNIT.w * k, UNIT.h * k)
     }),
     paintNotes: vi.fn((unit: number, dpr: number, canvas: HTMLCanvasElement, signal?: AbortSignal) => {
       if (!manifest.can.notes) return Promise.reject(new StreamSessionError('policy-refused'))
@@ -418,5 +422,180 @@ describe('remote show: scale bucket', () => {
     // Meanwhile the old bitmap is shown scaled.
     expect(px(canvas, 960, 540)).toEqual([255, 0, 0, 255])
     s.exit()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 1: retained surfaces are byte-admitted; re-entrant exit; presenter refresh
+// ---------------------------------------------------------------------------
+
+const SLIDE_B1 = 960 * 540 * 4
+const SLIDE_B2 = 1920 * 1080 * 4
+
+/** A deterministic workspace (no terminal scratch) the show's every retained surface must be leased from. */
+function workspaceOf(limit: number) {
+  const ws = createSlideShowWorkspace('desktop', { limit, scratch: 0 })
+  vi.spyOn(remoteShowDeps, 'workspace').mockImplementation(() => ws)
+  return ws
+}
+
+describe('remote show: retained surfaces are byte-admitted', () => {
+  it('a full workspace refuses the slide surface before any request: typed error frame, still navigable', async () => {
+    // Room for the audience output (960×540) and nothing else.
+    workspaceOf(SLIDE_B1 + 1000)
+    const fd = fakeDoc({ count: 3 })
+    const { s, root } = await show(fd)
+    expect(fd.doc.paint).not.toHaveBeenCalled()
+    expect(frame(root)).toBe('error')
+    expect(root.querySelector('[data-officeview-show-frame-text]')?.textContent).toBe('Slide 1 could not be shown (workspace-full)')
+    s.next()
+    expect(s.state.slide).toBe(1)
+    s.exit()
+  })
+
+  it('a retained slide holds its bytes; exit returns the workspace to its pre-show usage', async () => {
+    const ws = workspaceOf(512 * 1024 * 1024)
+    const before = ws.used()
+    const fd = fakeDoc({ count: 3 })
+    const { s } = await show(fd)
+    // Terminal output + the in-flight destination, reserved before the paint.
+    expect(ws.used() - before).toBe(SLIDE_B1 + SLIDE_B1)
+    await fd.paints[0]!.ok()
+    expect(ws.used() - before).toBe(SLIDE_B1 + SLIDE_B1)
+    s.exit()
+    await s.ended
+    expect(ws.used()).toBe(before)
+  })
+
+  it('an aborted request gives its bytes back at once', async () => {
+    const ws = workspaceOf(512 * 1024 * 1024)
+    const fd = fakeDoc({ count: 8 })
+    const { s } = await show(fd)
+    const p0 = fd.paints[0]!
+    s.goTo(6)
+    await clock.advance(400)
+    expect(p0.signal?.aborted).toBe(true)
+    // Terminal + the new target only: the aborted destination was released before its late result.
+    expect(ws.used()).toBe(SLIDE_B1 + SLIDE_B1)
+    await p0.ok()
+    expect(ws.used()).toBe(SLIDE_B1 + SLIDE_B1)
+    s.exit()
+    await s.ended
+    expect(ws.used()).toBe(0)
+  })
+
+  it('a bucket replacement holds old + new while the new one is in flight, then frees the old', async () => {
+    const ws = workspaceOf(512 * 1024 * 1024)
+    const fd = fakeDoc({ count: 1, buckets: [1, 2] })
+    const { s } = await show(fd)
+    await fd.paints[0]!.ok()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1920 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1080 })
+    window.dispatchEvent(new Event('resize'))
+    await clock.advance(400)
+    // Terminal (now 1920×1080) + the old bitmap + the new destination.
+    expect(ws.used()).toBe(SLIDE_B2 + SLIDE_B1 + SLIDE_B2)
+    await fd.paints[1]!.ok()
+    expect(ws.used()).toBe(SLIDE_B2 + SLIDE_B2)
+    s.exit()
+    await s.ended
+    expect(ws.used()).toBe(0)
+  })
+
+  it('the cache is bounded by bytes: evicted slides release their leases', async () => {
+    // Terminal + room for a small cache only.
+    const ws = workspaceOf(SLIDE_B1 + 8 * SLIDE_B1)
+    const fd = fakeDoc({ count: 10 })
+    const { s } = await show(fd)
+    let peak = 0
+    for (let i = 0; i < 9; i++) {
+      for (let k = 0; k < 4; k++) {
+        await clock.advance(1_100)
+        for (const p of fd.paints.filter((x) => !x.signal?.aborted && !x.settled)) await p.ok()
+        peak = Math.max(peak, ws.used())
+      }
+      s.next()
+    }
+    expect(peak).toBeLessThanOrEqual(SLIDE_B1 + 8 * SLIDE_B1)
+    // Bytes held equal the bitmaps retained (plus the terminal): nothing evicted stays charged.
+    const held = fd.paints.filter((p) => p.canvas.width > 0).length
+    const inFlight = fd.paints.filter((p) => !p.settled && !p.signal?.aborted).length
+    expect(ws.used()).toBe(SLIDE_B1 + (held + inFlight) * SLIDE_B1)
+    expect(held).toBeLessThan(9)
+    s.exit()
+    await s.ended
+    expect(ws.used()).toBe(0)
+  })
+
+  it('a notes image and its Presenter View copy are leased; dropping the notes releases both', async () => {
+    const ws = workspaceOf(512 * 1024 * 1024)
+    const fd = fakeDoc({ count: 2, notes: true })
+    const { s } = await show(fd, { popup: null })
+    await fd.paints[0]!.ok()
+    await clock.advance(1_000)
+    const pending = ws.used()
+    await fd.notes[0]!.ok()
+    const NOTES = 720 * 100 * 4
+    const withNotes = ws.used()
+    // The worst-case reservation shrank to the delivered image plus its pane copy.
+    expect(withNotes).toBeLessThan(pending)
+    fd.setManifest({ notes: false })
+    expect(withNotes - ws.used()).toBe(2 * NOTES)
+    s.exit()
+    await s.ended
+    expect(ws.used()).toBe(0)
+  })
+})
+
+describe('remote show: exit inside a notification loop', () => {
+  it('exit() from a frame subscriber stops the rest of the frame dispatch', async () => {
+    const fd = fakeDoc({ count: 2 })
+    const { s } = await show(fd)
+    const later = vi.fn()
+    s.presenterSource.onFrame(() => s.exit())
+    s.presenterSource.onFrame(later)
+    await fd.paints[0]!.ok()
+    expect(s.state.exited).toBe(true)
+    expect(later).not.toHaveBeenCalled()
+  })
+
+  it('a frame subscriber removed by an earlier one is not called', async () => {
+    const fd = fakeDoc({ count: 2 })
+    const { s } = await show(fd)
+    const later = vi.fn()
+    let off = () => {}
+    s.presenterSource.onFrame(() => off())
+    off = s.presenterSource.onFrame(later)
+    await fd.paints[0]!.ok()
+    expect(later).not.toHaveBeenCalled()
+    s.exit()
+  })
+
+  it('exit() from a view subscriber stops the rest of the change dispatch', async () => {
+    const fd = fakeDoc({ count: 2 })
+    const { s } = await show(fd)
+    const later = vi.fn()
+    s.presenterSource.subscribe(() => s.exit())
+    s.presenterSource.subscribe(later)
+    s.presenterSource.touch()
+    expect(s.state.exited).toBe(true)
+    expect(later).not.toHaveBeenCalled()
+  })
+})
+
+describe('remote show: presenter refresh', () => {
+  it('Alt+F5 into Presenter View starts the 1 Hz refresh once; exit stops it', async () => {
+    const stop = vi.fn()
+    const every = vi.spyOn(remoteShowDeps, 'every').mockImplementation(() => stop)
+    const fd = fakeDoc({ count: 2 })
+    const { s, host } = await show(fd)
+    expect(every).not.toHaveBeenCalled()
+    const altF5 = () => host.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', altKey: true, bubbles: true, cancelable: true }))
+    altF5()
+    expect(every).toHaveBeenCalledTimes(1)
+    altF5(); altF5()
+    expect(every).toHaveBeenCalledTimes(1)
+    s.exit()
+    expect(stop).toHaveBeenCalledTimes(1)
   })
 })

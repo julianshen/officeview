@@ -37,7 +37,7 @@ import { mountPresenterView, type PresenterSource } from '../../slideshow/presen
 import { createPresenterPlacement, type PresenterPlacement } from '../../slideshow/presenter/placement'
 import { createElapsedTimer, type ElapsedTimer } from '../../slideshow/presenter/timer'
 import { adoptPresenterWindow, type PresenterWindow } from '../../slideshow/presenter/window'
-import type { DiagnosticSink, SlideShowWorkspace, TerminalReserve } from '../../slideshow/types'
+import type { DiagnosticSink, Lease, SlideShowWorkspace, TerminalReserve } from '../../slideshow/types'
 import { admitShow, backingFor, createSlideShowWorkspace, surfaceBytes, type Backing, type SlideShowProfile } from '../../slideshow/workspace'
 import { StreamSessionError } from './errors'
 import { bucketFor, type RemoteOfficeDoc } from './remote-doc'
@@ -57,6 +57,8 @@ export interface RemoteShowStart extends Omit<ShowStart, 'doc' | 'handle' | 'sou
 export const NOTES_SETTLE_MS = 300
 /** How long the post-exit focus restore waits for the browser to leave full screen (as the local session). */
 const RESTORE_LISTENER_MS = 5000
+/** The server's notes image bounds (session.ts): 720 CSS px × scale wide, at most 8,192 device px tall. */
+const NOTES_WIDTH_CSS = 720, NOTES_MAX_PX = 8192
 /** Presenter View's timer and clock refresh. */
 const PRESENTER_TICK_MS = 1000
 
@@ -198,22 +200,46 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     idle = []
     for (const f of run) f()
   }
+  /**
+   * Retained slide surfaces are byte-admitted (spec 7): each bitmap's bytes are leased from the show's
+   * workspace before its request goes out and held until it is evicted, replaced or disposed. The cache
+   * holds what a share of the room left after the audience output fits at the largest bucket; with less
+   * room, fewer neighbours are prefetched (the wanted set never exceeds the cache, so nothing thrashes).
+   */
+  const maxBucket = Math.max(1, ...doc.manifest.recorder.scalesBuckets)
+  const destBytes = (unit: number, bucket: number) => { const u = list[unit] ?? first; return surfaceBytes(Math.ceil(u.w * bucket), Math.ceil(u.h * bucket)) }
+  const slots = Math.floor((workspace.limit - workspace.used()) / 2 / destBytes(unitOf[0] ?? 0, maxBucket))
+  const maxCached = Math.max(1, Math.min(8, slots))
+  /** Neighbours prefetched besides the target: at most 3 (2 next + 1 previous), always fewer than the cache holds. */
+  const neighbours = Math.max(0, Math.min(3, maxCached - 2))
   const fetcher: ShowFetcher = createShowFetcher({
     async paint(unit, scale, dpr, sig, charge) {
+      // The destination's bytes first: no room is a typed refusal, and nothing is requested.
+      const lease = workspace.lease(destBytes(unit, scale * dpr), 'remote-show:slide')
+      if (!lease) throw new StreamSessionError('workspace-full', 'the slideshow workspace has no room for this slide')
       open++
-      // R2: a fresh canvas per bitmap; `close` frees it.
+      // R2: a fresh canvas per bitmap; `close` frees it and its bytes.
       const canvas = owner.createElement('canvas')
       zero(canvas)
+      const free = () => { zero(canvas); lease.release() }
+      // An abandoned request gives its bytes back now, not when its late result arrives.
+      sig.addEventListener('abort', free, { once: true })
       try {
         await doc.paint(unit, scale, dpr, canvas, sig, { onSend: charge })
         // The doc returns without painting after an abort or the end: nothing to keep.
-        if (sig.aborted || !(canvas.width > 0)) { zero(canvas); throw new StreamSessionError('closed', 'nothing painted') }
-        return Object.assign(canvas, { close: () => zero(canvas) })
+        if (sig.aborted || !(canvas.width > 0)) { free(); throw new StreamSessionError('closed', 'nothing painted') }
+        sig.removeEventListener('abort', free)
+        // The raster may be smaller than the bucket surface: keep only what it holds.
+        lease.shrink(lease.bytes - surfaceBytes(canvas.width, canvas.height))
+        return Object.assign(canvas, { close: free })
+      } catch (e) {
+        free()
+        throw e
       } finally {
         settledOne()
       }
     },
-  }, clock)
+  }, clock, { maxCached })
   /** Units whose last request failed (cleared once a bitmap lands). */
   const failed = new Map<number, RemoteErrorCode>()
   /** Bumped on every content change Presenter View shows (bitmaps, errors, notes). */
@@ -230,7 +256,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (slide === 'end') { fetcher.want(count ? [unitOf[count - 1]!] : []); return }
     const p = slide
     const near = [p + 1, p + 2].map((q) => (q < count ? q : loop ? q % count : -1))
-    fetcher.want([p, ...near, p - 1].filter((q) => q >= 0 && q < count).map((q) => unitOf[q]!))
+    const wanted = [p, ...[...near, p - 1].filter((q) => q >= 0 && q < count && q !== p).slice(0, neighbours)]
+    fetcher.want(wanted.map((q) => unitOf[q]!))
   }
 
   // ---------------------------------------------------------------------
@@ -258,13 +285,22 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     afterFrame()
   }
 
+  /** Each subscriber still subscribed, stopping once one of them ends the show. */
+  function notify(set: Set<() => void>, onThrow?: (f: () => void, e: unknown) => void): void {
+    for (const f of [...set]) {
+      if (exited) return
+      if (!set.has(f)) continue
+      if (!onThrow) { f(); continue }
+      try { f() } catch (e) { onThrow(f, e) }
+    }
+  }
+
   function afterFrame(): void {
-    for (const f of [...frameSubs]) {
-      try { f() } catch (e) {
+    if (exited) return
+    notify(frameSubs, (f, e) => {
         frameSubs.delete(f)
         sink.add({ code: 'presenter-paint', message: `Presenter View stopped mirroring the audience (${e instanceof Error ? e.message : String(e)})` })
-      }
-    }
+    })
   }
 
   fetcher.onReady((unit) => {
@@ -291,6 +327,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   let notes: ImageNotes | undefined
   let notesUnit: number | undefined
   let notesImage: HTMLCanvasElement | undefined
+  /** The notes image's bytes and its Presenter View copy's (the pane canvas), held while the notes are shown. */
+  let notesLease: Lease | undefined
   let notesAbort: AbortController | undefined
   let notesWait: (() => void) | undefined
   /** One per followed slide: a retry queued for an earlier visit never runs. */
@@ -316,6 +354,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     notesAbort?.abort(); notesAbort = undefined
     if (notesImage) zero(notesImage)
     notesImage = undefined
+    notesLease?.release()
+    notesLease = undefined
     notesUnit = undefined
     if (notes) { notes = undefined; content++ }
   }
@@ -332,18 +372,36 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   }
   function requestNotes(unit: number, gen: number, retry: boolean): void {
     if (exited || gen !== notesGen || notesUnit !== unit || !notesOn()) return
+    const dpr = win?.devicePixelRatio ?? 1
+    // The worst-case image (720 × scale wide, up to 8,192 px tall) is reserved before the request, then
+    // trimmed to the delivered image plus its pane copy; no room is an error in the pane, nothing sent.
+    const notesScale = bucketFor(1, dpr, doc.manifest.recorder.scalesBuckets.filter((b) => b === 1 || b === 2).concat(2))
+    const lease = workspace.lease(surfaceBytes(NOTES_WIDTH_CSS * notesScale, NOTES_MAX_PX), 'remote-show:notes')
+    if (!lease) { sink.add({ code: 'workspace', message: 'The slideshow workspace has no room for the notes image' }); setNotes('error'); return }
     const ctl = new AbortController()
     notesAbort = ctl
     const image = owner.createElement('canvas')
     zero(image)
     const stale = () => exited || notesAbort !== ctl || ctl.signal.aborted
-    doc.paintNotes(unit, win?.devicePixelRatio ?? 1, image, ctl.signal).then(() => {
-      if (stale() || !(image.width > 0)) { zero(image); if (!stale()) { notesAbort = undefined; setNotes('error') } return }
+    const free = () => { zero(image); lease.release() }
+    ctl.signal.addEventListener('abort', free, { once: true })
+    doc.paintNotes(unit, dpr, image, ctl.signal).then(() => {
+      if (stale() || !(image.width > 0)) { free(); if (!stale()) { notesAbort = undefined; setNotes('error') } return }
       notesAbort = undefined
+      ctl.signal.removeEventListener('abort', free)
+      const bytes = surfaceBytes(image.width, image.height)
+      if (lease.bytes >= 2 * bytes) lease.shrink(lease.bytes - 2 * bytes)
+      else if (!lease.grow(2 * bytes - lease.bytes)) {
+        free()
+        sink.add({ code: 'workspace', message: 'The slideshow workspace has no room for the notes image' })
+        setNotes('error')
+        return
+      }
       notesImage = image
+      notesLease = lease
       setNotes('ready', image)
     }, (e: unknown) => {
-      zero(image)
+      free()
       if (stale()) return
       notesAbort = undefined
       const code = e instanceof StreamSessionError ? e.code : undefined
@@ -370,14 +428,14 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   let viewVersion = 0
   let viewKey = ''
   function syncPresenter(force = false): void {
-    if (!viewSubs.size) return
+    if (exited || !viewSubs.size) return
     const t = clock.now()
     const key = [slide, screen, paused, presenter, swapped ? 1 : 0, sink.list().length, content,
       timer ? Math.floor(timer.elapsed(t) / 1000) : 0, timer?.paused, Math.floor(remoteShowDeps.wall() / 60000)].join('|')
     if (!force && key === viewKey) return
     viewKey = key
     viewVersion++
-    for (const f of [...viewSubs]) f()
+    notify(viewSubs)
   }
 
   // ---------------------------------------------------------------------
@@ -430,6 +488,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     listeners.abort()
     stopManifest?.()
     stopTick?.()
+    stopTick = undefined
     dropNotes()
     fetcher.dispose()
     view?.dispose()
@@ -488,8 +547,15 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       swapped = { dispose: () => { mounted.dispose(); box.remove() } }
       surface.root.hidden = true
     }
+    startTick()
     followNotes()
     syncPresenter(true)
+  }
+
+  /** Presenter View's timer and wall clock move without a frame loop: a 1 Hz refresh while it can be shown. */
+  function startTick(): void {
+    if (stopTick || exited || presenter === 'none') return
+    stopTick = remoteShowDeps.every(win, PRESENTER_TICK_MS, () => syncPresenter())
   }
 
   function dispatch(input: ShowInput): void { run(input, false) }
@@ -729,7 +795,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     started = true
     if (presenter === 'swap') toggleView()
     // Presenter View's timer and wall clock move without a frame loop.
-    if (presenter !== 'none') stopTick = remoteShowDeps.every(win, PRESENTER_TICK_MS, () => syncPresenter())
+    startTick()
   } catch (e) {
     release()
     host.replaceChildren()

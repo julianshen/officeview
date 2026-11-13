@@ -19,6 +19,8 @@ export type StreamErrorCode =
   | 'print-too-large' | 'print-quota-exhausted'
   /** Notes refusal (Stage 3c): the unit is out of range or hidden. */
   | 'invalid-unit'
+  /** Client refusal (Stage 3c show): the slideshow workspace has no room for the surface. */
+  | 'workspace-full'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'
