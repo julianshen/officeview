@@ -69,7 +69,7 @@ export const remoteShowDeps = {
     const w = win ?? globalThis
     return {
       now: () => (win?.performance ?? globalThis.performance).now(),
-      wake: (ms, cb) => { const id = w.setTimeout(cb, ms); return () => w.clearTimeout(id) },
+      wake: (ms, cb) => { const id = w.setTimeout(cb, ms); return () => w.clearTimeout(id as number) },
     }
   },
   /** A repeating wall timer; returns the stop. */

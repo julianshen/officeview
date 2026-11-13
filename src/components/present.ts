@@ -7,10 +7,12 @@
  * comments off class members, object-literal properties and JSX props
  * (the library build keeps those verbatim; slideshow plan S1-1).
  */
-import type { OfficeDocSource } from './OfficeDoc'
+import type { DocxDocument } from '../docx/types'
+import type { XlsxDocument } from '../xlsx/types'
 import type { PptxDocument, PptxPackageHandle } from '../pptx/types'
 import type { SlideShowDiagnostic } from '../slideshow/types'
 import type { WatermarkOptions } from '../core/watermark'
+import type { RemoteOfficeDoc } from '../stream/remote/remote-doc'
 import { pptxPackageHandle } from '../pptx/parse'
 
 export type { SlideShowDiagnostic }
@@ -24,6 +26,7 @@ export class SlideShowError extends Error {
 }
 
 export interface PresentOptions {
+  /** A number is a slide index; on a streamed deck it counts the shown slides only (hidden left out). */
   from?: 'beginning' | 'current' | number
   /** 'auto' (default): Presenter View when a second screen can be used, else audience only. */
   presenterView?: boolean | 'auto'
@@ -154,7 +157,8 @@ export interface ShowStart {
 }
 
 export interface PresentRequest {
-  doc: PptxDocument | OfficeDocSource
+  /** OfficeDoc's `OfficeDocSource`, named from its parts: the remote path (show.ts) must not reach OfficeDoc.tsx. */
+  doc: DocxDocument | XlsxDocument | PptxDocument | RemoteOfficeDoc
   host: HTMLElement
   opts?: PresentOptions
   platform: PresentPlatform
@@ -172,6 +176,8 @@ export interface PresentRequest {
 
 /** @internal Tests defer or fail the chunk through this. */
 export const showLoader = { load: () => import('../slideshow') }
+/** @internal The streamed deck's show (design §4.3), lazy as the local chunk. */
+export const remoteShowLoader = { load: () => import('../stream/remote/show') }
 
 /**
  * The start sequence. Everything up to the import runs synchronously inside
@@ -181,8 +187,12 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   const { doc, host, opts = {}, platform: P } = req
   const from = opts.from ?? 'beginning'
   const d = host.ownerDocument, w = d.defaultView!
-  const code: SlideShowErrorCode | 0 = !req.allow || !('slides' in doc) ? 'not-presentable'
-    : typeof from == 'number' && !doc.slides[from] ? 'invalid-slide'
+  // A streamed deck (design §4.3) is read from its manifest, synchronously: its slides
+  // are the units not hidden, `from` a streamed index (R19); Presenter View needs can.notes.
+  const m = (doc as RemoteOfficeDoc).kind == 'remote' && (doc as RemoteOfficeDoc).manifest
+  const slides = m ? m.units.list.filter((u) => !u.hidden) : 'slides' in doc && doc.slides
+  const code: SlideShowErrorCode | 0 = !req.allow || !slides || m && (!m.can.present || !slides.length || opts.presenterView === true && !m.can.notes) ? 'not-presentable'
+    : typeof from == 'number' && !slides[from] ? 'invalid-slide'
     : P.hasActivation(w) === false ? 'gesture-required' : 0
   const token = code ? 0 : acquireShowToken(host)
   if (!token) return Promise.reject(new SlideShowError(code || 'already-presenting'))
@@ -193,7 +203,7 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   // A throwing open is a blocked popup, so the token is never held by a dead start.
   let popup: Window | null | undefined = null
   try {
-    popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
+    popup = pv === true || pv == 'auto' && screen && (!m || m.can.notes) ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
   } catch {}
   let done: unknown, handed: unknown, entered: unknown
   const ac = new AbortController(), signal = ac.signal
@@ -232,13 +242,13 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   host.focus()
   return Promise.race([
     new Promise<never>((_, no) => signal.addEventListener('abort', () => handed || no(new SlideShowError('cancelled')))),
-    showLoader.load().then((m) => {
+    (m ? remoteShowLoader.load() : showLoader.load()).then((x) => {
       if (signal.aborted) return
       handed = 1
-      return m.runShow({
-        ...req, ...opts, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), token, fullscreen, retryFullscreen, from, signal, cleanup, popup,
-        callbacks: { ...m.viewerCallbacks(host, back), ...req.callbacks },
-      })
+      const s = { ...req, ...opts, token, fullscreen, retryFullscreen, from, signal, cleanup, popup }
+      // The remote viewer supplies its own navigation callbacks (unit indices).
+      return 'runRemoteShow' in x ? x.runRemoteShow({ ...s, doc: doc as RemoteOfficeDoc, callbacks: req.callbacks as SlideShowCallbacks })
+        : x.runShow({ ...s, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), callbacks: { ...x.viewerCallbacks(host, back), ...req.callbacks } })
     }),
   ]).catch((e) => {
     cleanup()

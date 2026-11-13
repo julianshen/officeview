@@ -37,9 +37,10 @@ export interface RemotePrint {
 
 const BAR: CSSProperties = { position: 'absolute', top: 8, left: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', maxWidth: 'calc(50% - 12px)' }
 const SURFACE: CSSProperties = { background: 'var(--ov-color-chrome, #fff)', color: 'var(--ov-color-text, inherit)', border: '1px solid var(--ov-color-border, #ccc)', borderRadius: 'var(--ov-radius-control, 6px)', padding: '4px 8px' }
-const BUTTON: CSSProperties = { ...SURFACE, cursor: 'pointer', font: 'inherit', minHeight: 28 }
+export const BUTTON: CSSProperties = { ...SURFACE, cursor: 'pointer', font: 'inherit', minHeight: 28 }
 
-export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; title?: string; themeRoot: RefObject<HTMLElement | null> }): RemotePrint {
+/** `lead`: controls shown first in the same bar (the remote view's Present button). */
+export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; title?: string; themeRoot: RefObject<HTMLElement | null>; lead?: ReactElement | null }): RemotePrint {
   // A resume may replace the manifest (caps and can.print): re-render and re-read.
   const [, setManifestRev] = useState(0)
   useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
@@ -151,8 +152,9 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
     </label>
   )
   const running = progress !== undefined
-  const ui = allowed || notice ? (
+  const ui = allowed || notice || o.lead ? (
     <div data-ov-remote-chrome="" style={BAR}>
+      {o.lead}
       {allowed ? <button type="button" data-ov-print-button="" ref={printBtn} disabled={running} onClick={start} style={BUTTON}>Print</button> : null}
       {running ? (
         <span style={{ ...SURFACE, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
