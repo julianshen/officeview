@@ -117,6 +117,23 @@ What to check afterwards:
 - `audit.ts --stage 3` lists `bar:color-auto-axis` and `bar:color-auto-negative-fill` as verified, with the measured ARGB in `matchedHypotheses` of the case. Otherwise the reason is printed: `bar-hypothesis-none` when the samples are not one colour, non-discriminating when the colour is within 16 per channel of the bar's own fill.
 - Never run `--write` here. The colours are published only by Task 23 (`--write --publish-stage3`).
 
+## 2c. The default-lengths case (Task 22b)
+
+`stage3-bar-lengths-default` owns `bar:lengths-default-10-90`. The captures so far show two 10/90 curves at one 180 pt width: the paired solid bar of `stage3-bar-lengths` B is 9 px shorter than 10/90 linear, and every base-only gradient bar is exactly 10/90 linear. The case crosses paired solid (B:D), paired gradient (E:G) and base-only (H:J) bars at 90, 180 and 360 pt, with values 0, 10, ..., 100 on each, so that one candidate rule of `BAR_LENGTH_RULES` (scripts/cf-refs/verify.ts) matches. Run it like the other cases, with the same preconditions, close checks and rerun rule:
+
+```
+bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-lengths-default --refresh-clock-date
+bun scripts/cf-refs/capture.ts --stage 3 --case stage3-bar-lengths-default
+bun scripts/cf-refs/capture.ts --stage 3 --verify-only
+bun scripts/cf-refs/audit.ts   --stage 3
+```
+
+What to check afterwards:
+
+- The resave keeps every bar paired (B:G) or base-only (H:J), and B:D stay `gradient="0"`. Excel drops `minLength="10" maxLength="90"` and `gradient="1"` from the companions, since they are the schema defaults. If the resave pairs the base-only bars, record it: H:J then no longer test the base-only form.
+- `audit.ts --stage 3` lists `bar:lengths-default-10-90` as verified and prints the matched rule (`matchedHypotheses` of the case). If it is refused with `bar-hypothesis-none`, no candidate fits. Record the px from the sidecar as a finding. Do not add a fitted rule.
+- Never run `--write` here. The rule is published only by Task 23 (`--write --publish-stage3`), as `VERIFIED_STAGE3_BAR_LENGTHS`.
+
 ## 3. The unresolved-shapes case (named explicitly)
 
 `stage3-bar-unresolved-shapes` is `unsupported` and lifts no capability, so `build.ts` skips it unless it is named:

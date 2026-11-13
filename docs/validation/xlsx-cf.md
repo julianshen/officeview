@@ -343,6 +343,7 @@ Task 18 prepares the Stage 3 evidence machinery. **Nothing here is Excel evidenc
 | Case ID | Sheet & Range | Question settled | Rulings | Status |
 |---|---|---|---|---|
 | `stage3-bar-settings-probe` | `Sheet1!A1:G12` | S3-A precondition probe against defaults and a default control; calibration columns 10/30/60 and one solid DXF cell; schema defaults for a base-only bar | S3-A, S3-Q | recipe-pending |
+| `stage3-bar-lengths-default` | `Sheet1!A1:J24` | Default 10/90 lengths (Task 22b): paired solid, paired gradient and base-only bars at 90/180/360 pt, values 0..100 by 10 | S3-B, S3-M | recipe-pending |
 | `stage3-bar-lengths` | `Sheet1!A1:J12` | Solid bar lengths (the midpoint cell at 50 is not designated for 10/90 vs 0/100): default 10/90 vs explicit 0/100, min/max, num 20/80, percent 25/75, percentile 10/90, autoMin and autoMax (autoMin differs from min), all-negative | S3-B, S3-C, S3-L | recipe-pending |
 | `stage3-bar-degenerate` | `Sheet1!A1:H12` | Equal values, a single numeric cell, inverted num 80 to 20, values beyond bounds, percent -10/150, Excel 2007 `min val="0"`, `min` placed second | S3-D, S3-E | recipe-pending |
 | `stage3-bar-axis-negative` | `Sheet1!A1:I12` | Mixed {-50..100} under automatic/middle/none, negative fill and border colours vs same-as-positive, all-positive automatic control | S3-K, S3-L | recipe-pending |
@@ -364,7 +365,7 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:settings-precondition-probe` | `stage3-bar-settings-probe` | excel-object-model | S3-A | recipe-pending (unverified) |
 | `bar:settings-schema-defaults` | `stage3-bar-settings-probe` | excel-object-model | S3-Q | recipe-pending (unverified) |
 | `bar:pixel-calibration` | `stage3-bar-settings-probe` | pixel calibration | S3-A | recipe-pending (unverified) |
-| `bar:lengths-default-10-90` | `stage3-bar-lengths` | pixel-measured | S3-B | recipe-pending (unverified) |
+| `bar:lengths-default-10-90` | `stage3-bar-lengths-default` (since Task 22b; `stage3-bar-lengths` B is a one-width cross-check) | pixel-measured | S3-B | recipe-pending: blocked until the case is captured (Task 22b) |
 | `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | pixel-measured | S3-B | recipe-pending (unverified) |
 | `bar:bounds-min-max` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
 | `bar:bounds-num` | `stage3-bar-lengths` | pixel-measured | S3-C and S3-B | recipe-pending (unverified) |
@@ -387,7 +388,7 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:negative-border-color` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
 | `bar:negative-border-same-as-positive` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
 | `bar:render-solid` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
-| `bar:render-gradient-stops` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
+| `bar:render-gradient-stops` | `stage3-bar-rendering` (pooled over every capture) | pixel-measured | S3-M | verified (Task 22b): `bar-length`, endBlend 0.847 |
 | `bar:render-border` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
 | `bar:direction-ltr` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
 | `bar:direction-rtl` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
@@ -412,11 +413,11 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:composition-with-scale` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
 | `bar:composition-overlapping-bars` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
 | `bar:composition-matching-stopIfTrue-ahead` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
-| `bar:composition-bar-stopIfTrue` | `stage3-bar-composition` | pixel-measured | S3-J | recipe-pending (unverified) |
-| `bar:composition-unresolved-stub` | `stage3-bar-composition` | pixel-measured | S3-I | recipe-pending (unverified) |
+| `bar:composition-bar-stopIfTrue` | `stage3-bar-composition` | none | S3-J; unsupported in Stage 3 per S3-CLOSE | refused-unsupported (`CF_STAGE3_UNSUPPORTED`) |
+| `bar:composition-unresolved-stub` | `stage3-bar-composition` | none | S3-I; unsupported in Stage 3 per S3-CLOSE (needs Stage 5) | refused-unsupported (`CF_STAGE3_UNSUPPORTED`) |
 | `bar:pairing-paired` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
 | `bar:settings-paired-precedence` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
-| `bar:pairing-standalone` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
+| `bar:pairing-standalone` | `stage3-bar-pairing` | none | S3-Q; unsupported in Stage 3 per S3-CLOSE | refused-unsupported (`CF_STAGE3_UNSUPPORTED`) |
 | `bar:pairing-base-only` | `stage3-bar-pairing` | excel-object-model | S3-Q | recipe-pending (unverified) |
 | `bar:scope-whole-column` | `stage3-bar-pairing` | pixel-measured | S3-H | recipe-pending (unverified) |
 | `bar:unresolved-orphan-x14` | `stage3-bar-unresolved-shapes` | none (always refused) | Always unsupported per S3-Q | unsupported (refused) |
@@ -725,3 +726,85 @@ Ruling S3-N withholds narrow cells only. No width threshold for "narrow" was mea
   - The paged scope learns the outcome when it paints. Until then it announces nothing as a bar.
 - **Host fills are parsed strictly.** A host fill counts as white only as an exact opaque `#RRGGBB` = FFFFFF, as `spreadsheetColor` resolves it. Any other value withholds the axis bar.
 - **Text is hidden only in two cases.** It is hidden under a bar that paints a fill, or under a bar whose evaluated length is zero (the minimum, or zero on an axis). A non-zero share that rounds away keeps its text.
+
+### Task 22b (2026-11-14): Excel's gradient fill, the 10/90 lengths, and three capabilities closed (owner ruling S3-CLOSE)
+
+No Excel was run. `audit.ts --write` was not run, and `verifiedCapabilities.ts` is unchanged, so production still withholds every bar. The manifest changed only through `generate.ts --stage 3 --case stage3-bar-lengths-default` and `capture.ts --stage 3 --verify-only`.
+
+**Gradient fill (`bar:render-gradient-stops`): verified.** Every gradient bar in the captures was decoded column by column on every bar row, from the RGBA PNGs (unpainted pixels have alpha 0; the harness composites over white). Text pixels were masked by the same-content control's ink. There are 24 bars:
+
+- rendering C3:C6, x14 at 0/100, fill 0000FF;
+- the probe's default control C2:C6, base-only at 10/90, fill 638EC6;
+- degenerate G and H, base-only, 0000FF;
+- pairing D, base-only, 0000FF.
+
+They range from 18 to 177 px long, 57,498 pixels in all.
+
+- **Model.** The gradient runs over the bar's own length, linear in sRGB, from the fill colour toward white by a fixed blend t: `c(i) = f + (255 − f)·t·(i + ½)/L`, for column `i` of a bar `L` px long. The bar is uniform vertically, has no border of its own and no partial alpha at its edges.
+- **The blend fraction.** Least squares gives t = 0.847 on every bar: per fill and per case, t is 0.847–0.8473. The end colour is therefore D8D8FF for 0000FF and E7EEF6 for 638EC6 (the probe's last column measures 231,238,246).
+- **Error.** The largest error over all 57,498 pixels is **6 per channel**: three text-halo pixels of rendering C6, which the control's ink does not mask. Every other pixel is within 3. The tolerance is 8.
+- **The gradient's length.** The extent of every 0/100 gradient bar equals the solid-length model exactly (rendering C: 18/89/159/177). Ruling S3-M therefore holds: a gradient bar takes its length from the solid model.
+
+**Rejected alternatives** (largest per-channel error over the pooled pixels; each also differs from `bar-length` by 17 or more somewhere):
+
+| Alternative | Max error | Why it is ruled out |
+|---|---|---|
+| The ramp laid over the whole span and cut at the bar's end (`cell-span`) | 192 | A half-length bar ends near 215, where this ramp ends near 108 |
+| A pure white end (`white-end`) | 44 | The last column is about 216, not 255 |
+| Interpolation in linear light (`linear-light`) | 63 | Midpoints fall too light |
+| A solid fill (`solid`) | 216 | The bar fades |
+| One fixed end colour for every fill (`fixed-end`) | 27 | Refuted by the probe's second fill; one fill alone cannot separate it from a blend toward white |
+
+**How the harness verifies it.** `sampleBarGradients` and `judgeBarGradient` (scripts/cf-refs/verify.ts) treat the gradient as an observation family, like the automatic colours.
+
+- The owning case verifies on its own capture with five hypotheses.
+- The audit pools every capture, including the second fill, and verifies only when that pooled judgement agrees with the owning case.
+- `--write --publish-stage3` then exports `VERIFIED_STAGE3_BAR_GRADIENT = { 'bar-length': { endBlend: 0.847, settledBy: ['bar:render-gradient-stops'] } }`. Without the flag, the rendering is byte-identical.
+
+**Production.** `layoutDataBar` gives the fill rect a `gradientEnd`, and `paintDataBars` fills it with a canvas linear gradient. A canvas samples pixel centres, exactly as the model does. The model comes only from the export, through `barGradientEvidence`. With the export absent, which is the state today, gradient bars stay withheld as before.
+
+A gradient paints only in the measured shape: left to right, no border, no axis, positive, on a white host. These were never measured, so they withhold:
+
+- right-to-left;
+- bordered;
+- with an axis;
+- negative;
+- on a filled host.
+
+**Lesson 1.** All 24 bars are painted by the production painter on a real canvas at the capture scale and compared with Excel pixel by pixel. The worst error is 6 per channel. A solid fill misses all 24 bars.
+
+**Default 10/90 lengths (`bar:lengths-default-10-90`): blocked, needs one Excel run.** The captures show two 10/90 curves at a single width (180 pt, span 177):
+
+| Bars | 0 / 25 / 50 / 75 / 100 % |
+|---|---|
+| Paired solid (lengths B, x14 with the schema-default 10/90) | 9 / 44 / 80 / 115 / 150 px |
+| Base-only gradient (probe C, degenerate G and H, pairing D) | 18 / 53 / 89 / 124 / 159 px |
+
+The base-only row is exactly `round((0.1 + 0.8·t)·177)`, 10/90 linear.
+
+- **Why no single formula fits.** Fill type and pairing form are confounded, so no formula of (span, t, min, max) can reproduce both rows.
+- **Two rules fit the solid row.** `half-min` gives `(min/2 + (max − min)·t)·span`, that is 5/85. `offset-9pt` gives 10/90 linear minus 9 pt. Both fit at this width and part at others.
+- **The candidate family.** `bar:lengths-default-10-90` now has the candidates `BAR_LENGTH_RULES`: `linear`, then `half-min` and `offset-9pt`, each applied to `all`, `x14` or `solid` bars. Gradient cells are measured by their gradient run, not the fade. On lengths B, all six non-linear candidates match, so the result is non-discriminating there.
+- **The new case.** `stage3-bar-lengths-default` (recipe-pending) crosses paired solid, paired gradient and base-only bars at 90/180/360 pt with values 0..100 in steps of 10. Every pair of candidates differs there by at least 3 px. It owns the capability because it sits before `stage3-bar-lengths` in the catalogue.
+- **Production.** The capability alone no longer lifts 10/90. The evaluator also needs the selected rule, `VERIFIED_STAGE3_BAR_LENGTHS`, which is rendered only with `--publish-stage3`. It applies rules that are a share of the span (`linear`, and `half-min` on `all` or `solid` bars). It stays unresolved for `offset-9pt` and for `x14`-scoped rules, because the definition does not record the pairing form.
+- **The run.** Recipes section 2c.
+
+**Three capabilities closed (owner ruling S3-CLOSE).** `CF_STAGE3_UNSUPPORTED` (scripts/cf-refs/cases.ts) records three capabilities as `refused-unsupported`. Their cases stay measured, and `isCapabilityVerified` never lifts them. Production is unchanged: it withholds and taints them as before.
+
+| Capability | Why it is unsupported in Stage 3 |
+|---|---|
+| `bar:composition-bar-stopIfTrue` | Excel's resave drops the flag; S3-J keeps such a rule unresolved |
+| `bar:composition-unresolved-stub` | It needs Stage 5 expressions |
+| `bar:pairing-standalone` | Excel always resaves the shape as paired, so no capture can show it |
+
+An unknown, reasonless or doubly registered id fails the audit.
+
+**`audit.ts --stage 3` after this task:** ok=true, 14/14 structural, stageComplete=false.
+
+| Disposition | Count | Capabilities |
+|---|---|---|
+| verified | 48 | — |
+| unverified-nondiscriminating | 8 | — |
+| refused-unsupported | 15 | the 12 `bar:unresolved-*` and the 3 above |
+| blocked | 1 | `bar:lengths-default-10-90`, pending the capture |
+| unaccounted | 0 | — |
