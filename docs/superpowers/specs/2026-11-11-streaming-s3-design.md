@@ -503,7 +503,9 @@ set a new `notes?: false`; the default for a presenter is true.
 >     `'auto'` then opens no window.
 >   - The show itself is lazy (+72 B eager in all, R26).
 >   - Slides come through a fetcher held to 48 unit requests in any 60 s,
->     with target-first pacing and prefetch of 2 next + 1 previous.
+>     with target-first pacing and prefetch of 2 next + 1 previous. The
+>     48 is the session's budget, shared with viewer paints and re-sends,
+>     and it survives show restarts and resume (R28).
 >   - Indices count shown slides only.
 >   - A failed slide shows "Slide n could not be shown (code)", and the
 >     show stays navigable.

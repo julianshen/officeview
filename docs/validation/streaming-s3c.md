@@ -123,6 +123,23 @@ issues only the first sweep's requests. The bound itself is proved by
 - "reviewer model: every paint charges twice …, real SessionRates — no
   close over 60 s of 400 ms navigation".
 
+Those cases run one fetcher alone. The final review found that the
+server's `'unit'` window lives as long as the session (sid), resume
+included, while each show had its own budget: restarting a show inside a
+minute, or viewer paints before it, could reach 4008 (R28, below). The
+session-level bound is proved by `tests/stream/unit-budget.test.ts`. It runs
+a real `StreamSession` and the real show fetcher against a fake server that
+applies the real `SessionRates`:
+
+- the reviewer's probe: 40 slides at 400 ms, dispose, restart the show on
+  the same session — no refusal, no close, ≤ 48 sends in any 60 s;
+- 30 viewer paints, then a 40-slide show — no refusal;
+- 70 viewer paints at once — 48 go out, the rest wait for room; no refusal;
+- resume mid-show with a request in flight, then a restarted show — the
+  log survives the resume, no refusal;
+- a server window already full at open (history the client cannot know):
+  one refusal, then no unit send for 62 s — no second breach, no close.
+
 The corpus has no deck with more than 6 slides.
 
 ## Owner-facing calls (plan C1–C4)
@@ -181,6 +198,31 @@ In plain words; the ledger has the full list (R1–R26).
   - Fast keying adds at most about 650 ms of latency.
 - **R16 — every server-charged send takes budget** (validation retries
   included).
+- **R28 — the budget is the session's** (final review, Important 1).
+  - One sliding send log per `StreamSession`. It lives as long as the
+    server sid, so it survives show restarts and resume.
+  - The session stamps every server-charged unit send, from any caller:
+    viewer paints, show fetches, validation and replay re-sends, and resume
+    re-sends. It does not stamp the stale-jti re-send, which the server
+    refuses before its rate gate. The show's `charge()` only marks its
+    request as sent, so nothing is counted twice.
+  - The client window is 62 s: the server's 60 s plus 2 s, because the
+    server stamps a request when it arrives.
+  - A first send waits, first in first out, until fewer than 48 sends are
+    in the window. A re-send of a request already sent waits for fewer
+    than 56. A viewer paint over budget therefore waits for room. It is
+    never sent into a full window.
+  - The show reads the same budget (`unitBudget`) and keeps its R14 pacing
+    and its 8-request prefetch reserve against it. Viewer paints are not
+    held back by the reserve, but they count.
+  - After a `rate-limited` unit refusal the session sends no charged unit
+    request, from any caller, until the log shows room and 2 s have
+    passed. The log never holds 60 sends, so a refusal means the server
+    counted sends the log never saw. That history is unknown, so the
+    window is treated as full for a whole 62 s span. After that, every send
+    the server counts is one the log stamped. Resume does not clear the
+    log: the server keeps the sid's window across resume, and the client
+    stamped every send it made, including the ones in flight at the drop.
 - **R17, R19 — hidden slides in the counts.**
   - Presenter View's grid leaves hidden slides out.
   - `slideIndex`, `goTo()`, `from` and the counter count shown slides only.
@@ -207,9 +249,20 @@ In plain words; the ledger has the full list (R1–R26).
   session aggregate, so it is admitted only when nothing else is in flight.
   Otherwise it is refused, then retried once (R11).
 - **R15 — long non-stop keying.** More than about 19 s of non-stop target
-  changes can use up the show's 48/min budget. The show then waits for the
-  60 s window to free a slot ("Loading slide n" meanwhile). It never trips
-  4008.
+  changes can use up the session's 48/min budget. Viewer paints and an
+  earlier show in the same minute use it up sooner. The show then waits
+  for the window to free a slot ("Loading slide n" meanwhile).
+- **R28 — what "no 4008" rests on.** The session never sends a unit
+  request into its own full window, and after a refusal it holds every unit
+  send for a whole window. The tests above show no close with the real
+  rate gate. What they cannot show: the client's clock is not the
+  server's. The 2 s receipt margin and the 8-send gap between 48 and 56
+  absorb normal latency. A delay longer than that, followed by a burst,
+  can still produce one refusal. That refusal starts the 62 s hold, so a
+  second and third breach would need the server to count sends the client
+  never made.
+- **R28 — a refusal costs a minute.** One `rate-limited` unit refusal
+  stalls all unit painting (viewer and show) for 62 s.
 - **R16 — accounting.** Charge accounting is conservative, not exact.
   Every server-charged send is counted, retries included, so the show may
   hold back when the server would still accept.
@@ -258,6 +311,7 @@ In plain words; the ledger has the full list (R1–R26).
 | `notes_deliveries` rows (one per request that passes the checks and the plan, written before the draw; a refusal before that step writes none, a failure after it keeps the row, which records the request, not a delivery, R7) and `notes_marks` rows (one per marked image, written just before its send) | `server/test/notes-wire.test.ts`, `server/test/notes-evidence.test.ts` |
 | client notes request: kind-7 admission (R10), hostile frames, unsolicited frames (R9), caps, abort, deadlines, rotation, resume, end barriers and image close (R13) | `tests/stream/remote-notes.test.ts` |
 | show fetcher: target first, the 48/min sliding window, reserve, pacing (R14), charge per send (R16), LRU, bucket change, dispose | `tests/stream/show-fetch.test.ts` |
+| the session's unit send log (R28): one per sid, every charged send stamped, viewer paints wait for room, show restart and resume, hold after a refusal, the real `SessionRates` | `tests/stream/unit-budget.test.ts`, `tests/stream/unit-send-log.test.ts`, `tests/stream/remote-show.test.tsx` ("R28") |
 | Presenter View over an image-backed source (counts, Next, grid, go-to, image notes) | `tests/slideshow-presenter-remote-adapters.test.tsx` |
 | remote show session: order, errors, end, notes, bucket, workspace leases, exit inside dispatch, refresh, pane copy | `tests/stream/remote-show.test.tsx` |
 | `present()` wiring: gesture, refusals, popup and full-screen order, lazy loading, Present button, F5, ref | `tests/stream/remote-present-start.test.tsx` |

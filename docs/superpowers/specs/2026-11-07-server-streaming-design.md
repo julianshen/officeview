@@ -1617,7 +1617,12 @@ outcomes.
   (`rate-limited`) only and never counts toward the 4008 breach window.
   The show's slide requests stay in `'unit'` (60/min, third breach in
   60 s closes 4008), and the client holds them to 48/min (§12a.7
-  amendment).
+  amendment). That budget belongs to the session, not to a show (R28).
+  One send log per StreamSession lives as long as the sid, so it survives
+  show restarts and resume. It is stamped on every server-charged unit
+  send, from any caller, over a 62 s client window. A first send waits for
+  fewer than 48 sends in the window, a re-send for fewer than 56. A
+  `rate-limited` unit refusal holds every unit send for 62 s.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1995,8 +2000,12 @@ render pipeline.
       workspace first (about 45 MiB at scale 2). With less free, the notes
       are refused.
     - (d) More than about 19 s of non-stop slide changes can use up the
-      show's 48/min budget. The show then waits for the window, showing
-      "Loading slide n", and never trips 4008.
+      session's 48/min budget. Viewer paints and an earlier show in the
+      same minute share it (R28). The show then waits for the window,
+      showing "Loading slide n". The client never sends into its own full
+      window. After a refusal it holds every unit send for 62 s, so it
+      does not supply a second or third breach. Clock skew between client
+      and server beyond the 2 s margin can still cause one refusal.
     - (e) The show's charge accounting is conservative, not exact. Every
       server-charged send is counted, so it may hold back while the server
       would still accept.
