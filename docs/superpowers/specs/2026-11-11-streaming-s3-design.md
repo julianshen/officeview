@@ -370,7 +370,15 @@ print rasters (parent T2 constructs).
 >   is larger fails the job (honest limit, parent §19). The client holds
 >   PNG blobs only, never RGBA, up to `PRINT_JOB_MAX_BLOB_BYTES` (192 MiB;
 >   beyond, `print-too-large` with no `limit`, a `print-cancel`, and the
->   blobs released). Every page is checked against the job: index, order,
+>   blobs released). The client also holds the job's decoded images to
+>   `PRINT_JOB_MAX_DECODED` (1 GiB, the server planner's twin): at
+>   `print-start` it sums `(unit.w × scale) × (unit.h × scale) × 4` over
+>   the range from the manifest sizes and the announced scale, and beyond
+>   the budget fails the job `print-too-large` with no `limit` (a
+>   `print-cancel`, everything released) before any page is kept; a
+>   running Σ `w × h × 4` of the checked page sizes repeats the check.
+>   Small, highly compressible PNGs therefore cannot hand the print
+>   surface more decoded images than the planner allows. Every page is checked against the job: index, order,
 >   count, scale, size and `print-done.pages`, and `print-start` /
 >   `print-done` are held to 48 KiB like text answers. Anything else fails
 >   the job `policy-refused` and nothing prints; the session survives. On

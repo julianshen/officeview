@@ -1,6 +1,6 @@
 /** Stage 3b Task 5: StreamSession.print() — every page checked against the job, fail closed. */
 import { describe, expect, it, vi } from 'vitest'
-import { gzipSync } from 'node:zlib'
+import { deflateSync, gzipSync } from 'node:zlib'
 import { randomBytes } from 'node:crypto'
 import { encodeMessage, Reassembler } from '../../src/stream/frame'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
@@ -8,7 +8,8 @@ import { encodeRasterBody } from '../../src/stream/raster'
 import { encodeUnit } from '../../src/stream/unit'
 import { PRINT_PAGE_BODY_MAX, printPageCap, StreamSession, type SessionOptions } from '../../src/stream/remote/session'
 import { StreamSessionError } from '../../src/stream/remote/errors'
-import { PRINT_JOB_MAX_BLOB_BYTES, printSizeOk } from '../../src/stream/remote/print-wire'
+import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, printSizeOk } from '../../src/stream/remote/print-wire'
+import { crc32 } from '../../src/stream/crc32'
 import { createRemoteDoc } from '../../src/stream/remote/remote-doc'
 import { SESSION_TRANSIENT_BYTES, unitCost } from '../../src/stream/remote/reservation'
 
@@ -593,4 +594,109 @@ describe('StreamSession.print — fix round 1 (admission, reassembly, throwing s
     await settle()
     expect(s.stats()).toMatchObject({ printing: false, inFlight: 0, inFlightBytes: 0 })
   }, 30_000)
+})
+
+/** A valid grayscale PNG (IHDR, one deflated all-zero IDAT, IEND, real CRCs): highly compressible. */
+function validPng(w: number, h: number): Uint8Array {
+  const chunk = (name: string, data: Buffer) => {
+    const t = Buffer.from(name), out = Buffer.alloc(data.length + 12)
+    out.writeUInt32BE(data.length); t.copy(out, 4); data.copy(out, 8)
+    out.writeUInt32BE(crc32(Buffer.concat([t, data])), out.length - 4)
+    return out
+  }
+  const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4); ih[8] = 8
+  return new Uint8Array(Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ih), chunk('IDAT', deflateSync(Buffer.alloc((w + 1) * h))), chunk('IEND', Buffer.alloc(0))]))
+}
+const pngCache = new Map<string, Uint8Array>()
+function validPage(unitIndex: number, w: number, h: number) {
+  const key = `${w}x${h}`
+  if (!pngCache.has(key)) pngCache.set(key, validPng(w, h))
+  const r = encodeRasterBody(w, h, pngCache.get(key)!), out = new Uint8Array(4 + r.length)
+  new DataView(out.buffer).setUint32(0, unitIndex, true); out.set(r, 4)
+  return out
+}
+/** Counts the abort listeners a job adds to / removes from its signal. */
+function countedSignal() {
+  const ac = new AbortController(), sig = ac.signal, n = { added: 0, removed: 0 }
+  const add = sig.addEventListener.bind(sig), remove = sig.removeEventListener.bind(sig)
+  sig.addEventListener = ((...a: Parameters<typeof add>) => { if (a[0] === 'abort') n.added++; return add(...a) }) as typeof sig.addEventListener
+  sig.removeEventListener = ((...a: Parameters<typeof remove>) => { if (a[0] === 'abort') n.removed++; return remove(...a) }) as typeof sig.removeEventListener
+  return { sig, n }
+}
+
+describe('StreamSession.print — final fix 1: the whole-job decoded budget', () => {
+  const big = (n: number, extra: Array<{ w: number; h: number }> = []) => {
+    const list = [...Array.from({ length: n }, () => ({ w: 2048, h: 2048 })), ...extra]
+    return { units: { count: list.length, list } }
+  }
+
+  it('PRINT_JOB_MAX_DECODED is the server twin (1 GiB)', () => {
+    expect(PRINT_JOB_MAX_DECODED).toBe(1024 * 1024 * 1024)
+  })
+
+  it('exactly the budget (16 units of 2048² at scale 2 = 1 GiB of RGBA) prints every page', async () => {
+    expect(16 * 4096 * 4096 * 4).toBe(PRINT_JOB_MAX_DECODED)
+    const { s, sock } = await opened({}, big(16))
+    const { p, reqId } = await started(s, sock, 15)
+    sock.text({ reqId, type: 'print-start', pages: 16, scale: 2 })
+    for (let i = 0; i < 16; i++) sock.frame(8, reqId, validPage(i, 4096, 4096))
+    sock.text({ reqId, type: 'print-done', pages: 16 })
+    const pages = await p
+    expect(pages.map((x) => x.unitIndex)).toEqual([...Array(16).keys()])
+    expect(sock.of('print-cancel')).toEqual([])
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, printHeld: 0, inFlight: 0, inFlightBytes: 0, reassemblyBytes: 0 })
+    s.close()
+  }, 60_000)
+
+  it('one RGBA step over the budget (16 × 2048² + one 1×1 unit at scale 2) fails at print-start, print-too-large with no limit', async () => {
+    expect(16 * 4096 * 4096 * 4 + 2 * 2 * 4).toBeGreaterThan(PRINT_JOB_MAX_DECODED)
+    const { s, sock } = await opened({}, big(16, [{ w: 1, h: 1 }]))
+    const { sig, n } = countedSignal()
+    const { p, reqId } = await started(s, sock, 16, { signal: sig })
+    sock.text({ reqId, type: 'print-start', pages: 17, scale: 2 })
+    const e = await failure(p) as StreamSessionError
+    expect(e.code).toBe('print-too-large')
+    expect(e.limit).toBeUndefined()
+    expect(e.requested).toBeUndefined()
+    expect(sock.of('print-cancel')).toEqual([{ reqId, type: 'print-cancel' }])
+    expect(n).toEqual({ added: 1, removed: 1 })
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, printHeld: 0, inFlight: 0, inFlightBytes: 0, reassemblyBytes: 0 })
+    // Late pages of the failed job are ignored; the session carries on.
+    sock.frame(8, reqId, validPage(0, 4096, 4096))
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, reassemblyBytes: 0 })
+    await usable(s, sock)
+    s.close()
+  }, 60_000)
+
+  it('the highly compressible 17 × 2048² job at scale 2 (1,140,850,688 B decoded, ~280 KB of PNG) is refused before any page is kept', async () => {
+    expect(17 * 4096 * 4096 * 4).toBe(1_140_850_688)
+    const { s, sock } = await opened({}, big(17))
+    const { sig, n } = countedSignal()
+    const { p, reqId } = await started(s, sock, 16, { signal: sig })
+    sock.text({ reqId, type: 'print-start', pages: 17, scale: 2 })
+    for (let i = 0; i < 17; i++) sock.frame(8, reqId, validPage(i, 4096, 4096))
+    sock.text({ reqId, type: 'print-done', pages: 17 })
+    const e = await failure(p) as StreamSessionError
+    expect(e.code).toBe('print-too-large')
+    expect(e.limit).toBeUndefined()
+    expect(sock.of('print-cancel')).toEqual([{ reqId, type: 'print-cancel' }])
+    expect(n).toEqual({ added: 1, removed: 1 })
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, printHeld: 0, inFlight: 0, inFlightBytes: 0, reassemblyBytes: 0 })
+    await usable(s, sock)
+    s.close()
+  }, 60_000)
+
+  it('the budget follows the announced scale: the same 17 units at scale 1 (272 MiB) print', async () => {
+    const { s, sock } = await opened({}, big(17))
+    const { p, reqId } = await started(s, sock, 16)
+    sock.text({ reqId, type: 'print-start', pages: 17, scale: 1 })
+    for (let i = 0; i < 17; i++) sock.frame(8, reqId, validPage(i, 2048, 2048))
+    sock.text({ reqId, type: 'print-done', pages: 17 })
+    expect((await p).length).toBe(17)
+    s.close()
+  }, 60_000)
 })

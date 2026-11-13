@@ -114,7 +114,7 @@ Layer-1 marking. The largest job here, `lo-tdf104788.pptx` (6 pages,
 | `prints` audit table, `printed` totals, `services.print` migration | `server/test/audit-store.test.ts` |
 | the `print` op: order, caps at the boundary, quota, running total, resume total, malformed ranges, rate, one job at a time, cancel, too large, ≤ 2 renders in flight, teardown, size contract, send pacing | `server/test/print-wire.test.ts` |
 | both marks on a print page; T2 hidden constructs vs a hidden-free print, with a mutation self-check | `server/test/print-evidence.test.ts` |
-| client job checks, hostile servers, admission grant, blob ceiling, abort, socket end | `tests/stream/remote-print.test.ts` |
+| client job checks, hostile servers, admission grant, blob ceiling, whole-job decoded budget (exact 1 GiB boundary, one step over, 17 × 2048² compressible pages), abort, socket end | `tests/stream/remote-print.test.ts` |
 | shared print surface (`printRasters`) | `tests/components/print-rasters.test.ts` and the existing print tests, unmodified |
 | remote print UI, guard, notices, Ctrl/Cmd+P, manifest change, document replacement | `tests/stream/remote-print-ui.test.tsx` |
 | browser end to end | `tests/browser/stream-print.spec.ts` (below) |

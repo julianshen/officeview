@@ -19,7 +19,7 @@ import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError } from './errors'
-import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_REFUSALS, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
+import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
 import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
@@ -116,8 +116,8 @@ interface PrintJob {
   sent: boolean
   /** The checked `print-start` scale, once it has arrived. */
   scale?: 1 | 2
-  /** Checked pages so far (PNG blobs only), and their bytes. */
-  pages: PrintedPage[]; bytes: number
+  /** Checked pages so far (PNG blobs only), their PNG bytes, and their decoded bytes (Σ w·h·4). */
+  pages: PrintedPage[]; bytes: number; decoded: number
   rotatedRetry: boolean
   onProgress?: (done: number, total: number) => void
   resolve: () => void
@@ -267,7 +267,9 @@ export class StreamSession {
    * Anything that does not match the job exactly — a page for another unit,
    * a duplicate, out of order, outside the size contract, too many, early or
    * wrong `print-done` — fails it `policy-refused`, and nothing is kept. Over
-   * PRINT_JOB_MAX_BLOB_BYTES of PNG it fails `print-too-large` with no `limit`.
+   * PRINT_JOB_MAX_BLOB_BYTES of PNG, or a `print-start` whose scale puts the
+   * job's decoded images (Σ w·h·4 from the manifest sizes) over
+   * PRINT_JOB_MAX_DECODED, it fails `print-too-large` with no `limit`.
    * A refusal rejects with its code (`limit`/`requested` when stated); abort
    * rejects with the abort reason; a drop mid-job rejects `session-rotated`
    * (the server stopped it; it is never re-issued); a session end rejects with
@@ -297,13 +299,13 @@ export class StreamSession {
         // After any message for it that is still being processed (the inbox is serial).
         if (release) { const r = release; release = undefined; void this.inbox.then(r) }
         const pages = job.pages
-        job.pages = []; job.bytes = 0
+        job.pages = []; job.bytes = 0; job.decoded = 0
         done(pages)
       }
       const onAbort = () => job.fail(signal!.reason ?? abortError(), true)
       const job: PrintJob = {
         from, n: to - from + 1, reqId: 0, pageCap, grant: printGrant(pageCap), granted: false,
-        sent: false, pages: [], bytes: 0, rotatedRetry: false,
+        sent: false, pages: [], bytes: 0, decoded: 0, rotatedRetry: false,
         ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
         resolve: () => settle(resolve),
         fail: (e, cancel) => settle(() => {
@@ -374,11 +376,15 @@ export class StreamSession {
       return job.fail(new StreamSessionError(code, code, { ...(limit !== undefined ? { limit } : {}), ...(requested !== undefined ? { requested } : {}) }), false)
     }
     const hostile = (why: string) => job.fail(new StreamSessionError('policy-refused', why), true)
+    const tooLarge = (why: string) => job.fail(new StreamSessionError('print-too-large', why), true)
     if (utf8Bytes(data) > TEXT_MESSAGE_BYTES) return hostile(`${String(m.type)} message over 48 KiB of UTF-8`)
     if (m.type === 'print-start') {
       if (job.scale) return hostile('a second print-start')
       const scale = printStart(m, job.n)
       if (!scale) return hostile('print-start does not match the job')
+      // The whole job's decoded images, from the manifest sizes at the announced
+      // scale, must fit PRINT_JOB_MAX_DECODED before any page is kept.
+      if (printDecodedBound(this.manifest.units.list, job.from, job.from + job.n - 1, scale) > PRINT_JOB_MAX_DECODED) return tooLarge('the print job is over the decoded budget')
       job.scale = scale
       return
     }
@@ -394,10 +400,14 @@ export class StreamSession {
     if (!job.scale) return hostile('a page before print-start')
     if (job.pages.length >= job.n) return hostile('more pages than announced')
     const index = job.from + job.pages.length, dims = this.manifest.units.list[index]!
-    let png: Uint8Array
-    try { ({ png } = printPage(payload, index, dims, job.scale)) } catch (e) { return hostile((e as Error).message) }
+    let page: ReturnType<typeof printPage>
+    try { page = printPage(payload, index, dims, job.scale) } catch (e) { return hostile((e as Error).message) }
+    const { png } = page
     job.bytes += png.byteLength
     if (job.bytes > this.printMaxBlobBytes()) return job.fail(new StreamSessionError('print-too-large', 'the print job is over the blob ceiling'), true)
+    // Defence in depth behind the print-start preflight: the checked raster sizes.
+    job.decoded += page.w * page.h * 4
+    if (job.decoded > PRINT_JOB_MAX_DECODED) return job.fail(new StreamSessionError('print-too-large', 'the print job is over the decoded budget'), true)
     job.pages.push({ unitIndex: index, widthPx: dims.w, heightPx: dims.h, scale: job.scale, png: new Blob([png as BlobPart], { type: 'image/png' }) })
     try { job.onProgress?.(job.pages.length, job.n) } catch (e) { job.fail(e, true) }
   }

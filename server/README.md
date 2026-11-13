@@ -367,8 +367,11 @@ session stays open):
   `8 MiB + 2 × pageCap` from its 96 MiB per-session admission for a job,
   with `pageCap` at most 44 MiB, so **a page whose PNG is over about
   44 MiB cannot print** from a stream (the job fails). It holds at most
-  192 MiB of PNG per job (beyond: "This document is too large to print
-  from the viewer.").
+  192 MiB of PNG per job, and a job whose images would decode to more than
+  1 GiB of RGBA at the announced scale (Σ `w × h × 4`, the server
+  planner's own budget, checked at `print-start` from the manifest sizes
+  and again per page) is failed before any page is kept (either way:
+  "This document is too large to print from the viewer.").
 - The viewer checks every page against the job (index, order, count, scale,
   size) and prints nothing when anything does not match.
 

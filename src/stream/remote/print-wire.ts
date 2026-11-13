@@ -16,6 +16,19 @@ export interface PrintedPage { unitIndex: number; widthPx: number; heightPx: num
  * `PRINT_JOB_MAX_BLOB_BYTES` in `src/components/paged/printDocument.ts`
  * (duplicated so the remote code never imports the local print module). */
 export const PRINT_JOB_MAX_BLOB_BYTES = 192 * 1024 * 1024
+/** A job's decoded image budget: Σ w·h·4 over its pages. Twin of
+ * `PRINT_JOB_MAX_DECODED` in `server/src/print.ts` (whose planner never plans
+ * past it); checked here too, so a hostile server cannot hand the print
+ * surface a job of small, highly compressible PNGs that decode past it. */
+export const PRINT_JOB_MAX_DECODED = 1024 * 1024 * 1024
+
+/** The job's decoded bytes at `scale` from the manifest sizes of `from..to`
+ * (each page is at most u × scale per axis, so this bounds every page). */
+export function printDecodedBound(units: ReadonlyArray<{ w: number; h: number }>, from: number, to: number, scale: 1 | 2): number {
+  let total = 0
+  for (let i = from; i <= to; i++) total += (units[i]!.w * scale) * (units[i]!.h * scale) * 4
+  return total
+}
 
 /** The refusal codes a print job rejects with; any other is `policy-refused`. */
 export const PRINT_REFUSALS = new Set(['rate-limited', 'policy-refused', 'session-rotated', 'print-too-large', 'print-quota-exhausted'] as const)
@@ -41,12 +54,12 @@ export function printStart(m: Record<string, unknown>, n: number): 1 | 2 | undef
  * against the page the job expects next; throws PrintWireError when it is
  * malformed, names another unit, or is outside the size contract.
  */
-export function printPage(body: Uint8Array, expected: number, unit: { w: number; h: number }, scale: 1 | 2): { png: Uint8Array } {
+export function printPage(body: Uint8Array, expected: number, unit: { w: number; h: number }, scale: 1 | 2): { w: number; h: number; png: Uint8Array } {
   if (body.length < 4) throw new PrintWireError('truncated page')
   const unitIndex = new DataView(body.buffer, body.byteOffset, body.byteLength).getUint32(0, true)
   if (unitIndex !== expected) throw new PrintWireError(`page for unit ${unitIndex}, expected ${expected}`)
   let r: ReturnType<typeof decodeRasterBody>
   try { r = decodeRasterBody(body.subarray(4), { maxRgbaBytes: UNIT_RASTER_DECODED_CAP }) } catch (e) { throw new PrintWireError(`page raster: ${(e as Error).message}`) }
   if (!printSizeOk(r, unit, scale)) throw new PrintWireError(`page ${r.w}×${r.h} outside unit ${unit.w}×${unit.h} at scale ${scale}`)
-  return { png: r.png }
+  return { w: r.w, h: r.h, png: r.png }
 }
