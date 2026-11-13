@@ -67,71 +67,91 @@ const prefixOf = (n: NoteParagraph) => (n.bullet ? `${n.bullet.length <= 2 ? n.b
 interface Line { x: number; y: number; text: string; chars: number }
 export interface NotesLayout { w: number; h: number; truncated: boolean; chars: number; lines: Line[] }
 
-/** Code points per measured piece: every measured string stays short (shaping one 65,536-character
- * run takes seconds, past the render deadline). A piece of visible glyphs is wider than a line, so it
- * breaks by code points as before; only zero-width runs can see a break move to a piece boundary. */
-const PIECE = 200
-const pieces = (token: string): string[] => {
-  if (token.length <= PIECE) return [token]
-  const cps = [...token], out: string[] = []
-  for (let i = 0; i < cps.length; i += PIECE) out.push(cps.slice(i, i + PIECE).join(''))
-  return out
+/** Most code points a line may hold, and so the most any one measurement sees. Visible glyphs
+ * of the face at 16 px fill the 672-px text area well before this; only zero-width runs reach it. */
+export const NOTES_MEASURE_MAX_CPS = 256
+/** Most code points measured for one notes image, summed over every measurement. Layout that would
+ * spend more stops and ends with the continuation line (shaping cost must stay inside the render
+ * deadline whatever the text; a 65,536-character run once took seconds). */
+export const NOTES_MEASURE_BUDGET = 2_000_000
+
+class MeasureBudgetSpent extends Error {}
+/** `measure` limited to NOTES_MEASURE_MAX_CPS code points per call and NOTES_MEASURE_BUDGET in total. */
+function budgeted(measure: (s: string) => number) {
+  let spent = 0
+  return (cps: readonly string[]) => {
+    if (cps.length > NOTES_MEASURE_MAX_CPS) throw new Error('notes: measurement over its per-call bound')
+    if ((spent += cps.length) > NOTES_MEASURE_BUDGET) throw new MeasureBudgetSpent()
+    return measure(cps.join(''))
+  }
 }
 
-/** Greedy word wrap of one hard line into `width`; a word wider than the line breaks by code points. */
-function wrap(text: string, width: number, measure: (s: string) => number, out: (text: string) => boolean): boolean {
+/** Greedy wrap of one hard line into `width`, over code points. A word that does not fit after
+ * existing content starts a new line; a word wider than a whole line fills each line with the longest
+ * prefix that fits. A line never exceeds NOTES_MEASURE_MAX_CPS code points. */
+function wrap(text: string, width: number, measure: (cps: readonly string[]) => number, out: (text: string) => boolean): boolean {
   if (text === '') return out('')
-  let line = ''
-  for (const token of text.split(/(\s+)/).filter(Boolean).flatMap(pieces)) {
-    if (measure(line + token) <= width) { line += token; continue }
-    if (line && !out(line.trimEnd())) return false
-    line = ''
-    if (/^\s+$/.test(token)) continue
-    let rest = [...token]
-    while (measure(rest.join('')) > width && rest.length > 1) {
-      let lo = 1, hi = rest.length - 1
-      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (measure(rest.slice(0, mid).join('')) <= width) lo = mid; else hi = mid - 1 }
-      if (!out(rest.slice(0, lo).join(''))) return false
-      rest = rest.slice(lo)
+  let line: string[] = [], emitted = false
+  const flush = () => { const t = line.join('').trimEnd(); line = []; emitted = true; return out(t) }
+  const fits = (cps: readonly string[]) => cps.length <= NOTES_MEASURE_MAX_CPS && measure(cps) <= width
+  for (const token of text.split(/(\s+)/).filter(Boolean)) {
+    let cps = [...token]
+    if (/^\s+$/.test(token)) {
+      // Whitespace at a break is dropped.
+      if (line.length && fits([...line, ...cps])) line.push(...cps)
+      else if (line.length && !flush()) return false
+      continue
     }
-    line = rest.join('')
+    while (cps.length) {
+      if (fits([...line, ...cps])) { line.push(...cps); break }
+      if (line.length) { if (!flush()) return false; continue }
+      // An empty line and a word wider than it: the longest prefix that fits (at least one code point).
+      let lo = 1, hi = Math.min(cps.length, NOTES_MEASURE_MAX_CPS)
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (measure(cps.slice(0, mid)) <= width) lo = mid; else hi = mid - 1 }
+      line = cps.slice(0, lo); cps = cps.slice(lo)
+      if (!flush()) return false
+    }
   }
-  return out(line.trimEnd())
+  // A hard line of whitespace only is still a (blank) line.
+  return line.length || !emitted ? flush() : true
 }
 
 /** The notes laid out in CSS px at `scale`: every line that fits under
  * NOTES_MAX_PX device px; when some do not, the last line is the continuation
  * line and the image is exactly NOTES_MAX_PX tall. `readerTruncated` (the
  * reader's character cap cut the notes) ends the image with the continuation
- * line too, right after the retained text. `chars` counts the notes
+ * line too, right after the retained text, and so does running out of the
+ * measurement budget (NOTES_MEASURE_BUDGET). `chars` counts the notes
  * characters on drawn lines (prefixes and the continuation line excluded). */
 export function layoutNotes(paragraphs: readonly NoteParagraph[], scale: 1 | 2, measure: (s: string) => number, readerTruncated = false): NotesLayout {
   const maxH = Math.floor(NOTES_MAX_PX / scale), room = Math.floor((maxH - 2 * PAD) / LINE)
   const lines: Line[] = []
-  let truncated = false
+  let truncated = false, workCut = false
+  const fit = budgeted(measure)
   for (const p of paragraphs) {
     const x = PAD + Math.min(p.level, 8) * INDENT, width = NOTES_WIDTH_CSS - PAD - x
     let prefix = prefixOf(p)
     for (const hard of p.text.split('\n')) {
-      const ok = wrap(prefix + hard, width, measure, (text) => {
+      let ok
+      try { ok = wrap(prefix + hard, width, fit, (text) => {
         if (lines.length >= room) { truncated = true; return false }
         // The prefix is not notes text.
         const chars = text.length - Math.min(prefix.length, text.length)
         prefix = prefix.slice(Math.min(prefix.length, text.length))
         lines.push({ x, y: PAD + lines.length * LINE, text, chars })
         return true
-      })
+      }) } catch (e) { if (!(e instanceof MeasureBudgetSpent)) throw e; workCut = true; ok = false }
       prefix = ''
       if (!ok) break
     }
-    if (truncated) break
+    if (truncated || workCut) break
   }
   const heightCut = truncated
   if (heightCut) {
     lines.splice(room - 1)
     // Anchored to the bottom edge: the image's last rows always show that the notes go on.
     lines.push({ x: PAD, y: maxH - PAD - LINE, text: NOTES_CONTINUATION, chars: 0 })
-  } else if (readerTruncated) {
+  } else if (readerTruncated || workCut) {
     // Every retained line fits; the notice takes the next line (or the last one when the image is full).
     if (lines.length >= room) lines.splice(room - 1)
     lines.push({ x: PAD, y: PAD + lines.length * LINE, text: NOTES_CONTINUATION, chars: 0 })

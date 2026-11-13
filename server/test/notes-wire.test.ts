@@ -8,7 +8,7 @@ import { AuditStore } from '../src/audit-store'
 import type { AuthDecision } from '../src/hooks'
 import { serverBackend } from '../src/backend'
 import { decodePng } from '../src/mark/png'
-import { drawNotes, layoutNotes, NOTES_CONTINUATION, NOTES_MAX_PX, NOTES_RATE_PER_MIN, readSlideNotes } from '../src/notes'
+import { drawNotes, layoutNotes, NOTES_CONTINUATION, NOTES_MAX_PX, NOTES_MEASURE_BUDGET, NOTES_MEASURE_MAX_CPS, NOTES_RATE_PER_MIN, readSlideNotes } from '../src/notes'
 import type { Pool } from '../src/pool'
 import { hiddenSlideDeck } from './fixtures'
 import { Client, corpus, disposePool, pool, start } from './harness'
@@ -313,6 +313,59 @@ describe('reader-cap truncation (separate from the height cap)', () => {
     // Line 1 is the (blank) spaces paragraph; line 2 is the continuation notice.
     expect(nonWhite(24, 48)).toBe(0)
     expect(nonWhite(48, 72)).toBeGreaterThan(50)
+    s.stop()
+  }, 60_000)
+})
+
+describe('bounded measurement', () => {
+  /** A deterministic measurer: `px` per code point; records every input's code-point length. */
+  const counting = (px: number) => {
+    const inputs: number[] = []
+    const measure = (t: string) => { const n = [...t].length; inputs.push(n); return n * px }
+    return { measure, inputs, total: () => inputs.reduce((a, b) => a + b, 0) }
+  }
+  const ZWSP = '\u200b'
+
+  test('a long word wraps greedily across the line (8 px per char, 672 px: 84 per line)', () => {
+    const m = counting(8)
+    const l = layoutNotes([{ level: 0, text: 'a'.repeat(400) }], 1, m.measure)
+    expect(l.lines.map((x) => x.text.length)).toEqual([84, 84, 84, 84, 64])
+    expect([l.truncated, l.chars]).toEqual([false, 400])
+    // A word after line content that fits on a fresh line moves there whole.
+    expect(layoutNotes([{ level: 0, text: `${'b'.repeat(80)} ${'c'.repeat(80)}` }], 1, counting(8).measure).lines.map((x) => x.text)).toEqual(['b'.repeat(80), 'c'.repeat(80)])
+  })
+
+  test('65,536 zero-width characters: every measured input is bounded, and so is the total work', () => {
+    const m = counting(0)
+    const l = layoutNotes([{ level: 0, text: ZWSP.repeat(65536) }], 1, m.measure)
+    expect(Math.max(...m.inputs)).toBeLessThanOrEqual(NOTES_MEASURE_MAX_CPS)
+    expect(m.total()).toBeLessThanOrEqual(NOTES_MEASURE_BUDGET)
+    expect(l.lines.every((x) => [...x.text].length <= NOTES_MEASURE_MAX_CPS)).toBe(true)
+  })
+
+  test('when the measurement budget runs out, layout stops and ends with the continuation line', () => {
+    const m = counting(0)
+    // Zero-width "words": every token fits, so each line costs many growing (bounded) measurements.
+    const l = layoutNotes([{ level: 0, text: 'ab '.repeat(21000) }], 1, m.measure)
+    expect(Math.max(...m.inputs)).toBeLessThanOrEqual(NOTES_MEASURE_MAX_CPS)
+    expect(m.total()).toBeLessThanOrEqual(NOTES_MEASURE_BUDGET)
+    expect(l.truncated).toBe(true)
+    expect(l.lines.at(-1)!.text).toBe(NOTES_CONTINUATION)
+    expect(l.h).toBeLessThan(NOTES_MAX_PX)
+    // Deterministic: the same input lays out the same (plan, draw and trace agree).
+    expect(layoutNotes([{ level: 0, text: 'ab '.repeat(21000) }], 1, counting(0).measure)).toEqual(l)
+  })
+
+  test('over the wire: a 65,536-character zero-width paragraph gets a reply within the deadline, with the continuation line', async () => {
+    const doc = await buildPptxDeck({ slides: [{ notes: [[ZWSP.repeat(65536)], ['tail']], shapes: [] }] })
+    const s = await session({ doc, decision: presenter({ visibleMark: 'off', forensicMark: false }) })
+    const r = await s.c.notes(0, 1, { ms: 5_000 })
+    expect(r.end).toBeUndefined()
+    expect(r.start).toMatchObject({ type: 'notes-start', w: 720, scale: 1 })
+    const png = decodePng(body(r.body!).png)
+    // Only the continuation notice is visible ink.
+    let n = 0; for (let i = 0; i < png.rgba.length; i += 4) if (png.rgba[i]! < 250) n++
+    expect(n).toBeGreaterThan(50)
     s.stop()
   }, 60_000)
 })
