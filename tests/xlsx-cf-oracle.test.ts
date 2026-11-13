@@ -3783,10 +3783,12 @@ describe('CF oracle verifier', () => {
 
     const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    expect(report.stageComplete).toBe(false)
+    // Capture run 7 (stage3-bar-lengths-default) completes Stage 3: nothing is blocked or unaccounted.
+    expect(report.stageComplete).toBe(true)
     expect(report.summary.cases).toBe(14)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
-    expect(report.blockedCapabilities.length).toBeGreaterThan(0)
+    expect(report.blockedCapabilities).toEqual([])
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(50)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
   }, 30_000) // about ten whole-stage audits: 6–8.5 s under load, over the 5 s default
   it('stage3ObservedBars reads the recorded px and ignores malformed entries', () => {

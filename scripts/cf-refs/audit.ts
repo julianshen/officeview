@@ -39,6 +39,7 @@ import {
   judgeBarAutoColour,
   loadBarScreenCapture,
   measureCaseBars,
+  primeVerifiedCases,
   judgeBarGradient,
   sampleBarAutoColours,
   sampleBarGradients,
@@ -134,7 +135,7 @@ function failCase(id: string, status: CfOracleStatus, code: string, reason: stri
  * Audit one manifest case without trusting its status label. Returns the
  * per-case audit; `ok` is decided by the caller from status consistency.
  */
-function auditCase(c: CfOracleCase, rootDir: string): Stage1CaseAudit {
+function auditCase(c: CfOracleCase, rootDir: string, verified?: ReturnType<typeof verifyCfCase>): Stage1CaseAudit {
   const checks: Record<string, 'pass' | 'fail'> = {}
   const check = (name: string, pass: boolean): boolean => {
     checks[name] = pass ? 'pass' : 'fail'
@@ -156,7 +157,7 @@ function auditCase(c: CfOracleCase, rootDir: string): Stage1CaseAudit {
   if (!check('has-markers', Array.isArray(c.markers) && c.markers.length > 0)) {
     return failCase(c.id, c.status, 'missing-case-field', `No markers declared for ${c.id}`, checks)
   }
-  const res = verifyCfCase(c, { rootDir })
+  const res = verified ?? verifyCfCase(c, { rootDir })
   if (res.kind === 'verified') {
     check('structural-evidence', true)
     check('hashes-match', true)
@@ -303,7 +304,7 @@ export interface Stage3AuditReport extends Stage1AuditReport {
 }
 
 /** The bordered-gradient shape production may draw (a `BAR_GRADIENT_BORDER_HYPOTHESES` id), with its fitted blend. */
-export type BarGradientBorderExport = Partial<Record<string, { endBlend?: number; settledBy: string[] }>>
+export type BarGradientBorderExport = Record<string, { endBlend?: number; settledBy: string[] }>
 
 /** The generated export of the verified bordered-gradient shape (one key at most, so `--write` stays idempotent). */
 export function renderBarGradientBorderBlock(border: BarGradientBorderExport): string {
@@ -488,8 +489,10 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   const missingCases = catalogIds.filter(id => !manifestIds.has(id))
   const catalogSet = new Set(catalogIds)
   const extraCases = stage3ManifestCases.map(c => c.id).filter(id => !catalogSet.has(id))
-  const perCase = stage3ManifestCases.map(c => auditCase(c, rootDir))
+  // Each case is verified once per audit: the case audit, the per-capability evidence and the cross-case gates share it.
   const evidence = new Map(stage3ManifestCases.map(c => [c.id, verifyCfCase(c, { rootDir })] as const))
+  primeVerifiedCases(manifest, { rootDir }, evidence)
+  const perCase = stage3ManifestCases.map(c => auditCase(c, rootDir, evidence.get(c.id)))
   const perCapability: Stage3CapabilityAudit[] = CF_STAGE3_CAPABILITIES.map(entry => {
     const owning = perCase.find(p => p.id === entry.caseId)
     let disposition: Stage3CapabilityAudit['disposition'] = 'unaccounted'

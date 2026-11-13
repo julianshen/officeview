@@ -4951,6 +4951,13 @@ export function verifyCfCase(c: CfOracleCase, options: VerifyCfOptions = {}): Ve
 
 const verifyCaseCache = new WeakMap<CfManifest, Map<string, VerifiedEvidence | Refusal>>()
 
+/** Seeds `isCapabilityVerified`'s per-manifest cache with results the caller already computed for that manifest. */
+export function primeVerifiedCases(manifest: CfManifest, options: VerifyCfOptions, results: ReadonlyMap<string, VerifiedEvidence | Refusal>): void {
+  let cache = verifyCaseCache.get(manifest)
+  if (!cache) verifyCaseCache.set(manifest, (cache = new Map()))
+  for (const [id, res] of results) cache.set(`${options.rootDir ?? process.cwd()}\u0000${id}`, res)
+}
+
 /** Returns true only when the capability's owning oracle case is fully `verified` (`status: 'measured'`). */
 export function isCapabilityVerified(
   capabilityId: string,

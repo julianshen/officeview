@@ -93,16 +93,18 @@ describe('gradient model judgement (Task 22b)', () => {
     expect(j.maxError!['fixed-end']).toBeUndefined()
   })
 
-  it('pooled over every capture (two fills, lengths 18..177): one blend fraction, the fixed end refuted', () => {
+  it('pooled over every capture (two fills, lengths 9..321): one blend fraction, the fixed end refuted', () => {
     const pooled = barGradientsAcrossCases(manifest(), REPO_ROOT)
-    expect(new Set(pooled.samples.map(s => s.ref.split(':')[0]))).toEqual(new Set(['stage3-bar-settings-probe', 'stage3-bar-degenerate', 'stage3-bar-rendering', 'stage3-bar-pairing']))
-    expect(pooled.samples).toHaveLength(24)
+    // Run 7 adds stage3-bar-lengths-default's 66 borderless gradient bars (E:J) to the 24 of the earlier captures.
+    expect(new Set(pooled.samples.map(s => s.ref.split(':')[0]))).toEqual(new Set(['stage3-bar-settings-probe', 'stage3-bar-lengths-default', 'stage3-bar-degenerate', 'stage3-bar-rendering', 'stage3-bar-pairing']))
+    expect(pooled.samples).toHaveLength(90)
+    expect(pooled.samples.filter(s => s.ref.startsWith('stage3-bar-lengths-default:'))).toHaveLength(66)
     expect(new Set(pooled.samples.map(s => s.fill.join()))).toEqual(new Set(['0,0,255', '99,142,198']))
     const j = judgeBarGradient(pooled)
     expect(j.status).toBe('discriminating')
     expect(j.matched).toBe('bar-length')
     expect(j.endBlend).toBe(0.847)
-    expect(j.maxError!['bar-length']).toBeLessThanOrEqual(6)
+    expect(j.maxError!['bar-length']).toBeLessThanOrEqual(BAR_COLOR_TOLERANCE)
     expect(j.maxError!['fixed-end']).toBeGreaterThan(2 * BAR_COLOR_TOLERANCE)
   }, 60_000)
 
@@ -148,9 +150,9 @@ describe('gradient export (Task 22b)', () => {
     const block = renderBarGradientBlock(report.barGradient)
     expect(block).toBe("export const VERIFIED_STAGE3_BAR_GRADIENT: Readonly<Record<string, { endBlend: number; settledBy: readonly string[] }>> = {\n  'bar-length': { endBlend: 0.847, settledBy: ['bar:render-gradient-stops'] },\n}\n")
     expect(renderBarGradientBlock({})).toBe('export const VERIFIED_STAGE3_BAR_GRADIENT: Readonly<Record<string, { endBlend: number; settledBy: readonly string[] }>> = {\n}\n')
-    // Ruling S3-GRAD-BORDER: the bordered shape stays blocked (its case is uncaptured) and exports nothing.
-    expect(report.perCapability.find(p => p.capabilityId === 'bar:render-gradient-border')?.disposition).toBe('supported-structural')
-    expect(report.barGradientBorder).toEqual({})
+    // Ruling S3-GRAD-BORDER, capture run 7: the frame over a ramp across the outer length, at the borderless blend.
+    expect(report.perCapability.find(p => p.capabilityId === 'bar:render-gradient-border')?.disposition).toBe('verified')
+    expect(report.barGradientBorder).toEqual({ 'frame-over-ramp': { endBlend: 0.847, settledBy: ['bar:render-gradient-border'] } })
     expect(renderBarGradientBorderBlock({})).toBe('export const VERIFIED_STAGE3_BAR_GRADIENT_BORDER: Readonly<Record<string, { endBlend?: number; settledBy: readonly string[] }>> = {\n}\n')
     expect(renderBarGradientBorderBlock({ 'frame-over-ramp': { endBlend: 0.847, settledBy: ['bar:render-gradient-border'] } }))
       .toBe("export const VERIFIED_STAGE3_BAR_GRADIENT_BORDER: Readonly<Record<string, { endBlend?: number; settledBy: readonly string[] }>> = {\n  'frame-over-ramp': { endBlend: 0.847, settledBy: ['bar:render-gradient-border'] },\n}\n")
@@ -221,7 +223,7 @@ describe('stage3-bar-lengths-default discriminates the 10/90 rules and the borde
   }
 
   it('the case designates 255 cells: 99 for the 10/90 rules, 156 bordered gradients (twelve columns of thirteen values)', () => {
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured') // captured in run 7; the synthetic checks below stay the family's own proof
     expect(c.expected.cells.filter(x => x.matched)).toHaveLength(255)
   })
 

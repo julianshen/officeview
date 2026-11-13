@@ -28,16 +28,17 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
   it('the current captures select span/cell for all-positive scopes and axis/side for mixed-sign scopes', () => {
     const report = auditStage3Manifest(manifest(), { rootDir: REPO_ROOT })
     expect(report.barLayout.layout).toEqual({
-      allPositive: { ...SPAN_CELL, settledBy: ['bar:lengths-explicit-0-100'] },
+      allPositive: { ...SPAN_CELL, settledBy: ['bar:lengths-default-10-90', 'bar:lengths-explicit-0-100'] },
       mixedSign: { ...AXIS_SIDE, settledBy: ['bar:axis-automatic', 'bar:axis-middle'] },
     })
     expect(report.barLayout.findings).toEqual([])
   }, AUDIT_TIMEOUT_MS)
 
-  it('Task 22b: no 10/90 rule is exported until bar:lengths-default-10-90 verifies; the block renders idempotently', () => {
+  it('Task 22b: capture run 7 verifies bar:lengths-default-10-90 and exports the matched rule; the block renders idempotently', () => {
     const report = auditStage3Manifest(manifest(), { rootDir: REPO_ROOT })
-    expect(report.perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')?.disposition).toBe('supported-structural')
-    expect(report.barLengths).toEqual({})
+    expect(report.perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')?.disposition).toBe('verified')
+    // stage3-bar-lengths-default (run 7): half-min on the x14 form, the linear reading on base-only bars.
+    expect(report.barLengths).toEqual({ 'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] } })
     expect(renderBarLengthsBlock({})).toBe('export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n}\n')
     expect(renderBarLengthsBlock({ 'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] } }))
       .toBe("export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n  'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] },\n}\n")
@@ -73,7 +74,7 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
     const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { publishStage3: true })
     const block = renderBarLayoutBlock(auditStage3Manifest(manifest(), { rootDir: REPO_ROOT }).barLayout.layout)
     expect(published).toContain(block)
-    expect(block).toContain("allPositive: { origin: 'span', lengthBasis: 'cell', settledBy: ['bar:lengths-explicit-0-100'] }")
+    expect(block).toContain("allPositive: { origin: 'span', lengthBasis: 'cell', settledBy: ['bar:lengths-default-10-90', 'bar:lengths-explicit-0-100'] }")
     // A published block is carried over verbatim by a later --write without --publish-stage3, and is idempotent.
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: published })).toBe(published)
     const edited = published.replace(block, renderBarLayoutBlock({ mixedSign: { ...AXIS_SIDE, settledBy: ['bar:axis-middle'] } }))
