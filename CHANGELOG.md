@@ -18,7 +18,7 @@ in git history.
   when every value lies within them), Excel's default 10/90 lengths, the dotted axis with negative bars, left-to-right and right-to-left, theme/indexed colours,
   automatic axis and negative colours, `showValue="0"`, and composition with fills and colour scales. Every geometry
   was measured from Excel 16.114 captures and the painter reproduces them (472 painted bars compared with Excel's
-  pixels, edges within 1 px; 255 gradient bars within 8 per channel). Shapes whose captures could not discriminate
+  pixels, edges within 1 px; 255 gradient bars compared in colour within 8 per channel, 246 of them also in geometry). Shapes whose captures could not discriminate
   the question (num and percent bounds, positional bounds, merged hosts, minimum visible width, copy text and the
   default negative border), equal or single-value scopes, values beyond num/percentile bounds, stop-if-true bars,
   standalone x14 bars and every unresolved shape stay withheld
