@@ -350,7 +350,7 @@ session stays open):
 |---|---|
 | `print-too-large` | over `maxPages` (`limit` = the cap, `requested` = the job's pages); or the pages fit neither scale 2 nor 1 (each page ≤ 8192 px per axis and ≤ 64 MiB of RGBA, the job ≤ 1 GiB of RGBA in all): no `limit` |
 | `print-quota-exhausted` | the session total would pass `maxSessionPages` (`limit` = the cap, `requested` = the job's pages) |
-| `rate-limited` | over the `'print'` rate, a job already running on the session (or a cancelled job's last pages still settling), or the render pool is saturated |
+| `rate-limited` | over the `'print'` rate, a job already running or being validated on the session when the request arrived (or a cancelled job's last pages still settling), or the render pool is saturated |
 | `policy-refused` | print off, a malformed range or token, a page outside the size contract, a dropped send, or an internal failure |
 | `session-rotated` | a `print` under a superseded token: the viewer re-issues it once under the new token (nothing was charged). A job whose connection drops mid-way is not re-issued (it stays charged). |
 

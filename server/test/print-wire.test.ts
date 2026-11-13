@@ -435,6 +435,22 @@ describe('print: cancel before validation (final fix 3)', () => {
     stop()
   }, 60_000)
 
+  test('two cancelled jobs back to back: the second, sent while the first held the slot, never runs', async () => {
+    const { c, store, sid, stop } = await session()
+    const token = c.manifest!.session.token
+    c.send({ reqId: 160, type: 'print', token, from: 0, to: 5 })
+    c.send({ reqId: 160, type: 'print-cancel' })
+    c.send({ reqId: 161, type: 'print', token, from: 0, to: 5 })
+    c.send({ reqId: 161, type: 'print-cancel' })
+    await Bun.sleep(1500)
+    expect(ofReq(c, 160)).toEqual([])
+    // The slot was busy when 161 arrived: at most its rate-limited refusal, never a job.
+    expect(ofReq(c, 161).map((x) => 'text' in x && x.text)).toEqual([refused(161, 'rate-limited')])
+    expect(store.prints(sid)).toEqual([])
+    expect((await c.print(162, 0, 0)).end.type).toBe('print-done')
+    stop()
+  }, 60_000)
+
   test('a cancel for another reqId during validation does not stop the job', async () => {
     const { c, stop } = await session()
     c.send({ reqId: 140, type: 'print', token: c.manifest!.session.token, from: 0, to: 0 })

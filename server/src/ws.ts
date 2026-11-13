@@ -556,19 +556,22 @@ export function createStreamServer(o: StreamServerOptions) {
    * the same cache → pool → Layer-1 → delivery-record step as `unit`.
    *
    * The job takes the sid's one print slot synchronously, before the token
-   * await, when the slot is free (a `print` arriving while another is pending
-   * or running does not, and is refused `rate-limited` after validation as
-   * before). A `print-cancel` for it during validation marks it stopped; it
+   * await, when the slot is free; a `print` arriving while another is pending
+   * or running does not, and is refused `rate-limited` after validation (as
+   * before), even if the slot has freed meanwhile. A `print-cancel` for it during validation marks it stopped; it
    * then ends silently after the await: nothing sent, rated, audited or
    * charged, and the slot freed. Only the one pending job is held (no
    * record of unknown reqIds). */
   async function onPrint(ws: WS, msg: Record<string, unknown>) {
     const sid0 = ws.data.sid, sd0 = sid0 ? sessionDoc.get(sid0) : undefined
+    // The one-job rule is decided at arrival: a print that finds the slot taken
+    // is refused rate-limited even if the slot frees during its validation.
+    const busy = !!sd0?.print
     let job: PrintJob | undefined
-    if (ws.data.phase === 'stream' && sd0 && !sd0.print && sid0 && owns(ws, sid0) && isU32(msg.reqId) && msg.reqId !== 0) sd0.print = job = { reqId: msg.reqId, stopped: false }
-    try { await printOp(ws, msg, job) } finally { if (job && sd0 && sd0.print === job) sd0.print = undefined }
+    if (ws.data.phase === 'stream' && sd0 && !busy && sid0 && owns(ws, sid0) && isU32(msg.reqId) && msg.reqId !== 0) sd0.print = job = { reqId: msg.reqId, stopped: false }
+    try { await printOp(ws, msg, job, busy) } finally { if (job && sd0 && sd0.print === job) sd0.print = undefined }
   }
-  async function printOp(ws: WS, msg: Record<string, unknown>, pending: PrintJob | undefined) {
+  async function printOp(ws: WS, msg: Record<string, unknown>, pending: PrintJob | undefined, busy: boolean) {
     const a = await textOp(ws, msg, () => !!pending?.stopped)
     if (!a) return
     const { reqId, s, sd } = a
@@ -578,7 +581,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.rates.check('print', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
     const caps = sd.policy.print
     if (caps === false) return refuse(ws, reqId, 'policy-refused')
-    if (sd.print && sd.print !== pending) return refuse(ws, reqId, 'rate-limited')
+    if (busy || (sd.print && sd.print !== pending)) return refuse(ws, reqId, 'rate-limited')
     const { from, to } = args, n = to - from + 1
     const plan = (o.planPrint ?? planPrint)(sd.doc.units, from, to)
     if ('refused' in plan) return refuse(ws, reqId, 'print-too-large')

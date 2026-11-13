@@ -315,9 +315,10 @@ print rasters (parent T2 constructs).
 >   takes a rate slot, refused ones included. A job that fails mid-way
 >   (render error, dropped send, socket loss, viewer cancel) prints
 >   nothing on the client, and its pages stay charged. Jobs are serialised
->   per sid: a `print` while a job runs, is still being validated, or
->   while a cancelled job's in-flight pages are still settling, is
->   refused `rate-limited`. A `print` takes the sid's one slot
+>   per sid: a `print` that arrives while a job runs, is still being
+>   validated, or while a cancelled job's in-flight pages are still
+>   settling, is refused `rate-limited` (decided on arrival, even if the
+>   slot frees during its own validation). A `print` takes the sid's one slot
 >   synchronously, before the token await, when the slot is free, so a
 >   `print-cancel` for it that arrives while its token is verified stops
 >   it: after the await it ends silently (no `print-start`, no `refused`,
