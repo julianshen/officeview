@@ -1345,6 +1345,9 @@ async function main(): Promise<void> {
     const g = r3.barGradient['bar-length']
     // eslint-disable-next-line no-console
     console.log(`bar gradient (S3-M): ${g ? `bar-length endBlend=${g.endBlend}` : 'none'} (${r3.barGradientJudgement})`)
+    const d = r3.barLengths['default-10-90']
+    // eslint-disable-next-line no-console
+    console.log(`bar 10/90 lengths (Task 22b): ${d ? `${d.rule} (${d.settledBy.join(', ')})` : 'none selected'}`)
   }
   // eslint-disable-next-line no-console
   console.log('--- pressure ---')

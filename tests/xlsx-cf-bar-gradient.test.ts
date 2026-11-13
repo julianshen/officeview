@@ -14,7 +14,12 @@ import type { CfManifest, CfOracleCase } from '../scripts/cf-refs/cases'
 import { CF_MANIFEST_PATH } from '../scripts/cf-refs/generate'
 import {
   BAR_COLOR_TOLERANCE,
+  BAR_LENGTH_RULES,
+  computeWorksheetRangeGeometry,
+  evaluateBarCapabilities,
   judgeBarGradient,
+  measureCaseBars,
+  readZipPartsSync,
   loadBarScreenCapture,
   predictBarGradientPixel,
   sampleBarGradients,
@@ -136,4 +141,68 @@ describe('gradient export (Task 22b)', () => {
     expect(block).toBe("export const VERIFIED_STAGE3_BAR_GRADIENT: Readonly<Record<string, { endBlend: number; settledBy: readonly string[] }>> = {\n  'bar-length': { endBlend: 0.847, settledBy: ['bar:render-gradient-stops'] },\n}\n")
     expect(renderBarGradientBlock({})).toBe('export const VERIFIED_STAGE3_BAR_GRADIENT: Readonly<Record<string, { endBlend: number; settledBy: readonly string[] }>> = {\n}\n')
   }, 30_000)
+})
+
+/**
+ * The new case has no capture yet, so it is run through the real harness on a synthetic capture: the generated workbook,
+ * Excel's measured geometry convention (6 pt per character, 30 pt rows, 1 px per pt) and bars planted by one rule (solid
+ * blue, or the verified gradient). The planted rule must come back as the one match, and a rule outside the family must
+ * match none. This checks the family and the gradient-run override end to end before the Excel run, not Excel.
+ */
+describe('stage3-bar-lengths-default discriminates the 10/90 rules (synthetic capture, Task 22b)', () => {
+  const c = caseOf('stage3-bar-lengths-default')
+  const parts = readZipPartsSync(new Uint8Array(readFileSync(resolve(REPO_ROOT, c.saved))))!
+  const colWidthsPt = [84, 180, 270, 360, 180, 270, 360, 180, 270, 360]
+  const rowHeightsPt = Array.from({ length: 24 }, () => 30)
+  const geom = computeWorksheetRangeGeometry(parts, c.range, { colWidthsPt, rowHeightsPt })!
+  const cls = (col: number): { x14: boolean; solid: boolean } => ({ x14: col <= 6, solid: col <= 3 })
+  const half = (x: number): number => Math.floor(x + 0.5 + 1e-9)
+  const planted = (rule: string, col: number, v: number, S: number): number => {
+    const t = v / 100, [form, scope] = rule.split('@'), k = cls(col)
+    const applies = form !== 'linear' && (scope === 'all' || (scope === 'x14' && k.x14) || (scope === 'solid' && k.solid))
+    if (rule === 'outside') return Math.max(0, half((0.1 + 0.8 * t) * S) - 20)
+    if (applies && form === 'half-min') return half((0.05 + 0.8 * t) * S)
+    const L = half((0.1 + 0.8 * t) * S)
+    return applies && form === 'offset-9pt' ? Math.max(0, L - 9) : L
+  }
+  const synthetic = (rule: string): DecodedPng => {
+    const width = colWidthsPt.reduce((a, b) => a + b, 0) + 1, height = 24 * 30 + 1
+    const data = new Uint8ClampedArray(width * height * 4).fill(255)
+    for (const cell of c.expected.cells.filter(x => x.matched)) {
+      const col = cell.ref.charCodeAt(0) - 65, row = Number(cell.ref.slice(1)) - 1
+      const v = (Number(cell.ref.slice(1)) - 2) * 10
+      const x0 = colWidthsPt.slice(0, col).reduce((a, b) => a + b, 0), S = colWidthsPt[col]! - 3
+      const L = planted(rule, col, v, S)
+      for (let y = row * 30 + 2; y <= row * 30 + 27; y++) {
+        for (let i = 0; i < L; i++) {
+          const rgb = cls(col).solid ? [0, 0, 255] : predictBarGradientPixel('bar-length', { fill: [0, 0, 255], length: L, span: S }, i, 0.847, []).map(Math.round)
+          const j = (y * width + x0 + 2 + i) * 4
+          data[j] = rgb[0]!; data[j + 1] = rgb[1]!; data[j + 2] = rgb[2]!
+        }
+      }
+    }
+    return { width, height, data }
+  }
+  const judge = (rule: string) => {
+    const png = synthetic(rule)
+    const measured = measureCaseBars(c, png, geom, parts)
+    expect(measured instanceof Map, `${rule}: ${JSON.stringify(measured).slice(0, 200)}`).toBe(true)
+    return evaluateBarCapabilities(c, parts, png, geom, measured as Exclude<typeof measured, { kind: 'refusal' }> as never)['bar:lengths-default-10-90']!
+  }
+
+  it('the case designates 99 cells: three fill/pairing classes at three widths, eleven values each', () => {
+    expect(c.status).toBe('recipe-pending')
+    expect(c.expected.cells.filter(x => x.matched)).toHaveLength(99)
+  })
+
+  for (const rule of BAR_LENGTH_RULES) {
+    it(`planted ${rule}: the one match`, () => {
+      const ev = judge(rule)
+      expect([ev.status, ev.matched], ev.reason).toEqual(['discriminating', rule])
+    })
+  }
+
+  it('a rule outside the family matches none (refused, never fitted)', () => {
+    expect(judge('outside').status).toBe('none')
+  })
 })

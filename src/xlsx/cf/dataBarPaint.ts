@@ -266,6 +266,8 @@ export function paintDataBars(
   check: (cap: string) => boolean = defaultHasEvidence,
   /** Told, per host it lays out, whether the bar was withheld (the paged scope learns `barWithheld` here). */
   onLayout?: (row: number, col: number, withheld: boolean) => void,
+  /** The render model (tests substitute a mutant); production always paints `CF_BAR_RENDER_MODEL`. */
+  model: CfBarRenderModel = CF_BAR_RENDER_MODEL,
 ): boolean {
   if (bars.size === 0) return true
   const paintOne = (row: number, col: number): void => {
@@ -274,7 +276,7 @@ export function paintDataBars(
     const host = cellRect(row, col)
     if (!host || !(host.width > 0 && host.height > 0)) return
     const deviceSpace = scale.output === 'device'
-    const primitives = layoutDataBar(bar, host, scale, CF_BAR_RENDER_MODEL, check)
+    const primitives = layoutDataBar(bar, host, scale, model, check)
     onLayout?.(row, col, primitives === undefined)
     if (!primitives) return
     const transform = deviceSpace ? ctx.getTransform() : undefined

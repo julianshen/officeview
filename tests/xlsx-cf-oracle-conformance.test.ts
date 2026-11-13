@@ -15,7 +15,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { CF_BAR_RENDER_MODEL, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
 import { createCanvas } from 'canvas'
@@ -712,6 +712,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LAYOUT'), 'the published layout is the audit result').toEqual(audit.barLayout.layout)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_AUTO_BAR_COLORS'), 'the published colours are the audit result').toEqual(audit.autoBarColours)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT'), 'the published gradient is the audit result').toEqual(audit.barGradient)
+      expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LENGTHS'), 'the published 10/90 rule is the audit result').toEqual(audit.barLengths)
     }
 
     // A pixel-measured bar production withholds, by case column, with why (withheld-only, like FINDINGS).
@@ -742,6 +743,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     injectCfBarLayout(audit.barLayout.layout)
     injectCfAutoBarColours(audit.autoBarColours)
     injectCfBarGradient(audit.barGradient)
+    injectCfBarLengths(audit.barLengths)
     try {
       await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
         for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
@@ -811,6 +813,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       injectCfBarLayout(null)
       injectCfAutoBarColours(null)
       injectCfBarGradient(null)
+      injectCfBarLengths(null)
     }
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
@@ -869,24 +872,29 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           expect(p?.fill, `${s.ref} lays out`).toBeDefined()
           expect([p.fill!.x, p.fill!.w, p.fill!.y, p.fill!.y + p.fill!.h - 1], `${s.ref} rect`).toEqual([s.leftPx, s.length, s.topPx, s.bottomPx])
           // Paint through the production painter on a real canvas (device output at the capture scale).
-          const canvas = createCanvas(o.cellLeftPx + o.cellWidthPx + 2, top + height + 2)
-          const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
-          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
-          // The renderer's transform: logical px to device px at zoom x DPR = 3/4 (the painter clips in logical units).
-          ctx.setTransform(0.75, 0, 0, 0.75, 0, 0)
-          paintDataBars(ctx, new Map([[row * 16384 + col, bar]]), () => bar, () => host, { r0: row, c0: col, r1: row, c1: col }, { zoom: 0.75, dpr: 1, output: 'device' })
-          const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const paintWith = (model: typeof CF_BAR_RENDER_MODEL, check?: (cap: string) => boolean) => {
+            const canvas = createCanvas(o.cellLeftPx + o.cellWidthPx + 2, top + height + 2)
+            const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+            // The renderer's transform: logical px to device px at zoom x DPR = 3/4 (the painter clips in logical units).
+            ctx.setTransform(0.75, 0, 0, 0.75, 0, 0)
+            paintDataBars(ctx, new Map([[row * 16384 + col, bar]]), () => bar, () => host, { r0: row, c0: col, r1: row, c1: col }, { zoom: 0.75, dpr: 1, output: 'device' }, check, undefined, model)
+            return ctx.getImageData(0, 0, canvas.width, canvas.height)
+          }
+          const img = paintWith(CF_BAR_RENDER_MODEL)
+          // Mutant: the production model with a zero blend paints the fill solid, through the same painter.
+          const solid = paintWith({ ...CF_BAR_RENDER_MODEL, gradient: { endBlend: 0 } }, () => true)
           const png = excelPng(c)
+          const at = (data: ImageData, x: number, y: number) => `FF${[0, 1, 2].map(j => data.data[(y * data.width + x) * 4 + j]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
           let solidMiss = false
           for (const q of s.pixels) {
             const x = s.leftPx + q.i
             const excel = pixelArgb(png, x, q.y)
-            const k = (q.y * img.width + x) * 4
-            const ours = `FF${[0, 1, 2].map(j => img.data[k + j]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+            const ours = at(img, x, q.y)
             const d = argbDelta(ours, excel)
             worst = Math.max(worst, d)
             if (d > 8) expect(d, `${s.ref} (${x}, ${q.y}) ours ${ours} Excel ${excel}`).toBeLessThanOrEqual(8)
-            if (argbDelta(argbHex(fill), excel) > 8) solidMiss = true
+            if (argbDelta(at(solid, x, q.y), excel) > 8) solidMiss = true
             pixels++
           }
           if (solidMiss) solidFails++
@@ -899,7 +907,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(bars).toBe(24)
     expect(pixels).toBeGreaterThan(50_000)
     expect(worst).toBeLessThanOrEqual(8)
-    // Mutant: the fill painted solid misses Excel on every gradient bar.
+    // Mutant: the painter with a zero blend (the fill painted solid) misses Excel on every gradient bar.
     expect(solidFails).toBe(24)
   }, 60_000)
 

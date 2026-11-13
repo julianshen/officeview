@@ -343,7 +343,7 @@ Task 18 prepares the Stage 3 evidence machinery. **Nothing here is Excel evidenc
 | Case ID | Sheet & Range | Question settled | Rulings | Status |
 |---|---|---|---|---|
 | `stage3-bar-settings-probe` | `Sheet1!A1:G12` | S3-A precondition probe against defaults and a default control; calibration columns 10/30/60 and one solid DXF cell; schema defaults for a base-only bar | S3-A, S3-Q | recipe-pending |
-| `stage3-bar-lengths-default` | `Sheet1!A1:J24` | Default 10/90 lengths (Task 22b): paired solid, paired gradient and base-only bars at 90/180/360 pt, values 0..100 by 10 | S3-B, S3-M | recipe-pending |
+| `stage3-bar-lengths-default` | `Sheet1!A1:J24` | Default 10/90 lengths (Task 22b): paired solid, paired gradient and base-only bars at 180/270/360 pt, values 0..100 by 10 | S3-B, S3-M | recipe-pending |
 | `stage3-bar-lengths` | `Sheet1!A1:J12` | Solid bar lengths (the midpoint cell at 50 is not designated for 10/90 vs 0/100): default 10/90 vs explicit 0/100, min/max, num 20/80, percent 25/75, percentile 10/90, autoMin and autoMax (autoMin differs from min), all-negative | S3-B, S3-C, S3-L | recipe-pending |
 | `stage3-bar-degenerate` | `Sheet1!A1:H12` | Equal values, a single numeric cell, inverted num 80 to 20, values beyond bounds, percent -10/150, Excel 2007 `min val="0"`, `min` placed second | S3-D, S3-E | recipe-pending |
 | `stage3-bar-axis-negative` | `Sheet1!A1:I12` | Mixed {-50..100} under automatic/middle/none, negative fill and border colours vs same-as-positive, all-positive automatic control | S3-K, S3-L | recipe-pending |
@@ -785,7 +785,7 @@ The base-only row is exactly `round((0.1 + 0.8·t)·177)`, 10/90 linear.
 - **Why no single formula fits.** Fill type and pairing form are confounded, so no formula of (span, t, min, max) can reproduce both rows.
 - **Two rules fit the solid row.** `half-min` gives `(min/2 + (max − min)·t)·span`, that is 5/85. `offset-9pt` gives 10/90 linear minus 9 pt. Both fit at this width and part at others.
 - **The candidate family.** `bar:lengths-default-10-90` now has the candidates `BAR_LENGTH_RULES`: `linear`, then `half-min` and `offset-9pt`, each applied to `all`, `x14` or `solid` bars. Gradient cells are measured by their gradient run, not the fade. On lengths B, all six non-linear candidates match, so the result is non-discriminating there.
-- **The new case.** `stage3-bar-lengths-default` (recipe-pending) crosses paired solid, paired gradient and base-only bars at 90/180/360 pt with values 0..100 in steps of 10. Every pair of candidates differs there by at least 3 px. It owns the capability because it sits before `stage3-bar-lengths` in the catalogue.
+- **The new case.** `stage3-bar-lengths-default` (recipe-pending) crosses paired solid, paired gradient and base-only bars at 180/270/360 pt with values 0..100 in steps of 10. Every pair of candidates differs there by at least 3 px. It owns the capability because it sits before `stage3-bar-lengths` in the catalogue.
 - **Production.** The capability alone no longer lifts 10/90. The evaluator also needs the selected rule, `VERIFIED_STAGE3_BAR_LENGTHS`, which is rendered only with `--publish-stage3`. It applies rules that are a share of the span (`linear`, and `half-min` on `all` or `solid` bars). It stays unresolved for `offset-9pt` and for `x14`-scoped rules, because the definition does not record the pairing form.
 - **The run.** Recipes section 2c.
 

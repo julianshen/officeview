@@ -119,7 +119,7 @@ What to check afterwards:
 
 ## 2c. The default-lengths case (Task 22b)
 
-`stage3-bar-lengths-default` owns `bar:lengths-default-10-90`. The captures so far show two 10/90 curves at one 180 pt width: the paired solid bar of `stage3-bar-lengths` B is 9 px shorter than 10/90 linear, and every base-only gradient bar is exactly 10/90 linear. The case crosses paired solid (B:D), paired gradient (E:G) and base-only (H:J) bars at 90, 180 and 360 pt, with values 0, 10, ..., 100 on each, so that one candidate rule of `BAR_LENGTH_RULES` (scripts/cf-refs/verify.ts) matches. Run it like the other cases, with the same preconditions, close checks and rerun rule:
+`stage3-bar-lengths-default` owns `bar:lengths-default-10-90`. The captures so far show two 10/90 curves at one 180 pt width: the paired solid bar of `stage3-bar-lengths` B is 9 px shorter than 10/90 linear, and every base-only gradient bar is exactly 10/90 linear. The case crosses paired solid (B:D), paired gradient (E:G) and base-only (H:J) bars at 180, 270 and 360 pt, with values 0, 10, ..., 100 on each, so that one candidate rule of `BAR_LENGTH_RULES` (scripts/cf-refs/verify.ts) matches. Run it like the other cases, with the same preconditions, close checks and rerun rule:
 
 ```
 bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-lengths-default --refresh-clock-date
