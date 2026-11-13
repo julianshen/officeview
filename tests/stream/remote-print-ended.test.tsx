@@ -135,6 +135,40 @@ describe('remote print: a terminal session end', () => {
     expect(framePrint).not.toHaveBeenCalled()
   })
 
+  it('the surface aborts on the end itself, before any React render or effect (microtasks only)', async () => {
+    h.open()
+    const { doc, end } = fakeDoc()
+    const v = render(<RemoteDocView document={asDoc(doc)} />)
+    fireEvent.click(printBtn(v)!)
+    await waitFor(() => expect(frames()[0]?.contentDocument?.querySelector('img')).toBeTruthy())
+    const { signal } = h.calls.at(-1)!
+    // No act(), no timers: a late image load in the same task must already find the surface aborted.
+    end(revoked())
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(signal.aborted).toBe(true)
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(framePrint).not.toHaveBeenCalled()
+  })
+
+  for (const first of ['print', 'ended'] as const) {
+    it(`doc.print rejecting with the terminal error (${first} settling first) shows no failure notice`, async () => {
+      h.open()
+      const { doc, end } = fakeDoc()
+      let fail!: (e: unknown) => void
+      doc.print.mockImplementation(() => new Promise<PrintedPage[]>((_, reject) => { fail = reject }))
+      const v = render(<RemoteDocView document={asDoc(doc)} />)
+      fireEvent.click(printBtn(v)!)
+      await waitFor(() => expect(doc.print).toHaveBeenCalledTimes(1))
+      const e = revoked()
+      await act(async () => { if (first === 'print') { fail(e); end(e) } else { end(e); fail(e) } })
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+      expect(v.container.textContent).toContain('Viewing session ended (revoked).')
+      expect(v.container.querySelector('[data-ov-print-notice]')).toBeNull()
+      expect(v.container.textContent).not.toContain('could not be printed')
+      expect(v.container.textContent).not.toContain('Preparing pages')
+    })
+  }
+
   it('closes an open range dialog', async () => {
     const { doc, end } = fakeDoc({ maxPages: 2 })
     const v = render(<RemoteDocView document={asDoc(doc)} />)

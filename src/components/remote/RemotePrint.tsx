@@ -50,7 +50,9 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   const [endedDoc, setEndedDoc] = useState<RemoteOfficeDoc>()
   useEffect(() => {
     let live = true
-    void doc.ended.then(() => { if (live) setEndedDoc(doc) })
+    // stopAll at once (not on the next render's effect): an image load landing
+    // before React re-renders must already find the surface aborted.
+    void doc.ended.then(() => { if (live) { stopAll(); setEndedDoc(doc) } })
     return () => { live = false }
   }, [doc])
   const ended = endedDoc === doc
