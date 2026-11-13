@@ -208,18 +208,20 @@ export function evaluateDataBar(
 /**
  * Where a non-0/100 bar's length starts (as a share of the span) under the selected rule (`BAR_LENGTH_RULES`,
  * scripts/cf-refs/verify.ts): `linear` at minLength, `half-min` at minLength / 2 (the slope is maxLength - minLength
- * either way). A rule scoped to `solid` bars applies to gradient="0" only. Undefined (unresolved) with no rule, an
- * `offset-9pt` rule on a bar it covers (a fixed point offset is not a share of the span), or an `x14`-scoped rule (the
- * definition does not record its pairing form).
+ * either way). A scoped rule applies to its class only (`solid`: gradient="0"; `x14`: the paired x14 form, Ruling
+ * S3-LEN-X14) and every other bar keeps the linear reading the same capture verified on it. Undefined (unresolved) with
+ * no rule, an `offset-9pt` rule on a bar it covers (a fixed point offset is not a share of the span), or an `x14`-scoped
+ * rule on a bar whose pairing form is unknown.
  */
 function defaultLengthsStart(def: CfDataBarDefinition, rule: string | undefined): number | undefined {
   if (rule === undefined) return undefined
   const [form, cls] = rule.split('@')
   const linear = def.minLength / 100
   if (form === 'linear' && cls === undefined) return linear
-  if (cls !== 'all' && cls !== 'solid' && cls !== 'x14') return undefined
-  if (cls === 'solid' && def.gradient) return linear
-  if (cls === 'x14') return undefined
+  if ((form !== 'half-min' && form !== 'offset-9pt') || (cls !== 'all' && cls !== 'solid' && cls !== 'x14')) return undefined
+  if (cls === 'x14' && def.pairing === undefined) return undefined
+  const applies = cls === 'all' || (cls === 'solid' && !def.gradient) || (cls === 'x14' && def.pairing === 'x14')
+  if (!applies) return linear
   return form === 'half-min' ? def.minLength / 200 : undefined
 }
 

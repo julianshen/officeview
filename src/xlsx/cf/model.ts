@@ -44,6 +44,9 @@ export type CfDefinition = (CfRuleOrigin & (
       border: boolean; negativeBarColorSameAsPositive: boolean; negativeBarBorderColorSameAsPositive: boolean
       axisPosition: 'automatic' | 'middle' | 'none'; direction: 'context' | 'leftToRight' | 'rightToLeft'; showValue: boolean
       sheetRightToLeft?: boolean
+      /** Ruling S3-LEN-X14: the pairing form, `x14` for a bar with an x14 companion (or standalone x14), `base-only` for a
+       * bare base `<dataBar>`. Excel's default 10/90 lengths differ between them; absent means unknown (fail closed). */
+      pairing?: 'x14' | 'base-only'
       /** Colours Excel draws as automatic (`auto="1"`), resolved to the measured ARGB of their capability (S3-F amended). */
       autoColors?: readonly ('negativeFill' | 'axis')[] }
 )) | { kind: 'unresolved'; type: CfRuleType | 'unknown'; reason: string; origin?: CfRuleOrigin }

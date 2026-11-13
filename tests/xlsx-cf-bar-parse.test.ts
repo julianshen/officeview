@@ -508,7 +508,7 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     const def = bar(only(withExactCfEvidence([...BAR_PARSE_CAPS, ...AUTO_CAPS], () => parse(xml)).value.rules).definition)
     // The bar's own fields, every optional one present, fit the derived constant (the origin is priced separately).
     const { dialect: _d, guid: _g, formulas: _f, ...own } = def
-    expect(Object.keys(own)).toHaveLength(18)
+    expect(Object.keys(own)).toHaveLength(19) // with the pairing form (Ruling S3-LEN-X14)
     expect(measurePayloadBytes(own)).toBeLessThanOrEqual(CF_BAR_DEFINITION_BYTES)
   })
 
@@ -517,5 +517,22 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     expect(barRequiredCapabilities(def, [{ rgb: 'FF638EC6' }])).toEqual(new Set(['bar:pairing-base-only', 'bar:settings-schema-defaults', 'bar:direction-context-ltr-sheet']))
     expect(barRequiredCapabilities({ ...def, dialect: 'x14' }, [{ theme: '4', customTheme: true }, { indexed: '10' }]))
       .toEqual(new Set(['bar:pairing-standalone', 'bar:settings-schema-defaults', 'bar:direction-context-ltr-sheet', 'bar:colors-theme-tint', 'bar:colors-custom-theme', 'bar:colors-indexed']))
+  })
+})
+
+describe('Ruling S3-LEN-X14: the parsed bar records its pairing form (Task 22b post-capture)', () => {
+  it('a paired bar is x14 and a base-only bar is base-only, on the resident and streamed paths alike', async () => {
+    const G = '{00000000-0000-4000-8000-0000000000B1}'
+    const xml = baseBar('B2:B6', 1, MINMAX + BLUE, G) +
+      baseBar('C2:C6', 2, MINMAX + BLUE) +
+      x14Block(companion('B2:B6', G, ' minLength="10" maxLength="90" gradient="0"', '<x14:cfvo type="min"/><x14:cfvo type="max"/>'))
+    await withExactCfEvidence(BAR_PARSE_CAPS, async () => {
+      const resident = parse(xml)
+      expect(bar(byPriority(resident.value.rules, 1).definition).pairing).toBe('x14')
+      expect(bar(byPriority(resident.value.rules, 2).definition).pairing).toBe('base-only')
+      const streamed = await stream(xml)
+      expect(streamed.value).toEqual(resident.value)
+      streamed.release()
+    })
   })
 })

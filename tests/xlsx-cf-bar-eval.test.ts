@@ -166,7 +166,25 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
     // A fixed point offset is not a share of the span, and the definition does not record the pairing form.
     expect(under('offset-9pt@all', false)).toEqual(['unresolved', 'unresolved', 'unresolved'])
     expect(under('offset-9pt@solid', true, withGradient)).toEqual([0.1, 0.3, 0.9])
-    expect(under('half-min@x14', false)).toEqual(['unresolved', 'unresolved', 'unresolved'])
+    // Ruling S3-LEN-X14 (the rule the capture selected): half-min on the x14 (paired) form, the linear reading the same
+    // capture verified on the base-only form, and unresolved when the pairing form is unknown.
+    const underForm = (rule: string, pairing: 'x14' | 'base-only' | undefined, gradient = false) => {
+      injectCfBarLengths({ 'default-10-90': { rule, settledBy: ['bar:lengths-default-10-90'] } })
+      try {
+        return withExactCfEvidence(gradient ? withGradient : STUB_EVIDENCE, () => [0, 25, 100].map(v => {
+          const out = evalBar(v, bar({ minLength: 10, maxLength: 90, gradient, ...(pairing ? { pairing } : {}) }), scope, SPAN_CELL)
+          return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
+        }))
+      } finally {
+        injectCfBarLengths(null)
+      }
+    }
+    expect(underForm('half-min@x14', 'x14')).toEqual([0.05, 0.25, 0.85])
+    expect(underForm('half-min@x14', 'x14', true)).toEqual([0.05, 0.25, 0.85])
+    expect(underForm('half-min@x14', 'base-only', true)).toEqual([0.1, 0.3, 0.9])
+    expect(underForm('half-min@x14', undefined)).toEqual(['unresolved', 'unresolved', 'unresolved'])
+    expect(underForm('offset-9pt@x14', 'base-only', true)).toEqual([0.1, 0.3, 0.9])
+    expect(underForm('offset-9pt@x14', 'x14')).toEqual(['unresolved', 'unresolved', 'unresolved'])
     expect(under('nonsense', false)).toEqual(['unresolved', 'unresolved', 'unresolved'])
     // The rule needs its capability too.
     expect(under('linear', false, STUB_EVIDENCE.filter(c => c !== 'bar:lengths-default-10-90'))).toEqual(['unresolved', 'unresolved', 'unresolved'])

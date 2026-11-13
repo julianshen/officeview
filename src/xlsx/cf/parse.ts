@@ -1148,6 +1148,8 @@ function parseDataBarRule(
     direction: directionText as CfDataBarDefinition['direction'],
     showValue,
     ...(sheetRightToLeft !== undefined ? { sheetRightToLeft } : {}),
+    // Ruling S3-LEN-X14: Excel's default lengths depend on the form (half-min on x14 bars, linear on base-only ones).
+    pairing: x14Bar ? 'x14' as const : 'base-only' as const,
     ...(autoColors.length > 0 ? { autoColors } : {}),
   }
   const required = barRequiredCapabilities({ ...inputs.origin, ...definition }, colourInputs, {
