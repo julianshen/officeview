@@ -2193,6 +2193,17 @@ function barRulesOf(c: CfOracleCase): BarRuleSpec[] {
 }
 
 /**
+ * Candidate rules for lengths other than 0/100 (Task 22b, `bar:lengths-default-10-90`), from the two curves the
+ * captures show at one width: base-only gradient bars measure `(min + (max - min)·t)` of the span exactly (10/90
+ * linear), while the paired solid bar of stage3-bar-lengths B measures 9 px shorter at 180 pt. Two forms fit that bar:
+ * - `half-min`: `(min/2 + (max - min)·t)` of the span (5/85 for 10/90, proportional to the span);
+ * - `offset-9pt`: 10/90 linear minus a fixed 9 pt (independent of the span).
+ * Each applies to one class of bars (the rest stay linear): `all`, `x14` (paired or standalone, not base-only) or
+ * `solid` (gradient="0"). `linear` is the plain reading. Two widths and both fill types per form discriminate them.
+ */
+export const BAR_LENGTH_RULES = ['linear', 'half-min@all', 'half-min@x14', 'half-min@solid', 'offset-9pt@all', 'offset-9pt@x14', 'offset-9pt@solid'] as const
+
+/**
  * The parameters a bar layout hypothesis varies. Each capability varies the one knob its question is about (and crosses
  * the nuisance knobs its fixture cannot hold still); every other knob keeps its first value. The first values are a
  * plain reading of the spec, never fitted to a capture: discrimination, not the default, decides what verifies.
@@ -2233,6 +2244,7 @@ export const BAR_MODEL_KNOBS = {
   showValue: ['honoured', 'ignored'],
   fillType: ['authored', 'solid', 'gradient'],
   border: ['authored', 'present', 'absent'],
+  lengthRule: BAR_LENGTH_RULES,
 } as const
 export type BarKnob = keyof typeof BAR_MODEL_KNOBS
 export type BarKnobs = { [K in BarKnob]: (typeof BAR_MODEL_KNOBS)[K][number] }
@@ -2270,11 +2282,16 @@ interface BarCapabilitySpec {
   vertical?: true
   /** Compare the traits fill type / border presence / value text. */
   traits?: readonly ('fill' | 'border' | 'text')[]
+  /**
+   * Gradient bars are compared by their extent too (Task 22b): the measurement is the gradient sampler's run of
+   * non-background columns (`sampleBarGradients`), not the strong-delta fade the geometry measurer sees.
+   */
+  gradientExtents?: true
 }
 
 /** Capabilities that the pixel hypotheses can settle. Anything absent records no hypotheses and stays unverified. */
 export const BAR_CAPABILITY_HYPOTHESES: Readonly<Record<string, BarCapabilitySpec>> = {
-  'bar:lengths-default-10-90': { knob: 'lengths', values: ['effective', 'full'] },
+  'bar:lengths-default-10-90': { knob: 'lengthRule', values: BAR_LENGTH_RULES, gradientExtents: true },
   'bar:lengths-explicit-0-100': { knob: 'lengths', values: ['effective', 'base'] },
   'bar:bounds-min-max': { knob: 'minmax', values: ['min-max', 'zero-anchored'] },
   'bar:bounds-num': { knob: 'numAs', values: ['num', 'min-max'] },
@@ -2599,8 +2616,14 @@ function predictBarCell(
       if (k.beyond === 'none') return { kind: 'none', text }
       t = Math.max(0, Math.min(1, t))
     }
-    const frac = fullLengths ? t : (minL + (maxL - minL) * t) / 100
+    let frac = fullLengths ? t : (minL + (maxL - minL) * t) / 100
+    // Task 22b: a candidate length rule replaces the linear reading on the class of bars it names.
+    const [form, cls] = k.lengthRule.split('@') as [string, string | undefined]
+    const applies = !fullLengths && form !== 'linear' &&
+      (cls === 'all' || (cls === 'x14' && rule.pairing !== 'base-only' && !useBase) || (cls === 'solid' && fillMode === 'solid'))
+    if (applies && form === 'half-min') frac = (minL / 2 + (maxL - minL) * t) / 100
     segLen = len(frac, S)
+    if (applies && form === 'offset-9pt') segLen = Math.max(0, segLen - 9)
     segStart = 0
   }
   if (segLen <= 0) return { kind: 'none', text }
@@ -2774,10 +2797,11 @@ export function buildBarHypotheses(
           perRef[ref]!.push({ id, question: combo[0], leftPx: 0, rightPx: 0, noBar: true })
           continue
         }
-        const gradient = p.fill === 'gradient'
+        // A gradient bar's extent is compared only where the capability measures it with the gradient sampler.
+        const gradient = p.fill === 'gradient' && !spec.gradientExtents
         const traits: Record<string, string> = {}
         for (const t of spec.traits ?? []) traits[t] = t === 'fill' ? p.fill : t === 'border' ? p.border : p.text
-        if (gradient) traits.fill = 'gradient'
+        if (p.fill === 'gradient') traits.fill = 'gradient'
         perRef[ref]!.push({
           id,
           question: combo[0],
@@ -2907,6 +2931,13 @@ export function evaluateBarCapabilities(
       out[cap] = judgeBarAutoColour(sampleBarAutoColours(c, parts, png, geom, measured)[cap])
       continue
     }
+    if (cap === BAR_GRADIENT_CAPABILITY) {
+      // The designated cells of the capability (the pooled, cross-case judgement is the audit's).
+      const refs = new Set(c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref))).map(cell => cell.ref.toUpperCase()))
+      const { endBlend: _t, maxError: _e, ...judged } = judgeBarGradient(sampleBarGradients(c, parts, png, geom, refs))
+      out[cap] = judged
+      continue
+    }
     const b = built[cap]
     if (!b?.hypotheses) {
       out[cap] = { status: 'no-hypotheses', reason: b?.reason ?? 'no pixel hypothesis family exists for this capability' }
@@ -2923,6 +2954,14 @@ export function evaluateBarCapabilities(
       }
       const t = observeBarTraits(png, geom, ref, cell.controlRef, o)
       meas[ref] = { leftPx: o.bar.leftPx, rightPx: o.bar.rightPx, topPx: o.bar.topPx, bottomPx: o.bar.bottomPx, ...(t.rgb ? { rgb: t.rgb } : {}), ...(t.borderRgb ? { borderRgb: t.borderRgb } : {}), traits: t.traits }
+    }
+    if (spec.gradientExtents) {
+      // Gradient cells are measured by their gradient run (Task 22b); a gradient cell the sampler cannot read (a shape
+      // never measured) keeps the fade extent, which matches no hypothesis: refused, never verified.
+      for (const g of sampleBarGradients(c, parts, png, geom, new Set(Object.keys(b.hypotheses))).samples) {
+        const m = meas[g.ref]
+        if (m) meas[g.ref] = { ...m, leftPx: g.leftPx, rightPx: g.leftPx + g.length - 1 }
+      }
     }
     const disc = spec.exact ? discriminateBar(b.hypotheses, meas, 0, 1) : discriminateBar(b.hypotheses, meas, 1, 3)
     out[cap] = disc.status === 'discriminating'
@@ -3172,6 +3211,293 @@ export function judgeBarAutoColour(o: BarAutoColourObservation | undefined, othe
   const near = [...o.others, ...others].find(x => rgbHexDelta(x, med) < BAR_COLOR_SEPARATION)
   if (near) return { status: 'non-discriminating', reason: `the measured automatic colour ${med} is within ${BAR_COLOR_SEPARATION - 1} per channel of ${near}, another colour of the bar` }
   return { status: 'discriminating', reason: `measured ${med} on ${o.samples.map(s => s.ref).join(', ')}`, matched: med }
+}
+
+/* ---------------- Stage 3: gradient fill (bar:render-gradient-stops, Task 22b) ---------------- */
+
+/** The capability whose answer is Excel's gradient model, judged from pixels (an observation family, like the colours). */
+export const BAR_GRADIENT_CAPABILITY = 'bar:render-gradient-stops'
+
+/**
+ * The candidate gradient models, each predicting every pixel of a gradient bar from its fill, its measured length L and
+ * span S, and the blend fraction t fitted to the same pixels (`f` a channel of the fill, `i` the column inside the bar):
+ * - `bar-length`: linear in sRGB over the bar's own length, from the fill toward white by t: f + (255 - f)·t·(i + ½)/L;
+ * - `cell-span`: the same ramp laid over the whole span and cut at the bar's end: f + (255 - f)·t·(i + ½)/S;
+ * - `white-end`: over the bar length to pure white: f + (255 - f)·(i + ½)/L;
+ * - `linear-light`: over the bar length to the same end colour, interpolated in linear light;
+ * - `solid`: the fill throughout (a solid bar drawn instead of the gradient);
+ * - `fixed-end`: over the bar length to one fixed end colour for every fill (the first sample's end); listed only when
+ *   the samples hold two fills that differ by the colour separation, since one fill cannot tell it from `bar-length`.
+ */
+export const BAR_GRADIENT_HYPOTHESES = ['bar-length', 'cell-span', 'white-end', 'linear-light', 'solid', 'fixed-end'] as const
+export type BarGradientHypothesis = (typeof BAR_GRADIENT_HYPOTHESES)[number]
+
+/** One measured gradient bar: its fill, extent and every unmasked pixel (column `i` inside the bar). */
+export interface BarGradientSample {
+  ref: string
+  fill: [number, number, number]
+  leftPx: number
+  /** The bar's first and last rows. */
+  topPx: number
+  bottomPx: number
+  length: number
+  span: number
+  /** The solid-length model's length (0/100 bars only); the gradient's extent must equal it within 1 px (Ruling S3-M). */
+  predictedLength?: number
+  pixels: Array<{ i: number; rgb: [number, number, number] }>
+}
+export interface BarGradientObservation {
+  samples: BarGradientSample[]
+  /** Gradient cells that could not be sampled, with the reason (never counted as evidence). */
+  unsampled: string[]
+}
+
+/** One saved bar rule with the settings the gradient shape depends on (paired: the companion's attributes win). */
+interface SavedGradientBar {
+  sqref: string
+  gradient: boolean
+  border: boolean
+  direction: string
+  axisPosition: string
+  minLength: number
+  maxLength: number
+  fill: string | undefined
+}
+
+function readSavedGradientBars(parts: Map<string, Uint8Array>): SavedGradientBar[] {
+  const raw = parts.get('xl/worksheets/sheet1.xml')
+  if (!raw) return []
+  const root = parseXml(new TextDecoder().decode(raw)) as XmlNode
+  const docRoot = asNode(root.worksheet) ?? root
+  const rgbOf = (node: XmlNode | undefined): string | undefined => {
+    const v = attr(node, 'rgb')
+    return v !== undefined && /^[0-9A-F]{8}$/i.test(v) && attr(node, 'tint') === undefined && attr(node, 'auto') === undefined ? v.toUpperCase() : undefined
+  }
+  const x14ById = new Map<string, XmlNode>()
+  const out: SavedGradientBar[] = []
+  const settings = (bar: XmlNode | undefined, x14: boolean, fill: string | undefined, sqref: string): SavedGradientBar => {
+    const flag = (name: string, def: boolean): boolean => {
+      const v = attr(bar, name)
+      return v === undefined ? def : v === '1' || v === 'true'
+    }
+    return {
+      sqref,
+      // A base-only bar has no fill-type attribute: it is the gradient (Excel 2007) bar.
+      gradient: x14 ? flag('gradient', true) : true,
+      border: x14 ? flag('border', false) : false,
+      direction: (x14 ? attr(bar, 'direction') : undefined) ?? (x14 ? 'context' : 'leftToRight'),
+      axisPosition: (x14 ? attr(bar, 'axisPosition') : undefined) ?? 'automatic',
+      minLength: Number(attr(bar, 'minLength') ?? '10'),
+      maxLength: Number(attr(bar, 'maxLength') ?? '90'),
+      fill,
+    }
+  }
+  for (const ext of asArray(asNode(docRoot.extLst)?.ext).map(asNode)) {
+    for (const cf of asArray(asNode(ext?.conditionalFormattings)?.conditionalFormatting).map(asNode)) {
+      const sq = textOf(cf?.sqref) ?? ''
+      for (const rule of asArray(cf?.cfRule).map(asNode)) {
+        if (!rule || attr(rule, 'type') !== 'dataBar') continue
+        const guid = x14RuleGuid(rule)
+        if (attr(rule, 'priority') === undefined && guid) x14ById.set(guid, rule)
+        else out.push(settings(asNode(rule.dataBar), true, rgbOf(asNode(asNode(rule.dataBar)?.fillColor)), sq))
+      }
+    }
+  }
+  for (const cf of asArray(docRoot.conditionalFormatting).map(asNode)) {
+    const sq = attr(cf, 'sqref') ?? ''
+    for (const rule of asArray(cf?.cfRule).map(asNode)) {
+      if (!rule || attr(rule, 'type') !== 'dataBar') continue
+      const fill = rgbOf(asNode(asNode(rule.dataBar)?.color))
+      const guid = baseRuleGuid(rule)
+      const companion = guid ? x14ById.get(guid) : undefined
+      out.push(companion ? settings(asNode(companion.dataBar), true, fill, sq) : settings(asNode(rule.dataBar), false, fill, sq))
+    }
+  }
+  return out
+}
+
+/** Whether the saved workbook draws any gradient bar (the audit decodes only such captures). */
+export function drawsBarGradient(parts: Map<string, Uint8Array>): boolean {
+  return readSavedGradientBars(parts).some(b => b.gradient)
+}
+
+const WHITE: readonly [number, number, number] = [255, 255, 255]
+
+/**
+ * Samples every gradient bar of the capture in the one shape the captures show: a left-to-right gradient bar with no
+ * border and no axis drawn, on a positive value, over a white cell, covered by that bar rule alone. Its extent is the
+ * run of columns, from the measured left inset, that differ from the white background by more than the colour
+ * tolerance on the bar's first and last rows (they must agree); every pixel of the bar's rows is kept unless the
+ * same-content control shows text ink at that offset. `refs`, when given, limits the sampling to those cells.
+ */
+export function sampleBarGradients(
+  c: CfOracleCase,
+  parts: Map<string, Uint8Array>,
+  png: DecodedPng,
+  geom: WorksheetRangeGeometry,
+  refs?: ReadonlySet<string>,
+): BarGradientObservation {
+  const facts = readBarSheetFacts(parts)
+  const bars = readSavedGradientBars(parts)
+  const rules = barRulesOf(c)
+  const out: BarGradientObservation = { samples: [], unsampled: [] }
+  for (const cell of c.expected.cells) {
+    const ref = cell.ref.toUpperCase()
+    if (refs && !refs.has(ref)) continue
+    const covering = bars.filter(b => isCellInSqref(ref, b.sqref))
+    if (covering.length === 0 || !covering.some(b => b.gradient)) continue
+    const why = (r: string): void => void out.unsampled.push(`${ref}: ${r}`)
+    if (covering.length !== 1) { why('more than one bar rule covers it'); continue }
+    const b = covering[0]!
+    if (c.markers.some(m => m.ruleType !== 'dataBar' && isCellInSqref(ref, m.sqref))) { why('another rule covers it'); continue }
+    if (b.border) { why('a bordered gradient bar was never measured'); continue }
+    if (b.direction === 'rightToLeft' || (b.direction === 'context' && facts.rightToLeft)) { why('a right-to-left gradient bar was never measured'); continue }
+    if (b.axisPosition === 'middle' || (b.axisPosition === 'automatic' && scopeHasMixedSigns(b.sqref, facts))) { why('a gradient bar with an axis was never measured'); continue }
+    const v = facts.values.get(ref)
+    if (v?.kind !== 'num' || v.v < 0) { why('not a non-negative number'); continue }
+    if (!b.fill) { why('its fill is not an rgb colour'); continue }
+    const box = cellPixelBox(png, geom, ref)
+    const ctrl = cellPixelBox(png, geom, cell.controlRef)
+    if (!box || !ctrl) { why('outside the capture'); continue }
+    const bg = sampleCellBackgroundRgb(png, ctrl)
+    if (rgbMaxDelta(bg, WHITE) > BAR_COLOR_TOLERANCE) { why('a gradient over a filled cell was never measured'); continue }
+    const ins = BAR_INSETS.excel
+    const w = Math.min(box.x1 - box.x0, ctrl.x1 - ctrl.x0)
+    const span = w - ins.l - ins.r
+    const yTop = box.y0 + ins.t
+    const yBottom = box.y1 - 1 - ins.b
+    const ink = (dx: number, dy: number): boolean => rgbMaxDelta(pixelAt(png, ctrl.x0 + dx, ctrl.y0 + dy), bg) > BAR_COLOR_TOLERANCE
+    const runOn = (y: number): number => {
+      let n = 0
+      while (n < span && rgbMaxDelta(pixelAt(png, box.x0 + ins.l + n, y), bg) > BAR_COLOR_TOLERANCE && !ink(ins.l + n, y - box.y0)) n++
+      return n
+    }
+    const length = runOn(yTop)
+    if (length !== runOn(yBottom)) { why('its first and last rows disagree on the extent'); continue }
+    if (length === 0) { why('no bar is drawn'); continue }
+    const pixels: BarGradientSample['pixels'] = []
+    for (let y = yTop; y <= yBottom; y++) {
+      for (let i = 0; i < length; i++) if (!ink(ins.l + i, y - box.y0)) pixels.push({ i, rgb: pixelAt(png, box.x0 + ins.l + i, y) })
+    }
+    let predictedLength: number | undefined
+    if (b.minLength === 0 && b.maxLength === 100) {
+      const p = predictBarCell(c, rules, ref, { x0: box.x0, w: box.x1 - box.x0, y0: box.y0, h: box.y1 - box.y0 }, geom, facts, { ...DEFAULT_BAR_KNOBS, fillType: 'solid' })
+      if (p.kind === 'bar') predictedLength = p.rightPx - p.leftPx + 1
+      else if (p.kind === 'none') predictedLength = 0
+    }
+    out.samples.push({ ref, fill: hexRgb(b.fill), leftPx: box.x0 + ins.l, topPx: yTop, bottomPx: yBottom, length, span, ...(predictedLength !== undefined ? { predictedLength } : {}), pixels })
+  }
+  return out
+}
+
+const srgbToLinear = (c: number): number => {
+  const s = c / 255
+  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+}
+const linearToSrgb = (v: number): number => 255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055)
+
+/** The end colour of a gradient from `fill` toward white by `t` (per channel, unrounded). */
+export const barGradientEnd = (fill: readonly number[], t: number): number[] => fill.map(f => f + (255 - f) * t)
+
+/** One hypothesis's predicted colour of column `i` of a sample (unrounded). */
+export function predictBarGradientPixel(h: BarGradientHypothesis, s: Pick<BarGradientSample, 'fill' | 'length' | 'span'>, i: number, t: number, fixedEnd: readonly number[]): number[] {
+  const at = (i + 0.5) / s.length
+  switch (h) {
+    case 'bar-length': return s.fill.map(f => f + (255 - f) * t * at)
+    case 'cell-span': return s.fill.map(f => f + (255 - f) * t * ((i + 0.5) / s.span))
+    case 'white-end': return s.fill.map(f => f + (255 - f) * at)
+    case 'linear-light': {
+      const end = barGradientEnd(s.fill, t)
+      return s.fill.map((f, k) => linearToSrgb(srgbToLinear(f) + (srgbToLinear(end[k]!) - srgbToLinear(f)) * at))
+    }
+    case 'solid': return [...s.fill]
+    case 'fixed-end': return s.fill.map((f, k) => f + (fixedEnd[k]! - f) * at)
+  }
+}
+
+/**
+ * The blend fraction t fitted to the samples by least squares under `bar-length`, over every channel the fill leaves
+ * room to lighten, rounded to 3 decimals. Undefined when no channel can lighten.
+ */
+export function fitBarGradientBlend(samples: readonly BarGradientSample[]): number | undefined {
+  let num = 0
+  let den = 0
+  for (const s of samples) {
+    for (const p of s.pixels) {
+      for (let k = 0; k < 3; k++) {
+        const room = (255 - s.fill[k]!) * ((p.i + 0.5) / s.length)
+        if (room <= 0) continue
+        num += (p.rgb[k]! - s.fill[k]!) * room
+        den += room * room
+      }
+    }
+  }
+  return den > 0 ? Math.round((num / den) * 1000) / 1000 : undefined
+}
+
+export interface BarGradientJudgement extends BarCapabilityEvaluation {
+  /** The fitted blend fraction toward white (when any channel can lighten). */
+  endBlend?: number
+  /** Largest per-channel error of each hypothesis over every sampled pixel. */
+  maxError?: Partial<Record<BarGradientHypothesis, number>>
+}
+
+/**
+ * Judges the gradient model from its samples (one capture, or every capture for the audit's cross-case check):
+ * - no sample: `no-hypotheses`;
+ * - a 0/100 sample whose extent differs from the solid-length model by more than 1 px: `none` (Ruling S3-M: a gradient
+ *   bar's length comes from the solid model only if its extent equals the solid rect within 1 px);
+ * - every hypothesis must differ from every other by `BAR_COLOR_SEPARATION` at some sampled pixel, or it is
+ *   `non-discriminating` (Lesson 3); a hypothesis matches when every sampled pixel is within `BAR_COLOR_TOLERANCE`
+ *   (8, the calibration cell's, Ruling S3-A step 6) of it; exactly one must match, else `none`.
+ */
+export function judgeBarGradient(o: BarGradientObservation | undefined): BarGradientJudgement {
+  if (!o || o.samples.length === 0) {
+    return { status: 'no-hypotheses', reason: `no gradient bar of the measured shape was sampled${o?.unsampled.length ? ` (${o.unsampled.join('; ')})` : ''}` }
+  }
+  const off = o.samples.filter(s => s.predictedLength !== undefined && Math.abs(s.length - s.predictedLength) > 1)
+  if (off.length > 0) {
+    return { status: 'none', reason: `the gradient extent is not the solid-length model's: ${off.map(s => `${s.ref} ${s.length} px vs ${s.predictedLength} px`).join(', ')} (Ruling S3-M)` }
+  }
+  const t = fitBarGradientBlend(o.samples)
+  if (t === undefined) return { status: 'no-hypotheses', reason: 'no sampled fill can lighten, so no blend fraction can be fitted' }
+  const fills = o.samples.map(s => s.fill)
+  const twoFills = fills.some(f => rgbMaxDelta(f, fills[0]!) >= BAR_COLOR_SEPARATION)
+  const hyps = BAR_GRADIENT_HYPOTHESES.filter(h => h !== 'fixed-end' || twoFills)
+  const fixedEnd = barGradientEnd(o.samples[0]!.fill, t)
+  const maxError: Partial<Record<BarGradientHypothesis, number>> = {}
+  const sep = new Map<string, number>()
+  for (const s of o.samples) {
+    for (const p of s.pixels) {
+      const preds = hyps.map(h => predictBarGradientPixel(h, s, p.i, t, fixedEnd))
+      hyps.forEach((h, a) => {
+        const e = Math.max(...[0, 1, 2].map(k => Math.abs(Math.round(preds[a]![k]!) - p.rgb[k]!)))
+        maxError[h] = Math.max(maxError[h] ?? 0, e)
+        for (let b = a + 1; b < hyps.length; b++) {
+          const key = `${h}/${hyps[b]}`
+          const d = Math.max(...[0, 1, 2].map(k => Math.abs(Math.round(preds[a]![k]!) - Math.round(preds[b]![k]!))))
+          sep.set(key, Math.max(sep.get(key) ?? 0, d))
+        }
+      })
+    }
+  }
+  const pixels = o.samples.reduce((n, s) => n + s.pixels.length, 0)
+  const errors = hyps.map(h => `${h} ${maxError[h]}`).join(', ')
+  const close = [...sep].filter(([, d]) => d < BAR_COLOR_SEPARATION)
+  if (close.length > 0) {
+    return { status: 'non-discriminating', reason: `hypotheses ${close.map(([k, d]) => `${k} (${d})`).join(', ')} differ by less than ${BAR_COLOR_SEPARATION} at every sampled pixel`, endBlend: t, maxError }
+  }
+  const matched = hyps.filter(h => maxError[h]! <= BAR_COLOR_TOLERANCE)
+  if (matched.length !== 1) {
+    return { status: 'none', reason: `${matched.length === 0 ? 'no' : matched.length} gradient hypothesis matches within ${BAR_COLOR_TOLERANCE} (max errors: ${errors}; t ${t})`, endBlend: t, maxError }
+  }
+  return {
+    status: 'discriminating',
+    reason: `matched ${matched[0]} with t ${t} on ${o.samples.length} bars (${o.samples.map(s => s.ref).join(', ')}), ${pixels} pixels; max errors: ${errors}`,
+    matched: matched[0],
+    endBlend: t,
+    maxError,
+  }
 }
 
 /**
@@ -3473,8 +3799,8 @@ function verifyBarCapture(
       const same = sameBar && (r.axisPx ?? null) === (m.axisPx ?? null)
       if (!same) return fail('sidecar-mismatch', `Sidecar observedBars for ${cell.ref} disagrees with the PNG measurement`)
     }
-    // The probe and the automatic colours are observations, not hypothesis families: they are recomputed above.
-    if (cap !== 'bar:settings-precondition-probe' && !isBarAutoColourCapability(cap)) {
+    // The probe, the automatic colours and the gradient model are observations recomputed above from the PNG.
+    if (cap !== 'bar:settings-precondition-probe' && !isBarAutoColourCapability(cap) && cap !== BAR_GRADIENT_CAPABILITY) {
       const hyps = recordedHyps?.[cap]
       if (!hyps) return fail('unobserved-expectation', `Capability ${cap} claims ${label} but the sidecar records no hypotheses to discriminate`)
       if (JSON.stringify(hyps) !== JSON.stringify(rec.hypotheses ?? null)) {

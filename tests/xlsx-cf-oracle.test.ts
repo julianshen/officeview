@@ -3179,6 +3179,7 @@ describe('CF oracle verifier', () => {
 
     expect(CF_STAGE3_CASES.map(c => c.id)).toEqual([
       'stage3-bar-settings-probe',
+      'stage3-bar-lengths-default',
       'stage3-bar-lengths',
       'stage3-bar-degenerate',
       'stage3-bar-axis-negative',
@@ -3766,7 +3767,7 @@ describe('CF oracle verifier', () => {
     const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     expect(report.stageComplete).toBe(false)
-    expect(report.summary.cases).toBe(13)
+    expect(report.summary.cases).toBe(14)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
     expect(report.blockedCapabilities.length).toBeGreaterThan(0)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
@@ -3839,16 +3840,18 @@ describe('CF oracle verifier', () => {
     // num 20/80 equals this data's min/max: both answers predict the same px (non-discriminating, Lesson 3).
     expect(evaluation['bar:bounds-num']).toMatchObject({ status: 'non-discriminating' })
     expect(labels.get('E3')).toEqual({ settings: 'unverified', geometry: 'non-discriminating' })
-    // Excel's default 10/90 matches neither 10/90 linear on the span nor 0/100: a finding, never a claim.
-    expect(evaluation['bar:lengths-default-10-90']).toMatchObject({ status: 'none' })
-    expect(labels.get('B3')).toEqual({ settings: 'unverified', geometry: 'unverified' })
+    // Excel's default 10/90 is not 10/90 linear on the span (Task 18b); at this one width every other candidate rule
+    // (5/85 or 10/90 minus 9 pt, on x14, solid or all bars) predicts the same px (Task 22b): non-discriminating here,
+    // decided by stage3-bar-lengths-default.
+    expect(evaluation['bar:lengths-default-10-90']).toMatchObject({ status: 'non-discriminating' })
+    expect(labels.get('B3')).toEqual({ settings: 'unverified', geometry: 'non-discriminating' })
 
     const res = verifyCfCase(c, { rootDir: dir })
     expect(res, JSON.stringify(res).slice(0, 400)).toMatchObject({ kind: 'verified' })
     if (res.kind !== 'verified') return
     expect([...res.verifiedCapabilities].sort()).toEqual(['bar:bounds-automin', 'bar:bounds-min-max', 'bar:bounds-percentile', 'bar:lengths-all-negative', 'bar:lengths-explicit-0-100'])
-    expect([...(res.nonDiscriminatingCapabilities ?? [])].sort()).toEqual(['bar:bounds-automax', 'bar:bounds-num', 'bar:bounds-percent'])
-    expect(res.refusedCapabilities).toEqual([expect.objectContaining({ capabilityId: 'bar:lengths-default-10-90', code: 'bar-hypothesis-none' })])
+    expect([...(res.nonDiscriminatingCapabilities ?? [])].sort()).toEqual(['bar:bounds-automax', 'bar:bounds-num', 'bar:bounds-percent', 'bar:lengths-default-10-90'])
+    expect(res.refusedCapabilities ?? []).toEqual([])
     expect(res.matchedHypotheses?.['bar:bounds-percentile']).toBe('inc')
 
     const relabel = (ref: string, ev: CfCellExpectation['barEvidence']): CfOracleCase => ({ ...c, expected: { ...c.expected, cells: c.expected.cells.map(x => (x.ref === ref ? { ...x, barEvidence: ev } : x)) } })
@@ -3860,8 +3863,8 @@ describe('CF oracle verifier', () => {
     // A non-discriminating capability relabelled pixel-measured refuses; an underclaim refuses too.
     expect(verifyCfCase(relabelCap(['E2', 'E3', 'E4', 'E5', 'E6'], { settings: 'unverified', geometry: 'pixel-measured' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
     expect(verifyCfCase(relabelCap(['C2', 'C3', 'C5', 'C6'], { settings: 'unverified', geometry: 'non-discriminating' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
-    // Claiming the refused 10/90 family refuses the case with bar-hypothesis-none.
-    expect(verifyCfCase(relabelCap(['B2', 'B3', 'B5', 'B6'], { settings: 'unverified', geometry: 'pixel-measured' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'bar-hypothesis-none' })
+    // Claiming the non-discriminating 10/90 family as pixel-measured refuses the case.
+    expect(verifyCfCase(relabelCap(['B2', 'B3', 'B5', 'B6'], { settings: 'unverified', geometry: 'pixel-measured' }), { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'unobserved-expectation' })
     // barApplied must follow the PNG.
     expect(verifyCfCase({ ...c, expected: { ...c.expected, cells: c.expected.cells.map(x => (x.ref === 'C3' ? { ...x, barApplied: false } : x)) } }, { rootDir: dir })).toMatchObject({ kind: 'refusal', code: 'cell-expectation-mismatch' })
 

@@ -26,15 +26,21 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BAR_AUTO_COLOUR_CAPABILITIES,
+  BAR_GRADIENT_CAPABILITY,
+  BAR_LENGTH_RULES,
   drawsBarAutoColour,
+  drawsBarGradient,
   isBarAutoColourCapability,
   isCapabilityVerified,
   judgeBarAutoColour,
   loadBarScreenCapture,
   measureCaseBars,
+  judgeBarGradient,
   sampleBarAutoColours,
+  sampleBarGradients,
   verifyCfCase,
   type BarAutoColourObservation,
+  type BarGradientObservation,
 } from './verify'
 import {
   CF_STAGE1_CAPABILITIES,
@@ -282,7 +288,14 @@ export interface Stage3AuditReport extends Stage1AuditReport {
   autoBarColours: Readonly<Record<string, string>>
   /** Ruling S3-B: the one layout variant per scope sign that the verified captures select, with why any scope has none. */
   barLayout: BarLayoutDerivation
+  /** Ruling S3-M (Task 22b): the verified gradient model's parameters, pooled across every capture (empty until verified). */
+  barGradient: BarGradientExport
+  /** The pooled gradient judgement, verified or not (for the report and the docs). */
+  barGradientJudgement: string
 }
+
+/** The gradient model production may draw: `bar-length`, from the fill toward white by `endBlend` over the bar length. */
+export type BarGradientExport = Partial<Record<'bar-length', { endBlend: number; settledBy: string[] }>>
 
 /** A `CfBarLayoutVariant` (src/xlsx/cf/dataBar.ts) and the verified capabilities that select it. */
 export interface BarLayoutSelection { origin: 'span' | 'axis'; lengthBasis: 'cell' | 'side'; settledBy: string[] }
@@ -303,7 +316,8 @@ export interface BarLayoutDerivation {
  */
 export const BAR_LAYOUT_SETTLING: Readonly<Record<string, { scope: BarLayoutScope; variants: Readonly<Record<string, { origin: 'span' | 'axis'; lengthBasis: 'cell' | 'side' }>> }>> = {
   'bar:lengths-explicit-0-100': { scope: 'allPositive', variants: { effective: { origin: 'span', lengthBasis: 'cell' } } },
-  'bar:lengths-default-10-90': { scope: 'allPositive', variants: { effective: { origin: 'span', lengthBasis: 'cell' } } },
+  // Every 10/90 length rule (Task 22b) starts at the leading edge and is a share of the whole cell: span/cell.
+  'bar:lengths-default-10-90': { scope: 'allPositive', variants: Object.fromEntries(BAR_LENGTH_RULES.map(r => [r, { origin: 'span', lengthBasis: 'cell' }])) },
   'bar:axis-automatic': { scope: 'mixedSign', variants: { automatic: { origin: 'axis', lengthBasis: 'side' } } },
   'bar:axis-middle': { scope: 'mixedSign', variants: { middle: { origin: 'axis', lengthBasis: 'side' } } },
 }
@@ -396,6 +410,29 @@ export function renderAutoBarColoursBlock(colours: Readonly<Record<string, strin
 }
 
 /**
+ * Every gradient bar of the measured shape that any measured Stage 3 capture draws, pooled across cases (refs are
+ * `<case>:<ref>`): the cross-case half of the gradient model (one blend fraction must hold for every fill and length).
+ */
+export function barGradientsAcrossCases(manifest: CfManifest, rootDir: string = REPO_ROOT): BarGradientObservation {
+  const pooled: BarGradientObservation = { samples: [], unsampled: [] }
+  for (const c of manifest.cases.filter(x => (x.stage === 3 || x.id.startsWith('stage3')) && x.status === 'measured')) {
+    const capture = loadBarScreenCapture(c, rootDir, drawsBarGradient)
+    if (!capture) continue
+    const o = sampleBarGradients(c, capture.parts, capture.png, capture.geom)
+    pooled.samples.push(...o.samples.map(s => ({ ...s, ref: `${c.id}:${s.ref}` })))
+    pooled.unsampled.push(...o.unsampled.map(u => `${c.id}: ${u}`))
+  }
+  return pooled
+}
+
+/** The generated export of the verified gradient model (fixed key order, so `--write` stays idempotent). */
+export function renderBarGradientBlock(gradient: BarGradientExport): string {
+  const g = gradient['bar-length']
+  const rows = g ? `  'bar-length': { endBlend: ${g.endBlend}, settledBy: [${g.settledBy.map(c => `'${c}'`).join(', ')}] },\n` : ''
+  return `export const VERIFIED_STAGE3_BAR_GRADIENT: Readonly<Record<string, { endBlend: number; settledBy: readonly string[] }>> = {\n${rows}}\n`
+}
+
+/**
  * Registry entries the audit cannot honour: an unsupported (Ruling S3-CLOSE) id that is not a Stage 3 capability, has
  * no reason, or is also registered non-discriminating (one capability has one disposition). Any of them fails `ok`.
  */
@@ -457,6 +494,18 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
     }
   }
   const autoBarColours = verifiedAutoBarColours(perCapability, pooled)
+  // The gradient model verifies only when every capture's gradient bars agree with the owning case's (one blend fraction
+  // over every fill and length, the fixed-end alternative refuted by a second fill).
+  const gradientEntry = perCapability.find(p => p.capabilityId === BAR_GRADIENT_CAPABILITY)
+  const pooledGradient = judgeBarGradient(gradientEntry?.disposition === 'verified' ? barGradientsAcrossCases(manifest, rootDir) : undefined)
+  const barGradient: BarGradientExport = {}
+  if (gradientEntry?.disposition === 'verified') {
+    const own = evidence.get(gradientEntry.caseId)
+    const owned = own?.kind === 'verified' ? own.matchedHypotheses?.[BAR_GRADIENT_CAPABILITY] : undefined
+    if (pooledGradient.status === 'discriminating' && pooledGradient.matched === 'bar-length' && owned === 'bar-length' && pooledGradient.endBlend !== undefined) {
+      barGradient['bar-length'] = { endBlend: pooledGradient.endBlend, settledBy: [BAR_GRADIENT_CAPABILITY] }
+    } else gradientEntry.disposition = 'supported-structural'
+  }
   const matchedByCase = [...evidence.values()].flatMap(r => r.kind === 'verified' && r.matchedHypotheses ? [r.matchedHypotheses] : [])
   const barLayout = deriveBarLayout(perCapability, matchedByCase)
   const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
@@ -474,6 +523,8 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   return {
     autoBarColours,
     barLayout,
+    barGradient,
+    barGradientJudgement: `${pooledGradient.status}: ${pooledGradient.reason}`,
     ok,
     perCase,
     perCapability,
@@ -520,6 +571,11 @@ const exportedLayout = (text: string | undefined): string | undefined => {
   return m ? m[0] : undefined
 }
 
+const exportedGradient = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_GRADIENT: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
 const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
   const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
   return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
@@ -542,6 +598,8 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const autoColoursBlock = stage3Report ? renderAutoBarColoursBlock(stage3Report.autoBarColours) : exportedColours(options.committedSource)
   // Ruling S3-B: the selected layout travels the same way, only beside a published Stage 3 set.
   const layoutBlock = stage3Report ? renderBarLayoutBlock(stage3Report.barLayout.layout) : exportedLayout(options.committedSource)
+  // Ruling S3-M (Task 22b): the verified gradient model travels the same way.
+  const gradientBlock = stage3Report ? renderBarGradientBlock(stage3Report.barGradient) : exportedGradient(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -552,7 +610,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -1255,6 +1313,10 @@ async function main(): Promise<void> {
     const show = (scope: BarLayoutScope): string => { const v = l.layout[scope]; return v ? `${v.origin}/${v.lengthBasis} (${v.settledBy.join(', ')})` : 'none' }
     // eslint-disable-next-line no-console
     console.log(`bar layout (S3-B): allPositive=${show('allPositive')} mixedSign=${show('mixedSign')}${l.findings.length ? ` findings=[${l.findings.join('; ')}]` : ''}`)
+    const r3 = report as Stage3AuditReport
+    const g = r3.barGradient['bar-length']
+    // eslint-disable-next-line no-console
+    console.log(`bar gradient (S3-M): ${g ? `bar-length endBlend=${g.endBlend}` : 'none'} (${r3.barGradientJudgement})`)
   }
   // eslint-disable-next-line no-console
   console.log('--- pressure ---')

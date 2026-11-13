@@ -3849,6 +3849,7 @@ const ORANGE = 'FFFFA500'
 const MIN_MAX: readonly CfBarCfvo[] = [{ type: 'min' }, { type: 'max' }]
 const SOLID_0_100: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
 const VALUES_5: readonly S3Value[] = [0, 25, 50, 75, 100]
+const VALUES_11: readonly S3Value[] = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 /**
  * Ruling S3-AUTO-GREY: the static cell fill of stage3-bar-auto-colors. Excel's "White, Background 1, Darker 35%". White
  * must be bar ink against it, so it sits at least BAR_STRONG_DELTA (64) below white (89 here); it is at least the colour
@@ -3959,6 +3960,38 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         }),
         bar('bar:settings-schema-defaults', 'C2:C6', 2, { pairing: 'base-only', colors: { fill: BLUE_DEFAULT }, x14Attrs: {} }),
         cellIsRaw('bar:pixel-calibration', 'G2', 3, '0', { dxfId: 1 }),
+      ],
+    },
+  ),
+  // 2a. stage3-bar-lengths-default (Task 22b): the owning case of bar:lengths-default-10-90. It sits before
+  // stage3-bar-lengths so that it owns the capability (the first case carrying a marker owns it); lengths B stays a
+  // cross-check at one width.
+  rect(
+    'stage3-bar-lengths-default',
+    'Excel\'s default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (90, 180, 360 pt) with eleven values each, min/max bounds, on white cells, left to right, no border.',
+    {
+      n: 11,
+      cols: [
+        col('B', 'Solid90', VALUES_11, 15),
+        col('C', 'Solid180', VALUES_11, 30),
+        col('D', 'Solid360', VALUES_11, 60),
+        col('E', 'Grad90', VALUES_11, 15),
+        col('F', 'Grad180', VALUES_11, 30),
+        col('G', 'Grad360', VALUES_11, 60),
+        col('H', 'Base90', VALUES_11, 15),
+        col('I', 'Base180', VALUES_11, 30),
+        col('J', 'Base360', VALUES_11, 60),
+      ],
+      rules: [
+        bar('bar:lengths-default-10-90', 'B2:B12', 1, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'C2:C12', 2, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'D2:D12', 3, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'E2:E12', 4, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'F2:F12', 5, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'G2:G12', 6, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '1' }, colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'H2:H12', 7, { pairing: 'base-only', colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'I2:I12', 8, { pairing: 'base-only', colors: { fill: BLUE } }),
+        bar('bar:lengths-default-10-90', 'J2:J12', 9, { pairing: 'base-only', colors: { fill: BLUE } }),
       ],
     },
   ),
