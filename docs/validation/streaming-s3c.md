@@ -23,7 +23,7 @@ Apple-silicon Mac.
 | `bun run typecheck:server` | clean |
 | `bun run lint` (`tsc --noEmit`, the client typecheck; covers `tests/`, so the browser specs too) | clean |
 | `bun run test` (`vitest run`) | full run: **13,409 passed, 1 failed**, 64 skipped, 1 todo (677 files). The failure is `tests/fc-t2-drawing-reply-grant.test.ts` "keeps an empty sheet ready under admissible pressure…" (an XLSX drawings grant assertion, `expected +0 to be 1884`). Re-run alone 4 times: **15/15 passed** each time. No XLSX code changed in this piece (`git diff b222a7ce..HEAD -- src/xlsx src/components/xlsx` is empty), so this reads as a load-dependent flake, not a regression; reported, not hidden |
-| `bun run test:browser:stream` | **28 passed** (5 new in `stream-present.spec.ts`) |
+| `bun run test:browser:stream` | **29 passed** (6 new in `stream-present.spec.ts`; fix round 1 re-run) |
 | `bun run gates:core` | **FAIL, red as on `main`**: index closure 421,141 B (see below) |
 
 The first browser run on this branch had 2 failures. Both were in existing
@@ -72,7 +72,7 @@ The gate is reported red, as on `main`. The baseline is untouched.
 | present a streamed deck | browser: `stream-present.spec.ts` "audience: present, step all 6 slides…" (started from a real click; full screen asked for in the gesture); `tests/stream/remote-present-start.test.tsx` (gesture-required without activation; host shown and `requestFullscreen` called **before** the lazy show module resolves; never the local chunk) |
 | forward, back, `goTo()` | browser: → through all 6 slides with the counter "Slide n of 6", the end slide, digits + Enter to slide 3, Esc exits (`ended`); ← in the hold test; `tests/stream/remote-show.test.tsx` "order and navigation" |
 | hidden slides never appear and the counter excludes them | `tests/stream/remote-show.test.tsx` "the order skips hidden units and the counter excludes them", "goTo(2) with unit 1 hidden shows unit 3"; `remote-present-start.test.tsx` "from is a streamed index", "a deck whose every unit is hidden is not-presentable"; `server/test/present-policy.test.ts` "hidden slides" (`'full'` flags them, `'visible-only'` drops them); `tests/slideshow-presenter-remote-adapters.test.tsx` (the grid leaves hidden slides out). Not in the browser: no corpus deck has a hidden slide. |
-| Presenter View shows notes only for a presenter viewer | browser: "presenter: Presenter View swaps in single-screen with a painted notes image…" (720 px wide; slide 5's image taller than the empty one, with dark text pixels); "audience: …" and "notes=off presenter: …" (Alt+F5 Presenter View shows "No notes for this slide" and sends no `notes`); `remote-present-start.test.tsx` (`presenterView: true` with `can.notes` false is `not-presentable`: no `window.open`, no full screen) |
+| Presenter View shows notes only for a presenter viewer | browser: "presenter: Presenter View swaps in single-screen with a painted notes image…" (the pane canvas is 720 px wide; slide 1's empty-notes image is fully opaque, over 80 % near-white paper, with no dark ink in the body region (marks only); slide 5's image is taller, fully opaque, over 80 % near-white, with more than 500 opaque dark (R, G, B < 128) pixels inside the 24 px-padded body region, polled until painted. A predicate test shows that a transparent canvas and a white canvas with a light marks-like tint both fail, and drawn text passes); "audience: …" and "notes=off presenter: …" (Alt+F5 Presenter View shows "No notes for this slide" and sends no `notes`); `remote-present-start.test.tsx` (`presenterView: true` with `can.notes` false is `not-presentable`: no `window.open`, no full screen) |
 | … and never on the audience surface | browser: the audience surface holds exactly its one canvas, never a notes canvas, before and after Alt+F5; `remote-show.test.tsx` "a presenter: notes only for the settled current slide, never on the audience canvas" (audience pixels unchanged by a notes delivery) |
 | a non-presenter gets no notes from any request | `server/test/notes-wire.test.ts` "refusals send no frame and write no audit row" (audience, presenter with `notes: false`, presenter resumed to `notes: false`, docx, hidden unit); `tests/stream/remote-notes.test.ts` "can.notes false → policy-refused before any send"; `remote-show.test.tsx` "an audience session (can.notes false) sends no notes request across a full run"; browser: zero `notes` messages sent for an audience or `notes=off` viewer |
 | no PPTX, notes text outside the a11y service, or media bytes cross the wire | `server/test/notes-wire.test.ts` "the kind-7 bodies, the manifest and every text message carry none of the notes text"; browser: slide 5's notes phrases appear in no text message received (below) |
@@ -110,7 +110,7 @@ for 10 s. The test then stops on slide 4 and asserts:
 - no close code was recorded by the WebSocket wrapper (so no 4008), and no
   `rate-limited` refusal was received.
 
-Measured (the test's log line): `hold: 264 key events in 10 s; unit requests from page load 11 (peak in any 60 s 11); rate refusals 0; close codes none` (earlier runs: 261–263 key events, 10–11 unit requests)
+Measured (the test's log line): `hold: 264 key events in 10 s; unit requests from page load 11 (peak in any 60 s 11); rate refusals 0; close codes none` (earlier runs: 261–264 key events, 9–11 unit requests)
 
 **How much this proves.** On a 6-slide deck it shows little about the rate
 bound: the show's 8-bitmap cache holds the whole deck, so a long hold
@@ -255,7 +255,7 @@ In plain words; the ledger has the full list (R1–R26).
 | the `notes` op: presenter path, empty notes, every request re-audited (C4), refusals with no frame and no row, check order, token / stale jti, rate 30/min (31st refused, socket open), encoded cap, wire audit, long notes (8,192 px with the continuation line), reader-cap continuation, bounded measurement | `server/test/notes-wire.test.ts` |
 | both marks on a notes image; production trace and `detect --notes` | `server/test/notes-evidence.test.ts` |
 | `services.notes` (and its `ALTER TABLE` migration; old rows read notes off) | `server/test/audit-store.test.ts` |
-| `notes_deliveries` rows (one per answered request, none for a refusal) and `notes_marks` rows | `server/test/notes-wire.test.ts`, `server/test/notes-evidence.test.ts` |
+| `notes_deliveries` rows (one per request that passes the checks and the plan, written before the draw; a refusal before that step writes none, a failure after it keeps the row, which records the request, not a delivery, R7) and `notes_marks` rows (one per marked image, written just before its send) | `server/test/notes-wire.test.ts`, `server/test/notes-evidence.test.ts` |
 | client notes request: kind-7 admission (R10), hostile frames, unsolicited frames (R9), caps, abort, deadlines, rotation, resume, end barriers and image close (R13) | `tests/stream/remote-notes.test.ts` |
 | show fetcher: target first, the 48/min sliding window, reserve, pacing (R14), charge per send (R16), LRU, bucket change, dispose | `tests/stream/show-fetch.test.ts` |
 | Presenter View over an image-backed source (counts, Next, grid, go-to, image notes) | `tests/slideshow-presenter-remote-adapters.test.tsx` |
@@ -282,9 +282,12 @@ The tests:
   Zero `notes` sent, no close.
 - **Presenter.** Presenter View (`presenterView: true`) opens the
   provisional window in the click; it is blocked, so Presenter View swaps
-  in and the audience surface is hidden. Slide 1's notes image is 720 px
-  wide. `5` + Enter in Presenter View requests slide 5's notes, whose
-  image is taller and has dark text pixels. The audience surface holds only
+  in and the audience surface is hidden. Slide 1's notes pane canvas is
+  720 px wide, fully opaque and mostly white paper, with no dark ink in the
+  body region (its notes body is empty: marks only). `5` + Enter in
+  Presenter View requests slide 5's notes; the test polls until that image
+  is taller, fully opaque, over 80 % near-white, and has more than 500
+  opaque dark pixels inside the body region. The audience surface holds only
   its own canvas throughout. Alt+F5 back shows slide 5 with no notes canvas
   anywhere. No refusal, no stream error, no close; the notes phrases are in
   no text message.
@@ -293,5 +296,9 @@ The tests:
   with no `window.open`, no full-screen request and no surface. Present
   then works: → to slide 2, and Alt+F5 shows "No notes for this slide".
   Zero `notes` sent.
+- **Paint predicate.** The same in-page measurement rejects a transparent
+  720 × 200 canvas and a white one carrying only a light marks-like tint,
+  and accepts one with drawn text (the negative controls for the check
+  above).
 - **Revocation.** `/revoke` mid-show: close 4005, `ended`, and no surface
   or Presenter View left.

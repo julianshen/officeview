@@ -32,6 +32,29 @@ const notesCanvas = (page: Page) => page.locator('canvas[aria-label="Speaker not
 const presentState = (page: Page) => page.evaluate(() => (window as unknown as { __ovStream: { present?: string } }).__ovStream.present)
 const streamError = (page: Page) => page.evaluate(() => (window as unknown as { __ovStream: { error?: string } }).__ovStream.error)
 
+/**
+ * What a notes pane canvas shows, measured in the page. `paper`: the share of pixels that are opaque
+ * (alpha 255) and near-white; `opaque`: the share with alpha 255; `ink`: opaque dark pixels (all of
+ * R, G, B < 128) inside the notes body region, the text box the server draws into (24 CSS px padding
+ * on every side; scale 1 here). The visible mark is a light tint (never < 128), so marks alone carry no ink.
+ */
+const notesStats = (c: HTMLCanvasElement) => {
+  const w = c.width, h = c.height, pad = 24
+  if (!(w > 0 && h > 0)) return { paper: 0, opaque: 0, ink: 0 }
+  const d = c.getContext('2d')!.getImageData(0, 0, w, h).data
+  let paper = 0, opaque = 0, ink = 0
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const k = (y * w + x) * 4
+    if (d[k + 3] !== 255) continue
+    opaque++
+    if (d[k]! > 240 && d[k + 1]! > 240 && d[k + 2]! > 240) paper++
+    else if (d[k]! < 128 && d[k + 1]! < 128 && d[k + 2]! < 128 && x >= pad && x < w - pad && y >= pad && y < h - pad) ink++
+  }
+  return { paper: paper / (w * h), opaque: opaque / (w * h), ink }
+}
+/** A painted notes image with text: opaque white paper over (almost) the whole pane and opaque dark ink in the body. */
+const paintedWithText = (s: { paper: number; opaque: number; ink: number }) => s.opaque === 1 && s.paper > 0.8 && s.ink > 500
+
 type Rec = { opens: number; fullscreen: number; closes: number[] }
 const rec = (page: Page) => page.evaluate(() => (window as unknown as { __ovPresent: Rec }).__ovPresent)
 
@@ -154,6 +177,12 @@ test('presenter: Presenter View swaps in single-screen with a painted notes imag
   const notes = swap(page).locator('canvas[aria-label="Speaker notes (image)"]')
   await expect(notes).toHaveCount(1)
   await expect.poll(() => notes.evaluate((c: HTMLCanvasElement) => c.width)).toBe(720)
+  // Painted: opaque white paper; marks only, so no body ink (the controlled negative for the predicate below).
+  await expect.poll(async () => (await notes.evaluate(notesStats)).opaque).toBe(1)
+  const empty = await notes.evaluate(notesStats)
+  expect(empty.paper).toBeGreaterThan(0.8)
+  expect(empty.ink).toBe(0)
+  expect(paintedWithText(empty)).toBe(false)
   expect(w.count('notes')).toBe(1)
   // The audience surface holds its one canvas only.
   await expect(surface(page).locator('canvas')).toHaveCount(1)
@@ -168,13 +197,8 @@ test('presenter: Presenter View swaps in single-screen with a painted notes imag
   await expect.poll(() => w.count('notes')).toBe(2)
   await expect.poll(() => notes.evaluate((c: HTMLCanvasElement) => c.height)).toBeGreaterThan(emptyH)
   expect(await notes.evaluate((c: HTMLCanvasElement) => c.width)).toBe(720)
-  const dark = await notes.evaluate((c: HTMLCanvasElement) => {
-    const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data
-    let n = 0
-    for (let k = 0; k < d.length; k += 4) if (d[k]! < 128 && d[k + 1]! < 128 && d[k + 2]! < 128) n++
-    return n
-  })
-  expect(dark).toBeGreaterThan(500)
+  // Painted with text: opaque white paper and opaque dark ink in the body region (polled until the paint lands).
+  await expect.poll(async () => paintedWithText(await notes.evaluate(notesStats))).toBe(true)
   await expect(surface(page).locator('canvas[aria-label="Speaker notes (image)"]')).toHaveCount(0)
   // Back to the audience surface: it shows slide 5, and no notes canvas exists anywhere.
   await page.keyboard.press('Alt+F5')
@@ -268,4 +292,23 @@ test('revocation mid-show exits the show cleanly: ended resolves, the surface is
   await expect(surface(page)).toHaveCount(0)
   await expect(page.locator('[data-officeview-presenter-view]')).toHaveCount(0)
   await expect.poll(async () => (await rec(page)).closes).toEqual([4005])
+})
+
+test('the notes paint predicate rejects a transparent pane and a marks-only image', async ({ page }) => {
+  await page.goto(`/src/debug/stream-viewer.html?port=${P}&${DECK}`)
+  // The same in-page measurement the presenter test uses, on canvases built here.
+  const stats = (kind: string) => page.evaluate(`(() => {
+    const c = document.createElement('canvas'); c.width = 720; c.height = 200
+    const x = c.getContext('2d')
+    if (${JSON.stringify(kind)} !== 'blank') { x.fillStyle = '#fff'; x.fillRect(0, 0, 720, 200) }
+    if (${JSON.stringify(kind)} === 'mark') { x.fillStyle = 'rgba(0,0,0,0.12)'; x.font = '24px sans-serif'; for (let y = 30; y < 200; y += 40) x.fillText('MARK MARK MARK MARK MARK', 10, y) }
+    if (${JSON.stringify(kind)} === 'text') { x.fillStyle = '#1a1a1a'; x.font = '16px sans-serif'; for (let y = 41; y < 176; y += 24) x.fillText('Speaker notes text across the line, drawn by the server.', 24, y) }
+    return (${notesStats.toString()})(c)
+  })()`) as Promise<{ paper: number; opaque: number; ink: number }>
+  const blank = await stats('blank'), mark = await stats('mark'), text = await stats('text')
+  expect(blank.opaque).toBe(0)
+  expect(paintedWithText(blank)).toBe(false)
+  expect(mark.ink).toBe(0)
+  expect(paintedWithText(mark)).toBe(false)
+  expect(paintedWithText(text)).toBe(true)
 })

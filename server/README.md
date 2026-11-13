@@ -497,8 +497,12 @@ or one `{ reqId, type: 'error', code }` and nothing more:
 
 **Audit.**
 - `notes_deliveries (sid, unit_index, scale, chars_drawn, at)`: one row per
-  answered request (`chars_drawn: 0` for empty notes), durable before the
-  draw. Refusals write none.
+  request that passes the checks and the layout plan (`chars_drawn: 0` for
+  empty notes), durable before the draw. A refusal before that step (token,
+  `can.notes`, unit, scale, rate, plan) writes none; a failure after it (the
+  draw, the forensic mark, the frame cap) is still refused but keeps the row,
+  so a row records a planned request, not a delivery. Delivery is
+  `notes_marks` (with the forensic mark on).
 - With the forensic mark on, `notes_marks` records each marked image, so a
   leaked notes image traces like a slide (`detect --notes`).
 - `services` gains a `notes` column. A store from before Stage 3c is
