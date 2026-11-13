@@ -5,7 +5,7 @@ export const enum Kind {
   XLSX_TILE = 5, SHOW_PLAN = 6, NOTES_RASTER = 7, PRINT_RASTER = 8,
 }
 export const FRAGMENT_CAP = 1 << 20, MAX_FRAGMENTS = 256, REASSEMBLY_MS = 5000, HEADER_BYTES = 23, EXT01_BYTES = 10
-export type RejectReason = 'magic' | 'version' | 'kind' | 'unexpected-reqId' | 'flags' | 'invariant-mismatch' | 'sequence' | 'final-count' | 'missing-ext01' | 'fragment-cap' | 'length' | 'fragment-count' | 'fragment-crc' | 'total-len' | 'encoded-cap' | 'decoded-cap' | 'inflate' | 'whole-crc' | 'timeout'
+export type RejectReason = 'magic' | 'version' | 'kind' | 'unexpected-reqId' | 'flags' | 'invariant-mismatch' | 'sequence' | 'final-count' | 'missing-ext01' | 'fragment-cap' | 'length' | 'fragment-count' | 'fragment-crc' | 'total-len' | 'encoded-cap' | 'decoded-cap' | 'inflate' | 'whole-crc' | 'timeout' | 'cancelled'
 export type Rejection = { ok: false; reqId?: number; reason: RejectReason }
 export type FrameResult = { ok: true; kind: Kind; reqId: number; payload: Uint8Array } | Rejection
 const MAGIC = 0x4453564f
@@ -72,6 +72,10 @@ export class Reassembler {
     }
     return rejection
   }
+  /** Drops `reqId`'s pending message, if any: its buffered fragments are
+   * released and an inflation in progress is cancelled (that push resolves
+   * `cancelled`). Idempotent; later fragments of it are out of sequence. */
+  drop(reqId: number): void { if (this.pending.has(reqId)) this.reject(reqId, 'cancelled') }
   sweep(): Rejection[] {
     const rejections: Rejection[] = [], now = this.now()
     for (const [id, p] of this.pending) if (!p.inflating && now - p.began >= REASSEMBLY_MS) rejections.push(this.reject(id, 'timeout'))

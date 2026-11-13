@@ -1,6 +1,7 @@
 /** Stage 3b Task 5: StreamSession.print() — every page checked against the job, fail closed. */
 import { describe, expect, it, vi } from 'vitest'
 import { gzipSync } from 'node:zlib'
+import { randomBytes } from 'node:crypto'
 import { encodeMessage, Reassembler } from '../../src/stream/frame'
 import { encodeManifest, type Manifest } from '../../src/stream/manifest'
 import { encodeRasterBody } from '../../src/stream/raster'
@@ -9,6 +10,19 @@ import { StreamSession, type SessionOptions } from '../../src/stream/remote/sess
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import { PRINT_JOB_MAX_BLOB_BYTES, printSizeOk } from '../../src/stream/remote/print-wire'
 import { createRemoteDoc } from '../../src/stream/remote/remote-doc'
+import { SESSION_TRANSIENT_BYTES, unitCost } from '../../src/stream/remote/reservation'
+
+const MiB = 1024 * 1024
+/** The grant a print job over units of this size holds (fix round 1). */
+const printGrant = (w: number, h: number) => 8 * MiB + Math.min(64 * MiB, 16 + unitCost(w, h, 2, false))
+/** An incompressible page body big enough to span several 1 MiB fragments. */
+function bigPage(unitIndex: number, w = 1920, h = 1080) {
+  const png = new Uint8Array(randomBytes(1_500_000))
+  png.set(pngHeader(w, h))
+  const r = encodeRasterBody(w, h, png), out = new Uint8Array(4 + r.length)
+  new DataView(out.buffer).setUint32(0, unitIndex, true); out.set(r, 4)
+  return out
+}
 
 const b64url = (o: object) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 const tokenFor = (jti: string) => `h.${b64url({ jti })}.s`
@@ -32,7 +46,13 @@ class FakeSocket extends EventTarget {
   readyState = 0
   sent: Array<Record<string, any>> = []
   closes: Array<{ code?: number; reason?: string }> = []
-  send(d: string) { this.sent.push(JSON.parse(d)) }
+  /** Message types whose send throws (a transport failure). */
+  throwOn = new Set<string>()
+  send(d: string) {
+    const m = JSON.parse(d)
+    if (this.throwOn.has(m.type)) throw new Error(`send ${m.type} failed`)
+    this.sent.push(m)
+  }
   close(code?: number, reason?: string) {
     this.closes.push({ code, reason })
     if (this.readyState === 3) return
@@ -44,6 +64,9 @@ class FakeSocket extends EventTarget {
   text(m: object) { this.deliver(JSON.stringify(m)) }
   frame(kind: number, reqId: number, payload: Uint8Array) {
     for (const f of encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: (b) => new Uint8Array(gzipSync(b)) })) this.deliver(f.slice().buffer)
+  }
+  fragments(kind: number, reqId: number, payload: Uint8Array) {
+    return encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: (b) => new Uint8Array(gzipSync(b)) }).map((f) => f.slice().buffer)
   }
   of(type: string) { return this.sent.filter((m) => m.type === type) }
   /** The drop of a live socket (no close() from the client). */
@@ -370,5 +393,182 @@ describe('StreamSession.print (scripted socket)', () => {
     const pages = await p
     expect(pages.map((x) => [x.unitIndex, x.scale])).toEqual([[1, 1]])
     expect(progress).toEqual([1])
+  })
+})
+
+describe('StreamSession.print — fix round 1 (admission, reassembly, throwing sends)', () => {
+  const big = { units: { count: 3, list: [{ w: 4096, h: 4096 }, { w: 2000, h: 1200 }, { w: 960, h: 540 }] } }
+
+  it('a job holds a grant from the session admission for its life, released once when it settles', async () => {
+    const { s, sock } = await opened()
+    const { p, reqId } = await started(s, sock, 1)
+    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: printGrant(960, 540) })
+    sock.text({ reqId, type: 'print-start', pages: 2, scale: 2 })
+    sock.frame(8, reqId, page(0)); sock.frame(8, reqId, page(1))
+    sock.text({ reqId, type: 'print-done', pages: 2 })
+    await p
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('print waits behind units holding the admission and is sent when they release', async () => {
+    const { s, sock } = await opened({}, big)
+    expect(unitCost(4096, 4096, 1, false) + printGrant(2000, 1200)).toBeGreaterThan(SESSION_TRANSIENT_BYTES)
+    const u = s.unit(0, 1)
+    await settle()
+    const p = s.print(1, 1, {})
+    void p.catch(() => {})
+    await settle()
+    expect(sock.of('print')).toEqual([])
+    expect(s.stats().printing).toBe(true)
+    // The slot is claimed while queued: a second job is refused at once.
+    expect((await failure(s.print(2, 2, {})) as StreamSessionError).code).toBe('rate-limited')
+    sock.frame(3, sock.of('unit')[0]!.reqId, encodeUnit({ unitId: 0, discriminator: 2, body: encodeRasterBody(2, 2, pngHeader(2, 2)) }))
+    const lease = await u
+    await settle()
+    expect(sock.of('print')).toEqual([])
+    lease.release()
+    await settle()
+    const req = sock.of('print')[0]!
+    expect(req).toMatchObject({ from: 1, to: 1 })
+    sock.text({ reqId: req.reqId, type: 'print-start', pages: 1, scale: 2 })
+    sock.frame(8, req.reqId, page(1, 4000, 2400))
+    sock.text({ reqId: req.reqId, type: 'print-done', pages: 1 })
+    expect((await p).length).toBe(1)
+  })
+
+  it('abort while queued for admission sends nothing, removes the listener, and frees the slot', async () => {
+    const { s, sock } = await opened({}, big)
+    const u = s.unit(0, 1)
+    await settle()
+    const ac = new AbortController(), sig = ac.signal
+    let added = 0, removed = 0
+    const add = sig.addEventListener.bind(sig), remove = sig.removeEventListener.bind(sig)
+    sig.addEventListener = ((...a: Parameters<typeof add>) => { if (a[0] === 'abort') added++; return add(...a) }) as typeof sig.addEventListener
+    sig.removeEventListener = ((...a: Parameters<typeof remove>) => { if (a[0] === 'abort') removed++; return remove(...a) }) as typeof sig.removeEventListener
+    const p = s.print(1, 1, { signal: sig })
+    await settle()
+    ac.abort()
+    expect(((await failure(p)) as Error).name).toBe('AbortError')
+    expect(added).toBe(1); expect(removed).toBe(1)
+    expect(s.stats().printing).toBe(false)
+    sock.frame(3, sock.of('unit')[0]!.reqId, encodeUnit({ unitId: 0, discriminator: 2, body: encodeRasterBody(2, 2, pngHeader(2, 2)) }))
+    ;(await u).release()
+    await settle()
+    expect(sock.of('print')).toEqual([])
+    expect(sock.of('print-cancel')).toEqual([])
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('a refusal, a hostile page and a socket drop each release the grant', async () => {
+    const { s, sock } = await opened()
+    const a = await started(s, sock)
+    sock.text({ reqId: a.reqId, type: 'refused', code: 'print-quota-exhausted', limit: 1, requested: 2 })
+    await failure(a.p); await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    const b = await started(s, sock)
+    sock.text({ reqId: b.reqId, type: 'print-start', pages: 2, scale: 2 })
+    sock.frame(8, b.reqId, page(1))
+    await failure(b.p); await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    const c = await started(s, sock)
+    sock.text({ reqId: c.reqId, type: 'refused', code: 'session-rotated' })
+    await settle()
+    // The retry keeps the one grant.
+    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: printGrant(960, 540) })
+    sock.drop(1006)
+    await failure(c.p); await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('kind-8 inflation is bounded by the job grant, not the blanket 64 MiB', async () => {
+    const { s, sock } = await opened()
+    const { p, reqId } = await started(s, sock, 0)
+    sock.text({ reqId, type: 'print-start', pages: 1, scale: 2 })
+    // A body over the job's page cap (but well under 64 MiB) is a decoded-cap rejection.
+    const over = new Uint8Array(Math.min(64 * MiB, 16 + unitCost(960, 540, 2, false)) + 1)
+    const push = vi.spyOn(Reassembler.prototype, 'push')
+    sock.frame(8, reqId, over)
+    const e = await failure(p) as StreamSessionError
+    expect(e.code).toBe('policy-refused')
+    const results = (await Promise.all(push.mock.results.map((r) => r.value))).filter(Boolean)
+    expect(results).toEqual([{ ok: false, reqId, reason: 'decoded-cap' }])
+    push.mockRestore()
+  })
+
+  it('settlement drops a partially reassembled page: no buffered bytes remain, with no further traffic', async () => {
+    const { s, sock } = await opened()
+    const ac = new AbortController()
+    const { p, reqId } = await started(s, sock, 1, { signal: ac.signal })
+    sock.text({ reqId, type: 'print-start', pages: 2, scale: 2 })
+    const frags = sock.fragments(8, reqId, bigPage(0))
+    expect(frags.length).toBeGreaterThan(1)
+    sock.deliver(frags[0]!)
+    await settle()
+    expect(s.stats().reassemblyBytes).toBeGreaterThan(0)
+    ac.abort()
+    await failure(p)
+    await settle(1100)
+    expect(s.stats()).toMatchObject({ printing: false, reassemblyBytes: 0 })
+    await usable(s, sock)
+  })
+
+  it('Reassembler.drop releases a pending message and is idempotent', async () => {
+    const r = new Reassembler({ acceptedVersions: new Set([1]), expects: () => true, encodedCap: () => 8 * MiB, decodedCap: () => 64 * MiB })
+    const frags = new FakeSocket().fragments(8, 5, bigPage(0))
+    expect(await r.push(new Uint8Array(frags[0]!))).toBeNull()
+    expect(r.bufferedBytes).toBeGreaterThan(0)
+    r.drop(5); r.drop(5); r.drop(99)
+    expect(r.bufferedBytes).toBe(0)
+    // The rest of the dropped message is out of sequence now.
+    expect(await r.push(new Uint8Array(frags[1]!))).toMatchObject({ ok: false, reqId: 5, reason: 'sequence' })
+  })
+
+  it('a throwing send(print) settles the job: rejected, slot and listener freed, grant released; the next job works', async () => {
+    const { s, sock } = await opened()
+    const ac = new AbortController(), sig = ac.signal
+    let added = 0, removed = 0
+    const add = sig.addEventListener.bind(sig), remove = sig.removeEventListener.bind(sig)
+    sig.addEventListener = ((...a: Parameters<typeof add>) => { if (a[0] === 'abort') added++; return add(...a) }) as typeof sig.addEventListener
+    sig.removeEventListener = ((...a: Parameters<typeof remove>) => { if (a[0] === 'abort') removed++; return remove(...a) }) as typeof sig.removeEventListener
+    sock.throwOn.add('print')
+    const e = await failure(s.print(0, 0, { signal: sig })) as StreamSessionError
+    expect(e.code).toBe('policy-refused')
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, inFlight: 0, inFlightBytes: 0 })
+    expect(added).toBe(1); expect(removed).toBe(1)
+    sock.throwOn.delete('print')
+    const { p, reqId } = await started(s, sock, 0)
+    sock.text({ reqId, type: 'print-start', pages: 1, scale: 2 })
+    sock.frame(8, reqId, page(0))
+    sock.text({ reqId, type: 'print-done', pages: 1 })
+    expect((await p).length).toBe(1)
+  })
+
+  it('a throwing send(print) on the session-rotated retry settles the job too', async () => {
+    const { s, sock } = await opened()
+    const { p, reqId } = await started(s, sock, 0)
+    sock.throwOn.add('print')
+    sock.text({ reqId, type: 'refused', code: 'session-rotated' })
+    expect((await failure(p) as StreamSessionError).code).toBe('policy-refused')
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('a throwing send(print-cancel) still rejects the job and frees everything', async () => {
+    const { s, sock } = await opened()
+    const ac = new AbortController()
+    const { p, reqId } = await started(s, sock, 1, { signal: ac.signal })
+    sock.text({ reqId, type: 'print-start', pages: 2, scale: 2 })
+    sock.throwOn.add('print-cancel')
+    ac.abort()
+    expect(((await failure(p)) as Error).name).toBe('AbortError')
+    await settle()
+    expect(s.stats()).toMatchObject({ printing: false, inFlight: 0, inFlightBytes: 0 })
+    // A hostile page with a throwing cancel rejects as well.
+    const b = await started(s, sock, 0)
+    sock.text({ reqId: b.reqId, type: 'print-start', pages: 3, scale: 2 })
+    expect((await failure(b.p) as StreamSessionError).code).toBe('policy-refused')
+    expect(s.stats().printing).toBe(false)
   })
 })
