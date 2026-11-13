@@ -6,8 +6,13 @@
  * `budgetPerMin` (48) requests are issued in any 60 s window (a sliding
  * window of issue times, charged when `io.paint` is called and never
  * refunded). The first `want` entry (the navigation target) is always next
- * in line; prefetch entries wait until the target is cached or has settled,
- * and are issued only while more than RESERVE requests remain in the window.
+ * in line, paced (ruling R14): a new target goes out at once when no target
+ * went out in the last TARGET_GAP_MS, else once it has been unchanged for
+ * TARGET_SETTLE_MS, so a held arrow costs about one request per 400 ms and
+ * the slide it stops on goes out within 250 ms. Prefetch waits until the
+ * target is cached or has failed and the wanted set has been unchanged for
+ * PREFETCH_SETTLE_MS, and is issued only while more than RESERVE requests
+ * remain in the window.
  * Units no longer wanted, or requested at a replaced bucket, are aborted; a
  * result that still arrives is closed, never kept. Bitmaps live in an LRU of
  * `maxCached`; a bucket change keeps old bitmaps as fallbacks until replaced.
@@ -51,6 +56,12 @@ const WINDOW_MS = 60_000
 const RESERVE = 8
 /** A failed unit is not re-issued sooner; a `rate-limited` refusal pauses all issuing this long. */
 const BACKOFF_MS = 2_000
+/** R14 pacing: a target is issued at once if no target went out this recently… */
+const TARGET_GAP_MS = 400
+/** …else once it has been the target this long. */
+const TARGET_SETTLE_MS = 250
+/** Prefetch waits for the wanted set to be unchanged this long. */
+const PREFETCH_SETTLE_MS = 1_000
 
 interface Entry { readonly unit: number; readonly key: string; readonly bmp: ImageBitmapLike }
 interface Req { readonly key: string; readonly ctl: AbortController }
@@ -65,6 +76,10 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
 
   let disposed = false
   let wanted: number[] = []
+  /** When `wanted[0]` / the wanted set last changed. */
+  let targetSince = -Infinity
+  let wantedSince = -Infinity
+  let lastTargetIssue = -Infinity
   /** No bucket ⇒ nothing is issued (the caller sets one before the first paint). */
   let bucket: { scale: number; dpr: number; key: string } | undefined
   /** Issue times inside the current window, oldest first. */
@@ -140,17 +155,25 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     }
     if (!bucket || !wanted.length) return
     if (now < pausedUntil) return schedule(now, pausedUntil)
-    const target = wanted[0]!
     const key = bucket.key
-    for (let i = 0; i < wanted.length; i++) {
-      const unit = wanted[i]!
-      if (entryOf(unit, key) || inflight.has(unit) || failed.has(unit)) continue
-      // Prefetch waits for the target to be cached or settled, so fast stepping costs one request a step.
-      if (i > 0 && !(entryOf(target, key) || failed.has(target))) return
-      if (budget - stamps.length <= (i === 0 ? 0 : RESERVE)) {
-        if (stamps.length) schedule(now, stamps[0]! + WINDOW_MS + 1)
-        return
-      }
+    const settled = (unit: number) => !!entryOf(unit, key) || failed.has(unit)
+    const outOfBudget = (reserve: number) => {
+      if (budget - stamps.length > reserve) return false
+      if (stamps.length) schedule(now, stamps[0]! + WINDOW_MS + 1)
+      return true
+    }
+    const target = wanted[0]!
+    if (!settled(target) && !inflight.has(target)) {
+      if (now - lastTargetIssue < TARGET_GAP_MS && now - targetSince < TARGET_SETTLE_MS) return schedule(now, targetSince + TARGET_SETTLE_MS)
+      if (outOfBudget(0)) return
+      lastTargetIssue = now
+      issue(target, now)
+    }
+    if (!settled(target)) return
+    if (now - wantedSince < PREFETCH_SETTLE_MS) return schedule(now, wantedSince + PREFETCH_SETTLE_MS)
+    for (const unit of wanted.slice(1)) {
+      if (settled(unit) || inflight.has(unit)) continue
+      if (outOfBudget(RESERVE)) return
       issue(unit, now)
     }
   }
@@ -172,6 +195,8 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
       const next: number[] = []
       for (const u of units) if (Number.isInteger(u) && u >= 0 && !next.includes(u)) next.push(u)
       for (const u of next) { const at = failed.get(u); if (at !== undefined && now - at >= BACKOFF_MS) failed.delete(u) }
+      if (next[0] !== wanted[0]) targetSince = now
+      if (next.length !== wanted.length || next.some((u, i) => u !== wanted[i])) wantedSince = now
       wanted = next
       pump()
     },

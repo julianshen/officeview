@@ -63,11 +63,12 @@ function setup(opts?: { budgetPerMin?: number; maxCached?: number }, autoMs?: nu
   const io = fakeIo(clock, autoMs)
   const f = createShowFetcher(io, clock, opts)
   const ready: number[] = []
+  const readyAt: [number, number][] = []
   const errors: [number, string][] = []
-  f.onReady((u) => ready.push(u))
+  f.onReady((u) => { ready.push(u); readyAt.push([u, clock.now()]) })
   f.onError((u, c) => errors.push([u, c]))
   f.setBucket(1, 1)
-  return { clock, io, f, ready, errors }
+  return { clock, io, f, ready, readyAt, errors }
 }
 
 /** Largest number of issue times in any closed 60 s window [s, s + 60 000]. */
@@ -79,19 +80,21 @@ function maxInWindow(times: number[]) {
 
 describe('createShowFetcher', () => {
   it('issues the target before any prefetch, and prefetch once the target settles', async () => {
-    const { io, f, ready } = setup()
+    const { clock, io, f, ready } = setup()
     f.want([5, 6, 7, 4])
     expect(io.calls.map((c) => c.unit)).toEqual([5])
     io.calls[0]!.resolve()
     await flush()
     expect(ready).toEqual([5])
+    await clock.advance(1_000) // R14: prefetch after the wanted set is unchanged 1 s
     expect(io.calls.map((c) => c.unit)).toEqual([5, 6, 7, 4])
     expect(f.cached(5)).toBeDefined()
   })
 
   it('a new target jumps ahead of prefetch still queued', async () => {
-    const { io, f } = setup()
+    const { clock, io, f } = setup()
     f.want([0, 1])
+    await clock.advance(400) // R14: past the target gap
     f.want([9, 10])
     expect(io.calls.map((c) => c.unit)).toEqual([0, 9])
     expect(io.calls[0]!.signal.aborted).toBe(true)
@@ -112,42 +115,66 @@ describe('createShowFetcher', () => {
     expect(f.cached(199 % 40)).toBeDefined()
   })
 
-  it('characterises the worst wait for the landing slide after a held-arrow burst', async () => {
-    const { clock, io, f, ready } = setup(undefined, 80)
-    // Hold → at 20 steps/s for 5 s (100 distinct targets), then stop.
-    for (let i = 0; i < 100; i++) {
-      f.want([i, i + 1, i + 2, Math.max(0, i - 1)])
-      await clock.advance(50)
-    }
-    const landedAt = clock.now()
-    let waited = -1
-    for (let ms = 0; ms <= 70_000 && waited < 0; ms += 100) {
-      if (ready.includes(99)) waited = clock.now() - landedAt
-      else await clock.advance(100)
-    }
-    expect(waited).toBeGreaterThanOrEqual(0)
-    expect(maxInWindow(io.calls.map((c) => c.at))).toBeLessThanOrEqual(48)
-    // Honest limit, recorded in the Task 4 report: 48 targets go out in the first
-    // ~2.4 s, so the landing slide waits for the oldest stamp to leave the window
-    // (measured 55 100 ms here). The show slows; it does not trip 4008.
-    expect(waited).toBeGreaterThan(50_000)
-    expect(waited).toBeLessThanOrEqual(60_001)
+  describe('R14 pacing', () => {
+    it('(a) held → for 5 s at 20 steps/s then stop on k: k issued ≤ 650 ms after the last want, ready on resolve, ≤ 48 per window', async () => {
+      const { clock, io, f, readyAt } = setup(undefined, 80)
+      const k = 99
+      for (let i = 0; i <= k; i++) {
+        if (i) await clock.advance(50)
+        f.want([i, i + 1, i + 2, Math.max(0, i - 1)])
+      }
+      const lastWant = clock.now()
+      await clock.advance(5_000)
+      const callK = io.calls.find((c) => c.unit === k)
+      expect(callK).toBeDefined()
+      expect(callK!.at - lastWant).toBeLessThanOrEqual(650)
+      expect(readyAt.find(([u]) => u === k)?.[1]).toBe(callK!.at + 80)
+      expect(maxInWindow(io.calls.map((c) => c.at))).toBeLessThanOrEqual(48)
+    })
+
+    it('(b) paced navigation (a step every 2 s): each target issued at once, prefetch 1 s after the step', async () => {
+      const { clock, io, f } = setup(undefined, 80)
+      for (let step = 0; step < 5; step++) {
+        const t = step * 4 + 1 // jumps of 4: no target is already prefetched
+        const at = clock.now()
+        const before = io.calls.length
+        f.want([t, t + 1, t + 2, t - 1])
+        expect(io.calls.slice(before).map((c) => [c.unit, c.at])).toEqual([[t, at]])
+        await clock.advance(999)
+        expect(io.calls.length).toBe(before + 1) // target ready at +80, prefetch still held
+        await clock.advance(1)
+        expect(io.calls.slice(before + 1).map((c) => [c.unit, c.at])).toEqual([[t + 1, at + 1_000], [t + 2, at + 1_000], [t - 1, at + 1_000]])
+        await clock.advance(1_000)
+      }
+    })
+
+    it('(c) a single step after idle is issued with zero delay, also after a burst', async () => {
+      const { clock, io, f } = setup(undefined, 80)
+      await clock.advance(10_000)
+      f.want([3, 4])
+      expect(io.calls.map((c) => [c.unit, c.at])).toEqual([[3, 10_000]])
+      for (let i = 10; i < 30; i++) { f.want([i, i + 1]); await clock.advance(50) }
+      await clock.advance(5_000)
+      const at = clock.now()
+      f.want([50, 51])
+      expect(io.calls.at(-1)).toMatchObject({ unit: 50, at })
+    })
   })
 
   it('with the budget at the reserve, prefetch is withheld but the target is still issued', async () => {
-    const { io, f } = setup({ budgetPerMin: 10 })
-    f.want([0]); io.calls[0]!.resolve(); await flush()
-    f.want([1]); io.calls[1]!.resolve(); await flush()
+    const { clock, io, f } = setup({ budgetPerMin: 10 })
+    f.want([0]); io.calls[0]!.resolve(); await clock.advance(1_000)
+    f.want([1]); io.calls[1]!.resolve(); await clock.advance(1_000)
     // 8 left = the reserve
     f.want([2, 3, 4]); expect(io.calls.map((c) => c.unit)).toEqual([0, 1, 2])
-    io.calls[2]!.resolve(); await flush()
+    io.calls[2]!.resolve(); await clock.advance(1_000)
     expect(io.calls).toHaveLength(3) // prefetch 3, 4 withheld
     f.want([5, 6]); expect(io.calls.map((c) => c.unit)).toEqual([0, 1, 2, 5])
   })
 
   it('aborts requests for units dropped from want and closes a result that arrives anyway', async () => {
-    const { io, f, ready } = setup()
-    f.want([0, 1, 2]); io.calls[0]!.resolve(); await flush()
+    const { clock, io, f, ready } = setup()
+    f.want([0, 1, 2]); io.calls[0]!.resolve(); await clock.advance(1_000)
     const [c1, c2] = [io.calls[1]!, io.calls[2]!]
     f.want([3])
     expect(c1.signal.aborted).toBe(true)
@@ -161,8 +188,8 @@ describe('createShowFetcher', () => {
   })
 
   it('A→B→A: the aborted first A resolving late is closed; one bitmap kept, one onReady', async () => {
-    const { io, f, ready } = setup()
-    f.want([0]); f.want([1]); f.want([0])
+    const { clock, io, f, ready } = setup()
+    f.want([0]); await clock.advance(400); f.want([1]); await clock.advance(400); f.want([0])
     expect(io.calls.map((c) => c.unit)).toEqual([0, 1, 0])
     const kept = io.calls[2]!.resolve(bitmap()) as Bmp
     const stale = io.calls[0]!.resolve(bitmap()) as Bmp
@@ -174,8 +201,8 @@ describe('createShowFetcher', () => {
   })
 
   it('a bucket change re-requests the current unit; cached() returns the old bitmap meanwhile, closed once replaced', async () => {
-    const { io, f, ready } = setup()
-    f.want([0]); const old = io.calls[0]!.resolve(bitmap(100)) as Bmp; await flush()
+    const { clock, io, f, ready } = setup()
+    f.want([0]); const old = io.calls[0]!.resolve(bitmap(100)) as Bmp; await clock.advance(400)
     f.setBucket(2, 1)
     expect(io.calls.map((c) => [c.unit, c.scale, c.dpr])).toEqual([[0, 1, 1], [0, 2, 1]])
     expect(f.cached(0)).toBe(old)
@@ -187,7 +214,7 @@ describe('createShowFetcher', () => {
   })
 
   it('a bucket change aborts in-flight requests at the old bucket and drops their late results', async () => {
-    const { io, f, ready } = setup()
+    const { clock, io, f, ready } = setup()
     f.want([0])
     f.setBucket(1, 2)
     expect(io.calls[0]!.signal.aborted).toBe(true)
@@ -195,6 +222,7 @@ describe('createShowFetcher', () => {
     await flush()
     expect(stale.close).toHaveBeenCalledOnce()
     expect(ready).toEqual([])
+    await clock.advance(250) // R14: the re-request of a just-issued target waits for it to settle
     expect(io.calls.map((c) => c.dpr)).toEqual([1, 2])
   })
 
@@ -204,9 +232,10 @@ describe('createShowFetcher', () => {
     io.calls[0]!.reject(new StreamSessionError('unit-failed'))
     await flush()
     expect(errors).toEqual([[0, 'unit-failed']])
-    // The failed target counts as settled: prefetch proceeds.
+    // The failed target counts as settled: prefetch proceeds (after R14's 1 s).
+    await clock.advance(1_000)
     expect(io.calls.map((c) => c.unit)).toEqual([0, 1])
-    f.want([0, 1]); await clock.advance(1_999); f.want([0, 1])
+    f.want([0, 1]); await clock.advance(999); f.want([0, 1])
     expect(io.calls.filter((c) => c.unit === 0)).toHaveLength(1)
     await clock.advance(10_000) // no automatic retry on any wake
     expect(io.calls.filter((c) => c.unit === 0)).toHaveLength(1)
@@ -232,7 +261,7 @@ describe('createShowFetcher', () => {
     await clock.advance(1_999)
     expect(io.calls).toHaveLength(1)
     f.want([0, 1])
-    await clock.advance(1)
+    await clock.advance(1) // pause over; target 0 has been the target ≥ 250 ms
     expect(io.calls.map((c) => c.unit)).toEqual([0, 0])
     expect(errors).toHaveLength(1)
   })
@@ -240,20 +269,21 @@ describe('createShowFetcher', () => {
   it('a target blocked by the budget is issued by a wake when the window frees, with no further want', async () => {
     const { clock, io, f } = setup({ budgetPerMin: 2 })
     f.want([0]); io.calls[0]!.resolve(); await flush()
+    await clock.advance(400)
     f.want([1]); io.calls[1]!.resolve(); await flush()
     f.want([2])
     expect(io.calls).toHaveLength(2)
-    await clock.advance(60_000)
+    await clock.advance(59_600)
     expect(io.calls).toHaveLength(2)
     await clock.advance(1)
     expect(io.calls.map((c) => c.unit)).toEqual([0, 1, 2])
   })
 
   it('evicts least-recently-used bitmaps beyond maxCached, closing them, never a wanted unit', async () => {
-    const { io, f } = setup({ maxCached: 2 })
+    const { clock, io, f } = setup({ maxCached: 2 })
     const bmps: Bmp[] = []
-    f.want([0]); bmps.push(io.calls[0]!.resolve(bitmap()) as Bmp); await flush()
-    f.want([1, 0]); bmps.push(io.calls[1]!.resolve(bitmap()) as Bmp); await flush()
+    f.want([0]); bmps.push(io.calls[0]!.resolve(bitmap()) as Bmp); await clock.advance(400)
+    f.want([1, 0]); bmps.push(io.calls[1]!.resolve(bitmap()) as Bmp); await clock.advance(400)
     f.want([2, 0]); bmps.push(io.calls[2]!.resolve(bitmap()) as Bmp); await flush()
     // 0 is older than 1 but still wanted: 1 goes.
     expect(bmps[1]!.close).toHaveBeenCalledOnce()
@@ -263,8 +293,8 @@ describe('createShowFetcher', () => {
   })
 
   it('dispose closes cached bitmaps, aborts in flight, drops late results and never fires onReady after', async () => {
-    const { io, f, ready } = setup()
-    f.want([0, 1]); const a = io.calls[0]!.resolve(bitmap()) as Bmp; await flush()
+    const { clock, io, f, ready } = setup()
+    f.want([0, 1]); const a = io.calls[0]!.resolve(bitmap()) as Bmp; await clock.advance(1_000)
     const inflight = io.calls[1]!
     f.dispose()
     expect(a.close).toHaveBeenCalledOnce()
