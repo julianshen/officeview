@@ -608,6 +608,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     evidence.injectCfBarGradient(audit.barGradient)
     evidence.injectCfBarLengths(audit.barLengths)
     evidence.injectCfBarGradientBorder(audit.barGradientBorder)
+    evidence.injectCfBarAutoBounds(audit.barAutoBounds)
     console.log(`Evidence: audit (${verified.length} Stage 3 capabilities verified by the harness, unpublished)`)
   }
   let passCount = 0

@@ -743,6 +743,12 @@ They range from 18 to 177 px long, 57,498 pixels in all.
 
 - **Model.** The gradient runs over the bar's own length, linear in sRGB, from the fill colour toward white by a fixed blend t: `c(i) = f + (255 − f)·t·(i + ½)/L`, for column `i` of a bar `L` px long. The bar is uniform vertically, has no border of its own and no partial alpha at its edges.
 - **The blend fraction.** Least squares gives t = 0.847 on every bar: per fill and per case, t is 0.847–0.8473. The end colour is therefore D8D8FF for 0000FF and E7EEF6 for 638EC6 (the probe's last column measures 231,238,246).
+- **Held-out check (Task 22b review, recorded in Task 22c).** The audit fits t on all 90 pooled bars of run 7 rather than on a held-out set. The reviewer therefore split them 45/45 and checked:
+  - each half fits t = 0.847;
+  - the model fitted on one half reproduces the other half with a largest error of 6 per channel;
+  - fitted per fill (0000FF and 638EC6), t is 0.847 for both.
+
+  So the fit generalises, and fitting on all bars does not overfit.
 - **Error.** The largest error over all 57,498 pixels is **6 per channel**: three text-halo pixels of rendering C6, which the control's ink does not mask. Every other pixel is within 3. The tolerance is 8.
 - **The gradient's length.** The extent of every 0/100 gradient bar equals the solid-length model exactly (rendering C: 18/89/159/177). Ruling S3-M therefore holds: a gradient bar takes its length from the solid model.
 
@@ -893,3 +899,50 @@ These columns now paint although no geometry capability designates them. They ar
 - lengths B;
 - degenerate G;
 - pairing D.
+
+### Task 22c (2026-11-14): automatic bounds (owner ruling S3-AUTO-BOUNDS) and the base-only solid gap (review I2)
+
+No Excel was run.
+
+**Review I2: the 10/90 rule is restricted to the forms its capture measured.**
+- `VERIFIED_STAGE3_BAR_LENGTHS` now also carries the combinations of pairing form and fill type that the owning case's designated cells cover in the saved workbook. For run 7 these are `base-only/gradient`, `x14/gradient` and `x14/solid`.
+- The evaluator resolves a 10/90 bar only for those combinations. Every other combination is unresolved, and an export that names no combination lifts nothing.
+- A base-only solid bar cannot be authored. The base `<dataBar>` (CT_DataBar) has only minLength, maxLength and showValue; `gradient` exists only on `<x14:dataBar>`. So every base-only bar is the gradient bar: the parser already reads it so, and run 7 measured it.
+- The brief's base-only solid column therefore has no valid XML. Instead of adding a column, the restriction closes I2: such a bar, if a file ever claimed one, stays unresolved.
+
+**New case `stage3-bar-auto-bounds` (recipe-pending).** It owns `bar:bounds-automin` and `bar:bounds-automax`, because it sits before `stage3-bar-lengths`, whose H and I columns remain a cross-check.
+- **The bars.** Ten paired x14 bars, in the attribute set of `excel-authored-databar.xlsx`, the file Excel's own dialog wrote:
+  - x14 cfvo autoMin/autoMax, over base min/max;
+  - minLength 0 / maxLength 100, or the default 10/90;
+  - `border="1"` with an `<x14:borderColor>`, or no border;
+  - explicit negative fill and axis colours.
+- **No base-only automatic bounds.** The base `<cfvo>` has no autoMin/autoMax type, so automatic bounds exist only on the x14 form.
+
+| Columns | Data | Bars | Lengths | Capability |
+|---|---|---|---|---|
+| B, C, D, E | {20..100}, where autoMin can differ from min | solid, solid with border, gradient with border, gradient | 0/100 | automin |
+| F, G | {20..100} | solid; gradient with border | 10/90 | automin |
+| H, I | {-100..-20}, where autoMax can differ from max | solid; solid with border | 0/100 | automax |
+| J, K | {-50..100}, mixed sign | solid; solid with border | 0/100 | automax |
+
+- **Why some shapes are absent.** Gradient bars appear only on positive data and left to right, the only shape the gradient model measured.
+- **The mixed-sign columns.** Every candidate agrees on them; they are an axis cross-check.
+- **Hypotheses.** `zero-anchored` (autoMin = min(0, v_min), autoMax = max(0, v_max)) and `min-max` (v_min, v_max), as before.
+  - The predictions are made under the 10/90 rule verified in run 7 (`half-min@x14`). `isCapabilityVerified` requires `bar:lengths-default-10-90`, and the audit drops a bound back to `supported-structural` unless the exported rule is the one assumed.
+  - Gradient cells, bordered or not, are measured by their gradient run.
+- **Separation.** The value 20 on {20..100} draws 35 px at 0/100 or no bar at all, and at 10/90 37 px against 9 px (28 px apart). The value -20 on {-100..-20} draws 35 px from the right edge or nothing. On mixed-sign data the candidates agree (0 px).
+- **Synthetic check.** On a synthetic capture of the case, each planted rule is the only match for both bounds, and planted bounds outside both rules match neither.
+- **Export.** `VERIFIED_STAGE3_BAR_AUTO_BOUNDS` (`autoMin` and `autoMax` → rule), rendered only with `--publish-stage3`.
+- **Production.** An automatic bound resolves only to its exported rule. Before Task 22c it resolved zero-anchored on the capability alone; now, without the export, it stays unresolved.
+- **Registry.** `bar:bounds-automax` left `CF_STAGE3_NONDISCRIMINATING`, because this case discriminates it.
+
+**`audit.ts --stage 3` until the capture:** 15/15 structural, stageComplete=false.
+
+| Disposition | Capabilities |
+|---|---|
+| verified | 49 |
+| blocked | `bar:bounds-automin`, `bar:bounds-automax`, waiting for the capture. `bar:bounds-automin` was verified on lengths H before Task 22c moved its ownership; this is fail-closed. |
+| unverified-nondiscriminating | 7 |
+| refused-unsupported | 15 |
+
+The run is in recipes section 2d.

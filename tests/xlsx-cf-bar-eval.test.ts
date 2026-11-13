@@ -8,7 +8,7 @@ import {
   type CfBarLayoutVariant,
 } from '../src/xlsx/cf/dataBar'
 import { resolveScaleThresholds } from '../src/xlsx/cf/colorScale'
-import { injectCfBarLayout, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { injectCfBarAutoBounds, injectCfBarLayout, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { createResidentCfSource } from '../src/xlsx/cf/statistics'
 import { residentSource } from '../src/xlsx/cf/render'
@@ -56,6 +56,8 @@ const AXIS_SIDE: CfBarLayoutVariant = { origin: 'axis', lengthBasis: 'side' }
 /** Every evaluation capability a bar of these settings could need, as a stub (never production evidence). */
 /** Every pairing form x fill type, for tests of the rule forms themselves (Task 22c). */
 const ALL_FORMS = ['base-only/gradient', 'base-only/solid', 'x14/gradient', 'x14/solid']
+/** The automatic-bound export Task 22c's case is expected to settle (stub only). */
+const ZERO_ANCHORED = { autoMin: { rule: 'zero-anchored', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'zero-anchored', settledBy: ['bar:bounds-automax'] } }
 const STUB_EVIDENCE = [
   'bar:bounds-min-max', 'bar:bounds-num', 'bar:bounds-percent', 'bar:bounds-percentile', 'bar:bounds-automin', 'bar:bounds-automax',
   'bar:lengths-default-10-90', 'bar:lengths-explicit-0-100', 'bar:render-solid', 'bar:render-border',
@@ -219,7 +221,8 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
   })
 
   it('autoMin and autoMax bounds', () => {
-    withExactCfEvidence(STUB_EVIDENCE, () => {
+    injectCfBarAutoBounds(ZERO_ANCHORED)
+    try { withExactCfEvidence(STUB_EVIDENCE, () => {
       const scope = [20, 40, 60]
       // Hypothesis: autoMin = min(0, v_min), autoMax = max(0, v_max).
       const auto = ready(evalBar(40, bar({ bounds: [{ type: 'autoMin' }, { type: 'max' }] }), scope, SPAN_CELL))
@@ -236,6 +239,27 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
     withExactCfEvidence(STUB_EVIDENCE.filter(c => c !== 'bar:bounds-automin'), () => {
       expect(resolveBarThresholds(bar({ bounds: [{ type: 'autoMin' }, { type: 'max' }] }), makeStats([20, 40, 60])).kind).toBe('unresolved')
     })
+    } finally { injectCfBarAutoBounds(null) }
+  })
+
+  it('Task 22c (S3-AUTO-BOUNDS): an automatic bound resolves only to the rule its capture verified', () => {
+    const pos = makeStats([20, 40, 60]), neg = makeStats([-60, -40, -20])
+    const both = bar({ bounds: [{ type: 'autoMin' }, { type: 'autoMax' }] })
+    const under = (auto: Parameters<typeof injectCfBarAutoBounds>[0], evidence = STUB_EVIDENCE) => {
+      injectCfBarAutoBounds(auto)
+      try {
+        return withExactCfEvidence(evidence, () => [pos, neg].map(st => {
+          const out = resolveBarThresholds(both, st)
+          return out.kind === 'ready' ? out.value : out.kind
+        }))
+      } finally { injectCfBarAutoBounds(null) }
+    }
+    expect(under(ZERO_ANCHORED)).toEqual([[0, 60], [-60, 0]])
+    expect(under({ autoMin: { rule: 'min-max', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'min-max', settledBy: ['bar:bounds-automax'] } })).toEqual([[20, 60], [-60, -20]])
+    // The capability alone, an unknown rule, or a rule without its capability resolves nothing.
+    expect(under(null)).toEqual(['unresolved', 'unresolved'])
+    expect(under({ autoMin: { rule: 'nearest', settledBy: ['bar:bounds-automin'] }, autoMax: ZERO_ANCHORED.autoMax })).toEqual(['unresolved', 'unresolved'])
+    expect(under(ZERO_ANCHORED, STUB_EVIDENCE.filter(c => c !== 'bar:bounds-automax'))).toEqual(['unresolved', 'unresolved'])
   })
 
   it('mixed-sign axis under stubbed variants', () => {

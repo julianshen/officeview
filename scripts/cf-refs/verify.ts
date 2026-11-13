@@ -2287,6 +2287,11 @@ interface BarCapabilitySpec {
    * non-background columns (`sampleBarGradients`), not the strong-delta fade the geometry measurer sees.
    */
   gradientExtents?: true
+  /**
+   * Knobs held at a value another verified capability settled (Task 22c: the 10/90 rule), instead of their first value.
+   * `isCapabilityVerified` then also requires that capability, and the audit requires its export to name the same value.
+   */
+  knobs?: Partial<BarKnobs>
 }
 
 /** Capabilities that the pixel hypotheses can settle. Anything absent records no hypotheses and stays unverified. */
@@ -2297,8 +2302,10 @@ export const BAR_CAPABILITY_HYPOTHESES: Readonly<Record<string, BarCapabilitySpe
   'bar:bounds-num': { knob: 'numAs', values: ['num', 'min-max'] },
   'bar:bounds-percent': { knob: 'percentAs', values: ['percent', 'num'] },
   'bar:bounds-percentile': { knob: 'percentile', values: ['inc', 'exc', 'range'], nuisance: ['beyond'] },
-  'bar:bounds-automin': { knob: 'auto', values: ['zero-anchored', 'min-max'] },
-  'bar:bounds-automax': { knob: 'auto', values: ['zero-anchored', 'min-max'] },
+  // Task 22c (S3-AUTO-BOUNDS): predicted under the 10/90 rule run 7 verified (its gate is checked in isCapabilityVerified
+  // and the audit), with gradient cells measured by their gradient run.
+  'bar:bounds-automin': { knob: 'auto', values: ['zero-anchored', 'min-max'], gradientExtents: true, knobs: { lengthRule: 'half-min@x14' } },
+  'bar:bounds-automax': { knob: 'auto', values: ['zero-anchored', 'min-max'], gradientExtents: true, knobs: { lengthRule: 'half-min@x14' } },
   'bar:lengths-all-negative': { knob: 'negLayout', values: ['axis', 'from-min'] },
   'bar:degenerate-equal-values': { knob: 'equal', values: ['half', 'none', 'full'] },
   'bar:degenerate-single-cell': { knob: 'equal', values: ['half', 'none', 'full'] },
@@ -2777,7 +2784,7 @@ export function buildBarHypotheses(
     const perRef: Record<string, BarHypothesis[]> = Object.fromEntries(refs.map(r => [r, []]))
     let why: string | undefined
     for (const combo of combos) {
-      const knobs = { ...DEFAULT_BAR_KNOBS, [spec.knob]: combo[0] } as BarKnobs
+      const knobs = { ...DEFAULT_BAR_KNOBS, ...(spec.knobs ?? {}), [spec.knob]: combo[0] } as BarKnobs
       nuisance.forEach((n, i) => ((knobs as Record<string, string>)[n] = combo[i + 1]!))
       const id = combo.length > 1 ? `${combo[0]}|${nuisance.map((n, i) => `${n}=${combo[i + 1]}`).join(',')}` : combo[0]!
       for (const ref of refs) {
@@ -2965,7 +2972,8 @@ export function evaluateBarCapabilities(
     if (spec.gradientExtents) {
       // Gradient cells are measured by their gradient run (Task 22b); a gradient cell the sampler cannot read (a shape
       // never measured) keeps the fade extent, which matches no hypothesis: refused, never verified.
-      for (const g of sampleBarGradients(c, parts, png, geom, new Set(Object.keys(b.hypotheses))).samples) {
+      const designated = new Set(Object.keys(b.hypotheses))
+      for (const g of [...sampleBarGradients(c, parts, png, geom, designated).samples, ...sampleBarGradients(c, parts, png, geom, designated, 'bordered').samples]) {
         const m = meas[g.ref]
         if (m) meas[g.ref] = { ...m, leftPx: g.leftPx, rightPx: g.leftPx + g.length - 1 }
       }
@@ -5006,6 +5014,8 @@ export function isCapabilityVerified(
     // settings capabilities are pixel-proven too (OD-7 as amended), so they also need the calibration.
     if (kind === 'settings' && !isCapabilityVerified('bar:pixel-calibration', manifest, options)) return false
     if (capabilityId !== 'bar:geometry-insets' && BAR_CAPABILITY_HYPOTHESES[capabilityId] !== undefined && !isCapabilityVerified('bar:geometry-insets', manifest, options)) return false
+    // Task 22c: a family predicted under the 10/90 rule needs that rule verified (the audit checks the value).
+    if (BAR_CAPABILITY_HYPOTHESES[capabilityId]?.knobs?.lengthRule !== undefined && !isCapabilityVerified('bar:lengths-default-10-90', manifest, options)) return false
   }
 
   // Precondition-probe check for scale:* capabilities

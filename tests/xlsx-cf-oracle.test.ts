@@ -3197,6 +3197,7 @@ describe('CF oracle verifier', () => {
     expect(CF_STAGE3_CASES.map(c => c.id)).toEqual([
       'stage3-bar-settings-probe',
       'stage3-bar-lengths-default',
+      'stage3-bar-auto-bounds',
       'stage3-bar-lengths',
       'stage3-bar-degenerate',
       'stage3-bar-axis-negative',
@@ -3550,10 +3551,13 @@ describe('CF oracle verifier', () => {
     expect(discriminateBar(apart, { B2: { leftPx: 84, rightPx: 160 }, B4: { leftPx: 84, rightPx: 160 } }, 1)).toMatchObject({ status: 'none' })
     // A single hypothesis cannot discriminate anything.
     expect(discriminateBar({ B2: [{ id: 'a', leftPx: 84, rightPx: 143 }] }, { B2: measured.B2 }, 1)).toMatchObject({ status: 'non-discriminating' })
-    // The static registry candidate is withheld and production holds no evidence for it.
-    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-automax']).toMatch(/autoMax/)
+    // A static registry candidate is withheld and production holds no evidence for it. (bar:bounds-automax left the
+    // registry in Task 22c: stage3-bar-auto-bounds now owns it with data that discriminates, S3-AUTO-BOUNDS.)
+    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-num']).toMatch(/num 20\/80/)
+    expect(hasEvidence('bar:bounds-num')).toBe(false)
+    expect(VERIFIED_CAPABILITIES.has('bar:bounds-num')).toBe(false)
+    expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-automax']).toBeUndefined()
     expect(hasEvidence('bar:bounds-automax')).toBe(false)
-    expect(VERIFIED_CAPABILITIES.has('bar:bounds-automax')).toBe(false)
   })
 
   describe('measured bar cases', () => {
@@ -3783,12 +3787,12 @@ describe('CF oracle verifier', () => {
 
     const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    // Capture run 7 (stage3-bar-lengths-default) completes Stage 3: nothing is blocked or unaccounted.
-    expect(report.stageComplete).toBe(true)
-    expect(report.summary.cases).toBe(14)
+    // Task 22c: stage3-bar-auto-bounds (recipe-pending) owns the automatic bounds, which wait for its capture.
+    expect(report.stageComplete).toBe(false)
+    expect(report.summary.cases).toBe(15)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
-    expect(report.blockedCapabilities).toEqual([])
-    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(50)
+    expect(report.blockedCapabilities.sort()).toEqual(['bar:bounds-automax', 'bar:bounds-automin'])
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(49)
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
   }, 90_000) // about ten whole-stage audits: 15–25 s alone since capture run 7 (a 510-cell case), up to 50 s beside the full parallel suite
   it('stage3ObservedBars reads the recorded px and ignores malformed entries', () => {

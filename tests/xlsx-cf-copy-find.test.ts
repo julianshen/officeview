@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { WorkbookFind, type FindSheetInput } from '../src/xlsx/view/find'
 import { serializeSelection, type CopyInput } from '../src/xlsx/view/copy'
 import { prepareCfTextScope, prepareCfWireScope, CF_TEXT_SCOPE_GRANT_BYTES } from '../src/xlsx/cf/text'
+import { injectCfBarAutoBounds } from '../src/xlsx/cf/evidence'
 import { cellDisplayText } from '../src/xlsx/render'
 import type { AuthoritativeCell, SourceStore, WorkbookOwner } from '../src/xlsx/view/contracts'
 import type { FormatAllocation } from '../src/xlsx/formula/format'
@@ -603,7 +604,10 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
   })
 
   it('worker find and main-thread paged copy return the formatted value of a showValue="0" bar cell in near and far rows', async () => {
-    await withBars(async () => {
+    // The fixture is Excel's preset shape (x14 autoMin/autoMax): its bounds resolve only through a verified rule
+    // (Task 22c, S3-AUTO-BOUNDS), stubbed here beside the stubbed capabilities.
+    injectCfBarAutoBounds({ autoMin: { rule: 'zero-anchored', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'zero-anchored', settledBy: ['bar:bounds-automax'] } })
+    try { await withBars(async () => {
       const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(barBytes()).buffer]) }, { docId: 'cf-bar-paged', profile: 'D' })
       try {
         await session.done
@@ -647,6 +651,6 @@ describe('showValue=0 value still copies and finds (S3-P)', () => {
           }
         } finally { await worker.release() }
       } finally { await session.release() }
-    }, SUPPRESS)
+    }, SUPPRESS) } finally { injectCfBarAutoBounds(null) }
   })
 })

@@ -3849,6 +3849,11 @@ const ORANGE = 'FFFFA500'
 const MIN_MAX: readonly CfBarCfvo[] = [{ type: 'min' }, { type: 'max' }]
 const SOLID_0_100: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
 const VALUES_5: readonly S3Value[] = [0, 25, 50, 75, 100]
+/** Task 22c (S3-AUTO-BOUNDS): data where autoMin can differ from min, autoMax from max, and mixed-sign data. */
+const AUTO_POS: readonly S3Value[] = [20, 40, 60, 80, 100]
+const AUTO_NEG: readonly S3Value[] = [-100, -80, -60, -40, -20]
+const AUTO_MIXED: readonly S3Value[] = [-50, -25, 0, 50, 100]
+const AUTO_CFVO: readonly CfBarCfvo[] = [{ type: 'autoMin' }, { type: 'autoMax' }]
 const VALUES_11: readonly S3Value[] = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 /** Ruling S3-GRAD-BORDER: 0..100 by 10, plus two short bars that separate an outer-length ramp from an inner one. */
 const VALUES_BORDERED: readonly S3Value[] = [...VALUES_11, 3, 5]
@@ -4002,6 +4007,39 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
             x14Attrs: { ...(i < 6 ? { minLength: '0', maxLength: '100' } : { minLength: '10', maxLength: '90' }), gradient: '1', border: '1' },
             colors: { fill: BLUE, border: Math.floor(i / 3) % 2 === 0 ? BLUE : GREEN },
           })),
+      ],
+    },
+  ),
+  // 2b. stage3-bar-auto-bounds (Task 22c, owner ruling S3-AUTO-BOUNDS): the owning case of bar:bounds-automin and
+  // bar:bounds-automax (it sits before stage3-bar-lengths, whose H and I columns stay a cross-check).
+  rect(
+    'stage3-bar-auto-bounds',
+    'Excel\'s automatic bounds, as its own data bar presets write them (x14 cfvo autoMin/autoMax, x14 minLength 0 / maxLength 100, border="1" with a border colour, explicit negative fill and axis colours: the attribute set of excel-authored-databar.xlsx, written by Excel\'s dialog). Paired x14 bars only: the base <cfvo> has no autoMin/autoMax type. autoMin is tested where it can differ from min (all-positive data without 0: {20..100}), autoMax where it can differ from max (all-negative data: {-100..-20}), and both on mixed-sign data, where every candidate agrees (a cross-check of the axis under automatic bounds). Solid and gradient, with and without the border; 0/100 and the default 10/90 (measured by run 7 as half-min on x14 bars). Gradient bars are positive and left to right only, the shape the gradient model measured.',
+    {
+      n: 5,
+      cols: [
+        col('B', 'PosSolid', AUTO_POS),
+        col('C', 'PosSolidBorder', AUTO_POS),
+        col('D', 'PosGradBorder', AUTO_POS),
+        col('E', 'PosGrad', AUTO_POS),
+        col('F', 'PosSolid1090', AUTO_POS),
+        col('G', 'PosGradBorder1090', AUTO_POS),
+        col('H', 'NegSolid', AUTO_NEG),
+        col('I', 'NegSolidBorder', AUTO_NEG),
+        col('J', 'MixedSolid', AUTO_MIXED),
+        col('K', 'MixedSolidBorder', AUTO_MIXED),
+      ],
+      rules: [
+        bar('bar:bounds-automin', 'B2:B6', 1, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100 }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'C2:C6', 2, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, border: '1' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'D2:D6', 3, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '0', maxLength: '100', gradient: '1', border: '1' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'E2:E6', 4, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '0', maxLength: '100', gradient: '1' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'F2:F6', 5, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automin', 'G2:G6', 6, { x14Cfvo: AUTO_CFVO, x14Attrs: { minLength: '10', maxLength: '90', gradient: '1', border: '1' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'H2:H6', 7, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'I2:I6', 8, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '0' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, negativeBorder: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'J2:J6', 9, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, negativeBarColorSameAsPositive: '0' }, colors: { fill: BLUE, negativeFill: RED, axis: BLACK } }),
+        bar('bar:bounds-automax', 'K2:K6', 10, { x14Cfvo: AUTO_CFVO, x14Attrs: { ...SOLID_0_100, border: '1', negativeBarColorSameAsPositive: '0', negativeBarBorderColorSameAsPositive: '0' }, colors: { fill: BLUE, border: BLUE, negativeFill: RED, negativeBorder: RED, axis: BLACK } }),
       ],
     },
   ),
@@ -4522,8 +4560,8 @@ const S3_RULINGS: Record<string, string> = {
   'bar:bounds-num': 'S3-C and S3-B',
   'bar:bounds-percent': 'S3-C and S3-B',
   'bar:bounds-percentile': 'S3-C and S3-B (exact percentile, PERCENTILE.INC)',
-  'bar:bounds-automin': 'S3-C (autoMin resolves only on x14 cfvo and only with this capability)',
-  'bar:bounds-automax': 'S3-C (autoMax resolves only on x14 cfvo and only with this capability)',
+  'bar:bounds-automin': 'S3-C and S3-AUTO-BOUNDS (autoMin resolves only on x14 cfvo, only with this capability, and only to the rule it verified: zero-anchored or min-max)',
+  'bar:bounds-automax': 'S3-C and S3-AUTO-BOUNDS (autoMax resolves only on x14 cfvo, only with this capability, and only to the rule it verified: zero-anchored or min-max)',
   'bar:bounds-positional': 'S3-D (positional and legacy cfvo shapes are unresolved)',
   'bar:bounds-out-of-domain': 'S3-E (percent/percentile outside 0..100 is unresolved, never clamped)',
   'bar:degenerate-equal-values': 'S3-E (v_min = v_max is unresolved)',
@@ -4595,8 +4633,6 @@ const S3_RULINGS: Record<string, string> = {
  * `bar:geometry-snapping` if no edge lands at a fractional point) are decided per capture by `discriminateBar`.
  */
 export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
-  'bar:bounds-automax':
-    'On all-positive data autoMax equals max, so a pixel measurement cannot tell the autoMax bound from the max bound. Re-measure with data where Excel\'s automatic maximum differs from the maximum value.',
   'bar:bounds-num':
     'The fixture\'s num 20/80 bounds equal its data\'s min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80.',
   'bar:bounds-percent':

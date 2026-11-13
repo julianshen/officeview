@@ -154,6 +154,33 @@ What to check afterwards:
 - The 0/100 bordered extents (K:P) must equal the solid-length model within 1 px (Ruling S3-M). If they do not, the judge refuses, and the px are the finding.
 - Never run `--write` here. The rule is published only by Task 23 (`--write --publish-stage3`), as `VERIFIED_STAGE3_BAR_LENGTHS`, and the bordered shape as `VERIFIED_STAGE3_BAR_GRADIENT_BORDER`.
 
+## 2d. The automatic-bounds case (Task 22c, owner ruling S3-AUTO-BOUNDS)
+
+`stage3-bar-auto-bounds` owns `bar:bounds-automin` and `bar:bounds-automax`. Its ten paired x14 bars are in Excel's own preset shape: x14 cfvo autoMin/autoMax, minLength 0 / maxLength 100 or the default 10/90, with or without a border, explicit negative fill and axis colours.
+
+| Columns | Data | Settles |
+|---|---|---|
+| B:G | {20..100} | autoMin |
+| H:I | {-100..-20} | autoMax |
+| J:K | {-50..100} | cross-check of the axis |
+
+The case has 100 cells, so its probes run as one chunk. Run it like the other cases, with the same preconditions, close checks and rerun rule:
+
+```
+bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-auto-bounds --refresh-clock-date
+bun scripts/cf-refs/capture.ts --stage 3 --case stage3-bar-auto-bounds
+bun scripts/cf-refs/capture.ts --stage 3 --verify-only
+bun scripts/cf-refs/audit.ts   --stage 3
+```
+
+What to check afterwards:
+
+- The resave keeps every bar paired, with `<x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/>`. Excel drops `minLength="10" maxLength="90"`, `gradient="1"` and `negativeBarBorderColorSameAsPositive` where they equal the defaults. If the resave rewrites autoMin/autoMax to min/max, record it: the case then no longer tests the automatic bounds.
+- `audit.ts --stage 3` lists both bounds as verified and prints `bar automatic bounds (S3-AUTO-BOUNDS): autoMin=<rule> autoMax=<rule>`.
+- If a bound is refused (`bar-hypothesis-none`), neither rule fits. Record the px of B2 or H6 from the sidecar as a finding; do not add a rule.
+- If the 10/90 rule ever stops being `half-min@x14`, the audit keeps both bounds unverified (their hypotheses assume it).
+- Never run `--write` here. The rules are published only by Task 23 (`--write --publish-stage3`), as `VERIFIED_STAGE3_BAR_AUTO_BOUNDS`.
+
 ## 3. The unresolved-shapes case (named explicitly)
 
 `stage3-bar-unresolved-shapes` is `unsupported` and lifts no capability, so `build.ts` skips it unless it is named:

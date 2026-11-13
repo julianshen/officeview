@@ -14,7 +14,7 @@
 import type { CfBarBound, CfBarDescriptor, CfDefinition, CfLiteral, CfOutcome, CfScaleBound } from './model'
 import type { CfRangeStatistics } from './statistics'
 import { resolveScaleThresholds, safeFraction } from './colorScale'
-import { barDefaultLengthsRule, barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarDefaultLengths, type CfBarLayout } from './evidence'
+import { barAutoBoundEvidence, barDefaultLengthsRule, barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarDefaultLengths, type CfBarLayout } from './evidence'
 
 type CfDataBarDefinition = Extract<CfDefinition, { kind: 'dataBar' }>
 
@@ -72,8 +72,8 @@ const DELEGATED_THRESHOLD_CHECKS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Resolves `[low, high]` for a bar. `autoMin`/`autoMax` are bar-specific (hypothesis: `min(0, v_min)` and
- * `max(0, v_max)`, gated by `bar:bounds-automin`/`-automax`); every other bound is resolved by the shared
+ * Resolves `[low, high]` for a bar. `autoMin`/`autoMax` are bar-specific: each resolves to the rule its capability
+ * verified (`barAutoBoundEvidence`: `min(0, v_min)`/`max(0, v_max)` or `v_min`/`v_max`), else it is unresolved; every other bound is resolved by the shared
  * `resolveScaleThresholds`, including degenerate scopes (one numeric cell, `v_min = v_max`, inverted bounds), which are
  * unresolved until `stage3-bar-degenerate` is implemented as measured.
  */
@@ -89,8 +89,12 @@ export function resolveBarThresholds(
     if (b.type === 'autoMin' || b.type === 'autoMax') {
       const extreme = b.type === 'autoMin' ? stats.min : stats.max
       if (extreme === undefined || !Number.isFinite(extreme)) return { kind: 'unresolved', reason: 'cf-no-numeric-values' }
+      // Ruling S3-AUTO-BOUNDS (Task 22c): the rule the oracle verified for this bound, never a default.
+      const rule = barAutoBoundEvidence(b.type, checkEvidence)
+      if (rule === undefined) return unmeasured()
+      const value = rule === 'min-max' ? extreme : b.type === 'autoMin' ? Math.min(0, extreme) : Math.max(0, extreme)
       // Substituted as a literal; its own gate passed above.
-      delegated.push({ bound: { type: 'num', value: b.type === 'autoMin' ? Math.min(0, extreme) : Math.max(0, extreme) } })
+      delegated.push({ bound: { type: 'num', value } })
     } else {
       delegated.push({ bound: b })
     }

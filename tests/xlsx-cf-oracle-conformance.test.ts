@@ -15,7 +15,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarGradientBorder, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarAutoBounds, injectCfBarGradientBorder, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { CF_BAR_RENDER_MODEL, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
 import { createCanvas } from 'canvas'
@@ -631,7 +631,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(barWithheld({ kind: 'unresolved', reason: 'cf-unsupported-rule' })).toBe(true)
 
     const stage3 = manifest.cases.filter(c => c.stage === 3)
-    expect(stage3.map(c => c.id)).toHaveLength(14)
+    expect(stage3.map(c => c.id)).toHaveLength(15)
     let checked = 0
     let barCells = 0
     for (const c of stage3) {
@@ -714,6 +714,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT'), 'the published gradient is the audit result').toEqual(audit.barGradient)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LENGTHS'), 'the published 10/90 rule is the audit result').toEqual(audit.barLengths)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT_BORDER'), 'the published bordered gradient is the audit result').toEqual(audit.barGradientBorder)
+      expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_AUTO_BOUNDS'), 'the published automatic bounds are the audit result').toEqual(audit.barAutoBounds)
     }
 
     // A pixel-measured bar production withholds, by case column, with why (withheld-only, like FINDINGS).
@@ -727,6 +728,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         'stage3-bar-showvalue:B', 'stage3-bar-showvalue:D',
       ].map(key => [key, { outcome: 'withheld', reason: 'num bounds: bar:bounds-num is non-discriminating (num 20/80 equals the data min/max), so unverified' } as Finding])),
       'stage3-bar-degenerate:F': { outcome: 'withheld', reason: 'percent bounds: bar:bounds-percent is non-discriminating, so unverified' },
+      'stage3-bar-lengths:H': { outcome: 'withheld', reason: 'autoMin: Task 22c moved bar:bounds-automin to stage3-bar-auto-bounds (S3-AUTO-BOUNDS), which awaits its capture; no automatic-bound rule is verified until then' },
     }
     // Bars production paints on cells the capture designated for no geometry capability (settings or another
     // capability's controls). They must still reproduce Excel's px; listed so the brief's "pending or
@@ -751,6 +753,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     injectCfBarGradient(audit.barGradient)
     injectCfBarLengths(audit.barLengths)
     injectCfBarGradientBorder(audit.barGradientBorder)
+    injectCfBarAutoBounds(audit.barAutoBounds)
     try {
       await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
         for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
@@ -830,11 +833,12 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       injectCfBarGradient(null)
       injectCfBarLengths(null)
       injectCfBarGradientBorder(null)
+      injectCfBarAutoBounds(null)
     }
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 414, measuredPainted: 378, withheldFound: 84, axes: 38, axisRows: 38 * 30, gradientBars: 231 })
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 411, measuredPainted: 375, withheldFound: 87, axes: 38, axisRows: 38 * 30, gradientBars: 231 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(28)
   }, 60_000)

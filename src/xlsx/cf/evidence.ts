@@ -257,6 +257,29 @@ export function barDefaultLengthsRule(check: (capability: string) => boolean = i
   return Object.freeze({ rule: r.rule, measured: Object.freeze(r.measured.filter(m => typeof m === 'string')) })
 }
 
+/**
+ * Ruling S3-AUTO-BOUNDS (Task 22c): what each automatic bound resolves to, as the oracle verified it, generated as
+ * `VERIFIED_STAGE3_BAR_AUTO_BOUNDS` beside the published Stage 3 set: `zero-anchored` (autoMin = min(0, v_min), autoMax =
+ * max(0, v_max)) or `min-max` (v_min, v_max). Absent today, so an automatic bound stays unresolved.
+ */
+export type CfBarAutoBoundRule = 'zero-anchored' | 'min-max'
+type CfBarAutoBoundsExport = Readonly<Record<string, Readonly<{ rule: string; settledBy: readonly string[] }>>>
+const PUBLISHED_BAR_AUTO_BOUNDS = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_AUTO_BOUNDS') as CfBarAutoBoundsExport | undefined
+let testBarAutoBounds: CfBarAutoBoundsExport | null = null
+
+/** Test injection of verified automatic-bound rules (same shape as the export); null clears. Gated by evidence too. */
+export function injectCfBarAutoBounds(auto: CfBarAutoBoundsExport | null): void {
+  testBarAutoBounds = auto ? JSON.parse(JSON.stringify(auto)) as CfBarAutoBoundsExport : null
+}
+
+/** The verified rule of one automatic bound, only when it is a known rule whose capabilities all pass `check`. */
+export function barAutoBoundEvidence(bound: 'autoMin' | 'autoMax', check: (capability: string) => boolean = id => hasEvidence(id)): CfBarAutoBoundRule | undefined {
+  const r = (testBarAutoBounds ?? PUBLISHED_BAR_AUTO_BOUNDS)?.[bound]
+  if (!r || (r.rule !== 'zero-anchored' && r.rule !== 'min-max')) return undefined
+  if (!Array.isArray(r.settledBy) || r.settledBy.length === 0 || !r.settledBy.every(cap => typeof cap === 'string' && check(cap))) return undefined
+  return r.rule
+}
+
 export function withCfEvidence<T>(
   capabilityId: string,
   evaluateOrVariant: string | (() => T),
