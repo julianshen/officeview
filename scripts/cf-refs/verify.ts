@@ -3273,6 +3273,8 @@ interface SavedGradientBar {
   fill: string | undefined
   /** `<x14:borderColor>` as rgb, when the bar draws a border. */
   borderColor?: string
+  /** Pairing form: `x14` (paired or standalone) or `base-only`. */
+  form: 'x14' | 'base-only'
 }
 
 function readSavedGradientBars(parts: Map<string, Uint8Array>): SavedGradientBar[] {
@@ -3301,6 +3303,7 @@ function readSavedGradientBars(parts: Map<string, Uint8Array>): SavedGradientBar
       minLength: Number(attr(bar, 'minLength') ?? '10'),
       maxLength: Number(attr(bar, 'maxLength') ?? '90'),
       fill,
+      form: x14 ? 'x14' : 'base-only',
       ...(x14 && rgbOf(asNode(bar?.borderColor)) ? { borderColor: rgbOf(asNode(bar?.borderColor)) } : {}),
     }
   }
@@ -3326,6 +3329,20 @@ function readSavedGradientBars(parts: Map<string, Uint8Array>): SavedGradientBar
     }
   }
   return out
+}
+
+/**
+ * Task 22c (review I2): the `<pairing form>/<solid|gradient>` combinations a capability's designated cells cover in the
+ * saved (Excel-resaved) workbook, read from the bar rule covering each cell: what its evidence actually measured.
+ */
+export function measuredBarForms(c: CfOracleCase, parts: Map<string, Uint8Array>, capabilityId: string): string[] {
+  const bars = readSavedGradientBars(parts)
+  const out = new Set<string>()
+  for (const cell of c.expected.cells) {
+    if (!cell.matched || !c.markers.some(m => m.capabilityId === capabilityId && isCellInSqref(cell.ref, m.sqref))) continue
+    for (const b of bars) if (isCellInSqref(cell.ref, b.sqref)) out.add(`${b.form}/${b.gradient ? 'gradient' : 'solid'}`)
+  }
+  return [...out].sort()
 }
 
 /** Whether the saved workbook draws any gradient bar (the audit decodes only such captures). */

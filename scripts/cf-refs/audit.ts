@@ -39,6 +39,8 @@ import {
   judgeBarAutoColour,
   loadBarScreenCapture,
   measureCaseBars,
+  measuredBarForms,
+  readZipPartsSync,
   primeVerifiedCases,
   judgeBarGradient,
   sampleBarAutoColours,
@@ -316,13 +318,14 @@ export function renderBarGradientBorderBlock(border: BarGradientBorderExport): s
 }
 
 /** The length rule production may apply to 10/90 bars: a `BAR_LENGTH_RULES` id matched by the owning capture. */
-export type BarLengthsExport = Partial<Record<'default-10-90', { rule: string; settledBy: string[] }>>
+export type BarLengthsExport = Partial<Record<'default-10-90', { rule: string; measured: string[]; settledBy: string[] }>>
 
 /** The generated export of the verified 10/90 length rule (fixed key order, so `--write` stays idempotent). */
 export function renderBarLengthsBlock(lengths: BarLengthsExport): string {
   const r = lengths['default-10-90']
-  const rows = r ? `  'default-10-90': { rule: '${r.rule}', settledBy: [${r.settledBy.map(c => `'${c}'`).join(', ')}] },\n` : ''
-  return `export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n${rows}}\n`
+  const list = (xs: readonly string[]): string => `[${xs.map(c => `'${c}'`).join(', ')}]`
+  const rows = r ? `  'default-10-90': { rule: '${r.rule}', measured: ${list(r.measured)}, settledBy: ${list(r.settledBy)} },\n` : ''
+  return `export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; measured: readonly string[]; settledBy: readonly string[] }>> = {\n${rows}}\n`
 }
 
 /** The gradient model production may draw: `bar-length`, from the fill toward white by `endBlend` over the bar length. */
@@ -560,7 +563,11 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   if (lengthsEntry?.disposition === 'verified') {
     const own = evidence.get(lengthsEntry.caseId)
     const rule = own?.kind === 'verified' ? own.matchedHypotheses?.['bar:lengths-default-10-90'] : undefined
-    if (rule !== undefined && (BAR_LENGTH_RULES as readonly string[]).includes(rule)) barLengths['default-10-90'] = { rule, settledBy: ['bar:lengths-default-10-90'] }
+    // Task 22c (review I2): the rule travels with the pairing form x fill type combinations its capture measured.
+    const owningCase = manifest.cases.find(c => c.id === lengthsEntry.caseId)
+    const savedParts = owningCase && existsSync(resolve(rootDir, owningCase.saved)) ? readZipPartsSync(new Uint8Array(readFileSync(resolve(rootDir, owningCase.saved)))) : null
+    const measured = owningCase && savedParts ? measuredBarForms(owningCase, savedParts, 'bar:lengths-default-10-90') : []
+    if (rule !== undefined && (BAR_LENGTH_RULES as readonly string[]).includes(rule) && measured.length > 0) barLengths['default-10-90'] = { rule, measured, settledBy: ['bar:lengths-default-10-90'] }
     else lengthsEntry.disposition = 'supported-structural'
   }
   const matchedByCase = [...evidence.values()].flatMap(r => r.kind === 'verified' && r.matchedHypotheses ? [r.matchedHypotheses] : [])

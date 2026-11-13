@@ -38,10 +38,11 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
     const report = auditStage3Manifest(manifest(), { rootDir: REPO_ROOT })
     expect(report.perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')?.disposition).toBe('verified')
     // stage3-bar-lengths-default (run 7): half-min on the x14 form, the linear reading on base-only bars.
-    expect(report.barLengths).toEqual({ 'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] } })
-    expect(renderBarLengthsBlock({})).toBe('export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n}\n')
-    expect(renderBarLengthsBlock({ 'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] } }))
-      .toBe("export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n  'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] },\n}\n")
+    // Task 22c (review I2): with the pairing form x fill type combinations the capture measured (no base-only solid).
+    expect(report.barLengths).toEqual({ 'default-10-90': { rule: 'half-min@x14', measured: ['base-only/gradient', 'x14/gradient', 'x14/solid'], settledBy: ['bar:lengths-default-10-90'] } })
+    expect(renderBarLengthsBlock({})).toBe('export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; measured: readonly string[]; settledBy: readonly string[] }>> = {\n}\n')
+    expect(renderBarLengthsBlock({ 'default-10-90': { rule: 'half-min@x14', measured: ['x14/solid'], settledBy: ['bar:lengths-default-10-90'] } }))
+      .toBe("export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; measured: readonly string[]; settledBy: readonly string[] }>> = {\n  'default-10-90': { rule: 'half-min@x14', measured: ['x14/solid'], settledBy: ['bar:lengths-default-10-90'] },\n}\n")
     // Every candidate rule keeps the span/cell layout: the rule changes lengths, not where a bar starts.
     for (const v of Object.values(BAR_LAYOUT_SETTLING['bar:lengths-default-10-90']!.variants)) expect(v).toEqual(SPAN_CELL)
   }, AUDIT_TIMEOUT_MS)

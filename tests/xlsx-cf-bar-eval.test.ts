@@ -54,6 +54,8 @@ const SPAN_CELL: CfBarLayoutVariant = { origin: 'span', lengthBasis: 'cell' }
 const AXIS_SIDE: CfBarLayoutVariant = { origin: 'axis', lengthBasis: 'side' }
 
 /** Every evaluation capability a bar of these settings could need, as a stub (never production evidence). */
+/** Every pairing form x fill type, for tests of the rule forms themselves (Task 22c). */
+const ALL_FORMS = ['base-only/gradient', 'base-only/solid', 'x14/gradient', 'x14/solid']
 const STUB_EVIDENCE = [
   'bar:bounds-min-max', 'bar:bounds-num', 'bar:bounds-percent', 'bar:bounds-percentile', 'bar:bounds-automin', 'bar:bounds-automax',
   'bar:lengths-default-10-90', 'bar:lengths-explicit-0-100', 'bar:render-solid', 'bar:render-border',
@@ -108,11 +110,11 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
 
   it('all-positive lengths under stubbed variants', () => {
     const scope = range(0, 100)
-    const D1090_RULE = { 'default-10-90': { rule: 'linear', settledBy: ['bar:lengths-default-10-90'] } }
+    const D1090_RULE = { 'default-10-90': { rule: 'linear', measured: ALL_FORMS, settledBy: ['bar:lengths-default-10-90'] } }
     injectCfBarLengths(D1090_RULE)
     try {
       withExactCfEvidence(STUB_EVIDENCE, () => {
-        const d1090 = bar({ minLength: 10, maxLength: 90 })
+        const d1090 = bar({ minLength: 10, maxLength: 90, pairing: 'x14' })
         const expected: Array<[number, number]> = [[0, 0.10], [25, 0.30], [50, 0.50], [100, 0.90]]
         for (const [v, end] of expected) {
           const b = ready(evalBar(v, d1090, scope, SPAN_CELL))
@@ -145,13 +147,39 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
     })
   })
 
+  it('Task 22c (review I2): a 10/90 rule applies only to the pairing form x fill type combinations its capture measured', () => {
+    const scope = range(0, 100)
+    const withGradient = STUB_EVIDENCE.filter(c => c !== 'bar:render-solid').concat('bar:render-gradient-stops')
+    const RUN7 = ['base-only/gradient', 'x14/gradient', 'x14/solid']
+    const at = (measured: readonly string[] | undefined, pairing: 'x14' | 'base-only', gradient: boolean) => {
+      injectCfBarLengths({ 'default-10-90': { rule: 'half-min@x14', ...(measured ? { measured } : {}), settledBy: ['bar:lengths-default-10-90'] } })
+      try {
+        return withExactCfEvidence(gradient ? withGradient : STUB_EVIDENCE, () => {
+          const out = evalBar(100, bar({ minLength: 10, maxLength: 90, gradient, pairing }), scope, SPAN_CELL)
+          return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
+        })
+      } finally {
+        injectCfBarLengths(null)
+      }
+    }
+    expect(at(RUN7, 'x14', false)).toBe(0.85)
+    expect(at(RUN7, 'x14', true)).toBe(0.85)
+    expect(at(RUN7, 'base-only', true)).toBe(0.9)
+    // A base-only solid bar was never captured: unresolved, never the linear reading by analogy.
+    expect(at(RUN7, 'base-only', false)).toBe('unresolved')
+    expect(at([...RUN7, 'base-only/solid'], 'base-only', false)).toBe(0.9)
+    // An export that names no measured combination lifts nothing.
+    expect(at(undefined, 'x14', false)).toBe('unresolved')
+    expect(at([], 'x14', false)).toBe('unresolved')
+  })
+
   it('10/90 under each selected length rule (Task 22b): only rules expressible as a share of the span apply', () => {
     const scope = range(0, 100)
     const under = (rule: string, gradient: boolean, evidence = STUB_EVIDENCE) => {
-      injectCfBarLengths({ 'default-10-90': { rule, settledBy: ['bar:lengths-default-10-90'] } })
+      injectCfBarLengths({ 'default-10-90': { rule, measured: ALL_FORMS, settledBy: ['bar:lengths-default-10-90'] } })
       try {
         return withExactCfEvidence(evidence, () => [0, 25, 100].map(v => {
-          const out = evalBar(v, bar({ minLength: 10, maxLength: 90, gradient }), scope, SPAN_CELL)
+          const out = evalBar(v, bar({ minLength: 10, maxLength: 90, gradient, pairing: 'base-only' }), scope, SPAN_CELL)
           return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
         }))
       } finally {
@@ -169,7 +197,7 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
     // Ruling S3-LEN-X14 (the rule the capture selected): half-min on the x14 (paired) form, the linear reading the same
     // capture verified on the base-only form, and unresolved when the pairing form is unknown.
     const underForm = (rule: string, pairing: 'x14' | 'base-only' | undefined, gradient = false) => {
-      injectCfBarLengths({ 'default-10-90': { rule, settledBy: ['bar:lengths-default-10-90'] } })
+      injectCfBarLengths({ 'default-10-90': { rule, measured: ALL_FORMS, settledBy: ['bar:lengths-default-10-90'] } })
       try {
         return withExactCfEvidence(gradient ? withGradient : STUB_EVIDENCE, () => [0, 25, 100].map(v => {
           const out = evalBar(v, bar({ minLength: 10, maxLength: 90, gradient, ...(pairing ? { pairing } : {}) }), scope, SPAN_CELL)

@@ -14,7 +14,7 @@
 import type { CfBarBound, CfBarDescriptor, CfDefinition, CfLiteral, CfOutcome, CfScaleBound } from './model'
 import type { CfRangeStatistics } from './statistics'
 import { resolveScaleThresholds, safeFraction } from './colorScale'
-import { barDefaultLengthsRule, barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarLayout } from './evidence'
+import { barDefaultLengthsRule, barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarDefaultLengths, type CfBarLayout } from './evidence'
 
 type CfDataBarDefinition = Extract<CfDefinition, { kind: 'dataBar' }>
 
@@ -120,7 +120,7 @@ export function evaluateDataBar(
   def: CfDataBarDefinition,
   thresholds: readonly [number, number],
   stats: Pick<CfRangeStatistics, 'min' | 'max'>,
-  options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant; layout?: CfBarLayout; lengthsRule?: string } = {},
+  options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant; layout?: CfBarLayout; lengthsRule?: CfBarDefaultLengths } = {},
 ): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
   const checkEvidence = options.hasEvidence ?? defaultHasEvidence
   const layout: CfBarLayout | undefined = options.variant ? { allPositive: options.variant, mixedSign: options.variant }
@@ -211,11 +211,13 @@ export function evaluateDataBar(
  * either way). A scoped rule applies to its class only (`solid`: gradient="0"; `x14`: the paired x14 form, Ruling
  * S3-LEN-X14) and every other bar keeps the linear reading the same capture verified on it. Undefined (unresolved) with
  * no rule, an `offset-9pt` rule on a bar it covers (a fixed point offset is not a share of the span), or an `x14`-scoped
- * rule on a bar whose pairing form is unknown.
+ * rule on a bar whose pairing form is unknown, or a bar whose pairing form x fill type the rule's capture never measured.
  */
-function defaultLengthsStart(def: CfDataBarDefinition, rule: string | undefined): number | undefined {
-  if (rule === undefined) return undefined
-  const [form, cls] = rule.split('@')
+function defaultLengthsStart(def: CfDataBarDefinition, selected: CfBarDefaultLengths | undefined): number | undefined {
+  if (selected === undefined) return undefined
+  // Task 22c (review I2): only the pairing form x fill type combinations the capture measured.
+  if (def.pairing === undefined || !selected.measured.includes(`${def.pairing}/${def.gradient ? 'gradient' : 'solid'}`)) return undefined
+  const [form, cls] = selected.rule.split('@')
   const linear = def.minLength / 100
   if (form === 'linear' && cls === undefined) return linear
   if ((form !== 'half-min' && form !== 'offset-9pt') || (cls !== 'all' && cls !== 'solid' && cls !== 'x14')) return undefined

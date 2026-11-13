@@ -235,7 +235,9 @@ export function barGradientBorderEvidence(check: (capability: string) => boolean
  * Stage 3 set. Absent today: a 10/90 bar stays unresolved even if its capability were verified, because the plain
  * linear reading is refuted by the captures.
  */
-type CfBarLengthsExport = Readonly<Record<string, Readonly<{ rule: string; settledBy: readonly string[] }>>>
+type CfBarLengthsExport = Readonly<Record<string, Readonly<{ rule: string; measured?: readonly string[]; settledBy: readonly string[] }>>>
+/** The selected 10/90 rule and the `<pairing>/<solid|gradient>` combinations its capture measured (Task 22c). */
+export type CfBarDefaultLengths = Readonly<{ rule: string; measured: readonly string[] }>
 const PUBLISHED_BAR_LENGTHS = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LENGTHS') as CfBarLengthsExport | undefined
 let testBarLengths: CfBarLengthsExport | null = null
 
@@ -244,12 +246,15 @@ export function injectCfBarLengths(lengths: CfBarLengthsExport | null): void {
   testBarLengths = lengths ? JSON.parse(JSON.stringify(lengths)) as CfBarLengthsExport : null
 }
 
-/** The selected rule for Excel's default 10/90 lengths, only when every capability that settled it passes `check`. */
-export function barDefaultLengthsRule(check: (capability: string) => boolean = id => hasEvidence(id)): string | undefined {
+/**
+ * The selected rule for Excel's default 10/90 lengths with the pairing form x fill type combinations its capture
+ * measured, only when every capability that settled it passes `check`. No measured combination: undefined.
+ */
+export function barDefaultLengthsRule(check: (capability: string) => boolean = id => hasEvidence(id)): CfBarDefaultLengths | undefined {
   const r = (testBarLengths ?? PUBLISHED_BAR_LENGTHS)?.['default-10-90']
-  if (!r || typeof r.rule !== 'string') return undefined
+  if (!r || typeof r.rule !== 'string' || !Array.isArray(r.measured) || r.measured.length === 0) return undefined
   if (!Array.isArray(r.settledBy) || r.settledBy.length === 0 || !r.settledBy.every(cap => typeof cap === 'string' && check(cap))) return undefined
-  return r.rule
+  return Object.freeze({ rule: r.rule, measured: Object.freeze(r.measured.filter(m => typeof m === 'string')) })
 }
 
 export function withCfEvidence<T>(
