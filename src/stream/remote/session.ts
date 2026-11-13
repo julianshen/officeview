@@ -120,6 +120,8 @@ interface UnitReq {
   assetBytes: number
   resolve: (u: UnitPayload) => void; reject: (e: unknown) => void
   retried: boolean; rotatedRetry: boolean
+  /** R16: called once per server-charged send (not the stale-jti re-send). */
+  onSend?: () => void
 }
 
 interface TextReq {
@@ -249,8 +251,13 @@ export class StreamSession {
     }
   }
 
-  /** Request one unit at a scale bucket. Settles once: payload, typed error, or abort. */
-  async unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitLease> {
+  /**
+   * Request one unit at a scale bucket. Settles once: payload, typed error, or abort.
+   * `onSend` (R16) is called on every send the server charges to the `'unit'` rate
+   * class: the first, a validation re-send and a resume re-send — never the
+   * stale-jti re-send (refused before it was charged).
+   */
+  async unit(index: number, bucket: number, signal?: AbortSignal, onSend?: () => void): Promise<UnitLease> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
     const dims = this.manifest.units.list[index]
     if (!dims || !this.manifest.recorder.scalesBuckets.includes(bucket)) throw new StreamSessionError('policy-refused', `no unit ${index} at bucket ${bucket}`)
@@ -258,7 +265,7 @@ export class StreamSession {
     const release = await this.admission.acquire(grant, signal)
     if (this.isClosed()) { release(); throw this.failure ?? new StreamSessionError('closed') }
     return new Promise<UnitLease>((resolve, reject) => {
-      const req: UnitReq = { index, bucket, reqId: 0, grant, assets: new Map(), assetBytes: 0, resolve: () => {}, reject, retried: false, rotatedRetry: false }
+      const req: UnitReq = { index, bucket, reqId: 0, grant, assets: new Map(), assetBytes: 0, resolve: () => {}, reject, retried: false, rotatedRetry: false, ...(onSend ? { onSend } : {}) }
       // A delivered payload keeps the lease (its consumer releases it after
       // decode/replay); a failed or aborted request releases it here, after
       // any message for it that is still being processed (the inbox is serial).
@@ -434,13 +441,15 @@ export class StreamSession {
   private isClosed() { return this.state === 'closed' }
   private setState(s: SessionState, e?: StreamSessionError) { if (this.state === s) return; this.state = s; this.o.onState?.(s, e) }
 
-  private issue(req: UnitReq) {
+  /** `charged` false only for the stale-jti re-send (R16: refused before the server charged it). */
+  private issue(req: UnitReq, charged = true) {
     this.units.delete(req.reqId)
     req.reqId = this.allocId(); req.assets = new Map(); req.assetBytes = 0
     this.units.set(req.reqId, req)
     // While resuming, the request waits; resume() re-issues it on the new socket.
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
     this.send({ reqId: req.reqId, type: 'unit', token: this.token, unitIndex: req.index, scale: req.bucket })
+    if (charged) { try { req.onSend?.() } catch { /* a hook never breaks the send */ } }
     this.ensureSweeper()
   }
   private issueText(req: TextReq) {
@@ -705,7 +714,7 @@ export class StreamSession {
     if (m.type === 'refused' && typeof m.reqId === 'number') {
       const req = this.units.get(m.reqId)
       if (!req) return
-      if (m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issue(req) }
+      if (m.code === 'session-rotated' && !req.rotatedRetry) { req.rotatedRetry = true; return this.issue(req, false) }
       const code = m.code === 'rate-limited' || m.code === 'session-rotated' ? m.code : 'policy-refused'
       req.reject(new StreamSessionError(code))
     }

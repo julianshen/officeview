@@ -319,7 +319,9 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   const t = src.now()
   const timer = src.timer
   const status = slide === 'end' ? 'End of slide show' : `Slide ${slide + 1} of ${count}`
-  const nextLabel = pos === 'end' ? 'Next: end of slide show' : `Next: slide ${pos.slide + 1}${pos.slide === slide ? ', next build' : ''}`
+  // A finished bitmap has no builds: Next on the same slide (a looping single-slide show) is that slide again.
+  const nextBuild = pos !== 'end' && pos.slide === slide && !imageBacked
+  const nextLabel = pos === 'end' ? 'Next: end of slide show' : `Next: slide ${pos.slide + 1}${nextBuild ? ', next build' : ''}`
   const placement = host === 'window' ? src.placement : undefined
   const goField = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return
@@ -355,7 +357,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
         <figure data-officeview-presenter-next="" aria-label={nextLabel}>
           <div data-officeview-presenter-pane="" ref={previewSlot} hidden={pos === 'end'} />
           {pos === 'end' && <div data-officeview-presenter-end="">End of slide show</div>}
-          <figcaption>{pos === 'end' ? 'Next: end of slide show' : pos.slide === slide ? 'Next build' : `Next slide (${pos.slide + 1})`}</figcaption>
+          <figcaption>{pos === 'end' ? 'Next: end of slide show' : nextBuild ? 'Next build' : `Next slide (${pos.slide + 1})`}</figcaption>
         </figure>
         <NotesPane notes={src.notes()} selectable={src.protection.copy} />
       </div>

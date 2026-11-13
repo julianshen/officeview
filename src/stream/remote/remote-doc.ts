@@ -19,7 +19,8 @@ export type { PrintOptions } from './session'
 
 export interface SessionLike {
   readonly manifest: Manifest
-  unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitLease>
+  /** `onSend` (R16): called once per server-charged send of the request. */
+  unit(index: number, bucket: number, signal?: AbortSignal, onSend?: () => void): Promise<UnitLease>
   /** One text request; resolves on the op's terminal message (see StreamSession.text). */
   text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void>
   /** One checked print job (see StreamSession.print); absent ⇒ print is unavailable. */
@@ -39,8 +40,11 @@ export interface RemoteOfficeDoc {
   readonly manifest: Manifest
   /** CSS-pixel unit sizes at scale 1. */
   units(): Promise<Array<{ widthPx: number; heightPx: number }>>
-  /** Paints the unit at the bucket for `scale × dpr`; the canvas is resized to the bucket surface. */
-  paint(unit: number, scale: 'fit' | number, dpr: number, canvas: CanvasLike, signal?: AbortSignal): Promise<void>
+  /**
+   * Paints the unit at the bucket for `scale × dpr`; the canvas is resized to the bucket surface.
+   * `opts.onSend` (R16) is called once per server-charged unit send, the replay re-request included.
+   */
+  paint(unit: number, scale: 'fit' | number, dpr: number, canvas: CanvasLike, signal?: AbortSignal, opts?: { onSend?: () => void }): Promise<void>
   /**
    * Server search. Each `onHits` call carries EVERY hit found so far (replace,
    * don't append); after a resume the search is re-issued and `onHits([])`
@@ -108,13 +112,13 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
     session,
     get manifest() { return session.manifest },
     async units() { return session.manifest.units.list.map((u) => ({ widthPx: u.w, heightPx: u.h })) },
-    async paint(unit, scale, dpr, canvas, signal) {
+    async paint(unit, scale, dpr, canvas, signal, po) {
       if (closed) throw new StreamSessionError('closed')
       const bucket = bucketFor(scale === 'fit' ? 1 : scale, dpr, session.manifest.recorder.scalesBuckets)
       let out: Awaited<ReturnType<typeof render>> | undefined
       // §7.6/§10: a unit that fails to replay is re-requested once, then reported.
       for (let attempt = 0; attempt < 2 && !out; attempt++) {
-        const payload = await session.unit(unit, bucket, signal)
+        const payload = await session.unit(unit, bucket, signal, po?.onSend)
         // The admission lease covers decode/replay; release it once that work is done.
         try { out = await render(unit, bucket, payload) } catch { /* retry once */ } finally { payload.release() }
       }
