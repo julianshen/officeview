@@ -16076,6 +16076,1634 @@
       }
     },
     {
+      "id": "stage3-bar-auto-bounds",
+      "stage": 3,
+      "question": "Excel's automatic bounds, as its own data bar presets write them (x14 cfvo autoMin/autoMax, x14 minLength 0 / maxLength 100, border=\"1\" with a border colour, explicit negative fill and axis colours: the attribute set of excel-authored-databar.xlsx, written by Excel's dialog). Paired x14 bars only: the base <cfvo> has no autoMin/autoMax type. autoMin is tested where it can differ from min (all-positive data without 0: {20..100}), autoMax where it can differ from max (all-negative data: {-100..-20}), and both on mixed-sign data, where every candidate agrees (a cross-check of the axis under automatic bounds). Solid and gradient, with and without the border; 0/100 and the default 10/90 (measured by run 7 as half-min on x14 bars). Gradient bars are positive and left to right only, the shape the gradient model measured.",
+      "input": "tests/fixtures/xlsx-cf/inputs/stage3-bar-auto-bounds.xlsx",
+      "saved": "tests/fixtures/xlsx-cf/stage3-bar-auto-bounds.xlsx",
+      "sheet": "Sheet1",
+      "range": "A1:K12",
+      "requiredAppearances": [
+        "screen"
+      ],
+      "markers": [
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "B2:B6",
+          "ruleType": "dataBar",
+          "priority": 1,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "B2:B6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "C2:C6",
+          "ruleType": "dataBar",
+          "priority": 2,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "C2:C6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "border": "1"
+            },
+            "colors": {
+              "border": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "D2:D6",
+          "ruleType": "dataBar",
+          "priority": 3,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "D2:D6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "1",
+              "border": "1"
+            },
+            "colors": {
+              "border": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "E2:E6",
+          "ruleType": "dataBar",
+          "priority": 4,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "E2:E6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "1"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "F2:F6",
+          "ruleType": "dataBar",
+          "priority": 5,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "F2:F6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "G2:G6",
+          "ruleType": "dataBar",
+          "priority": 6,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automin",
+          "sqref": "G2:G6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "10",
+              "maxLength": "90",
+              "gradient": "1",
+              "border": "1"
+            },
+            "colors": {
+              "border": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "H2:H6",
+          "ruleType": "dataBar",
+          "priority": 7,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "H2:H6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "negativeBarColorSameAsPositive": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "I2:I6",
+          "ruleType": "dataBar",
+          "priority": 8,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "I2:I6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "border": "1",
+              "negativeBarColorSameAsPositive": "0",
+              "negativeBarBorderColorSameAsPositive": "0"
+            },
+            "colors": {
+              "border": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "negativeBorder": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "J2:J6",
+          "ruleType": "dataBar",
+          "priority": 9,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "J2:J6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "negativeBarColorSameAsPositive": "0"
+            },
+            "colors": {
+              "negativeFill": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "legacy",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "K2:K6",
+          "ruleType": "dataBar",
+          "priority": 10,
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "min"
+              },
+              {
+                "type": "max"
+              }
+            ],
+            "attrs": {},
+            "colors": {
+              "fill": "FF0000FF"
+            }
+          }
+        },
+        {
+          "part": "xl/worksheets/sheet1.xml",
+          "extension": "x14",
+          "capabilityId": "bar:bounds-automax",
+          "sqref": "K2:K6",
+          "ruleType": "dataBar",
+          "formulas": [],
+          "bar": {
+            "pairing": "paired",
+            "cfvo": [
+              {
+                "type": "autoMin"
+              },
+              {
+                "type": "autoMax"
+              }
+            ],
+            "attrs": {
+              "minLength": "0",
+              "maxLength": "100",
+              "gradient": "0",
+              "border": "1",
+              "negativeBarColorSameAsPositive": "0",
+              "negativeBarBorderColorSameAsPositive": "0"
+            },
+            "colors": {
+              "border": "FF0000FF",
+              "negativeFill": "FFFF0000",
+              "negativeBorder": "FFFF0000",
+              "axis": "FF000000"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "inputSha256": "cb8d0827309a4bf179c248ee325eeee88d070deb04dc77f11e2982616f5a49d9",
+        "savedSha256": "cb8d0827309a4bf179c248ee325eeee88d070deb04dc77f11e2982616f5a49d9",
+        "provenance": "seed-hypothesis",
+        "positiveRefs": [
+          "B2",
+          "B3",
+          "B4",
+          "B5",
+          "B6",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6",
+          "D2",
+          "D3",
+          "D4",
+          "D5",
+          "D6",
+          "E2",
+          "E3",
+          "E4",
+          "E5",
+          "E6",
+          "F2",
+          "F3",
+          "F4",
+          "F5",
+          "F6",
+          "G2",
+          "G3",
+          "G4",
+          "G5",
+          "G6",
+          "H2",
+          "H3",
+          "H4",
+          "H5",
+          "H6",
+          "I2",
+          "I3",
+          "I4",
+          "I5",
+          "I6",
+          "J2",
+          "J3",
+          "J4",
+          "J5",
+          "J6",
+          "K2",
+          "K3",
+          "K4",
+          "K5",
+          "K6"
+        ],
+        "negativeRefs": [
+          "B8",
+          "B9",
+          "B10",
+          "B11",
+          "B12",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12",
+          "D8",
+          "D9",
+          "D10",
+          "D11",
+          "D12",
+          "E8",
+          "E9",
+          "E10",
+          "E11",
+          "E12",
+          "F8",
+          "F9",
+          "F10",
+          "F11",
+          "F12",
+          "G8",
+          "G9",
+          "G10",
+          "G11",
+          "G12",
+          "H8",
+          "H9",
+          "H10",
+          "H11",
+          "H12",
+          "I8",
+          "I9",
+          "I10",
+          "I11",
+          "I12",
+          "J8",
+          "J9",
+          "J10",
+          "J11",
+          "J12",
+          "K8",
+          "K9",
+          "K10",
+          "K11",
+          "K12"
+        ],
+        "cells": [
+          {
+            "ref": "B2",
+            "controlRef": "B8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B3",
+            "controlRef": "B9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B4",
+            "controlRef": "B10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B5",
+            "controlRef": "B11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B6",
+            "controlRef": "B12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C2",
+            "controlRef": "C8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C3",
+            "controlRef": "C9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C4",
+            "controlRef": "C10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C5",
+            "controlRef": "C11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "C6",
+            "controlRef": "C12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D2",
+            "controlRef": "D8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D3",
+            "controlRef": "D9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D4",
+            "controlRef": "D10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D5",
+            "controlRef": "D11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "D6",
+            "controlRef": "D12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E2",
+            "controlRef": "E8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E3",
+            "controlRef": "E9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E4",
+            "controlRef": "E10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E5",
+            "controlRef": "E11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "E6",
+            "controlRef": "E12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F2",
+            "controlRef": "F8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F3",
+            "controlRef": "F9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F4",
+            "controlRef": "F10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F5",
+            "controlRef": "F11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "F6",
+            "controlRef": "F12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G2",
+            "controlRef": "G8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G3",
+            "controlRef": "G9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G4",
+            "controlRef": "G10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G5",
+            "controlRef": "G11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "G6",
+            "controlRef": "G12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H2",
+            "controlRef": "H8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H3",
+            "controlRef": "H9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H4",
+            "controlRef": "H10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H5",
+            "controlRef": "H11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "H6",
+            "controlRef": "H12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I2",
+            "controlRef": "I8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I3",
+            "controlRef": "I9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I4",
+            "controlRef": "I10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I5",
+            "controlRef": "I11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "I6",
+            "controlRef": "I12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J2",
+            "controlRef": "J8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J3",
+            "controlRef": "J9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J4",
+            "controlRef": "J10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J5",
+            "controlRef": "J11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "J6",
+            "controlRef": "J12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K2",
+            "controlRef": "K8",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K3",
+            "controlRef": "K9",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K4",
+            "controlRef": "K10",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K5",
+            "controlRef": "K11",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "K6",
+            "controlRef": "K12",
+            "matched": true,
+            "barApplied": true,
+            "fillSource": "unverified",
+            "barEvidence": {
+              "settings": "unverified",
+              "geometry": "unverified"
+            }
+          },
+          {
+            "ref": "B8",
+            "controlRef": "B2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B9",
+            "controlRef": "B3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B10",
+            "controlRef": "B4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B11",
+            "controlRef": "B5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "B12",
+            "controlRef": "B6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C8",
+            "controlRef": "C2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C9",
+            "controlRef": "C3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C10",
+            "controlRef": "C4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C11",
+            "controlRef": "C5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "C12",
+            "controlRef": "C6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D8",
+            "controlRef": "D2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D9",
+            "controlRef": "D3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D10",
+            "controlRef": "D4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D11",
+            "controlRef": "D5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "D12",
+            "controlRef": "D6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E8",
+            "controlRef": "E2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E9",
+            "controlRef": "E3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E10",
+            "controlRef": "E4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E11",
+            "controlRef": "E5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "E12",
+            "controlRef": "E6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F8",
+            "controlRef": "F2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F9",
+            "controlRef": "F3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F10",
+            "controlRef": "F4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F11",
+            "controlRef": "F5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "F12",
+            "controlRef": "F6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G8",
+            "controlRef": "G2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G9",
+            "controlRef": "G3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G10",
+            "controlRef": "G4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G11",
+            "controlRef": "G5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "G12",
+            "controlRef": "G6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H8",
+            "controlRef": "H2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H9",
+            "controlRef": "H3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H10",
+            "controlRef": "H4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H11",
+            "controlRef": "H5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "H12",
+            "controlRef": "H6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I8",
+            "controlRef": "I2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I9",
+            "controlRef": "I3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I10",
+            "controlRef": "I4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I11",
+            "controlRef": "I5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "I12",
+            "controlRef": "I6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J8",
+            "controlRef": "J2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J9",
+            "controlRef": "J3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J10",
+            "controlRef": "J4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J11",
+            "controlRef": "J5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "J12",
+            "controlRef": "J6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K8",
+            "controlRef": "K2",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K9",
+            "controlRef": "K3",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K10",
+            "controlRef": "K4",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K11",
+            "controlRef": "K5",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          },
+          {
+            "ref": "K12",
+            "controlRef": "K6",
+            "matched": false,
+            "barApplied": false,
+            "fillSource": "unverified",
+            "note": "same-content unformatted control"
+          }
+        ]
+      },
+      "captures": [
+        {
+          "appearance": "screen",
+          "pngPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-bounds.png",
+          "sidecarPath": "tests/fixtures/xlsx-cf/refs/stage3-bar-auto-bounds.json"
+        }
+      ],
+      "status": "recipe-pending",
+      "reason": "Preparation only: no Excel capture has been run for this Stage 3 case; every bar:* capability it settles stays unverified and production withholds the bar (Ruling S3-A / OD-7)",
+      "tolerance": {
+        "meanAbs": 0.015,
+        "rowMax": 0.08,
+        "strong": 12
+      },
+      "resavedByExcel": false
+    },
+    {
       "id": "stage3-bar-lengths",
       "stage": 3,
       "question": "Solid bar lengths. All-positive data {0,25,50,75,100} under x14 minLength/maxLength 10/90 and 0/100 (the cell at 50 does not discriminate); num 20/80; percent 25/75; percentile 10/90 over {1,2,3,4,10}; autoMin and autoMax over {20,40,60} where autoMin differs from min (0 vs 20); all-negative data {-100..-20}.",
