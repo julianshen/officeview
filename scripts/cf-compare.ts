@@ -442,7 +442,8 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
         const props = s.properties ?? {}
         const values = Object.keys(props).sort().map(k => `${k}=${JSON.stringify((props as Record<string, unknown>)[k])}`).join('+')
         const scale = s.scale ? `|scale:${s.scale.ruleId}:${(s.scale.argb >>> 0).toString(16)}:${s.scale.fraction ?? ''}` : ''
-        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}${scale}`
+        const bar = s.bar ? `|bar:${JSON.stringify(s.bar)}` : ''
+        return `${s.row},${s.col}:${values}|${[...(s.unresolvedWrites ?? [])].sort().join('+')}|${s.unresolvedReason ?? ''}${scale}${bar}`
       })
     const { resolveCfCellStyle } = await import('../src/xlsx/cf/dxf')
     const pkg = await OfficePackage.load(saved)
@@ -458,7 +459,9 @@ export async function comparePagedViewport(c: CfOracleCase, rootDir: string): Pr
       const unresolved = s.unresolvedReason !== undefined || (s.unresolvedWrites !== undefined && s.unresolvedWrites.length > 0)
       const hasProps = s.properties !== undefined && Object.keys(s.properties).length > 0
       const hasScale = s.scale?.argb !== undefined
-      if (!hasProps && !hasScale) return { applied: false, unresolved }
+      // A wire bar descriptor is an applied outcome (Task 23): the bar paints, though it writes no style property.
+      const hasBar = s.bar !== undefined
+      if (!hasProps && !hasScale) return { applied: hasBar, unresolved }
       const style = resolveCfCellStyle(base as never, {
         properties: s.properties,
         ...(hasScale ? { visual: { colorScale: { ruleId: s.scale!.ruleId, argb: s.scale!.argb, ...(s.scale!.fraction !== undefined ? { fraction: s.scale!.fraction } : {}) } } } : {}),
