@@ -336,6 +336,31 @@ describe.skipIf(!existsSync(CORPUS) || corpusFiles.length === 0)('corpus dataBar
   }, 120000)
 })
 
+// No corpus workbook carries CF at all (§4), so the corpus check above compares absent rules. The Stage 3 oracle
+// workbooks and Excel's own dialog-authored bar are the bar writer shapes this repository holds: they run the same check.
+const BAR_WORKBOOKS = [...new Set(manifest().cases.filter(c => c.stage === 3).flatMap(c => [c.saved, c.input])), 'tests/fixtures/xlsx-cf/excel-authored-databar.xlsx']
+describe('Stage 3 oracle workbooks parse identically on both paths', () => {
+  it.each(BAR_WORKBOOKS)('%s', async path => {
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, path)))
+    const doc = await parseXlsx(await OfficePackage.load(bytes))
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: `stage3-both-${path}`, profile: 'D' })
+    try {
+      await session.done
+      let withCf = 0
+      for (const paged of session.workbook.sheets) {
+        if (paged.kind !== 'worksheet') continue
+        const resident = doc.sheets.find(s => s.name === paged.name)
+        expect(paged.conditionalFormatting, `${path} ${paged.name}`).toEqual(resident?.conditionalFormatting)
+        if (resident?.conditionalFormatting) withCf++
+      }
+      expect(withCf, path).toBeGreaterThan(0)
+    } finally {
+      await session.release()
+    }
+  }, 120000)
+})
+
 describe('Stage 3 pressure scenarios and resource bounds', () => {
   it('a 1M-row DECLARED A:A scope with 100 bars and 100 scales shares one scan and paints the first bar', async () => {
     const sample = await pressureBar1MRowSharedScan()

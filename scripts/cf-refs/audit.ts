@@ -1474,7 +1474,7 @@ function syntheticColumnSource(cells: number, stamp: CfStamp): CfValueSource & {
 /**
  * The 1,000,000-unit work cap (CF_LIMITS.workUnits) on a bar's statistics scan, under the default statistics budget a
  * service builds (no time limit, default units). A scanned cell costs far more than the one unit the page charges (the
- * statistics accounting, its checkpoints and its buffer growth: about 45 units per cell at 10,000 cells, measured), so
+ * statistics accounting, its checkpoints and its buffer growth: about 66 units per cell at 10,000 cells, measured), so
  * 10,000 cells admit and 100,000 refuse `cf-resource-limit` part-way, with nothing left charged. Synthetic one-cell pages
  * keep the column cheap to build.
  */
