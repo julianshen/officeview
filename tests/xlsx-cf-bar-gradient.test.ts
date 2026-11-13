@@ -93,11 +93,13 @@ describe('gradient model judgement (Task 22b)', () => {
     expect(j.maxError!['fixed-end']).toBeUndefined()
   })
 
-  it('pooled over every capture (two fills, lengths 9..321): one blend fraction, the fixed end refuted', () => {
+  it('pooled over every capture (two fills, lengths 9 to 321 px): one blend fraction, the fixed end refuted', () => {
     const pooled = barGradientsAcrossCases(manifest(), REPO_ROOT)
-    // Run 7 adds stage3-bar-lengths-default's 66 borderless gradient bars (E:J) to the 24 of the earlier captures.
-    expect(new Set(pooled.samples.map(s => s.ref.split(':')[0]))).toEqual(new Set(['stage3-bar-settings-probe', 'stage3-bar-lengths-default', 'stage3-bar-degenerate', 'stage3-bar-rendering', 'stage3-bar-pairing']))
-    expect(pooled.samples).toHaveLength(90)
+    // Run 7 adds stage3-bar-lengths-default's 66 borderless gradient bars (E:J) to the 24 of the earlier captures, and
+    // run 8 stage3-bar-auto-bounds' five (E; its bordered D and G are the bordered judge's).
+    expect(new Set(pooled.samples.map(s => s.ref.split(':')[0]))).toEqual(new Set(['stage3-bar-settings-probe', 'stage3-bar-lengths-default', 'stage3-bar-auto-bounds', 'stage3-bar-degenerate', 'stage3-bar-rendering', 'stage3-bar-pairing']))
+    expect(pooled.samples).toHaveLength(95)
+    expect(pooled.samples.filter(s => s.ref.startsWith('stage3-bar-auto-bounds:'))).toHaveLength(5)
     expect(pooled.samples.filter(s => s.ref.startsWith('stage3-bar-lengths-default:'))).toHaveLength(66)
     expect(new Set(pooled.samples.map(s => s.fill.join()))).toEqual(new Set(['0,0,255', '99,142,198']))
     const j = judgeBarGradient(pooled)

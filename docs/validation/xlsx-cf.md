@@ -946,3 +946,46 @@ No Excel was run.
 | refused-unsupported | 15 |
 
 The run is in recipes section 2d.
+
+### Stage 3 capture run 8 (2026-11-14): automatic bounds, and Stage 3 complete
+
+The orchestrator built and captured `stage3-bar-auto-bounds` in Excel 16.114 (8c76bcf6). The capture is `measured`, and its committed files were not edited. Excel's resave keeps `autoMin`/`autoMax` on all ten bars. `capture.ts --stage 3 --verify-only` relabelled nothing.
+
+**Automatic bounds: verified.**
+
+| Bound | Rule | Owning data |
+|---|---|---|
+| `bar:bounds-automin` | `zero-anchored`: autoMin = min(0, v_min) | {20..100} |
+| `bar:bounds-automax` | `zero-anchored`: autoMax = max(0, v_max) | {-100..-20} |
+
+- Each rule is the only match. The `min-max` alternative differs from it by a whole bar against no bar at B2 and H6, and by 28 px at F2 (10/90).
+- The predictions use `half-min@x14` for F and G, which is still the exported 10/90 rule, so the coupling gate holds.
+- On the mixed-sign columns J and K both rules agree. With their ten black dotted axes, the axis pattern now holds pixel for pixel on 48 axes.
+- `VERIFIED_STAGE3_BAR_AUTO_BOUNDS` would carry both rules. Production resolves an automatic bound only from it, and it is published only by Task 23.
+
+**Gradient fill, still `bar-length` t = 0.847.**
+- The borderless pool gains column E: 95 bars, 288,858 pixels, largest error 8.
+- The 10 bordered gradient bars (D, G) are painted as `frame-over-ramp` by the production painter and match Excel within 8. They join the 150 of run 7 in the colour conformance, so 255 gradient bars are compared in all. A solid fill misses every one of them.
+
+**`audit.ts --stage 3`:** ok=true, 15/15 structural, pending 0, **stageComplete=true**, with no blocked or unaccounted capability.
+
+| Disposition | Count |
+|---|---|
+| verified | 51 |
+| unverified-nondiscriminating | 7 |
+| refused-unsupported | 15 |
+
+**Lesson 1, under the audit's evidence.**
+
+| Measure | Count |
+|---|---|
+| bars that paint | 472 |
+| of which pixel-measured | 428 |
+| of which gradient bars | 246 |
+| withheld findings | 84 |
+| axes | 48, of which 38 explicit; a solid axis fails all 38 explicit ones |
+
+- The `stage3-bar-lengths:H` finding is gone: autoMin is verified.
+- Two columns whose capabilities are now all verified paint without a geometry designation. Both are listed in the test:
+  - `stage3-bar-lengths:I`, autoMax on all-positive data;
+  - `stage3-bar-pairing:B`, the paired bar with x14 autoMin/autoMax.

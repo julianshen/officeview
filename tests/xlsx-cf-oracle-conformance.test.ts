@@ -728,7 +728,6 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         'stage3-bar-showvalue:B', 'stage3-bar-showvalue:D',
       ].map(key => [key, { outcome: 'withheld', reason: 'num bounds: bar:bounds-num is non-discriminating (num 20/80 equals the data min/max), so unverified' } as Finding])),
       'stage3-bar-degenerate:F': { outcome: 'withheld', reason: 'percent bounds: bar:bounds-percent is non-discriminating, so unverified' },
-      'stage3-bar-lengths:H': { outcome: 'withheld', reason: 'autoMin: Task 22c moved bar:bounds-automin to stage3-bar-auto-bounds (S3-AUTO-BOUNDS), which awaits its capture; no automatic-bound rule is verified until then' },
     }
     // Bars production paints on cells the capture designated for no geometry capability (settings or another
     // capability's controls). They must still reproduce Excel's px; listed so the brief's "pending or
@@ -743,6 +742,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage3-bar-lengths:B': 'the paired solid 10/90 bar is non-discriminating at its one width; stage3-bar-lengths-default settles the rule (half-min on x14), which reproduces it',
       'stage3-bar-degenerate:G': 'Excel 2007 min val="0": a base-only gradient bar at 10/90 designated for bar:bounds-positional (non-discriminating); its bounds and lengths are verified',
       'stage3-bar-pairing:D': 'the base-only bar designates settings capabilities only; every capability it needs is verified',
+      // Capture run 8 (Task 22c): the automatic bounds are verified, so the lengths case's autoMax column paints.
+      'stage3-bar-pairing:B': 'the paired bar (x14 autoMin/autoMax, 0/100) designates settings capabilities only; since run 8 every capability it needs is verified',
+      'stage3-bar-lengths:I': 'autoMax on all-positive data is non-discriminating in this case; stage3-bar-auto-bounds settles it (zero-anchored), which reproduces it',
     }
     for (const f of Object.values(BAR_FINDINGS)) expect(f.outcome).toBe('withheld')
 
@@ -838,15 +840,16 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 411, measuredPainted: 375, withheldFound: 87, axes: 38, axisRows: 38 * 30, gradientBars: 231 })
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows, gradientBars }).toEqual({ painted: 472, measuredPainted: 428, withheldFound: 84, axes: 48, axisRows: 48 * 30, gradientBars: 246 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
-    expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(28)
+    // Run 8 adds stage3-bar-auto-bounds J and K: ten more explicit black axes.
+    expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(38)
   }, 60_000)
 
   it('RED mutant: a solid axis fails the Lesson 1 axis rows on every explicit axis', () => {
     // The production model with its dash removed (the axis colour on every row), against the same Excel pixels.
     const solid = { ...CF_BAR_RENDER_MODEL, axisDash: { ...CF_BAR_RENDER_MODEL.axisDash, onPt: 4, offPt: 0 } }
-    expect(axisSamples.length, 'runs after the Lesson 1 test').toBe(38)
+    expect(axisSamples.length, 'runs after the Lesson 1 test').toBe(48)
     let explicit = 0, failed = 0
     for (const s of axisSamples) {
       const p = layoutDataBar(s.bar, s.host, { zoom: 0.75, dpr: 1, output: 'device' }, solid, () => true)!
@@ -856,8 +859,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       for (let y = s.top; y < s.top + s.height; y++) if (argbDelta(argbHex(rows.get(y)!), pixelArgb(s.png, s.axisPx, y)) > 8) mismatch = true
       if ((s.bar.axisColor! & 0xffffff) !== 0xffffff) { explicit++; if (mismatch) failed++ } else expect(mismatch, `${s.cellKey}: a white axis is solid either way`).toBe(false)
     }
-    expect(explicit).toBe(28)
-    expect(failed, 'the solid mutant fails every explicit axis').toBe(28)
+    expect(explicit).toBe(38)
+    expect(failed, 'the solid mutant fails every explicit axis').toBe(38)
   })
 
   /**
@@ -874,12 +877,14 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(verified).toContain('bar:render-gradient-stops')
     expect(verified).toContain('bar:render-gradient-border')
     const pooled = barGradientsAcrossCases(manifest, REPO_ROOT)
-    expect(pooled.samples).toHaveLength(90)
-    // Ruling S3-GRAD-BORDER (run 7): the bordered gradient bars of stage3-bar-lengths-default, painted as bordered bars.
-    const borderedCase = manifest.cases.find(x => x.id === 'stage3-bar-lengths-default')!
-    const bc = loadBarScreenCapture(borderedCase, REPO_ROOT)!
-    const bordered = sampleBarGradients(borderedCase, bc.parts, bc.png, bc.geom, undefined, 'bordered').samples.map(s => ({ ...s, ref: `${borderedCase.id}:${s.ref}` }))
-    expect(bordered).toHaveLength(150)
+    expect(pooled.samples).toHaveLength(95)
+    // Ruling S3-GRAD-BORDER: every bordered gradient bar of every capture (run 7's 150, run 8's 10), painted as bordered.
+    const bordered = manifest.cases.filter(x => x.stage === 3 && x.status === 'measured').flatMap(bcCase => {
+      const bc = loadBarScreenCapture(bcCase, REPO_ROOT)
+      return bc ? sampleBarGradients(bcCase, bc.parts, bc.png, bc.geom, undefined, 'bordered').samples.map(s => ({ ...s, ref: `${bcCase.id}:${s.ref}` })) : []
+    })
+    expect(bordered).toHaveLength(160)
+    expect(bordered.filter(s => s.ref.startsWith('stage3-bar-auto-bounds:'))).toHaveLength(10)
     let bars = 0, pixels = 0, worst = 0, solidFails = 0, borderedBars = 0
     injectCfBarGradient(audit.barGradient)
     injectCfBarGradientBorder(audit.barGradientBorder)
@@ -934,11 +939,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       injectCfBarGradient(null)
       injectCfBarGradientBorder(null)
     }
-    expect({ bars, borderedBars }).toEqual({ bars: 240, borderedBars: 150 })
+    expect({ bars, borderedBars }).toEqual({ bars: 255, borderedBars: 160 })
     expect(pixels).toBeGreaterThan(600_000)
     expect(worst).toBeLessThanOrEqual(8)
     // Mutant: the fill painted solid misses Excel on every gradient bar, bordered or not.
-    expect(solidFails).toBe(240)
+    expect(solidFails).toBe(255)
   }, 60_000)
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {

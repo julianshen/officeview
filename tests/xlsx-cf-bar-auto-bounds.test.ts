@@ -86,7 +86,7 @@ const judge = (rule: 'zero-anchored' | 'min-max' | 'outside') => {
 
 describe('stage3-bar-auto-bounds (synthetic capture, Task 22c)', () => {
   it('designates 50 cells of ten paired x14 bars with autoMin/autoMax cfvo', () => {
-    expect(c.status).toBe('recipe-pending')
+    expect(c.status).toBe('measured') // captured in run 8; the synthetic checks stay the family's own proof
     expect(c.expected.cells.filter(x => x.matched)).toHaveLength(50)
     expect(c.markers.filter(m => m.extension === 'x14' && m.bar?.cfvo.map(v => v.type).join() === 'autoMin,autoMax')).toHaveLength(10)
   })

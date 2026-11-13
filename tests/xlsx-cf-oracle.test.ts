@@ -3787,12 +3787,13 @@ describe('CF oracle verifier', () => {
 
     const report = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
-    // Task 22c: stage3-bar-auto-bounds (recipe-pending) owns the automatic bounds, which wait for its capture.
-    expect(report.stageComplete).toBe(false)
+    // Capture run 8 (stage3-bar-auto-bounds) completes Stage 3 again: nothing is blocked or unaccounted.
+    expect(report.stageComplete).toBe(true)
     expect(report.summary.cases).toBe(15)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
-    expect(report.blockedCapabilities.sort()).toEqual(['bar:bounds-automax', 'bar:bounds-automin'])
-    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(49)
+    expect(report.blockedCapabilities).toEqual([])
+    expect(report.perCapability.filter(p => p.disposition === 'verified')).toHaveLength(51)
+    expect(report.barAutoBounds).toEqual({ autoMin: { rule: 'zero-anchored', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'zero-anchored', settledBy: ['bar:bounds-automax'] } })
     expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
   }, 90_000) // about ten whole-stage audits: 15–25 s alone since capture run 7 (a 510-cell case), up to 50 s beside the full parallel suite
   it('stage3ObservedBars reads the recorded px and ignores malformed entries', () => {
