@@ -3968,18 +3968,18 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
   // cross-check at one width.
   rect(
     'stage3-bar-lengths-default',
-    'Excel\'s default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (90, 180, 360 pt) with eleven values each, min/max bounds, on white cells, left to right, no border.',
+    'Excel\'s default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (180, 270, 360 pt: at least 30 characters, S3-A step 4, so the value text stays clear of every bar edge) with eleven values each, min/max bounds, on white cells, left to right, no border.',
     {
       n: 11,
       cols: [
-        col('B', 'Solid90', VALUES_11, 15),
-        col('C', 'Solid180', VALUES_11, 30),
+        col('B', 'Solid180', VALUES_11, 30),
+        col('C', 'Solid270', VALUES_11, 45),
         col('D', 'Solid360', VALUES_11, 60),
-        col('E', 'Grad90', VALUES_11, 15),
-        col('F', 'Grad180', VALUES_11, 30),
+        col('E', 'Grad180', VALUES_11, 30),
+        col('F', 'Grad270', VALUES_11, 45),
         col('G', 'Grad360', VALUES_11, 60),
-        col('H', 'Base90', VALUES_11, 15),
-        col('I', 'Base180', VALUES_11, 30),
+        col('H', 'Base180', VALUES_11, 30),
+        col('I', 'Base270', VALUES_11, 45),
         col('J', 'Base360', VALUES_11, 60),
       ],
       rules: [

@@ -9686,7 +9686,7 @@
     {
       "id": "stage3-bar-lengths-default",
       "stage": 3,
-      "question": "Excel's default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (90, 180, 360 pt) with eleven values each, min/max bounds, on white cells, left to right, no border.",
+      "question": "Excel's default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (180, 270, 360 pt: at least 30 characters, S3-A step 4, so the value text stays clear of every bar edge) with eleven values each, min/max bounds, on white cells, left to right, no border.",
       "input": "tests/fixtures/xlsx-cf/inputs/stage3-bar-lengths-default.xlsx",
       "saved": "tests/fixtures/xlsx-cf/stage3-bar-lengths-default.xlsx",
       "sheet": "Sheet1",
@@ -10063,8 +10063,8 @@
         }
       ],
       "expected": {
-        "inputSha256": "6db1014f3ac5d2c51c572cfeafc3f6829a55f1e7b43bffe9ee6792dee152654c",
-        "savedSha256": "6db1014f3ac5d2c51c572cfeafc3f6829a55f1e7b43bffe9ee6792dee152654c",
+        "inputSha256": "f8a8bca31f72032f93054dbed5ccf8ad247d75a3dcaba7e412951c599fa8867e",
+        "savedSha256": "f8a8bca31f72032f93054dbed5ccf8ad247d75a3dcaba7e412951c599fa8867e",
         "provenance": "seed-hypothesis",
         "positiveRefs": [
           "B2",
