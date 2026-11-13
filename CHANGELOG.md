@@ -12,6 +12,20 @@ in git history.
 
 ### Added
 
+- **Excel data bars (view-only).** Conditional formatting data bars now paint in resident, worker-backed and paged
+  views, in print and export, wherever Excel's own rendering verifies them: solid and gradient fills (gradient toward
+  white over the bar's length, with or without a border), borders, min/max and automatic bounds (percentile bounds
+  when every value lies within them), Excel's default 10/90 lengths, the dotted axis with negative bars, left-to-right and right-to-left, theme/indexed colours,
+  automatic axis and negative colours, `showValue="0"`, and composition with fills and colour scales. Every geometry
+  was measured from Excel 16.114 captures and the painter reproduces them (472 painted bars compared with Excel's
+  pixels, edges within 1 px; 255 gradient bars within 8 per channel). Shapes whose captures could not discriminate
+  the question (num and percent bounds, positional bounds, merged hosts, minimum visible width, copy text and the
+  default negative border), equal or single-value scopes, values beyond num/percentile bounds, stop-if-true bars,
+  standalone x14 bars and every unresolved shape stay withheld
+  with their base formatting and announce "Conditional formatting unavailable". A painted bar announces
+  "Data bar, N% of range" (「資料橫條 N%」 in zh-TW); known issue: the forced-paged view still announces its painted
+  bars as unavailable. Details are in `docs/validation/xlsx-cf.md` §11.
+
 - **Excel colour scales (view-only).** Two- and three-colour conditional formatting scales now paint in
   resident, worker-backed and paged views, in print and export, with min/max/num/percent/percentile thresholds,
   theme/indexed/rgb endpoint colours and fill-slot composition against other rules. Fills match Excel's display

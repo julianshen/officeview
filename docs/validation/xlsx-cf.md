@@ -121,7 +121,7 @@ Scanned all `.xlsx` archives in `corpus/` and `tests/fixtures/` by inspecting ZI
     - Colour forms represented: 8-digit ARGB hex (`rgb="FFFF0000"`, `rgb="00F8696B"`), `theme` + `tint` (`theme="4" tint="0.4"`), `indexed="10"`, `auto="1"`, and plain `rgb`. A custom `theme1.xml` palette was authored as intent but NOT measured (the saved workbook keeps the stock Office theme); `scale:colors-custom-theme` is unverified.
     - x14 usage: standalone `<x14:colorScale>` inside `<extLst>` with `<x14:cfvo>` carrying `<xm:f>0</xm:f>` and `<xm:f>$A$1</xm:f>` (OD-3: recorded for writer-shape inventory, out of scope for Stage 2, lifts no capability).
 
-- **Data bar (`<dataBar>` / `<x14:dataBar>`) inventory (Task 18, Stage 3)**: scanned every `.xlsx` under `corpus/` (the 9 workbooks this host materializes; the 33-file set counted above is not present in this checkout) and `tests/fixtures/` (`626` outside `xlsx-cf/`, `38` oracle fixtures, `33` oracle inputs; `~$` lockfiles skipped, none present) by reading the ZIP entries (`xl/worksheets/sheet*.xml`):
+- **Data bar (`<dataBar>` / `<x14:dataBar>`) inventory (Task 18, Stage 3)**: scanned every `.xlsx` under `corpus/` (9 workbooks were materialized when Task 18 scanned; Task 23 re-scanned all 33 now present: none contains `<conditionalFormatting>`, so none a data bar) and `tests/fixtures/` (`626` outside `xlsx-cf/`, `38` oracle fixtures, `33` oracle inputs; `~$` lockfiles skipped, none present) by reading the ZIP entries (`xl/worksheets/sheet*.xml`):
   - **No corpus workbook and no pre-existing fixture outside `tests/fixtures/xlsx-cf/` contains a `<dataBar>` or `<x14:dataBar>`.** Stage 3 therefore has no third-party writer shapes to be compatible with beyond Excel's own.
   - **Writer shape seen in the wild (Excel-resaved)**: `stage1-priority-composition.xlsx` (Stage 1 cross-visual marker; writer `Microsoft Macintosh Excel`, Excel 16.114 resave) carries one base-only rule, `<cfRule type="dataBar" priority="10"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule>`: no attributes, `min`/`max` cfvo, one `rgb` colour (Excel's default blue `638EC6`), no `<extLst>` and no x14 companion. So Excel 16.114 preserved an Excel 2007 (base-only) bar on resave instead of rewriting it into the paired form; the `bar:pairing-base-only` case re-measures that with attributes. The saved workbook's `theme1.xml` is the new Office theme (accent1 `156082`), which is why theme-colour markers pin `theme`/`tint` attributes and never a palette lookup.
   - **Pairing authored by the oracle** (not yet resaved by Excel): paired = base `<dataBar>` plus a cfRule-level `<extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>` and an `<x14:cfRule type="dataBar" id>` companion with no `@priority` under `{78C0D931-6437-407d-A8EE-F0AAD7539E65}`; standalone = `<x14:cfRule priority id>` with `<x14:fillColor>`; base-only = the 2007 shape above.
@@ -989,3 +989,184 @@ The orchestrator built and captured `stage3-bar-auto-bounds` in Excel 16.114 (8c
 - Two columns whose capabilities are now all verified paint without a geometry designation. Both are listed in the test:
   - `stage3-bar-lengths:I`, autoMax on all-positive data;
   - `stage3-bar-pairing:B`, the paired bar with x14 autoMin/autoMax.
+
+### Task 23 (2026-11-14): Stage 3 validation, publication and PR 3 evidence
+
+No Excel was run. The manifest, sidecars and PNGs are unchanged (`capture.ts --stage 3 --verify-only` relabelled nothing).
+
+**Publication (Ruling S3-WRITE).** `bun scripts/cf-refs/audit.ts --stage 3 --write --publish-stage3`, run twice; the
+first run was staged, and `git diff --exit-code src/xlsx/cf/verifiedCapabilities.ts` after the second was clean. The
+file gains `VERIFIED_STAGE3_CAPABILITIES` (51) and the six exports: automatic colours (both `FFFFFFFF`), the layout
+(allPositive `span/cell`, mixedSign `axis/side`), the gradient (`bar-length`, 0.847), the 10/90 rule (`half-min@x14`,
+measured `base-only/gradient`, `x14/gradient`, `x14/solid`), the bordered gradient (`frame-over-ramp`, 0.847) and the
+automatic bounds (both `zero-anchored`). The Stage 1 (110) and Stage 2 (34) sets are byte-unchanged; the diff against
+PR 2 (`adc2b757`) adds only Stage 3 blocks, their ids in `VERIFIED_CAPABILITIES` and the header comment. Production now
+paints every bar the evidence verifies.
+
+**Dual gate (Lessons 1, 4).** `audit.ts --stage 3`: ok=true, 15/15 structural, pending 0, stageComplete=true, 51
+verified, 7 unverified-nondiscriminating, 15 refused-unsupported, 0 blocked, 0 unaccounted. Stage 1 (13/13) and
+Stage 2 (8/8) audits ok and complete. `tests/xlsx-cf-oracle-conformance.test.ts` passes with no injection: the
+published set and exports equal the audit result (now asserted unconditionally), and the Lesson 1 numbers of run 8
+hold unchanged (472 bars paint, 428 pixel-measured, 246 gradient, 84 withheld findings, 48 axes).
+
+**One row per Stage 3 `[measure]` capability** (generated from the audit's per-capability result; "Ruling" is the one
+the capability lifts):
+
+| Capability ID | Oracle case | Ruling | Evidence kind (OD-7 amended) | Status | Refusal still in force |
+|---|---|---|---|---|---|
+| `bar:settings-precondition-probe` | `stage3-bar-settings-probe` | S3-A | pixel-measured | verified | — |
+| `bar:settings-schema-defaults` | `stage3-bar-settings-probe` | S3-Q | pixel-measured | verified | — |
+| `bar:pixel-calibration` | `stage3-bar-settings-probe` | S3-A | pixel calibration | verified | — |
+| `bar:lengths-default-10-90` | `stage3-bar-lengths-default` | S3-B | pixel-measured | verified | — |
+| `bar:render-gradient-border` | `stage3-bar-lengths-default` | S3-M, S3-GRAD-BORDER | pixel-measured | verified | — |
+| `bar:bounds-automin` | `stage3-bar-auto-bounds` | S3-C | pixel-measured | verified | — |
+| `bar:bounds-automax` | `stage3-bar-auto-bounds` | S3-C | pixel-measured | verified | — |
+| `bar:lengths-explicit-0-100` | `stage3-bar-lengths` | S3-B | pixel-measured | verified | — |
+| `bar:bounds-min-max` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
+| `bar:bounds-num` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): The fixture's num 20/80 bounds equal its data's min/max (20..80), so num and min/max predict identical px (largest separation 0 px; Task 18b recomputation). Re-measure with data spanning beyond the num bounds, for example 0..100 under num 20/80. |
+| `bar:bounds-percent` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): On 0..100 data percent 25/75 and num 25/75 give the same bounds, so a pixel measurement cannot tell percent from a literal reading (largest separation 0 px; Task 18b recomputation). Re-measure with data whose range is not 0..100. |
+| `bar:bounds-percentile` | `stage3-bar-lengths` | S3-C and S3-B | pixel-measured | verified | — |
+| `bar:lengths-all-negative` | `stage3-bar-lengths` | S3-B and S3-L | pixel-measured | verified | — |
+| `bar:degenerate-equal-values` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
+| `bar:degenerate-single-cell` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
+| `bar:degenerate-inverted` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
+| `bar:degenerate-beyond-bounds` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
+| `bar:bounds-out-of-domain` | `stage3-bar-degenerate` | S3-E | pixel-measured | verified | — |
+| `bar:bounds-positional` | `stage3-bar-degenerate` | S3-D | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): Both positional shapes are base-only bars, which are gradient (the schema default): their visible extent is the fade, not the bar geometry, so no length hypothesis can be checked (S3-M, Task 18b). Re-author them with an x14 companion at gradient="0" carrying the same positional cfvo. |
+| `bar:axis-automatic` | `stage3-bar-axis-negative` | S3-K | pixel-measured | verified | — |
+| `bar:axis-middle` | `stage3-bar-axis-negative` | S3-K | pixel-measured | verified | — |
+| `bar:axis-none` | `stage3-bar-axis-negative` | S3-K | pixel-measured | verified | — |
+| `bar:negative-fill-color` | `stage3-bar-axis-negative` | S3-L | pixel-measured | verified | — |
+| `bar:negative-fill-same-as-positive` | `stage3-bar-axis-negative` | S3-L | pixel-measured | verified | — |
+| `bar:negative-border-color` | `stage3-bar-axis-negative` | S3-L | pixel-measured | verified | — |
+| `bar:negative-border-same-as-positive` | `stage3-bar-axis-negative` | S3-L | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): With negativeBarBorderColorSameAsPositive="1" Excel's canonical form carries no <x14:negativeBorderColor> (an extra one shifts into the axis colour, finding S3-18B-A), so the alternative "a distinct negative border" has no colour to predict and both answers predict the same pixels (largest separation 0 px; fix round 1 recomputation). Re-measure only once Excel's default negative border colour is known. |
+| `bar:render-solid` | `stage3-bar-rendering` | S3-M | pixel-measured | verified | — |
+| `bar:render-gradient-stops` | `stage3-bar-rendering` | S3-M | pixel-measured | verified | — |
+| `bar:render-border` | `stage3-bar-rendering` | S3-M | pixel-measured | verified | — |
+| `bar:direction-ltr` | `stage3-bar-rendering` | S3-K | pixel-measured | verified | — |
+| `bar:direction-rtl` | `stage3-bar-rendering` | S3-K | pixel-measured | verified | — |
+| `bar:direction-context-ltr-sheet` | `stage3-bar-rendering` | S3-K | pixel-measured | verified | — |
+| `bar:colors-theme-tint` | `stage3-bar-rendering` | S3-F | pixel-measured | verified | — |
+| `bar:colors-indexed` | `stage3-bar-rendering` | S3-F | pixel-measured | verified | — |
+| `bar:geometry-insets` | `stage3-bar-geometry` | S3-N | pixel-measured | verified | — |
+| `bar:geometry-snapping` | `stage3-bar-geometry` | S3-N | pixel-measured | verified | — |
+| `bar:geometry-min-visible-width` | `stage3-bar-geometry` | S3-N | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): The smallest positive value (0.5 of 0..100 on a 177 px span) already rounds to a 1 px bar, so "no minimum" and "1 px minimum" predict the same px (largest separation 0 px; Task 18b recomputation). Re-measure with a value under 0.28 percent of the span. |
+| `bar:geometry-narrow-clip` | `stage3-bar-geometry` | S3-N | pixel-measured | verified | — |
+| `bar:showvalue-canvas-suppression` | `stage3-bar-showvalue` | S3-O | pixel-measured | verified | — |
+| `bar:showvalue-copy-text` | `stage3-bar-showvalue` | S3-P | none (clipboard observation; object model retired, OD-7 amended) | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind. |
+| `bar:participation-types` | `stage3-bar-participation` | S3-G | pixel-measured | verified | — |
+| `bar:participation-error-presence` | `stage3-bar-participation` | S3-G | pixel-measured | verified | — |
+| `bar:participation-dateserial` | `stage3-bar-participation` | S3-G | pixel-measured | verified | — |
+| `bar:scope-disjoint` | `stage3-bar-scope` | S3-H | pixel-measured | verified | — |
+| `bar:scope-duplicate-blocks` | `stage3-bar-scope` | S3-H | pixel-measured | verified | — |
+| `bar:scope-hidden-row` | `stage3-bar-scope` | S3-H | pixel-measured | verified | — |
+| `bar:scope-autofilter-hidden-row` | `stage3-bar-scope` | S3-H | pixel-measured | verified | — |
+| `bar:scope-merged-cell` | `stage3-bar-scope` | S3-H | pixel-measured, non-discriminating | unverified-nondiscriminating | withheld (`cf-unmeasured-capability` or unresolved): The merged host B8 is the only designated cell, and "statistics over the host alone across the merged width" and "all four values on the host column only" put the bar end 2 px apart, under the 3 px separation the +-1 px tolerance needs (Task 18b recomputation). Re-measure with a merge whose hypotheses differ by 3 px or more. |
+| `bar:composition-dxf-fill` | `stage3-bar-composition` | S3-I | pixel-measured | verified | — |
+| `bar:composition-with-scale` | `stage3-bar-composition` | S3-I | pixel-measured | verified | — |
+| `bar:composition-overlapping-bars` | `stage3-bar-composition` | S3-I | pixel-measured | verified | — |
+| `bar:composition-matching-stopIfTrue-ahead` | `stage3-bar-composition` | S3-I | pixel-measured | verified | — |
+| `bar:composition-bar-stopIfTrue` | `stage3-bar-composition` | S3-J; unsupported in Stage 3 per S3-CLOSE | none | refused-unsupported | withheld: Unsupported in Stage 3 per S3-CLOSE: Excel's resave drops stopIfTrue from a data bar rule, so no capture of the saved workbook can show what the flag does; Ruling S3-J keeps such a rule unresolved (it taints every later rule on its cells). |
+| `bar:composition-unresolved-stub` | `stage3-bar-composition` | S3-I; unsupported in Stage 3 per S3-CLOSE (needs Stage 5) | none | refused-unsupported | withheld: Unsupported in Stage 3 per S3-CLOSE: the stub ahead of the bar is an expression rule, which needs Stage 5 expressions to evaluate; until then it stays unresolved and withholds the bar after it. |
+| `bar:pairing-paired` | `stage3-bar-pairing` | S3-Q | pixel-measured | verified | — |
+| `bar:settings-paired-precedence` | `stage3-bar-pairing` | S3-Q | pixel-measured | verified | — |
+| `bar:pairing-standalone` | `stage3-bar-pairing` | S3-Q; unsupported in Stage 3 per S3-CLOSE | none | refused-unsupported | withheld: Unsupported in Stage 3 per S3-CLOSE: Excel 16.114 always resaves a standalone x14 bar in its canonical paired form (stage3-bar-pairing.rejected.xlsx), so no capture of a saved workbook can show the standalone shape; it stays withheld (cf-unsupported-rule). |
+| `bar:pairing-base-only` | `stage3-bar-pairing` | S3-Q | pixel-measured | verified | — |
+| `bar:scope-whole-column` | `stage3-bar-pairing` | S3-H | pixel-measured | verified | — |
+| `bar:unresolved-orphan-x14` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-Q | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-duplicate-guid` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-Q | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-companion-fillcolor` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-Q | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-formula-cfvo` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-C | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-xmf-reference` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-C | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-active-present` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-R | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-one-cfvo` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-C | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-three-cfvo` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-C | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-cfvo-no-type` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-C | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-automin-base` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-C | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-auto-color` | `stage3-bar-unresolved-shapes` | Always unsupported, per S3-F as amended (an automatic positive fill has no capability) | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:unresolved-alpha-00-color` | `stage3-bar-unresolved-shapes` | Always unsupported per S3-F | none | refused-unsupported | unresolved at parse (`cf-unsupported-rule`, `cf-invalid-x14-link` or `cf-invalid-rule`), whole contribution refused |
+| `bar:color-auto-axis` | `stage3-bar-auto-colors` | S3-F (amended), S3-AUTO-GREY, S3-AUTO-BG | pixel-measured | verified | — |
+| `bar:color-auto-negative-fill` | `stage3-bar-auto-colors` | S3-F (amended), S3-AUTO-GREY, S3-AUTO-BG | pixel-measured | verified | — |
+
+**Tests (Task 23).**
+- `tests/xlsx-cf-stage3.test.ts`: every enabled bar capability has verified evidence; the Stage 1/2 sets are their
+  own audits; every unresolved bar shape refuses atomically on the resident and the paged worker paths (the
+  unresolved-shapes workbook is refused sheet-wide, `cf-invalid-x14-link`, by its orphan x14 and duplicate GUID);
+  every measured case carries the same bar descriptors through the real paged route as the resident service (14
+  cases); corpus files and the 30 Stage 3 workbooks plus Excel's dialog-authored bar parse to identical CF rules on
+  both paths (the corpus holds no CF at all, so its part compares absent rules); the bar pressure below.
+- Product fix (RED first): a host too small to lay a bar out at the capture scale now withholds it (it used to
+  announce a bar and let a zero-length `showValue="0"` bar hide its value while painting nothing). As a consequence a
+  zero-length bar in such a host keeps its text, and a zero-size host announces unavailable formatting.
+- Harness fix: `cf-compare --mode paged` counts a wire bar descriptor as applied.
+
+**Resource audit (`audit.ts --stage 3`, published evidence).**
+
+| Scenario | Result |
+|---|---|
+| 1M-row declared `A:A`, 100 stored cells, 100 bars + 100 scales | one statistics scan for the 200 scopes (100 stored cells read); the text scope reads 140 values for a 40-cell request (a per-rule scan would read 200 per cell) and paints the first bar on all 40 (S3-I-OVERLAP); its byte estimate is O(rules x cells), so the same request over all 100 cells refuses before any read; peak 3,613,360 B, net 0 |
+| refused percentile bar (-10) beside a min/max bar | the percentile bar announces unavailable and reports no bar; the min/max bar paints 10/10; net 0 |
+| whole-column bar extents | `computeMetrics` keeps 10 rows; the bar paints its 10 stored cells; net 0 |
+| distinct ranges | 150 bars over distinct 2-cell ranges: 10 rects admit and paint 10; 300 rects refuse before enumeration (0 reads, net 0) |
+| 1,000,000-unit cap on a bar's statistics scan (default service budget) | 10,000 cells admit (662,221 units, about 66 per cell); 100,000 refuse `cf-resource-limit` after 58,369 reads at 999,939 units; net 0 |
+| 20 open/read/cancel/close cycles over B2:B12 of the default-lengths case | 80 reads, 220 bar states, final net 0 |
+| no-CF baseline | 0 reserves, 0 reads, no scope |
+| module graph | eager graph clean (fresh build) |
+
+**`CF_LIMITS.activeMs` (50 ms wall clock, owner risk; behaviour unchanged).** Measured through the production
+service with the published evidence and an instrumented budget that counts active time exactly as
+`createCfWorkBudget` does (`.superpowers/t23/activems.ts`, not committed). This machine (14 cores) already ran at a
+load average of about 5 in the "idle" runs; "loaded" adds 14 busy processes.
+
+| Scope | Cells | Idle median / max ms | Loaded median / max ms |
+|---|---|---|---|
+| `stage3-bar-lengths-default` A1:V28 (largest fixture) | 616 | 5.9 / 13.8 | 6.9 / 24.4 |
+| `stage3-bar-auto-bounds` | 132 | 1.0 / 1.4 | 1.2 / 2.8 |
+| sparse 1M-row declared A:A, 200 rules, 40-cell request | 40 | 8.8 / 11.5 | 6.8 / 23.3 |
+| populated 100,000-row column, 1 bar, one 5,000-cell batch | 5,000 | 24.0 / 27.2 | 43.8 / 76.1 |
+| populated 1,048,576-row column | 5,000 | refused before activeMs matters: the 1,000,000-unit bounds scan (`CF work limit`) | same |
+
+The Stage 3 fixtures keep a 2x-8x margin even under load; a 5,000-cell batch over a 100,000-row column has under 2x
+idle and exceeds 50 ms under load (max 76 ms), so its CF would intermittently refuse. Options for the owner:
+(1) raise `activeMs` (simple; weakens the main-thread guard proportionally); (2) split the budget per paint batch or
+per checkpoint slice (keeps the guard per unit of work; more plumbing, and total time is no longer bounded);
+(3) count work units instead of wall time (deterministic and load-independent; needs a calibrated unit cap per
+device class and loses the wall-clock guarantee on slow devices).
+
+**Browser** (`.superpowers/t22/pw.config.ts`: the stock config's second webServer needs `@napi-rs/canvas`):
+chromium 18/18 passed and Playwright WebKit (`webkit-2370`) 18/18 passed. The Stage 3 tests (bars paint and the
+resident, worker and forced-paged legs agree within 0.2 % of pixels; six zoom/DPR pairs; frozen panes; a live max
+edit that rescales the bars; print capture with bar pixels on the prepared page) pass on every leg; the bar
+descriptor is asserted on the resident and worker legs, and the forced-paged descriptor by the expected-failure test
+(known limit below).
+
+**`cf-compare --stage 3`** (bound to each case's `savedSha256` and oracle hash): static 0 pass / 3 unsupported / 33
+fail, print 0 / 3 / 33 (no printer captures), export 0 / 3 / 33 — whole-image comparisons fail for Stage 1/2 cases
+too (column widths, gridlines; Ruling I6) and are `*unverified*`, never measured fidelity; interactive 29 pass / 3 /
+4 fail and paged 31 pass / 3 / 2 fail. The Stage 3 failures in both are expectation-model artefacts that also fail
+on the base with audit evidence: participation B4 (`matched` with `barApplied: false`, a cell Excel draws no bar on)
+and composition F2 (a matching DXF with no visible property); the two Stage 1 interactive failures are the
+clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 1 conformance, not by cf-compare.
+
+**Known limits (recorded, not fixed).**
+- **Forced-paged descriptor (defect).** In the forced-paged view the grid semantics read a second wire scope
+  (`InteractiveSheetDoc` semantic text scope) that never paints, and a host-less wire scope announces a bar only after
+  painting it, so every painted bar announces "Conditional formatting unavailable" there. The bars do paint (and the
+  worker sends the same descriptors as the resident path). Pinned by an expected-failure browser test; the fix needs
+  the semantic scope to read the painter's outcome or a host source.
+- **Merged hosts.** `assembleScope` (text.ts) would announce a bar inside a merge where `render.ts` refuses to paint
+  it; unreachable while `bar:scope-merged-cell` is unverified (the service withholds any bar scope that intersects a
+  merge on every production path, as the paged agreement test confirms).
+- **Resident host vs frame host.** `barAt`/`describe` decide withholding on a host computed from the sheet's own
+  metrics, the painter on the frame's host; in sorted or filtered views they may differ by up to 1 px, which can only
+  matter for a share that rounds to zero at the capture scale.
+- **`residentBarHosts` budget** charges 8 B per axis entry and 64 B per cell, not the JS per-entry overhead.
+- **Worker cache split charge.** A large reply is charged whole and definitions are not shared between entries
+  (bounded memory, recorded from Task 21).
+- **`measureBarGeometry` no-workbook fallback** treats a 1 px run in the axis colour as the axis; test-only path.
+- **Text scope estimate.** The resident text scope (copy, find, accessibility) prices every rule's properties per
+  cell, so many rules over one column refuse requests the paint path (which sizes its batches) admits.
+- **Default statistics unit cap.** The text path's statistics scan costs about 66 units per cell, so a bar over more
+  than roughly 15,000 populated cells refuses there at 1,000,000 units (the paint path allows 10,000,000).
+- **zh-TW label.** 「資料橫條」 is the exact name in Excel 16.114 zh-TW's Conditional Formatting style menu (the orchestrator
+  selected it by that name when authoring `excel-authored-databar.xlsx`); no change needed.
