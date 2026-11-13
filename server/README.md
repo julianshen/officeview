@@ -276,9 +276,14 @@ Spec: `docs/superpowers/specs/2026-11-11-streaming-s3-design.md` §4.2 and
 its 2026-11-13 amendment; measurements and test map:
 `docs/validation/streaming-s3b.md`.
 
-**What prints.** The server draws each page again for print (scale 2, or
-scale 1 when a page or the whole job is too large at 2) with the session's
-marks, both of them, exactly as on screen. The viewer prints those print
+**What prints.** The server obtains a print-resolution raster for each page
+(scale 2, or scale 1 when a page or the whole job is too large at 2). It may
+come from the shared canonical render cache, the same deterministic bytes a
+screen render at that scale would have. The visible mark is part of that
+raster, and the session's forensic mark is applied per page and per request,
+exactly as on screen; a page too small to carry the forensic mark
+(`capacity` / `all-masked`) prints with the visible mark only and is audited
+as an `unmarked` delivery. The viewer prints those print
 rasters through a hidden iframe. It never prints the canvases it shows: the
 remote view is hidden in print media, so the browser's own Print menu
 prints a blank page. A page is one streamed unit: a DOCX page, a PPTX slide

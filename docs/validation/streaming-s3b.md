@@ -96,6 +96,16 @@ roughly 150–400 ms cold and 100–270 ms warm; the warm time is dominated by
 Layer-1 marking. The largest job here, `lo-tdf104788.pptx` (6 pages,
 3.2 MiB of PNG), takes about 1.5 s cold.
 
+## Known limits not machine-checked
+
+- **Real print output.** The browser spec stubs the print frame's `print()`
+  (an OS print dialog cannot be driven); it checks the frame's images, that
+  the frame sits outside the hidden remote root, and print-media layout, but
+  not paper output.
+- **Range dialog modality.** Keyboard focus is contained (Tab/Shift+Tab wrap,
+  Escape restores focus to Print); the background is not made inert, so a
+  click or programmatic focus can leave the dialog. Deferred follow-up.
+
 ## Test map
 
 | what | where |

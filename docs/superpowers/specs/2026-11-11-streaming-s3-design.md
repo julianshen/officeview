@@ -404,8 +404,11 @@ print rasters (parent T2 constructs).
 >   to print at once (limit: N pages).", "This document is too large to
 >   print from the viewer.", "Print limit for this session reached (N
 >   pages).", "Too many requests. Try again shortly.", "The document could
->   not be printed. Please try again."; an abort shows none. The dialog is
->   modal and keeps focus inside it (Tab wraps; Escape closes). A replaced
+>   not be printed. Please try again."; an abort shows none. The dialog
+>   contains keyboard focus (Tab/Shift+Tab wrap; Escape closes and returns
+>   focus to Print) but does not make the page behind it inert: a click or
+>   programmatic focus can still reach background controls (deferred, as in
+>   the pivot group dialog it follows). A replaced
 >   document aborts the old job and starts with no progress, range or
 >   notice.
 > - **Evidence (Task 4 ruling).** The no-hidden-content check compares each
