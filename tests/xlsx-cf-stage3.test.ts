@@ -248,6 +248,59 @@ describe('every unresolved bar shape refuses atomically on both paths', () => {
   }, 120000)
 })
 
+describe('published bars agree on the resident and the paged worker paths', () => {
+  it('every measured Stage 3 case carries the same bar descriptors through the real paged route as the resident service', async () => {
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const { createPagedWorkbookSource } = await import('../src/xlsx/view/pagedSource')
+    let compared = 0, bars = 0
+    for (const c of manifest().cases.filter(x => x.stage === 3 && x.status === 'measured')) {
+      const sheet = await savedSheet(c.saved)
+      const cf = sheet.conditionalFormatting!
+      const memory = createCfMemory()
+      const merges = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
+      const service = createCfService(cf, memory, { evidence: cfRuntimeEvidence, merges })
+      const stamp = { owner: 'resident', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(cf), viewGen: 0, structureGen: 0, clockGen: 0 }
+      const rect = sqrefRect(c.range)
+      // The resident outcome over the case range, in paint batches of at most 256 cells (the cap per call).
+      const resident = new Map<string, unknown>()
+      for (let r0 = rect.firstRow; r0 <= rect.lastRow; r0 += 8) {
+        const part = { ...rect, firstRow: r0, lastRow: Math.min(rect.lastRow, r0 + 7) }
+        const lease = await service.prepareCf({ stamp, sourceRects: [part], signal: new AbortController().signal, grantBytes: CF_LIMITS.scratchBytes }, residentSource(sheet, stamp, memory, 'engine'))
+        for (let row = part.firstRow; row <= part.lastRow; row++) for (let col = part.firstCol; col <= part.lastCol; col++) {
+          const o = lease.value.at(row, col)
+          const bar = o.kind === 'ready' ? o.value.visual?.dataBar : undefined
+          if (bar) resident.set(`${row},${col}`, { start: bar.startFraction, end: bar.endFraction, axis: bar.axisFraction, fill: bar.fillColor, neg: bar.isNegative })
+        }
+        lease.release()
+      }
+      service.dispose()
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(readFileSync(join(REPO_ROOT, c.saved))).buffer as ArrayBuffer]) }, { docId: `stage3-agree-${c.id}`, profile: 'D' })
+      const wire = new Map<string, unknown>()
+      try {
+        await session.done
+        const source = createPagedWorkbookSource(session)
+        const sheetId = source.sheets.find(x => x.name === c.sheet)?.sheetId ?? source.sheets[0]!.sheetId
+        const store = source.store(sheetId)
+        const wireMemory = createCfMemory()
+        for (let r0 = rect.firstRow; r0 <= rect.lastRow; r0 += 8) {
+          const rects = [{ r0, r1: Math.min(rect.lastRow, r0 + 7), c0: rect.firstCol, c1: rect.lastCol }]
+          const result = await store.readConditionalFormatting?.({ rects, stamp: { owner: 'audit', sheetId, workbookValueGen: store.stamp.valueGen, cfGen: 0, viewGen: 0, structureGen: 0, clockGen: 0 }, grantBytes: 2 * 1024 * 1024 }, wireMemory, { signal: new AbortController().signal })
+          expect(result?.kind, `${c.id} rows ${r0}+`).toBe('ready')
+          for (const st of result!.states) if (st.bar) wire.set(`${st.row},${st.col}`, { start: st.bar.startFraction, end: st.bar.endFraction, axis: st.bar.axisFraction, fill: st.bar.fillColor, neg: st.bar.isNegative })
+        }
+        await store.release()
+      } finally {
+        await session.release()
+      }
+      expect([...wire.entries()].sort(), c.id).toEqual([...resident.entries()].sort())
+      compared++
+      bars += resident.size
+    }
+    expect(compared).toBe(14)
+    expect(bars).toBeGreaterThan(400)
+  }, 300000)
+})
+
 // The Stage 3 corpus inventory (docs/validation/xlsx-cf.md §4): no corpus workbook carries a data bar.
 const CORPUS_DATABAR_FILES = 0
 const corpusFiles = existsSync(CORPUS) ? readdirSync(CORPUS).filter(f => f.endsWith('.xlsx') && !f.startsWith('~$')).sort() : []
