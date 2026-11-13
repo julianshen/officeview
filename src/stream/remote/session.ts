@@ -70,16 +70,21 @@ const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
 /** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
  * wide, 1..NOTES_MAX_PX device px tall. */
 const NOTES_WIDTH_CSS = 720, NOTES_MAX_PX = 8192
-/** The decoded cap of one NOTES_RASTER at `scale`: the u32 unit index and the
- * 12-byte raster header plus the largest notes image's RGBA at that scale (a
- * PNG of text on white is far smaller; one that does not compress fails
- * closed), never over 64 MiB. */
-export const notesBodyCap = (scale: 1 | 2) => Math.min(UNIT_RASTER_DECODED_CAP, 16 + NOTES_WIDTH_CSS * scale * NOTES_MAX_PX * 4)
-/** A notes request's admission grant: the encoded cap plus the decoded body,
- * as a unit raster's (`unitCost`). Print reserves encoded + 2 × decoded, but
- * that would clamp a scale-2 notes grant to the whole 96 MiB aggregate and
- * stall the show's slide units behind it. */
-export const notesGrant = (scale: 1 | 2) => NOTES_ENCODED_CAP + notesBodyCap(scale)
+/** The decoded cap of the NOTES_RASTER of a declared `w × h` image (R10): the
+ * u32 unit index and the 12-byte raster header plus the image's RGBA (a PNG of
+ * text on white is far smaller; one that does not compress fails closed),
+ * never over 64 MiB. */
+export const notesBodyCap = (w: number, h: number) => Math.min(UNIT_RASTER_DECODED_CAP, 16 + w * h * 4)
+/** The admission grant of a declared `w × h` notes image (R10), its true peak
+ * as print's: the encoded bound (the body plus deflate/gzip slack, as
+ * `unitCost`; `notes-start` declares no encoded size), at most the 8 MiB kind
+ * cap, plus 2 × the decoded body (inflated chunks + their contiguous copy).
+ * Over the 96 MiB aggregate (the tallest scale-2 images, ≈ 98 MiB) Admission
+ * clamps it to the aggregate. */
+export const notesGrant = (w: number, h: number) => {
+  const body = notesBodyCap(w, h)
+  return Math.min(NOTES_ENCODED_CAP, Math.ceil(body * 1.01) + 65536) + 2 * body
+}
 /** The refusal codes a notes request rejects with; any other is `policy-refused`. */
 const NOTES_REFUSALS = new Set<StreamErrorCode>(['policy-refused', 'invalid-unit', 'rate-limited', 'session-rotated'])
 /**
@@ -149,8 +154,10 @@ interface PrintJob {
 
 interface NotesReq {
   unit: number; scale: 1 | 2; reqId: number
-  /** The decoded cap of its one NOTES_RASTER (see notesBodyCap). */
+  /** The decoded cap of its one NOTES_RASTER (see notesBodyCap); 0 until `notes-start` is granted. */
   bodyCap: number
+  /** Takes the admission grant of the declared image (released on settle unless leased out). */
+  hold: (release: () => void) => void
   /** Sent on the current socket (false while it waits out a resume). */
   sent: boolean
   /** The checked `notes-start` size, once it has arrived. */
@@ -372,8 +379,10 @@ export class StreamSession {
    * A refusal rejects with its code; a `session-rotated` one (stale jti) is
    * re-issued once. Abort rejects with its reason; a drop with the request
    * sent rejects `session-rotated` (never re-issued: the server audits each);
-   * a session end rejects with the session failure. The lease keeps the
-   * admission grant until `release()`.
+   * a session end rejects with the session failure. Nothing is reserved until
+   * `notes-start` declares the image (R10); its grant (`notesGrant`) is taken
+   * then or never: no room rejects `rate-limited`. The lease keeps the grant
+   * until `release()`.
    */
   async notes(unit: number, scale: 1 | 2, signal?: AbortSignal): Promise<NotesLease> {
     if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
@@ -383,18 +392,15 @@ export class StreamSession {
     if ((scale !== 1 && scale !== 2) || !m.recorder.scalesBuckets.includes(scale)) throw new StreamSessionError('policy-refused', `no notes scale ${scale}`)
     const dims = Number.isInteger(unit) && unit >= 0 ? m.units.list[unit] : undefined
     if (!dims || dims.hidden) throw new StreamSessionError('invalid-unit', `no notes for unit ${unit}`)
-    const bodyCap = notesBodyCap(scale)
     return new Promise<NotesLease>((resolve, reject) => {
       // The one settlement path: idempotent, drops the request, its abort
       // listener, its partial reassembly and — unless leased out — its grant.
       let settled = false, release: (() => void) | undefined
-      const queued = new AbortController()
       const settle = (done: () => void, keepGrant = false) => {
         if (settled) return
         settled = true
         if (this.notesReqs.get(req.reqId) === req) this.notesReqs.delete(req.reqId)
         signal?.removeEventListener('abort', onAbort)
-        queued.abort()
         if (req.reqId) this.reasm.drop(req.reqId)
         // After any message for it that is still being processed (the inbox is serial).
         if (release && !keepGrant) { const r = release; release = undefined; void this.inbox.then(r) }
@@ -402,7 +408,8 @@ export class StreamSession {
       }
       const onAbort = () => req.fail(signal!.reason ?? abortError())
       const req: NotesReq = {
-        unit, scale, reqId: 0, bodyCap, sent: false, rotatedRetry: false,
+        unit, scale, reqId: 0, bodyCap: 0, sent: false, rotatedRetry: false,
+        hold: (r) => { if (settled) r(); else release = r },
         resolve: (img) => settle(() => {
           const r = release!
           resolve({ ...img, release: () => { void this.inbox.then(r) } })
@@ -410,12 +417,7 @@ export class StreamSession {
         fail: (e) => settle(() => reject(e)),
       }
       signal?.addEventListener('abort', onAbort, { once: true })
-      // §14: the request's receive/inflate/decode workspace comes out of the session's aggregate.
-      this.admission.acquire(notesGrant(scale), queued.signal).then((r) => {
-        if (settled) return r()
-        release = r
-        this.issueNotes(req)
-      }, (e) => req.fail(e))
+      this.issueNotes(req)
     })
   }
 
@@ -511,7 +513,7 @@ export class StreamSession {
    * throws fails it `policy-refused`. */
   private issueNotes(req: NotesReq) {
     if (req.reqId) { if (this.notesReqs.get(req.reqId) === req) this.notesReqs.delete(req.reqId); this.reasm.drop(req.reqId) }
-    req.reqId = this.allocId(); req.sent = false; req.start = undefined
+    req.reqId = this.allocId(); req.sent = false; req.start = undefined; req.bodyCap = 0
     this.notesReqs.set(req.reqId, req)
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
     if (!this.manifest.can.notes) return req.fail(new StreamSessionError('policy-refused', 'notes are off for this session'))
@@ -540,7 +542,14 @@ export class StreamSession {
     if (req.start) return hostile('a second notes-start')
     const h = m.h
     if (m.scale !== req.scale || m.w !== NOTES_WIDTH_CSS * req.scale || !Number.isInteger(h) || (h as number) < 1 || (h as number) > NOTES_MAX_PX) return hostile('notes-start does not match the request')
-    req.start = { w: m.w as number, h: h as number }
+    const w = m.w as number
+    // §14/R10: the declared image's grant, now or never — its frame is already
+    // on its way, and waiting in the serial inbox would block the messages whose leases free the room.
+    const release = this.admission.tryAcquire(notesGrant(w, h as number))
+    if (!release) return req.fail(new StreamSessionError('rate-limited', 'no admission room for the notes image'))
+    req.hold(release)
+    req.start = { w, h: h as number }
+    req.bodyCap = notesBodyCap(w, h as number)
   }
   /** The one NOTES_RASTER of a notes request: the unit asked, at the announced size. */
   private onNotesFrame(req: NotesReq, payload: Uint8Array) {
@@ -594,8 +603,8 @@ export class StreamSession {
       expects: (reqId, kind) => (kind === Kind.MANIFEST ? reqId === this.helloReqId && !!this.handshake
         // PRINT_RASTER only ever for the running, sent print job.
         : kind === Kind.PRINT_RASTER ? this.livePrint(reqId) !== undefined
-        // NOTES_RASTER only ever for a live, sent notes request.
-        : kind === Kind.NOTES_RASTER ? this.liveNotes(reqId) !== undefined
+        // NOTES_RASTER only ever for a live, sent notes request holding its declared grant.
+        : kind === Kind.NOTES_RASTER ? this.liveNotes(reqId)?.start !== undefined
         : this.units.has(reqId) && UNIT_KINDS.has(kind)),
       encodedCap: (k) => CAPS[k]?.[0] ?? 0,
       // A unit response may never decode past the bytes its request was admitted for.

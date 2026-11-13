@@ -119,8 +119,11 @@ describe('StreamSession.notes / RemoteOfficeDoc.paintNotes (scripted socket)', (
     const { s, sock } = await opened()
     const { p, req, reqId, canvas, draws, decoded } = await painting(s, sock, 1, 2)
     expect(req).toEqual({ reqId, type: 'notes', token: tokenFor('j1'), unit: 1, scale: 2 })
-    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: notesGrant(2) })
+    // R10: nothing is reserved until notes-start declares the image.
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
     sock.text({ reqId, type: 'notes-start', w: 1440, h: 96, scale: 2 })
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: notesGrant(1440, 96) })
     sock.frame(7, reqId, notesBody(1, 1440, 96))
     await expect(p).resolves.toBeUndefined()
     expect([canvas.width, canvas.height]).toEqual([1440, 96])
@@ -130,11 +133,44 @@ describe('StreamSession.notes / RemoteOfficeDoc.paintNotes (scripted socket)', (
     expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0, reassemblyBytes: 0 })
   })
 
-  it('the grant is encoded cap + the scale\'s decoded body, well under the session aggregate', () => {
-    expect(notesBodyCap(1)).toBe(16 + 720 * 8192 * 4)
-    expect(notesBodyCap(2)).toBe(16 + 1440 * 8192 * 4)
-    expect(notesGrant(2)).toBe(8 * MiB + notesBodyCap(2))
-    expect(notesGrant(2)).toBeLessThan(96 * MiB)
+  it('R10: the grant is sized from the declared image: encoded bound + 2 × the decoded body (the true decode peak)', () => {
+    expect(notesBodyCap(1440, 96)).toBe(16 + 1440 * 96 * 4)
+    // Small image: the encoded bound is the body plus deflate/gzip slack, not the 8 MiB kind cap.
+    expect(notesGrant(1440, 96)).toBe(Math.ceil(notesBodyCap(1440, 96) * 1.01) + 65536 + 2 * notesBodyCap(1440, 96))
+    expect(notesGrant(1440, 96)).toBeLessThan(2 * MiB)
+    // Large image: the encoded bound tops out at the 8 MiB kind cap.
+    expect(notesGrant(1440, 8192)).toBe(8 * MiB + 2 * notesBodyCap(1440, 8192))
+  })
+
+  it('R10: an invalid declaration reserves nothing', async () => {
+    const { s, sock } = await opened()
+    const { p, reqId } = await painting(s, sock, 0, 1)
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 8193, scale: 1 })
+    expect((await failure(p) as StreamSessionError).code).toBe('policy-refused')
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('R10: no admission room for the declared image → rate-limited, nothing paints, the late frame is dropped, the session stays usable', async () => {
+    const { s, sock } = await opened()
+    // Five scale-2 slide units in flight (≈ 80 MiB of the 96 MiB aggregate).
+    const units = [0, 1, 0, 1, 0].map((i) => { const u = s.unit(i, 2); void u.catch(() => {}); return u })
+    await settle()
+    const held = s.stats().inFlightBytes
+    const { p, reqId, draws } = await painting(s, sock, 0, 1)
+    sock.text({ reqId, type: 'notes-start', w: 720, h: 8192, scale: 1 })
+    expect((await failure(p) as StreamSessionError).code).toBe('rate-limited')
+    sock.frame(7, reqId, notesBody(0, 720, 8192))
+    await settle()
+    expect(draws).toEqual([])
+    expect(s.stats()).toMatchObject({ inFlight: 5, inFlightBytes: held })
+    // A small notes image still fits beside them.
+    const small = await painting(s, sock, 1, 1)
+    sock.text({ reqId: small.reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
+    sock.frame(7, small.reqId, notesBody(1, 720, 48))
+    await small.p
+    expect(small.draws.length).toBe(1)
+    void units
   })
 
   it('the scale follows dpr: the smallest offered bucket ≥ dpr, else the largest', async () => {
@@ -232,7 +268,7 @@ describe('StreamSession.notes / RemoteOfficeDoc.paintNotes (scripted socket)', (
     const { p, reqId, draws } = await painting(s, sock, 0, 1)
     sock.text({ reqId, type: 'notes-start', w: 720, h: 48, scale: 1 })
     const push = vi.spyOn(Reassembler.prototype, 'push')
-    sock.frame(7, reqId, new Uint8Array(notesBodyCap(1) + 1))
+    sock.frame(7, reqId, new Uint8Array(notesBodyCap(720, 48) + 1))
     expect((await failure(p) as StreamSessionError).code).toBe('policy-refused')
     const results = (await Promise.all(push.mock.results.map((r) => r.value))).filter(Boolean)
     expect(results).toEqual([{ ok: false, reqId, reason: 'decoded-cap' }])
@@ -403,7 +439,7 @@ describe('StreamSession.notes / RemoteOfficeDoc.paintNotes (scripted socket)', (
     next.frame(7, req.reqId, notesBody(1, 1440, 48))
     const lease = await waiting
     expect([lease.w, lease.h]).toEqual([1440, 48])
-    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: notesGrant(2) })
+    expect(s.stats()).toMatchObject({ inFlight: 1, inFlightBytes: notesGrant(1440, 48) })
     lease.release()
     await settle()
     expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
