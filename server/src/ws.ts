@@ -24,7 +24,7 @@ import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, t
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
-import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, printArgs, runPrint, type PrintSlot } from './print'
+import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, SOCKET_BACKPRESSURE_LIMIT, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
@@ -69,6 +69,8 @@ export interface StreamServerOptions {
   encodeHangMs?: number
   /** TEST-ONLY: replaces the print job planner (e.g. to force a too-large refusal). */
   planPrint?: typeof planPrint
+  /** TEST-ONLY: interposes on binary sends and the socket's buffered amount (backpressure tests). */
+  transport?: { sendBinary(ws: unknown, frame: Uint8Array): number; bufferedAmount(ws: unknown): number }
 }
 
 interface Conn {
@@ -81,6 +83,8 @@ interface Conn {
   rates: SessionRates
   timers: Set<ReturnType<typeof setTimeout>>
   missingFaces: string[]
+  /** Print jobs waiting for this socket to drain. */
+  drainWaiters: Set<() => void>
 }
 type WS = ServerWebSocket<Conn>
 
@@ -122,6 +126,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.phase === 'closed') return
     const code = name === 'superseded' ? 4409 : CLOSE[name]
     ws.data.phase = 'closed'
+    wakeDrain(ws)
     for (const t of ws.data.timers) clearTimeout(t)
     ws.close(code, name)
   }
@@ -138,7 +143,27 @@ export function createStreamServer(o: StreamServerOptions) {
     if (z.length + 4 > ENCODED[kind]!) return undefined
     return encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: () => z, fragmentBytes: FRAGMENT })
   }
-  const sendFrames = (ws: WS, messages: Uint8Array[][]) => { for (const m of messages) for (const f of m) ws.sendBinary(f) }
+  const sendBinary = (ws: WS, f: Uint8Array) => o.transport ? o.transport.sendBinary(ws, f) : ws.sendBinary(f)
+  const bufferedOf = (ws: WS) => o.transport ? o.transport.bufferedAmount(ws) : ws.getBufferedAmount()
+  /** Sends every fragment in order; false (and nothing more sent) once the transport drops one (Bun: 0).
+   * -1 (backpressure) means queued. The unit path ignores the result (pre-existing behaviour). */
+  const sendFrames = (ws: WS, messages: Uint8Array[][]): boolean => {
+    for (const m of messages) for (const f of m) if (sendBinary(ws, f) === 0) return false
+    return true
+  }
+  const wakeDrain = (ws: WS) => { const w = [...ws.data.drainWaiters]; ws.data.drainWaiters.clear(); for (const f of w) f() }
+  /** Resolves once `ws` holds at most PRINT_SEND_HIGH_WATER unsent bytes, or `alive` fails.
+   * Woken by `drain`, the socket's close, or the job's `wake` (cancel, teardown, resume);
+   * a slow re-check guards a missed wake. */
+  async function belowHighWater(ws: WS, job: PrintJob, alive: () => boolean) {
+    while (alive() && bufferedOf(ws) > PRINT_SEND_HIGH_WATER) {
+      await new Promise<void>((resolve) => {
+        const wake = () => { clearTimeout(t); ws.data.drainWaiters.delete(wake); if (job.wake === wake) job.wake = undefined; resolve() }
+        const t = setTimeout(wake, 5_000)
+        ws.data.drainWaiters.add(wake); job.wake = wake
+      })
+    }
+  }
   const gone = (ws: WS) => ws.data.phase === 'closed'
   const owns = (ws: WS, sid: string) => !gone(ws) && table.get(sid)?.activeSocket === (ws as unknown)
 
@@ -254,7 +279,9 @@ export function createStreamServer(o: StreamServerOptions) {
       try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print }) } catch { return close(ws, 'policy-refused') }
     }
     const old = s.activeSocket as unknown as WS | undefined
-    if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
+    if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t); wakeDrain(old) }
+    // A job on the old socket cannot continue on the new one.
+    if (sd.print) { sd.print.stopped = true; sd.print.wake?.() }
     const reaper = reapers.get(s.sid); if (reaper) { clearTimeout(reaper); reapers.delete(s.sid) }
     table.supersede(s.sid, ws as never, token.jti)
     sd.tokenExp = token.exp
@@ -276,7 +303,7 @@ export function createStreamServer(o: StreamServerOptions) {
     sessionDoc.delete(sid)
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
-    if (sd?.print) sd.print.stopped = true
+    if (sd?.print) { sd.print.stopped = true; sd.print.wake?.() }
     if (sd) releaseDoc(sd.doc.docRef)
   }
   /** Keep the session (and its document charge) for a resume until the grace
@@ -548,13 +575,14 @@ export function createStreamServer(o: StreamServerOptions) {
     try { audit.recordPrint({ sid: s.sid, pages: n, fromUnit: from, toUnit: to, scale }) } catch { return refuse(ws, reqId, 'policy-refused') }
     // P3: charged now; a job that fails later stays charged.
     sd.printedPages += n
-    const job = { reqId, stopped: false }
+    const job: PrintJob = { reqId, stopped: false }
     sd.print = job
     send(ws, { reqId, type: 'print-start', pages: n, scale })
     const alive = () => !job.stopped && owns(ws, s.sid) && ws.data.phase === 'stream' && sessionDoc.get(s.sid) === sd
     try {
       await runPrint({
         job, from, to, alive,
+        ready: () => belowHighWater(ws, job, alive),
         page: async (unitIndex) => {
           // A long job can outlive the parse: every page re-charges it.
           if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
@@ -562,6 +590,8 @@ export function createStreamServer(o: StreamServerOptions) {
           if (!alive()) return undefined
           if (typeof unit === 'string') return pageCode(unit)
           if (unit.kind !== 'raster') return 'policy-refused'
+          // Fail closed: a page outside the PRINT_RASTER size contract is never marked or sent.
+          if (!printSizeOk(unit, sd.doc.units[unitIndex]!, scale)) return 'policy-refused'
           const d = await deliverRaster(alive, s.sid, sd, unitIndex, scale, unit, (u) => { const f = frame(KIND.PRINT_RASTER, reqId, encodePrintBody(unitIndex, u.w, u.h, u.png)); return f ? [f] : undefined })
           return d === undefined ? undefined : typeof d === 'string' ? pageCode(d) : d.messages
         },
@@ -579,7 +609,7 @@ export function createStreamServer(o: StreamServerOptions) {
   function onPrintCancel(ws: WS, msg: Record<string, unknown>) {
     const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
     if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid)) return
-    if (sd.print && isU32(msg.reqId) && sd.print.reqId === msg.reqId) sd.print.stopped = true
+    if (sd.print && isU32(msg.reqId) && sd.print.reqId === msg.reqId) { sd.print.stopped = true; sd.print.wake?.() }
   }
 
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
@@ -681,13 +711,16 @@ export function createStreamServer(o: StreamServerOptions) {
       const ip = srv.requestIP(req)?.address ?? 'unknown'
       const gate = ipRates.admit(ip, now())
       if (gate !== 'ok') return new Response('Too Many Requests', { status: 429 })
-      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [] }
+      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set() }
       if (srv.upgrade(req, { data })) return undefined
       ipRates.release(ip)
       return new Response('Upgrade failed', { status: 400 })
     },
     websocket: {
       maxPayloadLength: FRAGMENT,
+      backpressureLimit: SOCKET_BACKPRESSURE_LIMIT,
+      closeOnBackpressureLimit: false,
+      drain(ws: WS) { wakeDrain(ws) },
       open(ws: WS) {
         sockets.add(ws)
         later(ws, helloMs, () => { if (ws.data.phase === 'hello') close(ws, 'ready-timeout') })
@@ -706,6 +739,7 @@ export function createStreamServer(o: StreamServerOptions) {
       close(ws: WS, code: number) {
         sockets.delete(ws)
         ipRates.release(ws.data.ip)
+        wakeDrain(ws)
         for (const t of ws.data.timers) clearTimeout(t)
         const sid = ws.data.sid
         // A server-initiated close set the phase first; only a peer drop reaches here open.

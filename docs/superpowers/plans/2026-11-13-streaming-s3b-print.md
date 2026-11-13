@@ -144,7 +144,7 @@ These are the planner's calls, listed for the owner at handoff.
   - Client → server: `{ reqId: u32, type: 'print', token: string, from: int, to: int }`. `from` and `to` are 0-based inclusive unit indices with `0 ≤ from ≤ to < units.count`.
   - Client → server: `{ reqId, type: 'print-cancel' }`, naming the running job's reqId. Unknown reqIds are ignored.
   - Server → client: `{ reqId, type: 'print-start', pages: n, scale: 1 | 2 }` where `n = to - from + 1`.
-  - Server → client: `n` kind-8 messages on the same reqId, in ascending unit order. The body is `u32 LE unitIndex` followed by the existing raster body (`src/stream/raster.ts`: `u32 w, u32 h, u32 pngLen, PNG`). The raster is `ceil(unit.w*scale) × ceil(unit.h*scale)`.
+  - Server → client: `n` kind-8 messages on the same reqId, in ascending unit order. The body is `u32 LE unitIndex` followed by the existing raster body (`src/stream/raster.ts`: `u32 w, u32 h, u32 pngLen, PNG`). The raster is the renderer's `sizeCeil(raw*scale)`, which can be under `ceil(unit.w*scale)` for a fractional raw page size (the manifest rounds first). The contract (Task 3 fix round 1 amendment) is `(unit.w - 1) * scale < w ≤ unit.w * scale`, and the same for `h`, where `unit` is the manifest's size. The server fails the job `policy-refused` for a page outside it.
   - Server → client: `{ reqId, type: 'print-done', pages: n }`.
   - Failure at any point: `{ reqId, type: 'refused', code, limit?, requested? }`, and nothing further for that reqId.
   - `export const PRINT_RATE_PER_MIN = 10`, `PRINT_CONCURRENCY = 2`, `PRINT_ENCODED_CAP = 8 * 1024 * 1024`, `PRINT_JOB_MAX_DECODED = 1024 * 1024 * 1024` in `server/src/print.ts`.
@@ -152,7 +152,7 @@ These are the planner's calls, listed for the owner at handoff.
   - The session total lives on the per-sid slot as `printedPages: number`, next to `copiedParagraphs`, and is created at open, kept on resume and dropped in teardown.
 
 - [ ] **Step 1: Write failing wire tests** in `print-wire.test.ts`, using the piece-1 spin-up pattern (`AuditStore.open(':memory:')`, `start({audit, policy})`, `Client`, `hello`, `ready`) on `corpus/pypptx-test.pptx`.
-  - **Happy path:** with uncapped print, `print 0..1` gives `print-start {pages: 2, scale: 2}`, then two kind-8 bodies with unitIndex 0 then 1, each decodable by `decodeRasterBody` at `ceil(unit*2)` size, then `print-done {pages: 2}`. `store.prints(sid)` is `[{pages: 2, fromUnit: 0, toUnit: 1, scale: 2}]`, and `deliveries` has a row for each page at scale 2.
+  - **Happy path:** with uncapped print, `print 0..1` gives `print-start {pages: 2, scale: 2}`, then two kind-8 bodies with unitIndex 0 then 1, each decodable by `decodeRasterBody` at a size within `(unit - 1) * 2 < w ≤ unit * 2` (and the same for `h`), then `print-done {pages: 2}`. `store.prints(sid)` is `[{pages: 2, fromUnit: 0, toUnit: 1, scale: 2}]`, and `deliveries` has a row for each page at scale 2.
   - **Per-job cap boundary:** with `{maxPages: 2}`, `0..1` is allowed and `0..2` is refused `{code: 'print-too-large', limit: 2, requested: 3}`. Nothing was charged: a following `0..1` is still allowed. The refused job left no `prints` row.
   - **Session cap boundary:** with `{maxPages: 5, maxSessionPages: 4}`, jobs of 2 then 2 are allowed. Then `0..0` is refused `{code: 'print-quota-exhausted', limit: 4, requested: 1}`.
   - **Running total:** with `{maxPages: 5, maxSessionPages: 2}`, printing page 0 twice is allowed and a third time is refused `print-quota-exhausted`.
@@ -223,7 +223,7 @@ These are the planner's calls, listed for the owner at handoff.
     - `print-start.pages ≠ to-from+1`
     - a scale other than 1 or 2
     - a page whose unitIndex is not the next expected one (wrong index, duplicate, out of order)
-    - a page whose raster `w ≠ ceil(unit.w*scale)` or `h ≠ ceil(unit.h*scale)`
+    - a page whose raster is outside `(unit.w - 1) * scale < w ≤ unit.w * scale` or `(unit.h - 1) * scale < h ≤ unit.h * scale`
     - a page before `print-start`
     - `print-done` before all pages
     - more pages than announced
@@ -321,7 +321,7 @@ These are the planner's calls, listed for the owner at handoff.
 
 - [ ] **Step 1: Write the browser spec.**
   - Install an init script that stubs `print` on any `[data-officeview-print-frame]` iframe's window as it is added (a MutationObserver), recording calls on `window.__ovPrints`.
-  - With `?print=on` on `pypptx-test.pptx`, clicking Print leads to one recorded print, and the frame holds `img[data-page]` equal to the unit count, each `naturalWidth` = `ceil(unit.w*2)`.
+  - With `?print=on` on `pypptx-test.pptx`, clicking Print leads to one recorded print, and the frame holds `img[data-page]` equal to the unit count, each `naturalWidth` within `(unit.w - 1) * 2 < naturalWidth ≤ unit.w * 2`.
   - With `?print=cap2`, the dialog appears. From 1 To 3 shows "Too many pages to print at once (limit: 2 pages)." and nothing is printed. From 1 To 2 prints 2 images.
   - With `?print=session3`, print 2 then 2: the second shows "Print limit for this session reached (3 pages)."
   - With `?print=off`, no Print button. Ctrl/Cmd+P opens nothing.

@@ -1,11 +1,12 @@
 /** Stage 3b Task 3 — print over the wire: whole-job check, caps, quota, audit, two renders at a time, PRINT_RASTER. */
 import { afterAll, describe, expect, test } from 'bun:test'
+import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { decodeRasterBody } from '../../src/stream/raster'
 import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import type { AuthDecision } from '../src/hooks'
 import { AdmissionRefused, type Pool } from '../src/pool'
-import { planPrint, PRINT_CONCURRENCY, PRINT_JOB_MAX_DECODED, PRINT_RATE_PER_MIN } from '../src/print'
+import { planPrint, PRINT_CONCURRENCY, PRINT_JOB_MAX_DECODED, PRINT_RATE_PER_MIN, PRINT_SEND_HIGH_WATER, printSizeOk } from '../src/print'
 import { Client, corpus, disposePool, pool, start } from './harness'
 
 afterAll(() => disposePool())
@@ -22,6 +23,7 @@ function instrumented() {
   let gate: Promise<void> | undefined, open = () => {}
   let live: (sid: string) => boolean = () => true
   let fail: { unitIndex: number; error: Error } | undefined
+  let shrink = 0
   const render: Pool['render'] = async (sid, job, est) => {
     let e = by.get(sid); if (!e) by.set(sid, e = { calls: 0, inFlight: 0, max: 0, afterTeardown: 0 })
     e.calls++; if (!live(sid)) e.afterTeardown++
@@ -29,7 +31,12 @@ function instrumented() {
     try {
       if (gate) await gate
       if (fail && job.unitIndex === fail.unitIndex) throw fail.error
-      return await real.render(sid, job, est)
+      const out = await real.render(sid, job, est)
+      if (!shrink || out.kind !== 'raster' || job.scale !== 2) return out
+      // As if the raw page were fractional: the renderer's ceil(raw × 2) is under 2 × the manifest size.
+      const img = await loadImage(Buffer.from(out.png)), w = out.w - shrink, h = out.h - shrink
+      const cv = createCanvas(w, h); cv.getContext('2d').drawImage(img, 0, 0)
+      return { ...out, w, h, png: new Uint8Array(cv.toBuffer('image/png')) }
     } finally { e.inFlight-- }
   }
   const proxy = new Proxy(real, { get(t, k) { if (k === 'render') return render; const v = Reflect.get(t, k); return typeof v === 'function' ? v.bind(t) : v } })
@@ -38,6 +45,8 @@ function instrumented() {
     hold() { gate = new Promise<void>((r) => { open = r }) }, release() { const o = open; gate = undefined; o() },
     liveWhen(f: (sid: string) => boolean) { live = f },
     failOn(unitIndex: number, error: Error) { fail = { unitIndex, error } },
+    /** Scale-2 rasters come back `px` smaller on each side. */
+    shrinkBy(px: number) { shrink = px },
     /** Waits until no render of `sid` is in flight. */
     async settled(sid: string) { while ((by.get(sid)?.inFlight ?? 0) > 0) await Bun.sleep(10) },
   }
@@ -74,6 +83,33 @@ describe('planPrint', () => {
     expect(planPrint(pages(300, 1000, 1000), 0, 299)).toEqual({ refused: 'too-large' })
   })
 })
+
+describe('printSizeOk', () => {
+  test('the renderer size bound: (unit - 1) × scale < w ≤ unit × scale, both sides', () => {
+    const u = { w: 961, h: 721 }
+    expect(printSizeOk({ w: 1921, h: 1441 }, u, 2)).toBe(true)
+    expect(printSizeOk({ w: 1922, h: 1442 }, u, 2)).toBe(true)
+    expect(printSizeOk({ w: 1920, h: 1442 }, u, 2)).toBe(false)
+    expect(printSizeOk({ w: 1923, h: 1442 }, u, 2)).toBe(false)
+    expect(printSizeOk({ w: 1922, h: 1440 }, u, 2)).toBe(false)
+    expect(printSizeOk({ w: 961, h: 721 }, u, 1)).toBe(true)
+    expect(printSizeOk({ w: 960, h: 721 }, u, 1)).toBe(false)
+  })
+})
+
+/** A TEST-ONLY transport: real sends unless told to drop; a fake buffered amount. */
+function transport() {
+  const t = {
+    buffered: 0, sock: undefined as unknown, dropKind8After: Infinity, kind8Sent: 0, kind8Attempts: 0,
+    sendBinary(ws: { sendBinary(f: Uint8Array): number }, f: Uint8Array) {
+      t.sock = ws
+      if (f[5] === 8) { t.kind8Attempts++; if (t.kind8Sent >= t.dropKind8After) return 0; t.kind8Sent++ }
+      return ws.sendBinary(f)
+    },
+    bufferedAmount(ws: unknown) { t.sock = ws; return t.buffered },
+  }
+  return t
+}
 
 describe('print over the wire', () => {
   test('happy path: print-start, ascending kind-8 pages at scale 2, print-done; audited and delivered', async () => {
@@ -240,6 +276,73 @@ describe('print over the wire', () => {
     expect(r.end).toEqual({ reqId: 10, type: 'print-done', pages: 2 })
     expect(store.prints(sid)).toEqual([{ sid, pages: 2, fromUnit: 2, toUnit: 3, scale: 1, at: expect.any(Number) }])
     expect(store.deliveries(sid).map((d) => [d.unitIndex, d.scale]).sort()).toEqual([[2, 1], [3, 1]])
+    stop()
+  }, 60_000)
+
+  test('fractional page size: a page inside (unit − 1) × scale < w ≤ unit × scale is sent; one outside fails the job', async () => {
+    // No corpus or builder doc yields a fractional raw size (pptx, docx and xlsx layouts round),
+    // so the pool returns the 1 px smaller raster ceil(raw × 2) gives for raw = unit − 0.5.
+    const ins = instrumented()
+    const { c, m, store, sid, stop } = await session({ pool: ins.pool })
+    ins.shrinkBy(1)
+    const u = m.units.list[0]!
+    const r = await c.print(10, 0, 0)
+    expect(r.end).toEqual({ reqId: 10, type: 'print-done', pages: 1 })
+    const d = decodeRasterBody(r.pages[0]!.subarray(4))
+    expect([d.w, d.h]).toEqual([u.w * 2 - 1, u.h * 2 - 1])
+    expect(d.w).not.toBe(Math.ceil(u.w * 2))
+    expect((u.w - 1) * 2 < d.w && d.w <= u.w * 2 && (u.h - 1) * 2 < d.h && d.h <= u.h * 2).toBe(true)
+    // 2 px under is outside the contract: the job fails closed before marking or sending that page.
+    ins.shrinkBy(2)
+    const bad = await c.print(11, 1, 1)
+    expect(bad.pages).toEqual([])
+    expect(bad.end).toEqual(refused(11, 'policy-refused'))
+    expect(store.deliveries(sid).filter((x) => x.unitIndex === 1)).toEqual([])
+    stop()
+  }, 60_000)
+
+  test('backpressure: no page goes out above the high-water mark; drain resumes the job', async () => {
+    const t = transport()
+    const { h, c, stop } = await session({ transport: t as never })
+    t.buffered = PRINT_SEND_HIGH_WATER + 1
+    const job = c.print(10, 0, 2)
+    await Bun.sleep(600)
+    expect(t.kind8Attempts).toBe(0)
+    // Below the mark again, but only a drain (not a timer) wakes the job.
+    t.buffered = 0
+    await Bun.sleep(300)
+    expect(t.kind8Attempts).toBe(0)
+    ;(h.stream.websocket as { drain(ws: unknown): void }).drain(t.sock)
+    const r = await job
+    expect(r.start).toEqual({ reqId: 10, type: 'print-start', pages: 3, scale: 2 })
+    expect(r.pages.map(bodyIndex)).toEqual([0, 1, 2])
+    expect(r.end).toEqual({ reqId: 10, type: 'print-done', pages: 3 })
+    // Cancel breaks a drain wait: the job ends without print-done and frees the sid.
+    t.buffered = PRINT_SEND_HIGH_WATER + 1
+    c.send({ reqId: 11, type: 'print', token: c.manifest!.session.token, from: 0, to: 0 })
+    expect(((await c.next((x) => 'text' in x && x.text.reqId === 11)) as { text: object }).text).toMatchObject({ type: 'print-start' })
+    c.send({ reqId: 11, type: 'print-cancel' })
+    await Bun.sleep(200)
+    t.buffered = 0
+    expect((await c.print(12, 1, 1)).end).toEqual({ reqId: 12, type: 'print-done', pages: 1 })
+    expect(c.msgs.filter((x) => ('text' in x && x.text.reqId === 11) || ('binary' in x && x.binary.reqId === 11))).toEqual([])
+    stop()
+  }, 60_000)
+
+  test('a dropped send fails the job: one refused, no print-done, nothing more rendered or sent', async () => {
+    const t = transport(), ins = instrumented()
+    const { c, store, sid, stop } = await session({ transport: t as never, pool: ins.pool })
+    t.dropKind8After = 1
+    const r = await c.print(10, 0, 5)
+    expect(r.start).toEqual({ reqId: 10, type: 'print-start', pages: 6, scale: 2 })
+    expect(r.pages.map(bodyIndex)).toEqual([0])
+    expect(r.end).toEqual(refused(10, 'policy-refused'))
+    await ins.settled(sid); await Bun.sleep(200)
+    expect(c.msgs.filter((x) => ('text' in x && x.text.reqId === 10) || ('binary' in x && x.binary.reqId === 10))).toEqual([])
+    // The dropped fragment was the last kind-8 send tried; at most the two in-flight pages were rendered beyond it.
+    expect(t.kind8Attempts).toBe(2)
+    expect(ins.of(sid).calls).toBeLessThanOrEqual(2 + PRINT_CONCURRENCY)
+    expect(store.prints(sid).length).toBe(1)
     stop()
   }, 60_000)
 
