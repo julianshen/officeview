@@ -140,7 +140,7 @@ export type CfBarHost = Rect & { readonly fill?: string }
  * right edges; Task 22b, Ruling S3-GRAD-BORDER), clamped to its end colours outside that span. */
 export type CfBarRect = Readonly<{ x: number; y: number; w: number; h: number; argb: number; gradientEnd?: number; gradientFrom?: number; gradientTo?: number }>
 /** What one bar paints, in paint order: the fill, its border frame, the axis column in the gap colour, then the axis
- * dashes over it. Empty when the host is too small. */
+ * dashes over it. Empty when the host rounds away at a non-capture scale (too small at the capture scale: withheld). */
 export type CfBarPrimitives = Readonly<{ fill?: CfBarRect; border?: readonly CfBarRect[]; axis?: CfBarRect; axisDashes?: readonly CfBarRect[] }>
 export type CfBarScale = Readonly<{ zoom: number; dpr: number; output?: 'logical' | 'device' }>
 
@@ -191,7 +191,9 @@ export function layoutDataBar(
   const L = X0 + dev(model.insetsPt.left), R = X1 - dev(model.insetsPt.right)
   const T = Y0 + dev(model.insetsPt.top), B = Y1 - dev(model.insetsPt.bottom)
   const S = R - L
-  if (!(S > 0) || !(B > T) || !(X1 > X0)) return {}
+  // A host too small to lay a bar out at the capture scale is unmeasured: withheld (so it is neither announced nor
+  // hides its text, Ruling S3-O). At another scale, a host that rounds away simply paints nothing there.
+  if (!(S > 0) || !(B > T) || !(X1 > X0)) return atCapture ? undefined : {}
   // A non-zero share that rounds to no pixel is the unmeasured minimum-visible-width branch.
   const lengthOf = (share: number, span: number): number | undefined => {
     const n = roundHalfUp(share * span)

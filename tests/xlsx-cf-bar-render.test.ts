@@ -20,7 +20,7 @@ import { prepareCfWireScope } from '../src/xlsx/cf/text'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_BAR_PAINT_CAPABILITIES, CF_BAR_RENDER_MODEL, barGradientEndArgb, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
+import { CF_BAR_PAINT_CAPABILITIES, CF_BAR_RENDER_MODEL, barGradientEndArgb, barHidesText, barWithheld, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
 import { injectCfBarGradient, injectCfBarGradientBorder } from '../src/xlsx/cf/evidence'
 import { predictBarGradientBorderPixel } from '../scripts/cf-refs/verify'
 import { getPaintables } from '../src/render/paint'
@@ -132,6 +132,21 @@ describe('CF_BAR_RENDER_MODEL equals the measured sidecars', () => {
     // Minimum visible width: a non-zero share that rounds to no pixel is the unmeasured branch; zero is no bar.
     expect(layoutDataBar(bar({ endFraction: 0.001 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
     expect(layoutDataBar(bar({ endFraction: 0 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toEqual({})
+  })
+  it('a host too small to lay a bar out at the capture scale withholds it: no announcement, no hidden text (Task 23, S3-O)', () => {
+    // 3 pt wide: the 2 pt left and 1 pt right insets leave no span. 4 pt tall: the 2 + 2 pt vertical insets leave none.
+    for (const host of [ptCell(84, 30, 3, 30), ptCell(84, 30, 180, 4), ptCell(84, 30, 0, 30)]) {
+      expect(layoutDataBar(bar(), host, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      expect(barWithheld(bar(), host, ALL)).toBe(true)
+      // Not even a zero-length bar hides its value in a host it cannot lay out in.
+      expect(barHidesText(bar({ endFraction: 0, showValue: false }), host, AT_CAPTURE, ALL)).toBe(false)
+    }
+    // A host that lays out at the capture scale but rounds away at a small zoom simply paints nothing there.
+    // 5 pt tall: 1 px of bar at the capture scale; at a quarter zoom the 2 + 2 pt insets (1 device px each) eat it.
+    const cell = ptCell(84, 30, 180, 5)
+    expect(layoutDataBar(bar(), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.fill).toBeDefined()
+    expect(layoutDataBar(bar(), cell, { zoom: 0.25, dpr: 1, output: 'device' }, CF_BAR_RENDER_MODEL, ALL)).toEqual({})
+    expect(barWithheld(bar(), cell, ALL)).toBe(false)
   })
 
 })
