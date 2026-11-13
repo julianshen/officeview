@@ -329,6 +329,11 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   let notesImage: HTMLCanvasElement | undefined
   /** The notes image's bytes and its Presenter View copy's (the pane canvas), held while the notes are shown. */
   let notesLease: Lease | undefined
+  /**
+   * The one pane canvas holding a copy of the notes image (Presenter View shows one pane at a time). Its bytes are
+   * half of `notesLease`; it is destroyed (zeroed) before they are refunded, and when a new pane takes the copy.
+   */
+  let notesPane: HTMLCanvasElement | undefined
   let notesAbort: AbortController | undefined
   let notesWait: (() => void) | undefined
   /** One per followed slide: a retry queued for an earlier visit never runs. */
@@ -339,7 +344,9 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       kind: 'image',
       state,
       paint(c) {
-        if (!image || !(image.width > 0)) return
+        if (exited || !image || !(image.width > 0) || image !== notesImage) return
+        if (notesPane && notesPane !== c) zero(notesPane)
+        notesPane = c
         c.width = image.width; c.height = image.height
         const ctx = c.getContext('2d')
         ctx?.drawImage(image, 0, 0)
@@ -354,6 +361,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     notesAbort?.abort(); notesAbort = undefined
     if (notesImage) zero(notesImage)
     notesImage = undefined
+    if (notesPane) zero(notesPane)
+    notesPane = undefined
     notesLease?.release()
     notesLease = undefined
     notesUnit = undefined

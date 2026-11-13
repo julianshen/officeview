@@ -599,3 +599,58 @@ describe('remote show: presenter refresh', () => {
     expect(stop).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('remote show: the notes pane copy is owned with its bytes', () => {
+  const NOTES = 720 * 100 * 4
+  const paneOf = (host: HTMLElement) => host.querySelector<HTMLCanvasElement>('[data-officeview-presenter-notes] canvas')!
+  async function withNotes(count = 3) {
+    const ws = workspaceOf(512 * 1024 * 1024)
+    const fd = fakeDoc({ count, notes: true })
+    const r = await show(fd, { popup: null })
+    await fd.paints[0]!.ok()
+    await clock.advance(1_000)
+    await fd.notes[0]!.ok()
+    const pane = paneOf(r.host)
+    expect([pane.width, pane.height]).toEqual([720, 100])
+    return { ws, fd, pane, ...r }
+  }
+
+  it('permission withdrawal destroys the pane copy as its bytes are refunded', async () => {
+    const { ws, fd, pane, s } = await withNotes()
+    const before = ws.used()
+    fd.setManifest({ notes: false })
+    expect(before - ws.used()).toBe(2 * NOTES)
+    expect([pane.width, pane.height]).toEqual([0, 0])
+    s.exit()
+  })
+
+  it('a slide change destroys the pane copy', async () => {
+    const { pane, s } = await withNotes()
+    s.next()
+    expect([pane.width, pane.height]).toEqual([0, 0])
+    s.exit()
+  })
+
+  it('closing and reopening Presenter View keeps one accounted pane copy', async () => {
+    const { ws, pane, s, host } = await withNotes()
+    const used = ws.used()
+    const altF5 = () => host.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', altKey: true, bubbles: true, cancelable: true }))
+    altF5(); altF5()
+    await flush()
+    const again = paneOf(host)
+    expect(again).not.toBe(pane)
+    expect([again.width, again.height]).toEqual([720, 100])
+    expect([pane.width, pane.height]).toEqual([0, 0])
+    // Presenter View's own surfaces come back to the same size: only the notes copies are compared.
+    expect(ws.used()).toBe(used)
+    s.exit()
+  })
+
+  it('exit destroys the pane copy before refunding it', async () => {
+    const { ws, pane, s } = await withNotes()
+    s.exit()
+    await s.ended
+    expect(ws.used()).toBe(0)
+    expect([pane.width, pane.height]).toEqual([0, 0])
+  })
+})
