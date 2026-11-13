@@ -20,6 +20,7 @@ import {
   CF_STAGE2_CAPABILITIES,
   CF_STAGE2_CASES,
   CF_STAGE3_CAPABILITIES,
+  CF_STAGE3_UNSUPPORTED,
   CF_STAGE3_CASES,
   CF_STAGE3_NONDISCRIMINATING,
   barCapabilityKind,
@@ -3768,7 +3769,7 @@ describe('CF oracle verifier', () => {
     expect(report.summary.cases).toBe(13)
     expect(report.summary.capabilities).toBe(CF_STAGE3_CAPABILITIES.length)
     expect(report.blockedCapabilities.length).toBeGreaterThan(0)
-    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-'))).toBe(true)
+    expect(report.perCapability.filter(p => p.disposition === 'refused-unsupported').every(p => p.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[p.capabilityId] !== undefined)).toBe(true)
   }, 30_000) // about ten whole-stage audits: 6–8.5 s under load, over the 5 s default
   it('stage3ObservedBars reads the recorded px and ignores malformed entries', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-observed-'))

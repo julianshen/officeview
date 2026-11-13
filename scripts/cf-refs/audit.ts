@@ -45,6 +45,7 @@ import {
   CF_STAGE3_CAPABILITIES,
   CF_STAGE3_CASES,
   CF_STAGE3_NONDISCRIMINATING,
+  CF_STAGE3_UNSUPPORTED,
   type CfManifest,
   type CfOracleCase,
   type CfOracleStatus,
@@ -395,6 +396,18 @@ export function renderAutoBarColoursBlock(colours: Readonly<Record<string, strin
 }
 
 /**
+ * Registry entries the audit cannot honour: an unsupported (Ruling S3-CLOSE) id that is not a Stage 3 capability, has
+ * no reason, or is also registered non-discriminating (one capability has one disposition). Any of them fails `ok`.
+ */
+export function unknownStage3Registrations(
+  unsupported: Readonly<Record<string, string>> = CF_STAGE3_UNSUPPORTED,
+  nonDiscriminating: Readonly<Record<string, string>> = CF_STAGE3_NONDISCRIMINATING,
+): string[] {
+  const ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
+  return Object.keys(unsupported).filter(id => !ids.has(id) || !unsupported[id]!.trim() || nonDiscriminating[id] !== undefined).sort()
+}
+
+/**
  * Stage 3 (data bars). Unlike Stages 1/2 a measured case can verify only some of its capabilities, so each capability's
  * disposition comes from `verifyCfCase`'s per-capability result and the cross-case gates (pixel calibration, precondition
  * probe), never from the case-level status: a case that verifies still reports every capability it did not
@@ -414,7 +427,8 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
     const owning = perCase.find(p => p.id === entry.caseId)
     let disposition: Stage3CapabilityAudit['disposition'] = 'unaccounted'
     if (owning?.structuralValid) {
-      if (owning.status === 'unsupported') disposition = 'refused-unsupported'
+      // Ruling S3-CLOSE: a registered capability of a measured case is unsupported in Stage 3, whatever its capture shows.
+      if (owning.status === 'unsupported' || CF_STAGE3_UNSUPPORTED[entry.capabilityId] !== undefined) disposition = 'refused-unsupported'
       else {
         disposition = 'supported-structural'
         const res = evidence.get(entry.caseId)
@@ -446,7 +460,10 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
   const matchedByCase = [...evidence.values()].flatMap(r => r.kind === 'verified' && r.matchedHypotheses ? [r.matchedHypotheses] : [])
   const barLayout = deriveBarLayout(perCapability, matchedByCase)
   const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
-  const unknownNonDiscriminating = Object.keys(CF_STAGE3_NONDISCRIMINATING).filter(id => !stage3Ids.has(id) || !CF_STAGE3_NONDISCRIMINATING[id]!.trim())
+  const unknownNonDiscriminating = [
+    ...Object.keys(CF_STAGE3_NONDISCRIMINATING).filter(id => !stage3Ids.has(id) || !CF_STAGE3_NONDISCRIMINATING[id]!.trim()),
+    ...unknownStage3Registrations(),
+  ]
   const caseOk = (p: Stage3CaseAudit): boolean => {
     if (p.status === 'measured') return p.structuralValid && p.code === undefined
     return p.structuralValid

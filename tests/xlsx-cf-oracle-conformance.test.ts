@@ -730,7 +730,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const PAINTED_UNDESIGNATED: Record<string, string> = {
       'stage3-bar-settings-probe:B': 'the probe bar (middle axis, right-to-left, border) designates settings capabilities only; every capability it needs is verified',
       'stage3-bar-pairing:C': 'the base-only bar designates settings capabilities only; every capability it needs is verified',
-      'stage3-bar-composition:H': 'the bar ahead of a DXF fill designates bar:composition-bar-stopIfTrue (blocked); Excel dropped the flag on resave, so the saved bar needs only verified capabilities',
+      'stage3-bar-composition:H': 'the bar ahead of a DXF fill designates bar:composition-bar-stopIfTrue (unsupported in Stage 3, S3-CLOSE); Excel dropped the flag on resave, so the saved bar needs only verified capabilities',
       'stage3-bar-axis-negative:H': 'positive cells of the negative-border-same-as-positive bar: that non-discriminating capability applies to negative cells only, which stay withheld',
     }
     for (const f of Object.values(BAR_FINDINGS)) expect(f.outcome).toBe('withheld')

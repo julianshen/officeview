@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { inflateRawSync, inflateSync } from 'node:zlib'
 import { parseXml } from '../../src/core/xml'
 import { columnWidthPx, maxDigitWidthPx } from '../../src/xlsx/columnWidth'
-import { CF_STAGE3_NONDISCRIMINATING, barCapabilityKind } from './cases'
+import { CF_STAGE3_NONDISCRIMINATING, CF_STAGE3_UNSUPPORTED, barCapabilityKind } from './cases'
 import type {
   CfDxfExpectation,
   CfManifest,
@@ -4531,6 +4531,8 @@ export function isCapabilityVerified(
 
   // Stage 3: a registry-flagged non-discriminating capability is never verified, whatever a capture shows (Lesson 3).
   if (CF_STAGE3_NONDISCRIMINATING[capabilityId] !== undefined) return false
+  // Ruling S3-CLOSE: a capability recorded unsupported in Stage 3 is never verified either.
+  if (CF_STAGE3_UNSUPPORTED[capabilityId] !== undefined) return false
   // Settings capabilities need the precondition probe; geometry capabilities need pixel calibration (Ruling S3-A).
   if (capabilityId.startsWith('bar:')) {
     const kind = barCapabilityKind(capabilityId)

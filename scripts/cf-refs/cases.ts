@@ -4521,10 +4521,10 @@ const S3_RULINGS: Record<string, string> = {
   'bar:composition-with-scale': 'S3-I (a bar paints over a colour scale only with this capability)',
   'bar:composition-overlapping-bars': 'S3-I (two matching bars on one cell withhold both and taint dataBar)',
   'bar:composition-matching-stopIfTrue-ahead': 'S3-I (a matching DXF stopIfTrue ahead halts the bar)',
-  'bar:composition-bar-stopIfTrue': 'S3-J (a bar carrying stopIfTrue="1" is unresolved and taints later rules)',
-  'bar:composition-unresolved-stub': 'S3-I (an unresolved expression stub at priority 1)',
+  'bar:composition-bar-stopIfTrue': 'S3-J (a bar carrying stopIfTrue="1" is unresolved and taints later rules); unsupported in Stage 3 per S3-CLOSE (CF_STAGE3_UNSUPPORTED)',
+  'bar:composition-unresolved-stub': 'S3-I (an unresolved expression stub at priority 1); unsupported in Stage 3 per S3-CLOSE (CF_STAGE3_UNSUPPORTED): needs Stage 5 expressions',
   'bar:pairing-paired': 'S3-Q (paired x14 form)',
-  'bar:pairing-standalone': 'S3-Q (standalone x14 form)',
+  'bar:pairing-standalone': 'S3-Q (standalone x14 form); unsupported in Stage 3 per S3-CLOSE (CF_STAGE3_UNSUPPORTED): Excel resaves it paired',
   'bar:pairing-base-only': 'S3-Q (base-only form)',
   'bar:settings-paired-precedence': 'S3-Q (a paired companion takes precedence over the base rule)',
   'bar:unresolved-orphan-x14': 'Always unsupported per S3-Q (an orphan x14 keeps cf-invalid-x14-link)',
@@ -4567,6 +4567,22 @@ export const CF_STAGE3_NONDISCRIMINATING: Readonly<Record<string, string>> = {
     'With negativeBarBorderColorSameAsPositive="1" Excel\'s canonical form carries no <x14:negativeBorderColor> (an extra one shifts into the axis colour, finding S3-18B-A), so the alternative "a distinct negative border" has no colour to predict and both answers predict the same pixels (largest separation 0 px; fix round 1 recomputation). Re-measure only once Excel\'s default negative border colour is known.',
   'bar:showvalue-copy-text':
     'Copy text is a clipboard observation, not a pixel one, and the object-model readback is retired (OD-7 as amended): no capture can discriminate it. It needs a recorded clipboard observation as its own evidence kind.',
+}
+
+/**
+ * Stage 3 capabilities of MEASURED cases recorded as unsupported in Stage 3 (owner ruling S3-CLOSE, 2026-11-13). The
+ * audit reports them `refused-unsupported` whatever their capture shows, `isCapabilityVerified` never lifts them, and
+ * production keeps withholding (or tainting) exactly as before: no gate in `src/` changes. Like the `bar:unresolved-*`
+ * shapes of `stage3-bar-unresolved-shapes`, they lift nothing; unlike them, their owning case stays measured because
+ * its other capabilities are evidenced by the same capture.
+ */
+export const CF_STAGE3_UNSUPPORTED: Readonly<Record<string, string>> = {
+  'bar:composition-bar-stopIfTrue':
+    'Unsupported in Stage 3 per S3-CLOSE: Excel\'s resave drops stopIfTrue from a data bar rule, so no capture of the saved workbook can show what the flag does; Ruling S3-J keeps such a rule unresolved (it taints every later rule on its cells).',
+  'bar:composition-unresolved-stub':
+    'Unsupported in Stage 3 per S3-CLOSE: the stub ahead of the bar is an expression rule, which needs Stage 5 expressions to evaluate; until then it stays unresolved and withholds the bar after it.',
+  'bar:pairing-standalone':
+    'Unsupported in Stage 3 per S3-CLOSE: Excel 16.114 always resaves a standalone x14 bar in its canonical paired form (stage3-bar-pairing.rejected.xlsx), so no capture of a saved workbook can show the standalone shape; it stays withheld (cf-unsupported-rule).',
 }
 
 /** Complete capability-to-evidence registry for all Stage 3 markers (one entry per distinct capability id). */
