@@ -8,7 +8,8 @@
  * (close 4007), only frames for an issued, still-awaited request are admitted,
  * and unit requests are admitted against the 8-outstanding / 96 MiB caps.
  * Text requests (Stage 3a search/select/copy/a11y, `text()`) keep their own
- * pending map; their answers are checked by `text-wire.ts`.
+ * pending map; their answers are checked by `text-wire.ts`. One print job
+ * (Stage 3b, `print()`) runs at a time; its pages are checked by `print-wire.ts`.
  */
 import { decodeAssets } from '../asset-wire'
 import { FRAGMENT_CAP, Kind, Reassembler, type FrameResult } from '../frame'
@@ -18,10 +19,12 @@ import { decodeRasterBody, UNIT_RASTER_DECODED_CAP } from '../raster'
 import type { StreamSource } from '../source'
 import { decodeUnit } from '../unit'
 import { closeName, StreamSessionError } from './errors'
-import { Admission, ASSET_ALLOWANCE, unitCost } from './reservation'
+import { PRINT_JOB_MAX_BLOB_BYTES, PRINT_JOB_MAX_DECODED, PRINT_REFUSALS, printDecodedBound, printPage, printStart, type PrintedPage, type PrintRefusalCode } from './print-wire'
+import { Admission, ASSET_ALLOWANCE, SESSION_TRANSIENT_BYTES, unitCost } from './reservation'
 import { admit, emptyTally, isTerminal, requestBody, TEXT_ANSWER_TYPES, TEXT_MESSAGE_BYTES, TEXT_REFUSALS, textMessage, utf8Bytes, type TextMessage, type TextRefusalCode, type TextRequest, type TextTally } from './text-wire'
 
 export type { RemoteRange, TextMessage, TextRequest } from './text-wire'
+export type { PrintedPage } from './print-wire'
 
 export type StreamClient = Pick<WebSocket, 'send' | 'close' | 'readyState' | 'addEventListener' | 'removeEventListener'> & { binaryType: BinaryType }
 export type StreamClientFactory = (source: StreamSource) => StreamClient
@@ -42,14 +45,40 @@ export interface SessionOptions {
   signal?: AbortSignal
   onNotice?: (n: StreamNotice) => void
   onState?: (s: SessionState, error?: StreamSessionError) => void
+  /** Tightens a print job's held-blob ceiling (tests); it never rises past PRINT_JOB_MAX_BLOB_BYTES. */
+  printMaxBlobBytes?: number
 }
+export interface PrintOptions { signal?: AbortSignal; onProgress?(done: number, total: number): void }
 
 /** READY must reach the server inside its 2 s window; hashing gets 1.5 s of it. */
 export const READY_FACE_BUDGET_MS = 1500
 const RESUME_BACKOFF_MS = [250, 500, 1000]
+/** PRINT_RASTER encoded cap (§14; twin of the server's PRINT_ENCODED_CAP). */
+const PRINT_ENCODED_CAP = 8 << 20
 const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.MANIFEST]: [256 << 10, 256 << 10], [Kind.ASSET_DEFINE]: [1 << 20, 8 << 20],
   [Kind.UNIT_RASTER]: [8 << 20, 64 << 20], [Kind.UNIT_COMMANDS]: [8 << 20, 8 << 20],
+  [Kind.PRINT_RASTER]: [PRINT_ENCODED_CAP, 64 << 20],
+}
+/**
+ * A print job's peak transient bytes for one page are its encoded fragments
+ * (`Reassembler.push`, src/stream/frame.ts:124, ≤ PRINT_ENCODED_CAP) plus the
+ * inflated chunks (frame.ts:161) plus their contiguous copy (frame.ts:164-165):
+ * encoded + 2 × decoded. The job's grant is that peak, so the decoded page
+ * body is clamped to keep the grant inside the session's aggregate admission.
+ * A page whose body is larger (a PNG over ~44 MiB) cannot print on the stream path.
+ */
+export const PRINT_PAGE_BODY_MAX = Math.floor((SESSION_TRANSIENT_BYTES - PRINT_ENCODED_CAP) / 2)
+/** The admission grant of a job whose page bodies may decode to `pageCap` bytes (see PRINT_PAGE_BODY_MAX). */
+export const printGrant = (pageCap: number) => PRINT_ENCODED_CAP + 2 * pageCap
+/** The decoded bytes one page message of `from..to` may inflate to: the u32
+ * unit index and 12-byte raster header plus the PNG, bounded as a unit raster
+ * is (`unitCost` of the range's largest unit at scale 2), never over 64 MiB
+ * nor PRINT_PAGE_BODY_MAX. */
+export function printPageCap(units: ReadonlyArray<{ w: number; h: number }>, from: number, to: number): number {
+  let worst = 0
+  for (let i = from; i <= to; i++) worst = Math.max(worst, unitCost(units[i]!.w, units[i]!.h, 2, false))
+  return Math.min(UNIT_RASTER_DECODED_CAP, PRINT_PAGE_BODY_MAX, 16 + worst)
 }
 const UNIT_KINDS = new Set<Kind>([Kind.ASSET_DEFINE, Kind.UNIT_RASTER, Kind.UNIT_COMMANDS])
 const defaultClient: StreamClientFactory = (s) => new WebSocket(s.url)
@@ -76,6 +105,26 @@ interface TextReq {
   tally: TextTally
   rotatedRetry: boolean
 }
+interface PrintJob {
+  from: number; n: number; reqId: number
+  /** The decoded cap of one page message (u32 index + raster body), and the
+   * admission grant the job holds for its life (one page's encoded + decoded bytes). */
+  pageCap: number; grant: number
+  /** Holds its admission grant (it is sent only once it does). */
+  granted: boolean
+  /** Sent on the current socket (false while it waits out a resume). */
+  sent: boolean
+  /** The checked `print-start` scale, once it has arrived. */
+  scale?: 1 | 2
+  /** Checked pages so far (PNG blobs only), their PNG bytes, and their decoded bytes (Σ w·h·4). */
+  pages: PrintedPage[]; bytes: number; decoded: number
+  rotatedRetry: boolean
+  onProgress?: (done: number, total: number) => void
+  resolve: () => void
+  /** Settles once; `cancel`: a client-side failure, so the server is told to stop. */
+  fail: (e: unknown, cancel: boolean) => void
+}
+
 /** Re-issued after a resume; copy and a11y are not (the server may already
  * have counted them against the copy quota). */
 const REISSUED = new Set<TextRequest['type']>(['search', 'select'])
@@ -104,6 +153,7 @@ export class StreamSession {
   private helloReqId = 0
   private readonly units = new Map<number, UnitReq>()
   private readonly texts = new Map<number, TextReq>()
+  private printJob?: PrintJob
   private readonly admission = new Admission()
   private missingFaces: string[] = []
   private state: SessionState | 'opening' = 'opening'
@@ -141,7 +191,14 @@ export class StreamSession {
     return s
   }
 
-  stats() { return { inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size } }
+  stats() {
+    return {
+      inFlight: this.admission.inFlight, inFlightBytes: this.admission.inFlightBytes, pending: this.units.size,
+      printing: !!this.printJob, printHeld: this.printJob?.pages.length ?? 0, printMaxBlobBytes: this.printMaxBlobBytes(),
+      /** Encoded bytes held in partial reassembly. */
+      reassemblyBytes: this.reasm.bufferedBytes,
+    }
+  }
 
   /** Request one unit at a scale bucket. Settles once: payload, typed error, or abort. */
   async unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitLease> {
@@ -203,6 +260,71 @@ export class StreamSession {
     })
   }
 
+  /**
+   * One print job over units `from..to` (0-based, inclusive; §4.2). Resolves
+   * with every page in unit order once `print-done` closes a job whose pages
+   * all matched it; `onProgress(done, total)` follows each accepted page.
+   * Anything that does not match the job exactly — a page for another unit,
+   * a duplicate, out of order, outside the size contract, too many, early or
+   * wrong `print-done` — fails it `policy-refused`, and nothing is kept. Over
+   * PRINT_JOB_MAX_BLOB_BYTES of PNG, or a `print-start` whose scale puts the
+   * job's decoded images (Σ w·h·4 from the manifest sizes) over
+   * PRINT_JOB_MAX_DECODED, it fails `print-too-large` with no `limit`.
+   * A refusal rejects with its code (`limit`/`requested` when stated); abort
+   * rejects with the abort reason; a drop mid-job rejects `session-rotated`
+   * (the server stopped it; it is never re-issued); a session end rejects with
+   * the session failure. Every client-side failure sends `print-cancel`. One
+   * job runs at a time: another call rejects `rate-limited` without sending.
+   */
+  async print(from: number, to: number, opts: PrintOptions = {}): Promise<PrintedPage[]> {
+    if (this.state === 'closed') throw this.failure ?? new StreamSessionError('closed')
+    const signal = opts.signal
+    if (signal?.aborted) throw signal.reason ?? abortError()
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from > to || to >= this.manifest.units.count) throw new StreamSessionError('policy-refused', `no print range ${from}..${to}`)
+    if (!this.manifest.can.print) throw new StreamSessionError('policy-refused', 'print is off for this session')
+    if (this.printJob) throw new StreamSessionError('rate-limited', 'a print job is already running')
+    const pageCap = printPageCap(this.manifest.units.list, from, to)
+    return new Promise<PrintedPage[]>((resolve, reject) => {
+      // The one settlement path: idempotent, frees the slot, the held pages, the
+      // abort listener, the job's partial reassembly and (once) its admission grant.
+      let settled = false, release: (() => void) | undefined
+      const queued = new AbortController()
+      const settle = (done: (pages: PrintedPage[]) => void) => {
+        if (settled) return
+        settled = true
+        if (this.printJob === job) this.printJob = undefined
+        signal?.removeEventListener('abort', onAbort)
+        queued.abort()
+        if (job.reqId) this.reasm.drop(job.reqId)
+        // After any message for it that is still being processed (the inbox is serial).
+        if (release) { const r = release; release = undefined; void this.inbox.then(r) }
+        const pages = job.pages
+        job.pages = []; job.bytes = 0; job.decoded = 0
+        done(pages)
+      }
+      const onAbort = () => job.fail(signal!.reason ?? abortError(), true)
+      const job: PrintJob = {
+        from, n: to - from + 1, reqId: 0, pageCap, grant: printGrant(pageCap), granted: false,
+        sent: false, pages: [], bytes: 0, decoded: 0, rotatedRetry: false,
+        ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+        resolve: () => settle(resolve),
+        fail: (e, cancel) => settle(() => {
+          // Best effort: the rejection runs whatever the transport does.
+          try { if (cancel && job.sent && this.sock?.readyState === 1) this.send({ reqId: job.reqId, type: 'print-cancel' }) } catch { /* the socket is failing */ } finally { reject(e) }
+        }),
+      }
+      // The slot is claimed at once (one job at a time), before admission.
+      this.printJob = job
+      signal?.addEventListener('abort', onAbort, { once: true })
+      // §14: the job's receive/inflate workspace comes out of the session's aggregate, queued behind units.
+      this.admission.acquire(job.grant, queued.signal).then((r) => {
+        if (settled) return r()
+        release = r; job.granted = true
+        this.issuePrint(job)
+      }, (e) => job.fail(e, false))
+    })
+  }
+
   /** Idempotent: closes the socket once (1000), rejects everything pending. */
   close(): void { this.end(undefined, 1000) }
 
@@ -228,6 +350,68 @@ export class StreamSession {
     req.sent = true
     this.send({ ...requestBody(req.request), reqId: req.reqId, type: req.request.type, token: this.token })
   }
+  /** Sends the job under a fresh reqId (the retired one's partial reassembly is
+   * dropped). A send that throws fails the job `policy-refused`. */
+  private issuePrint(job: PrintJob) {
+    if (job.reqId) this.reasm.drop(job.reqId)
+    job.reqId = this.allocId(); job.sent = false
+    if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
+    try {
+      this.send({ reqId: job.reqId, type: 'print', token: this.token, from: job.from, to: job.from + job.n - 1 })
+    } catch { return job.fail(new StreamSessionError('policy-refused', 'the print request could not be sent'), false) }
+    job.sent = true
+    this.ensureSweeper()
+  }
+  private printMaxBlobBytes() {
+    const v = this.o.printMaxBlobBytes
+    return typeof v === 'number' && v >= 0 && v < PRINT_JOB_MAX_BLOB_BYTES ? v : PRINT_JOB_MAX_BLOB_BYTES
+  }
+  /** The text messages of the running job: a refusal, `print-start`, `print-done`. */
+  private onPrintText(job: PrintJob, m: Record<string, unknown>, data: string) {
+    if (m.type === 'refused') {
+      // A RENEW race (refused before the job was checked or charged): re-issued once.
+      if (m.code === 'session-rotated' && !job.scale && !job.rotatedRetry) { job.rotatedRetry = true; return this.issuePrint(job) }
+      const code: PrintRefusalCode = PRINT_REFUSALS.has(m.code as PrintRefusalCode) ? m.code as PrintRefusalCode : 'policy-refused'
+      const limit = isCount(m.limit) ? m.limit : undefined, requested = isCount(m.requested) ? m.requested : undefined
+      return job.fail(new StreamSessionError(code, code, { ...(limit !== undefined ? { limit } : {}), ...(requested !== undefined ? { requested } : {}) }), false)
+    }
+    const hostile = (why: string) => job.fail(new StreamSessionError('policy-refused', why), true)
+    const tooLarge = (why: string) => job.fail(new StreamSessionError('print-too-large', why), true)
+    if (utf8Bytes(data) > TEXT_MESSAGE_BYTES) return hostile(`${String(m.type)} message over 48 KiB of UTF-8`)
+    if (m.type === 'print-start') {
+      if (job.scale) return hostile('a second print-start')
+      const scale = printStart(m, job.n)
+      if (!scale) return hostile('print-start does not match the job')
+      // The whole job's decoded images, from the manifest sizes at the announced
+      // scale, must fit PRINT_JOB_MAX_DECODED before any page is kept.
+      if (printDecodedBound(this.manifest.units.list, job.from, job.from + job.n - 1, scale) > PRINT_JOB_MAX_DECODED) return tooLarge('the print job is over the decoded budget')
+      job.scale = scale
+      return
+    }
+    if (m.type === 'print-done') {
+      if (!job.scale || job.pages.length !== job.n || m.pages !== job.n) return hostile('print-done does not close the job')
+      return job.resolve()
+    }
+    return hostile(`unexpected ${String(m.type)} on a print job`)
+  }
+  /** One PRINT_RASTER of the running job: checked against the page expected next, then kept as a PNG Blob. */
+  private onPrintPage(job: PrintJob, payload: Uint8Array) {
+    const hostile = (why: string) => job.fail(new StreamSessionError('policy-refused', why), true)
+    if (!job.scale) return hostile('a page before print-start')
+    if (job.pages.length >= job.n) return hostile('more pages than announced')
+    const index = job.from + job.pages.length, dims = this.manifest.units.list[index]!
+    let page: ReturnType<typeof printPage>
+    try { page = printPage(payload, index, dims, job.scale) } catch (e) { return hostile((e as Error).message) }
+    const { png } = page
+    job.bytes += png.byteLength
+    if (job.bytes > this.printMaxBlobBytes()) return job.fail(new StreamSessionError('print-too-large', 'the print job is over the blob ceiling'), true)
+    // Defence in depth behind the print-start preflight: the checked raster sizes.
+    job.decoded += page.w * page.h * 4
+    if (job.decoded > PRINT_JOB_MAX_DECODED) return job.fail(new StreamSessionError('print-too-large', 'the print job is over the decoded budget'), true)
+    job.pages.push({ unitIndex: index, widthPx: dims.w, heightPx: dims.h, scale: job.scale, png: new Blob([png as BlobPart], { type: 'image/png' }) })
+    try { job.onProgress?.(job.pages.length, job.n) } catch (e) { job.fail(e, true) }
+  }
+
   /** A re-issued request's consumer first learns its earlier answer is void. */
   private reissueText(req: TextReq) {
     if (req.sent && !this.deliver(req, { type: 'restart' })) return
@@ -264,10 +448,15 @@ export class StreamSession {
     const gen = ++this.gen
     this.reasm = new Reassembler({
       acceptedVersions: new Set([1]),
-      expects: (reqId, kind) => (kind === Kind.MANIFEST ? reqId === this.helloReqId && !!this.handshake : this.units.has(reqId) && UNIT_KINDS.has(kind)),
+      expects: (reqId, kind) => (kind === Kind.MANIFEST ? reqId === this.helloReqId && !!this.handshake
+        // PRINT_RASTER only ever for the running, sent print job.
+        : kind === Kind.PRINT_RASTER ? this.livePrint(reqId) !== undefined
+        : this.units.has(reqId) && UNIT_KINDS.has(kind)),
       encodedCap: (k) => CAPS[k]?.[0] ?? 0,
       // A unit response may never decode past the bytes its request was admitted for.
-      decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity : this.units.get(reqId)?.grant ?? 0),
+      decodedCap: (k, reqId) => Math.min(CAPS[k]?.[1] ?? 0, k === Kind.MANIFEST ? Infinity
+        : k === Kind.PRINT_RASTER ? this.livePrint(reqId)?.pageCap ?? 0
+        : this.units.get(reqId)?.grant ?? 0),
     })
     return new Promise<Manifest>((resolve, reject) => {
       this.handshake = { resolve, reject }
@@ -309,6 +498,12 @@ export class StreamSession {
     if (this.missingFaces.length) this.o.onNotice?.({ code: 'face-missing' })
   }
 
+  /** The running print job when `reqId` names it on the current socket. */
+  private livePrint(reqId: unknown): PrintJob | undefined {
+    const job = this.printJob
+    return job && job.sent && job.reqId === reqId ? job : undefined
+  }
+
   private onMessage(data: unknown) {
     // The receipt guard runs on arrival, before anything is queued or buffered.
     const size = typeof data === 'string' ? data.length : data instanceof ArrayBuffer ? data.byteLength : (data as Blob).size
@@ -332,6 +527,8 @@ export class StreamSession {
       this.token = m.token
       return
     }
+    const job = this.livePrint(m.reqId)
+    if (job) return this.onPrintText(job, m, data)
     const text = typeof m.reqId === 'number' ? this.texts.get(m.reqId) : undefined
     // Only text-service answers are held to 48 KiB (refused/diag are control messages).
     if (text) return this.onTextAnswer(text, m, TEXT_ANSWER_TYPES.has(m.type as string) ? utf8Bytes(data) : 0)
@@ -346,12 +543,20 @@ export class StreamSession {
 
   private async onFrame(res: FrameResult) {
     if (!res.ok) {
+      // Fail closed: any rejected frame on the print job fails the job.
+      const job = this.livePrint(res.reqId)
+      if (job) return job.fail(new StreamSessionError('policy-refused', `print frame rejected: ${res.reason}`), true)
       const req = res.reqId !== undefined ? this.units.get(res.reqId) : undefined
       if (req) this.retryOrFail(req)
       else if (res.reqId !== undefined && res.reqId === this.helloReqId && this.handshake) this.end(new StreamSessionError('manifest-invalid'), 1000)
       return
     }
     if (res.kind === Kind.MANIFEST) return this.onManifest(res.payload)
+    if (res.kind === Kind.PRINT_RASTER) {
+      // A message that completed after its job settled is dropped.
+      const job = this.livePrint(res.reqId)
+      return job && this.onPrintPage(job, res.payload)
+    }
     const req = this.units.get(res.reqId)
     if (!req) return
     try {
@@ -413,6 +618,8 @@ export class StreamSession {
     for (const req of [...this.texts.values()]) {
       if (req.sent && !REISSUED.has(req.request.type)) req.reject(new StreamSessionError('session-rotated', 'the session resumed with this request in flight'))
     }
+    // The server stops (and keeps charged) a job whose socket went: never re-issued.
+    if (this.printJob?.sent) this.printJob.fail(new StreamSessionError('session-rotated', 'the session resumed with a print job in flight'), false)
     this.scheduleResume()
   }
 
@@ -442,13 +649,20 @@ export class StreamSession {
     for (const req of [...this.units.values()]) this.issue(req)
     // In issue order, so the newest search is the one the server keeps.
     for (const req of [...this.texts.values()]) this.reissueText(req)
+    // A job called while resuming was never sent: it goes out now.
+    if (this.printJob?.granted && !this.printJob.sent) this.issuePrint(this.printJob)
   }
 
   private ensureSweeper() {
     if (this.sweeper) return
     this.sweeper = setInterval(() => {
-      for (const r of this.reasm.sweep()) { const req = r.reqId !== undefined ? this.units.get(r.reqId) : undefined; if (req) this.retryOrFail(req) }
-      if (!this.units.size && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
+      for (const r of this.reasm.sweep()) {
+        const job = this.livePrint(r.reqId)
+        if (job) { job.fail(new StreamSessionError('policy-refused', 'a print page timed out in reassembly'), true); continue }
+        const req = r.reqId !== undefined ? this.units.get(r.reqId) : undefined
+        if (req) this.retryOrFail(req)
+      }
+      if (!this.units.size && !this.printJob && this.sweeper) { clearInterval(this.sweeper); this.sweeper = undefined }
     }, 1000)
   }
 
@@ -464,6 +678,7 @@ export class StreamSession {
     if (this.handshake) { this.handshake.reject(err); this.handshake = undefined }
     for (const req of [...this.units.values()]) req.reject(err)
     for (const req of [...this.texts.values()]) req.reject(err)
+    this.printJob?.fail(err, false)
     this.admission.drain(err)
     this.setState('closed', error)
     this.settleEnded(error)

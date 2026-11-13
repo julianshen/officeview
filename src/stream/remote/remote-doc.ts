@@ -9,16 +9,21 @@ import type { HighlightRect } from '../../core/overlay'
 import type { Manifest } from '../manifest'
 import { replayUnit } from '../replay'
 import { StreamSessionError } from './errors'
-import type { StreamNotice, UnitLease, UnitPayload } from './session'
+import type { PrintedPage } from './print-wire'
+import type { PrintOptions, StreamNotice, UnitLease, UnitPayload } from './session'
 import type { RemoteRange, TextMessage, TextRequest } from './text-wire'
 
 export type { RemoteRange } from './text-wire'
+export type { PrintedPage } from './print-wire'
+export type { PrintOptions } from './session'
 
 export interface SessionLike {
   readonly manifest: Manifest
   unit(index: number, bucket: number, signal?: AbortSignal): Promise<UnitLease>
   /** One text request; resolves on the op's terminal message (see StreamSession.text). */
   text(request: TextRequest, on: (m: TextMessage) => void, signal?: AbortSignal): Promise<void>
+  /** One checked print job (see StreamSession.print); absent ⇒ print is unavailable. */
+  print?(from: number, to: number, opts: PrintOptions): Promise<PrintedPage[]>
   close(): void
   readonly ended?: Promise<StreamSessionError | undefined>
   /** Calls `cb` after a resume has replaced `manifest`; returns the unsubscribe. */
@@ -45,6 +50,9 @@ export interface RemoteOfficeDoc {
   copy(range: RemoteRange): Promise<string>
   /** Accessible paragraphs of a unit (one paragraph in 'focused' mode). */
   a11y(unit: number, paragraph?: number): Promise<Array<{ rect: HighlightRect; text?: string }>>
+  /** Server-drawn print pages for units `from..to` (inclusive), every page
+   * checked against the job (see StreamSession.print for the rejections). */
+  print(range: { from: number; to: number }, opts?: PrintOptions): Promise<PrintedPage[]>
   /** Calls `cb` after a resume has replaced `manifest` (R3: `can.copy`, `caps` and
    * `can.textA11y` may change); returns the unsubscribe. */
   onManifestChange(cb: () => void): () => void
@@ -150,6 +158,11 @@ export function createRemoteDoc(session: SessionLike, o: { backend?: CanvasBacke
         if (m.type === 'a11y-result') for (const p of m.paragraphs) out.push({ rect: toRects(p.rect)[0]!, ...(p.text !== undefined ? { text: p.text } : {}) })
       })
       return out
+    },
+    async print(range, po = {}) {
+      if (closed) throw new StreamSessionError('closed')
+      if (!session.print) throw new StreamSessionError('policy-refused', 'print unavailable')
+      return session.print(range.from, range.to, po)
     },
     onManifestChange(cb) { return session.onManifestChange?.(cb) ?? (() => {}) },
     close() { if (closed) return; closed = true; session.close() },

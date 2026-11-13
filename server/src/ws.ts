@@ -24,6 +24,7 @@ import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, t
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
+import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
@@ -36,9 +37,9 @@ export const CLOSE = {
   'session-expired': 4004, 'revoked': 4005, 'layout-changed': 4006, 'rate-limited': 4008, 'policy-refused': 4009,
 } as const
 export type CloseName = keyof typeof CLOSE
-export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted'
+export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
 
-const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4 } as const
+const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, PRINT_RASTER: 8 } as const
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -66,6 +67,10 @@ export interface StreamServerOptions {
   audit?: AuditTable
   /** TEST-ONLY: wedge each Layer-1 encode (forwarded only by a testHooks pool). */
   encodeHangMs?: number
+  /** TEST-ONLY: replaces the print job planner (e.g. to force a too-large refusal). */
+  planPrint?: typeof planPrint
+  /** TEST-ONLY: interposes on binary sends and the socket's buffered amount (backpressure tests). */
+  transport?: { sendBinary(ws: unknown, frame: Uint8Array): number; bufferedAmount(ws: unknown): number }
 }
 
 interface Conn {
@@ -78,6 +83,8 @@ interface Conn {
   rates: SessionRates
   timers: Set<ReturnType<typeof setTimeout>>
   missingFaces: string[]
+  /** Print jobs waiting for this socket to drain. */
+  drainWaiters: Set<() => void>
 }
 type WS = ServerWebSocket<Conn>
 
@@ -99,8 +106,8 @@ export function createStreamServer(o: StreamServerOptions) {
   const docs = new Map<string, DocState>()          // docRef → state
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
-   * gone on teardown. */
-  const sessionDoc = new Map<string, TextSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
+   * gone on teardown. So does its print state (`printedPages`, the running job). */
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -119,6 +126,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.phase === 'closed') return
     const code = name === 'superseded' ? 4409 : CLOSE[name]
     ws.data.phase = 'closed'
+    wakeDrain(ws)
     for (const t of ws.data.timers) clearTimeout(t)
     ws.close(code, name)
   }
@@ -129,13 +137,33 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
    * framed, so a conforming client never sees an encoded-cap rejection. */
-  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20 }
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
   const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
     const z = new Uint8Array(gzipSync(payload, { level: 6 }))
     if (z.length + 4 > ENCODED[kind]!) return undefined
     return encodeMessage({ ver: 1, kind: kind as never, reqId, payload, compress: () => z, fragmentBytes: FRAGMENT })
   }
-  const sendFrames = (ws: WS, messages: Uint8Array[][]) => { for (const m of messages) for (const f of m) ws.sendBinary(f) }
+  const sendBinary = (ws: WS, f: Uint8Array) => o.transport ? o.transport.sendBinary(ws, f) : ws.sendBinary(f)
+  const bufferedOf = (ws: WS) => o.transport ? o.transport.bufferedAmount(ws) : ws.getBufferedAmount()
+  /** Sends every fragment in order; false (and nothing more sent) once the transport drops one (Bun: 0).
+   * -1 (backpressure) means queued. The unit path ignores the result (pre-existing behaviour). */
+  const sendFrames = (ws: WS, messages: Uint8Array[][]): boolean => {
+    for (const m of messages) for (const f of m) if (sendBinary(ws, f) === 0) return false
+    return true
+  }
+  const wakeDrain = (ws: WS) => { const w = [...ws.data.drainWaiters]; ws.data.drainWaiters.clear(); for (const f of w) f() }
+  /** Resolves once `ws` holds at most PRINT_SEND_HIGH_WATER unsent bytes, or `alive` fails.
+   * Woken by `drain`, the socket's close, or the job's `wake` (cancel, teardown, resume);
+   * a slow re-check guards a missed wake. */
+  async function belowHighWater(ws: WS, job: PrintJob, alive: () => boolean) {
+    while (alive() && bufferedOf(ws) > PRINT_SEND_HIGH_WATER) {
+      await new Promise<void>((resolve) => {
+        const wake = () => { clearTimeout(t); ws.data.drainWaiters.delete(wake); if (job.wake === wake) job.wake = undefined; resolve() }
+        const t = setTimeout(wake, 5_000)
+        ws.data.drainWaiters.add(wake); job.wake = wake
+      })
+    }
+  }
   const gone = (ws: WS) => ws.data.phase === 'closed'
   const owns = (ws: WS, sid: string) => !gone(ws) && table.get(sid)?.activeSocket === (ws as unknown)
 
@@ -211,10 +239,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -238,7 +266,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const tokenProof = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
     const d = await o.authorize({ ...req, resume: { sid: s.sid }, ...(tokenProof ? {} : { token: resume.resumeProof }) })
     if (gone(ws)) return
-    // R3: copy and textA11y may change on resume; every other field is exact-match.
+    // R3: copy, textA11y and the print caps (Stage 3b P4) may change on resume; every other field is exact-match.
     const policy = d ? effectivePolicy(d) : undefined
     const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
@@ -247,11 +275,13 @@ export function createStreamServer(o: StreamServerOptions) {
     if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     // A change of the mutable text services is durable before it takes effect
     // (the open row stays write-once); a failed write refuses the resume.
-    if (JSON.stringify([policy!.copy, policy!.textA11y]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y])) {
-      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y }) } catch { return close(ws, 'policy-refused') }
+    if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print])) {
+      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print }) } catch { return close(ws, 'policy-refused') }
     }
     const old = s.activeSocket as unknown as WS | undefined
-    if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t) }
+    if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t); wakeDrain(old) }
+    // A job on the old socket cannot continue on the new one.
+    if (sd.print) { sd.print.stopped = true; sd.print.wake?.() }
     const reaper = reapers.get(s.sid); if (reaper) { clearTimeout(reaper); reapers.delete(s.sid) }
     table.supersede(s.sid, ws as never, token.jti)
     sd.tokenExp = token.exp
@@ -273,6 +303,7 @@ export function createStreamServer(o: StreamServerOptions) {
     sessionDoc.delete(sid)
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
+    if (sd?.print) { sd.print.stopped = true; sd.print.wake?.() }
     if (sd) releaseDoc(sd.doc.docRef)
   }
   /** Keep the session (and its document charge) for a resume until the grace
@@ -293,8 +324,8 @@ export function createStreamServer(o: StreamServerOptions) {
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
       // Presentation, notes and links land later in Stage 3.
-      can: { search: true, copy: p.copy !== false, print: p.print, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
-      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y },
+      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
+      caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y, print: p.print === false ? null : { ...p.print } },
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
       notices: [...forensicNotices(p), ...(p.relaxed ? ['relaxed-session'] : [])],
@@ -334,63 +365,81 @@ export function createStreamServer(o: StreamServerOptions) {
     if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
     // Every request re-charges its parse: an evicted document re-enters the ledger on reparse.
     if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
-    const p = sd.policy, mark = markOf(p, sd.decision)
+    const p = sd.policy
     const missing = p.projection === 'commands' ? [...ws.data.missingFaces].sort() : undefined
-    const job = { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex: unitIndex as number, scale: scale as number, mark }
-    const estimate = (() => { const size = sd.doc.units[unitIndex as number]!; return size.w * size.h * 4 * (scale as number) ** 2 * 2 })()
-    const fields = (projectionMode: 'final-raster' | 'commands') => keyFields(sd.doc, mark, unitIndex as number, scale as number, projectionMode, missing)
-    const obtain = async (projection: 'final-raster' | 'commands'): Promise<RenderedUnit | RefusalCode> => {
-      const key = renderKey(fields(projection))
-      const hit = renderCache.get(key)
-      if (hit) return hit
-      try {
-        const unit = await o.pool.render(s.sid, { ...job, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
-        renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
-        return unit
-      } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
-    }
-    const first = await obtain(p.projection)
-    if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+    const alive = () => owns(ws, s.sid) && ws.data.phase === 'stream'
+    const ui = unitIndex as number, sc = scale as number
+    const first = await obtainUnit(s.sid, sd, ui, sc, p.projection, missing)
+    if (!alive()) return
     if (typeof first === 'string') return refuse(ws, reqId, first)
     let unit: RenderedUnit = first
-    let messages = unit.kind === 'commands' ? prepareUnit(reqId, unitIndex as number, unit) : undefined
+    let messages = unit.kind === 'commands' ? prepareUnit(reqId, ui, unit) : undefined
     if (!messages && unit.kind === 'commands') {
       // Assets too large for ASSET_DEFINE's caps: ship the unit as a raster (Task 7).
-      const raster = await obtain('final-raster')
-      if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
+      const raster = await obtainUnit(s.sid, sd, ui, sc, 'final-raster', missing)
+      if (!alive()) return
       if (typeof raster === 'string') return refuse(ws, reqId, raster)
       unit = raster
     }
-    let unmarked: string | undefined, canonical: Uint8Array | undefined
+    let unmarked: string | undefined
     if (unit.kind === 'raster') {
-      // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
-      if (sd.forensic) {
-        canonical = unit.png
-        const m = await markUnit(s.sid, sd, unitIndex as number, scale as number, unit)
-        if (!owns(ws, s.sid) || ws.data.phase !== 'stream') return
-        if (typeof m === 'string') return refuse(ws, reqId, m)
-        unit = m.unit; unmarked = m.unmarked
-      }
-      messages = prepareUnit(reqId, unitIndex as number, unit)
+      const d = await deliverRaster(alive, s.sid, sd, ui, sc, unit, (u) => prepareUnit(reqId, ui, u))
+      if (d === undefined) return
+      if (typeof d === 'string') return refuse(ws, reqId, d)
+      messages = d.messages; unmarked = d.unmarked
     }
     if (!messages) return refuse(ws, reqId, 'policy-refused')
-    // Durable before anything about this unit goes out (never a delivered mark without a record); a failed write refuses it.
-    if (canonical) {
-      try { audit.recordDelivery({ sid: s.sid, unitIndex: unitIndex as number, scale: scale as number, status: unmarked ? 'unmarked' : 'l1', ...(unmarked ? { reason: unmarked } : {}), refSha256: createHash('sha256').update(canonical).digest('hex') }) } catch { return refuse(ws, reqId, 'policy-refused') }
-    }
     if (unit.kind === 'raster' && unit.fallback === 'face-missing') send(ws, { reqId, type: 'diag', code: 'face-missing', unitIndex })
     if (unmarked) send(ws, { reqId, type: 'diag', code: 'forensic-unmarked', unitIndex, reason: unmarked })
     sendFrames(ws, messages)
   }
 
+  /** The canonical unit for a session: the render cache, else the pool (then cached). */
+  async function obtainUnit(sid: string, sd: { doc: DocState; policy: EffectivePolicy; decision: AuthDecision }, unitIndex: number, scale: number, projection: 'final-raster' | 'commands', missing?: string[]): Promise<RenderedUnit | RefusalCode> {
+    const p = sd.policy, mark = markOf(p, sd.decision)
+    const key = renderKey(keyFields(sd.doc, mark, unitIndex, scale, projection, missing))
+    const hit = renderCache.get(key)
+    if (hit) return hit
+    const size = sd.doc.units[unitIndex]!, estimate = size.w * size.h * 4 * scale ** 2 * 2
+    try {
+      const unit = await o.pool.render(sid, { docRef: sd.doc.docRef, contentPolicy: p.contentPolicy, unitIndex, scale, mark, projection, ...(projection === 'commands' && missing ? { missingFaces: missing } : {}) }, estimate)
+      renderCache.put(key, unit, unit.kind === 'raster' ? unit.png.length : unit.ops.length + unit.assets.reduce((n, a) => n + (a.type === 'bitmap' ? a.rgba.length : 256), 0))
+      return unit
+    } catch (e) { return e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused' }
+  }
+
+  /** The shared per-unit tail (unit and print): Layer-1 over the canonical
+   * raster, frame it with `pack`, then the durable delivery record — in that
+   * order, so a unit over its frame cap leaves no delivery row, and nothing
+   * goes out unrecorded. `undefined`: the caller died meanwhile (send nothing). */
+  async function deliverRaster(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unitIndex: number, scale: number, unit: RenderedUnit & { kind: 'raster' }, pack: (u: RenderedUnit & { kind: 'raster' }) => Uint8Array[][] | undefined): Promise<{ messages: Uint8Array[][]; unmarked?: string } | RefusalCode | undefined> {
+    // Every raster this session receives — fallbacks included — carries its Layer-1 mark.
+    let unmarked: string | undefined
+    const canonical = sd.forensic ? unit.png : undefined
+    if (sd.forensic) {
+      const m = await markUnit(sid, sd, unitIndex, scale, unit)
+      if (!alive()) return undefined
+      if (typeof m === 'string') return m
+      unit = m.unit; unmarked = m.unmarked
+    }
+    const messages = pack(unit)
+    if (!messages) return 'policy-refused'
+    // Durable before anything about this unit goes out (never a delivered mark without a record); a failed write refuses it.
+    if (canonical) {
+      try { audit.recordDelivery({ sid, unitIndex, scale, status: unmarked ? 'unmarked' : 'l1', ...(unmarked ? { reason: unmarked } : {}), refSha256: createHash('sha256').update(canonical).digest('hex') }) } catch { return 'policy-refused' }
+    }
+    return { messages, ...(unmarked ? { unmarked } : {}) }
+  }
+
   /** The onUnit preamble for a text op: stream phase, reqId, token, ownership
    * after the await, jti. Answers (refuse/close) and returns undefined on failure. */
-  async function textOp(ws: WS, msg: Record<string, unknown>) {
+  /** `cancelled`: checked after the token await; true ⇒ nothing is sent (a print cancelled while it was validated). */
+  async function textOp(ws: WS, msg: Record<string, unknown>, cancelled?: () => boolean) {
     const reqId = msg.reqId
     const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
     if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return void refuse(ws, reqId, 'policy-refused')
     const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
-    if (!owns(ws, s.sid)) return
+    if (!owns(ws, s.sid) || cancelled?.()) return
     if (!v.ok) return void (v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused'))
     const jti = table.acceptJti(s.sid, v.claims.jti)
     if (jti === 'rotated') return void refuse(ws, reqId, 'session-rotated')
@@ -500,6 +549,87 @@ export function createStreamServer(o: StreamServerOptions) {
     })
   }
 
+  /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
+   * audited and charged before `print-start`; everything after the token
+   * await up to `print-start` is synchronous, so two prints cannot both pass
+   * the running-job and quota checks. Pages are always final rasters, through
+   * the same cache → pool → Layer-1 → delivery-record step as `unit`.
+   *
+   * The job takes the sid's one print slot synchronously, before the token
+   * await, when the slot is free; a `print` arriving while another is pending
+   * or running does not, and is refused `rate-limited` after validation (as
+   * before), even if the slot has freed meanwhile. A `print-cancel` for it during validation marks it stopped; it
+   * then ends silently after the await: nothing sent, rated, audited or
+   * charged, and the slot freed. Only the one pending job is held (no
+   * record of unknown reqIds). */
+  async function onPrint(ws: WS, msg: Record<string, unknown>) {
+    const sid0 = ws.data.sid, sd0 = sid0 ? sessionDoc.get(sid0) : undefined
+    // The one-job rule is decided at arrival: a print that finds the slot taken
+    // is refused rate-limited even if the slot frees during its validation.
+    const busy = !!sd0?.print
+    let job: PrintJob | undefined
+    if (ws.data.phase === 'stream' && sd0 && !busy && sid0 && owns(ws, sid0) && isU32(msg.reqId) && msg.reqId !== 0) sd0.print = job = { reqId: msg.reqId, stopped: false }
+    try { await printOp(ws, msg, job, busy) } finally { if (job && sd0 && sd0.print === job) sd0.print = undefined }
+  }
+  async function printOp(ws: WS, msg: Record<string, unknown>, pending: PrintJob | undefined, busy: boolean) {
+    const a = await textOp(ws, msg, () => !!pending?.stopped)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = printArgs(msg, sd.doc.units.length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    // A 'print' overflow is a refusal only (never a breach toward 4008).
+    if (ws.data.rates.check('print', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    const caps = sd.policy.print
+    if (caps === false) return refuse(ws, reqId, 'policy-refused')
+    if (busy || (sd.print && sd.print !== pending)) return refuse(ws, reqId, 'rate-limited')
+    const { from, to } = args, n = to - from + 1
+    const plan = (o.planPrint ?? planPrint)(sd.doc.units, from, to)
+    if ('refused' in plan) return refuse(ws, reqId, 'print-too-large')
+    if (caps.maxPages !== null && n > caps.maxPages) return refuse(ws, reqId, 'print-too-large', { limit: caps.maxPages, requested: n })
+    if (caps.maxSessionPages !== null && sd.printedPages + n > caps.maxSessionPages) return refuse(ws, reqId, 'print-quota-exhausted', { limit: caps.maxSessionPages, requested: n })
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const { scale } = plan
+    try { audit.recordPrint({ sid: s.sid, pages: n, fromUnit: from, toUnit: to, scale }) } catch { return refuse(ws, reqId, 'policy-refused') }
+    // P3: charged now; a job that fails later stays charged.
+    sd.printedPages += n
+    const job: PrintJob = pending ?? { reqId, stopped: false }
+    sd.print = job
+    send(ws, { reqId, type: 'print-start', pages: n, scale })
+    const alive = () => !job.stopped && owns(ws, s.sid) && ws.data.phase === 'stream' && sessionDoc.get(s.sid) === sd
+    try {
+      await runPrint({
+        job, from, to, alive,
+        ready: () => belowHighWater(ws, job, alive),
+        page: async (unitIndex) => {
+          // A long job can outlive the parse: every page re-charges it.
+          if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
+          const unit = await obtainUnit(s.sid, sd, unitIndex, scale, 'final-raster')
+          if (!alive()) return undefined
+          if (typeof unit === 'string') return pageCode(unit)
+          if (unit.kind !== 'raster') return 'policy-refused'
+          // Fail closed: a page outside the PRINT_RASTER size contract is never marked or sent.
+          if (!printSizeOk(unit, sd.doc.units[unitIndex]!, scale)) return 'policy-refused'
+          const d = await deliverRaster(alive, s.sid, sd, unitIndex, scale, unit, (u) => { const f = frame(KIND.PRINT_RASTER, reqId, encodePrintBody(unitIndex, u.w, u.h, u.png)); return f ? [f] : undefined })
+          return d === undefined ? undefined : typeof d === 'string' ? pageCode(d) : d.messages
+        },
+        send: (m) => sendFrames(ws, m),
+        done: () => send(ws, { reqId, type: 'print-done', pages: n }),
+        refuse: (code) => refuse(ws, reqId, code),
+      })
+    } finally { if (sd.print === job) sd.print = undefined }
+  }
+
+  /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
+  const pageCode = (c: RefusalCode) => c === 'rate-limited' ? c : 'policy-refused'
+
+  /** Stops the sid's pending (still validating) or running job when `reqId` names it; anything else is ignored (no reply, ever). */
+  function onPrintCancel(ws: WS, msg: Record<string, unknown>) {
+    const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid)) return
+    if (sd.print && isU32(msg.reqId) && sd.print.reqId === msg.reqId) { sd.print.stopped = true; sd.print.wake?.() }
+  }
+
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
   function keyFields(doc: DocState, mark: MarkSpec, unitIndex: number, scale: number, projectionMode: 'final-raster' | 'commands', missing?: string[]): RenderKeyFields {
     return {
@@ -584,6 +714,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'select') return onSelect(ws, m)
     if (m.type === 'copy') return onCopy(ws, m)
     if (m.type === 'a11y') return onA11y(ws, m)
+    if (m.type === 'print') return onPrint(ws, m)
+    if (m.type === 'print-cancel') return onPrintCancel(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 
@@ -597,13 +729,14 @@ export function createStreamServer(o: StreamServerOptions) {
       const ip = srv.requestIP(req)?.address ?? 'unknown'
       const gate = ipRates.admit(ip, now())
       if (gate !== 'ok') return new Response('Too Many Requests', { status: 429 })
-      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [] }
+      const data: Conn = { ip, origin, url: req.url, headers: req.headers, phase: 'hello', rates: new SessionRates(), timers: new Set(), missingFaces: [], drainWaiters: new Set() }
       if (srv.upgrade(req, { data })) return undefined
       ipRates.release(ip)
       return new Response('Upgrade failed', { status: 400 })
     },
     websocket: {
       maxPayloadLength: FRAGMENT,
+      drain(ws: WS) { wakeDrain(ws) },
       open(ws: WS) {
         sockets.add(ws)
         later(ws, helloMs, () => { if (ws.data.phase === 'hello') close(ws, 'ready-timeout') })
@@ -622,6 +755,7 @@ export function createStreamServer(o: StreamServerOptions) {
       close(ws: WS, code: number) {
         sockets.delete(ws)
         ipRates.release(ws.data.ip)
+        wakeDrain(ws)
         for (const t of ws.data.timers) clearTimeout(t)
         const sid = ws.data.sid
         // A server-initiated close set the phase first; only a peer drop reaches here open.

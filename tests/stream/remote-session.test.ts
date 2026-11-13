@@ -18,7 +18,7 @@ const exampleManifest = (): Manifest => ({
   session: { sid: '0123456789ab', token: 'x.y.z', expiresSec: 300, resume: 'session' },
   policy: { contentPolicy: 'visible-only', protection: 'final-raster', semantic: 'visible-only', contentPolicyId: 'visible-only@1', viewerMarkId: 'fixed' },
   can: { search: true, copy: false, print: true, textA11y: false, present: false, notes: false, links: false },
-  caps: { copy: null, a11y: 'off' },
+  caps: { copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } },
   recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [1, 2], requiredFaces: [{ id: 'carlito-regular', hash: 'f6418f708baede9789daef5d', alias: 'Calibri' }], projection: 'final-raster' },
   limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: 1 << 20, tilePx: 512 },
   notices: ['forensic-off'],

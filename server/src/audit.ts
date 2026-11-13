@@ -5,8 +5,8 @@
 import { extendedCodeword } from './mark/bch'
 import { insertMessage } from './mark/message'
 import { CODEC_ID } from './mark/params'
-import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type StoredRow } from './audit-store'
-import type { A11yMode, CopyPolicy } from './hooks'
+import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type PrintRecord, type StoredRow } from './audit-store'
+import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 
 export { AUDIT_RETENTION_SEC }
 
@@ -35,9 +35,11 @@ export interface AuditRow {
   servicesChanged: Array<TextServices & { at: number }>
   /** Copy events recorded for this sid and the paragraphs they carried (a11y records excluded). */
   copied: { events: number; paragraphs: number }
+  /** Print jobs recorded for this sid and the pages they carried. */
+  printed: { jobs: number; pages: number }
 }
-export interface TextServices { copy: CopyPolicy; textA11y: A11yMode }
-export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings' | 'servicesChanged' | 'copied'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
+export interface TextServices { copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy }
+export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings' | 'servicesChanged' | 'copied' | 'printed'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
 
 export interface Issued { token24: number; salt8: number; msg40: Uint8Array; code: Int8Array }
 
@@ -91,10 +93,15 @@ export class AuditTable {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putCopy({ ...r, at: Math.floor(Date.now() / 1000) })
   }
+  /** One print job is about to go to `sid`: durable before the send. Throws for an unknown or expired sid. */
+  recordPrint(r: Omit<PrintRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putPrint({ ...r, at: Math.floor(Date.now() / 1000) })
+  }
   /** A resume changed `sid`'s resolved text services: durable before they take effect. Throws for an unknown or expired sid. */
   recordServices(sid: string, s: TextServices): void {
     if (!this.store.getRow(sid)) throw new Error(`no audit row for ${sid}`)
-    this.store.putServices({ sid, copy: s.copy, textA11y: s.textA11y, at: Math.floor(Date.now() / 1000) })
+    this.store.putServices({ sid, copy: s.copy, textA11y: s.textA11y, print: s.print, at: Math.floor(Date.now() / 1000) })
   }
   /** Frozen view: issuance plus what has been delivered so far (distinct delivery records). */
   get(sid: string): AuditRow | undefined {
@@ -104,14 +111,18 @@ export class AuditTable {
     const marked = ds.filter((d) => d.status === 'l1').length
     const forensicLayers: Array<'l1'> = marked ? ['l1'] : []
     const copies = this.store.copies(sid).filter((c) => c.kind === 'copy')
-    const services: TextServices = (r as Partial<StoredRow>).services ?? { copy: false, textA11y: 'off' }
+    const prints = this.store.prints(sid)
+    // A row stored before Stage 3a reads as off; one stored before 3b has no print record and reads as print off.
+    const stored = (r as Partial<StoredRow>).services
+    const services: TextServices = stored ? { ...stored, print: stored.print ?? false } : { copy: false, textA11y: 'off', print: false }
     return Object.freeze({
       ...r, visibleMark: Object.freeze({ ...r.visibleMark }), markSettings: Object.freeze({ ...r.markSettings, forensic: forensicLayers.length > 0 }), forensic: r.forensic && Object.freeze({ ...r.forensic }),
       forensicLayers: Object.freeze(forensicLayers) as Array<'l1'>, delivered: Object.freeze({ marked, unmarked: ds.length - marked }),
       untraceable: r.markSettings.visible === 'off' && forensicLayers.length === 0,
       services: Object.freeze({ ...services }),
-      servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, at: x.at }))) as AuditRow['servicesChanged'],
+      servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, print: x.print, at: x.at }))) as AuditRow['servicesChanged'],
       copied: Object.freeze({ events: copies.length, paragraphs: copies.reduce((n, c) => n + c.paragraphs, 0) }),
+      printed: Object.freeze({ jobs: prints.length, pages: prints.reduce((n, p) => n + p.pages, 0) }),
     })
   }
   expire(nowSec: number): number {

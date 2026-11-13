@@ -11,6 +11,8 @@
  *   ?copy=full|cap3|off on the stream URL sets the session's copy policy.
  *   ?a11y=unit|focused|off sets copy so that a11y resolves to that mode (R7):
  *          unit = copy 'full'; focused = copy capped 3 / session 5; off = copy and a11y off.
+ *   ?print=on|off|cap2|session3 sets the session's print policy (Stage 3b):
+ *          on = true; off = false; cap2 = {maxPages: 2}; session3 = {maxPages: 5, maxSessionPages: 3}.
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity)
  */
@@ -31,6 +33,8 @@ const demo = demoHooks({ docDir: resolve(root, 'corpus'), demo: true })
 const COPY = { full: 'full', cap3: { maxParagraphs: 3 }, off: false } as const
 /** TEST-ONLY `?a11y=unit|focused|off` (Stage 3a Task 8); applied after `?copy=`. */
 const A11Y = { unit: { copy: 'full' }, focused: { copy: { maxParagraphs: 3, maxSessionParagraphs: 5 } }, off: { copy: false, textA11y: false } } as const
+/** TEST-ONLY `?print=on|off|cap2|session3` (Stage 3b Task 8): the session's print policy; absent = the demo default. */
+const PRINT = { on: true, off: false, cap2: { maxPages: 2 }, session3: { maxPages: 5, maxSessionPages: 3 } } as const
 const pick = <T extends object>(table: T, v: string | null): T[keyof T] | undefined => (v !== null && v in table ? table[v as keyof T] : undefined)
 const hooks = {
   ...demo,
@@ -38,7 +42,8 @@ const hooks = {
     const d = await demo.authorize(req)
     if (!d) return d
     const copy = pick(COPY, req.url.searchParams.get('copy')), a11y = pick(A11Y, req.url.searchParams.get('a11y'))
-    return { ...d, policy: { ...d.policy, ...(copy !== undefined ? { copy } : {}), ...a11y } }
+    const print = pick(PRINT, req.url.searchParams.get('print'))
+    return { ...d, policy: { ...d.policy, ...(copy !== undefined ? { copy } : {}), ...a11y, ...(print !== undefined ? { print } : {}) } }
   },
 }
 

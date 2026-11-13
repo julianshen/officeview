@@ -1,12 +1,13 @@
 /** Stage 2b Task 4: the durable audit store (§9.3/§13.2), delivery records before send. */
 import { afterAll, afterEach, describe, expect, it } from 'bun:test'
+import { Database } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
 import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { AUDIT_RETENTION_SEC, AuditTable, msgHex } from '../src/audit'
-import { AuditStore, type CopyRecord, type DeliveryRecord, type StoredRow } from '../src/audit-store'
+import { AuditStore, type CopyRecord, type DeliveryRecord, type PrintRecord, type StoredRow } from '../src/audit-store'
 import { messageFor } from '../src/mark/message'
 import { Client, corpus, disposePool, start } from './harness'
 
@@ -18,7 +19,7 @@ const dbPath = () => { const d = mkdtempSync(join(tmpdir(), 'ov-audit-')); dirs.
 const kMsg = Uint8Array.from({ length: 32 }, (_, i) => 200 - i)
 const row = (o: Partial<StoredRow> = {}): StoredRow => ({
   ip: '1.2.3.4', startedAt: 1000, keyGeneration: 1, policyId: 'visible-only@1', markSettings: { visible: 'viewer', forensicRequested: true }, relaxed: false, forensic: null,
-  docRef: 'doc-a', contentPolicy: 'visible-only', visibleMark: { kind: 'viewer', text: 'alice' }, services: { copy: false, textA11y: 'off' }, ...o,
+  docRef: 'doc-a', contentPolicy: 'visible-only', visibleMark: { kind: 'viewer', text: 'alice' }, services: { copy: false, textA11y: 'off', print: false }, ...o,
 })
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex')
 
@@ -204,13 +205,13 @@ describe('text services audit (Stage 3a Task 5)', () => {
 
   it('copies are their own rows: repeats are kept, get() totals copy events only', () => {
     const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
-    t.record('s1', row({ services: { copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused' } }))
+    t.record('s1', row({ services: { copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused', print: false } }))
     t.recordCopy(copyRec('s1', 2)); t.recordCopy(copyRec('s1', 2))
     s.putCopy({ sid: 's1', kind: 'a11y', paragraphs: 1, fromUnit: 0, toUnit: 0, at: 9 })
     expect(s.copies('s1')).toEqual([{ ...copyRec('s1', 2), at: expect.any(Number) }, { ...copyRec('s1', 2), at: expect.any(Number) }, { sid: 's1', kind: 'a11y', paragraphs: 1, fromUnit: 0, toUnit: 0, at: 9 }])
     expect(t.get('s1')).toMatchObject({ services: { copy: { maxParagraphs: 3, maxSessionParagraphs: null }, textA11y: 'focused' }, servicesChanged: [], copied: { events: 2, paragraphs: 4 } })
     expect(() => t.recordCopy(copyRec('nope', 1))).toThrow(/no audit row/)
-    expect(() => t.recordServices('nope', { copy: false, textA11y: 'off' })).toThrow(/no audit row/)
+    expect(() => t.recordServices('nope', { copy: false, textA11y: 'off', print: false })).toThrow(/no audit row/)
     s.close()
   })
 
@@ -218,15 +219,15 @@ describe('text services audit (Stage 3a Task 5)', () => {
     const path = dbPath()
     const t = new AuditTable({ store: AuditStore.open(path) })
     t.record('s1', row())
-    t.recordServices('s1', { copy: { maxParagraphs: null, maxSessionParagraphs: null }, textA11y: 'unit' })
-    t.recordServices('s1', { copy: false, textA11y: 'off' })
+    t.recordServices('s1', { copy: { maxParagraphs: null, maxSessionParagraphs: null }, textA11y: 'unit', print: { maxPages: 2, maxSessionPages: null } })
+    t.recordServices('s1', { copy: false, textA11y: 'off', print: false })
     ;(t as unknown as { store: AuditStore }).store.close()
     const s2 = AuditStore.open(path), t2 = new AuditTable({ store: s2 })
     expect(s2.getRow('s1')).toEqual(row())
-    expect(t2.get('s1')!.services).toEqual({ copy: false, textA11y: 'off' })
+    expect(t2.get('s1')!.services).toEqual({ copy: false, textA11y: 'off', print: false })
     expect(t2.get('s1')!.servicesChanged).toEqual([
-      { copy: { maxParagraphs: null, maxSessionParagraphs: null }, textA11y: 'unit', at: expect.any(Number) },
-      { copy: false, textA11y: 'off', at: expect.any(Number) },
+      { copy: { maxParagraphs: null, maxSessionParagraphs: null }, textA11y: 'unit', print: { maxPages: 2, maxSessionPages: null }, at: expect.any(Number) },
+      { copy: false, textA11y: 'off', print: false, at: expect.any(Number) },
     ])
     s2.close()
   })
@@ -235,7 +236,29 @@ describe('text services audit (Stage 3a Task 5)', () => {
     const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
     const { services: _s, ...legacy } = row()
     s.putRow('old', legacy as StoredRow)
-    expect(t.get('old')).toMatchObject({ services: { copy: false, textA11y: 'off' }, servicesChanged: [], copied: { events: 0, paragraphs: 0 } })
+    expect(t.get('old')).toMatchObject({ services: { copy: false, textA11y: 'off', print: false }, servicesChanged: [], copied: { events: 0, paragraphs: 0 } })
+    s.close()
+  })
+
+  it('a services table created before Stage 3b gains its print column; old changes read as print off', () => {
+    const path = dbPath()
+    const raw = new Database(path, { create: true, strict: true })
+    raw.exec('CREATE TABLE services (sid TEXT NOT NULL, copy TEXT NOT NULL, text_a11y TEXT NOT NULL, at INTEGER NOT NULL)')
+    raw.query('INSERT INTO services (sid, copy, text_a11y, at) VALUES (?, ?, ?, ?)').run('s1', 'false', 'off', 5)
+    raw.close()
+    const s = AuditStore.open(path)
+    expect(s.services('s1')).toEqual([{ sid: 's1', copy: false, textA11y: 'off', print: false, at: 5 }])
+    s.putRow('s1', row())
+    s.putServices({ sid: 's1', copy: false, textA11y: 'off', print: { maxPages: 1, maxSessionPages: 3 }, at: 6 })
+    expect(s.services('s1').map((r) => r.print)).toEqual([false, { maxPages: 1, maxSessionPages: 3 }])
+    s.close()
+    AuditStore.open(path).close() // reopening is idempotent
+  })
+
+  it('a row stored before Stage 3b (no print in its services) reads as print off', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    s.putRow('old', { ...row(), services: { copy: false, textA11y: 'off' } } as unknown as StoredRow)
+    expect(t.get('old')!.services).toEqual({ copy: false, textA11y: 'off', print: false })
     s.close()
   })
 
@@ -243,7 +266,7 @@ describe('text services audit (Stage 3a Task 5)', () => {
     const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
     t.record('old', row({ startedAt: 0 })); t.record('new', row({ startedAt: 100 }))
     t.recordCopy(copyRec('old', 1)); t.recordCopy(copyRec('new', 1))
-    t.recordServices('old', { copy: false, textA11y: 'off' })
+    t.recordServices('old', { copy: false, textA11y: 'off', print: false })
     expect(t.expire(AUDIT_RETENTION_SEC)).toBe(1)
     expect(s.copies('old')).toEqual([]); expect(s.services('old')).toEqual([])
     expect(s.copies('new').length).toBe(1)
@@ -255,7 +278,61 @@ describe('text services audit (Stage 3a Task 5)', () => {
     const s = AuditStore.open(path); s.putRow('s1', row()); s.close()
     const r = AuditStore.openReadOnlyForTrace(path)
     expect(() => r.putCopy({ ...copyRec('s1', 1), at: 1 })).toThrow(/read-only/)
-    expect(() => r.putServices({ sid: 's1', copy: false, textA11y: 'off', at: 1 })).toThrow(/read-only/)
+    expect(() => r.putServices({ sid: 's1', copy: false, textA11y: 'off', print: false, at: 1 })).toThrow(/read-only/)
+    r.close()
+  })
+})
+
+describe('print audit (Stage 3b Task 2)', () => {
+  const printRec = (sid: string, pages: number, scale: 1 | 2 = 1): Omit<PrintRecord, 'at'> => ({ sid, pages, fromUnit: 0, toUnit: pages - 1, scale })
+
+  it('prints are their own rows: kept in order with when, get() totals jobs and pages', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('s1', row())
+    t.recordPrint(printRec('s1', 2)); t.recordPrint(printRec('s1', 3, 2))
+    expect(s.prints('s1')).toEqual([{ ...printRec('s1', 2), at: expect.any(Number) }, { ...printRec('s1', 3, 2), at: expect.any(Number) }])
+    expect(s.prints('s1')[0]!.at).toBeGreaterThan(0)
+    expect(t.get('s1')!.printed).toEqual({ jobs: 2, pages: 5 })
+    s.close()
+  })
+
+  it('a fresh row has printed {jobs: 0, pages: 0}', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('s1', row())
+    expect(t.get('s1')!.printed).toEqual({ jobs: 0, pages: 0 })
+    s.close()
+  })
+
+  it('recordPrint for an unknown sid throws', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    expect(() => t.recordPrint(printRec('nope', 1))).toThrow(/no audit row/)
+    expect(s.prints('nope')).toEqual([])
+    s.close()
+  })
+
+  it('expire() removes prints with their row', () => {
+    const s = AuditStore.open(':memory:'), t = new AuditTable({ store: s })
+    t.record('old', row({ startedAt: 0 })); t.record('new', row({ startedAt: 100 }))
+    t.recordPrint(printRec('old', 1)); t.recordPrint(printRec('new', 1))
+    expect(t.expire(AUDIT_RETENTION_SEC)).toBe(1)
+    expect(s.prints('old')).toEqual([]); expect(s.prints('new').length).toBe(1)
+    s.close()
+  })
+
+  it('a store created before the prints table gains it on open', () => {
+    const path = dbPath()
+    const raw = new Database(path, { create: true }); raw.exec('CREATE TABLE rows (sid TEXT PRIMARY KEY, started_at INTEGER NOT NULL, key_generation INTEGER NOT NULL, doc_ref TEXT NOT NULL, msg40 TEXT, row TEXT NOT NULL)'); raw.close()
+    const s = AuditStore.open(path); s.putRow('s1', row())
+    s.putPrint({ ...printRec('s1', 1), at: 7 })
+    expect(s.prints('s1')).toEqual([{ ...printRec('s1', 1), at: 7 }])
+    s.close()
+  })
+
+  it('trace store refuses print writes', () => {
+    const path = dbPath()
+    const s = AuditStore.open(path); s.putRow('s1', row()); s.close()
+    const r = AuditStore.openReadOnlyForTrace(path)
+    expect(() => r.putPrint({ ...printRec('s1', 1), at: 1 })).toThrow(/read-only/)
     r.close()
   })
 })

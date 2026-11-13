@@ -16,31 +16,31 @@ describe('copy / textA11y policy in the manifest', () => {
   test('defaults: search on, copy off, a11y off', async () => {
     const m = await open({})
     expect(m.can).toMatchObject({ search: true, copy: false, textA11y: false })
-    expect(m.caps).toEqual({ copy: null, a11y: 'off' })
+    expect(m.caps).toEqual({ copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } })
   })
   test("copy 'full' ⇒ a11y unit", async () => {
     const m = await open({ copy: 'full' })
     expect(m.can).toMatchObject({ search: true, copy: true, textA11y: true })
-    expect(m.caps).toEqual({ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit' })
+    expect(m.caps).toEqual({ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'unit', print: { maxPages: null, maxSessionPages: null } })
   })
   test('copy cap ⇒ a11y focused', async () => {
     const m = await open({ copy: { maxParagraphs: 3 } })
     expect(m.can).toMatchObject({ copy: true, textA11y: true })
-    expect(m.caps).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: null }, a11y: 'focused' })
+    expect(m.caps).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: null }, a11y: 'focused', print: { maxPages: null, maxSessionPages: null } })
   })
   test('copy cap with a session cap carries both', async () => {
     const m = await open({ copy: { maxParagraphs: 3, maxSessionParagraphs: 20 } })
-    expect(m.caps).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: 20 }, a11y: 'focused' })
+    expect(m.caps).toEqual({ copy: { maxParagraphs: 3, maxSessionParagraphs: 20 }, a11y: 'focused', print: { maxPages: null, maxSessionPages: null } })
   })
   test('textA11y:true with copy off ⇒ unit', async () => {
     const m = await open({ textA11y: true })
     expect(m.can).toMatchObject({ copy: false, textA11y: true })
-    expect(m.caps).toEqual({ copy: null, a11y: 'unit' })
+    expect(m.caps).toEqual({ copy: null, a11y: 'unit', print: { maxPages: null, maxSessionPages: null } })
   })
   test('textA11y:false with copy full ⇒ off', async () => {
     const m = await open({ copy: 'full', textA11y: false })
     expect(m.can).toMatchObject({ copy: true, textA11y: false })
-    expect(m.caps).toEqual({ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'off' })
+    expect(m.caps).toEqual({ copy: { maxParagraphs: null, maxSessionParagraphs: null }, a11y: 'off', print: { maxPages: null, maxSessionPages: null } })
   })
   test('copy or a11y on does not mark the session relaxed (R4)', async () => {
     const m = await open({ copy: 'full', textA11y: true })
@@ -64,7 +64,7 @@ describe('bad caps fail closed', () => {
   test('a bad cap reaches the manifest as copy off', async () => {
     const m = await open({ copy: { maxParagraphs: -1 } })
     expect(m.can.copy).toBe(false)
-    expect(m.caps).toEqual({ copy: null, a11y: 'off' })
+    expect(m.caps).toEqual({ copy: null, a11y: 'off', print: { maxPages: null, maxSessionPages: null } })
   })
 })
 
@@ -78,7 +78,7 @@ describe('resume (R3): copy and textA11y are mutable, everything else exact-matc
     const b = new Client(h.url)
     const m2 = await b.hello({ resume: { sid: m.session.sid, resumeProof: m.session.token } })
     expect(m2.session.sid).toBe(m.session.sid)
-    expect(m2.caps).toEqual({ copy: { maxParagraphs: 1, maxSessionParagraphs: null }, a11y: 'focused' })
+    expect(m2.caps).toEqual({ copy: { maxParagraphs: 1, maxSessionParagraphs: null }, a11y: 'focused', print: { maxPages: null, maxSessionPages: null } })
     expect(h.stream.table.get(m.session.sid)!.effectivePolicy.copy).toEqual({ maxParagraphs: 1, maxSessionParagraphs: null })
     expect((await a.closed).code).toBe(4409)
     b.close(); h.stop()
@@ -91,7 +91,7 @@ describe('resume (R3): copy and textA11y are mutable, everything else exact-matc
     const b = new Client(h.url)
     const m2 = await b.hello({ resume: { sid: m.session.sid, resumeProof: m.session.token } })
     expect(m2.can).toMatchObject({ copy: false, textA11y: true })
-    expect(m2.caps).toEqual({ copy: null, a11y: 'unit' })
+    expect(m2.caps).toEqual({ copy: null, a11y: 'unit', print: { maxPages: null, maxSessionPages: null } })
     b.close(); h.stop()
   })
   test('resume with a changed visibleMark still closes auth-failed', async () => {

@@ -1,6 +1,6 @@
 /**
  * Stage 1d browser harness page: <OfficeFile data={{ kind: 'stream', url }}>
- * against server/test/app.ts. Query: ?doc=<corpus file>&relaxed=1&srv=short&fonts=1&copy=full|cap3|off&a11y=unit|focused|off.
+ * against server/test/app.ts. Query: ?doc=<corpus file>&relaxed=1&srv=short&fonts=1&copy=full|cap3|off&a11y=unit|focused|off&print=on|off|cap2|session3.
  * Assertions read window.__ovStream (notices, error) and the DOM.
  */
 import { useMemo } from 'react'
@@ -12,7 +12,7 @@ import '../styles/officeview.css'
 const q = new URLSearchParams(location.search)
 const P = Number(q.get('port') ?? 4181)
 const wsPort = q.get('srv') === 'short' ? P + 2 : P
-const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}) })
+const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}), ...(q.get('print') ? { print: q.get('print')! } : {}) })
 const state = { notices: [] as StreamNotice[], error: undefined as string | undefined }
 ;(window as unknown as { __ovStream: typeof state }).__ovStream = state
 

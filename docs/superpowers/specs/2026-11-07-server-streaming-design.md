@@ -301,8 +301,17 @@ export interface StreamSource {
                                projection?: 'protected' | 'relaxed';
                                visibleMark?: 'fixed' | 'viewer' | 'off';
                                forensicMark?: boolean;   // default true
-                               print?: boolean } }       // default true (§2 item 9)
+                               print?: boolean           // default true (§2 item 9)
+                                 | { maxPages: number; maxSessionPages?: number } } }
   ```
+  *Amendment (2026-11-13, Stage 3b):* `print` is `true` (default, uncapped),
+  `false` (off), or a cap object: `maxPages` per job and, optionally,
+  `maxSessionPages` per session. A cap that is not a positive safe integer,
+  or any other value, resolves to print off (fail closed). The resolved
+  policy is `print: false | { maxPages: number | null; maxSessionPages:
+  number | null }`, and the manifest carries `can.print` and `caps.print`
+  (`null` when print is off; the client fails closed on `can.print: true`
+  with `caps.print: null`). Stage 3 design §4.2 amendment.
   Relaxations are recorded in the audit table (§9.3/§13.4); **the client has
   no relax surface** — a client-requested relax closes with `policy-refused`
   (§16 T6). Turning both marks off makes the session **untraceable** and its
@@ -402,6 +411,11 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    kept and measured against the new caps, the resumed MANIFEST carries the
    new caps, and the change is audited (the `services` table) before it
    takes effect. Every other policy field keeps the exact-match rule.
+   *Amendment (2026-11-13, Stage 3b):* `print` leaves the policy match too
+   (Stage 3 design §4.2, P4). The new print caps replace the old, the pages
+   already printed in the session are kept and measured against them, the
+   resumed MANIFEST carries the new `caps.print`, and the change is
+   audited in `services` (its `print` column) before it takes effect.
 8. **Code registry (round-10 F4; one normative registry, complete):**
    the only session CLOSE codes and op-refusal codes in the protocol are
    in this table — "no other code exists" means exactly this list, and
@@ -426,6 +440,8 @@ states: HELLO → MANIFEST → READY(ack) → STREAM → (RENEW → STREAM)* →
    | `text-unavailable` | op refusal, never a CLOSE (added 2026-11-12, Stage 3a) | select/copy with copy off; a11y with `textA11y` off (Stage 3 design §4.1) |
    | `copy-too-large` | op refusal, never a CLOSE, carries `limit` (+ `requested`) (added 2026-11-12) | a copy over `maxParagraphs` or over 4 MiB; an a11y answer over its limits |
    | `copy-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-12) | a copy or focused a11y read that would pass `maxSessionParagraphs` |
+   | `print-too-large` | op refusal, never a CLOSE (added 2026-11-13, Stage 3b); carries `limit` and `requested` over `maxPages`, neither when the job fits at no print scale | a print job over `maxPages`, or one whose pages fit neither scale 2 nor scale 1 (`planPrint`); the client also fails a job locally with this code (no `limit`) over its 192 MiB blob ceiling (Stage 3 design §4.2) |
+   | `print-quota-exhausted` | op refusal, never a CLOSE, carries `limit` and `requested` (added 2026-11-13) | a print job that would take the session's printed pages past `maxSessionPages` |
 
    `session-rotated` is **only** an op refusal (a typed text-message
    reply; the session stays open) — never a CLOSE. `rate-limited` and
@@ -1505,6 +1521,17 @@ outcomes.
   (`rate-limited`) only and never counts toward the 4008 breach window.
   Select is charged only the message budget above; the client sends at
   most one select per 200 ms (≤ 5/s).
+  *Amendment (2026-11-13, Stage 3b, as built):* print is rate class
+  `'print'`, `PRINT_RATE_PER_MIN` = 10 jobs per minute per sid, counted on
+  every `print` request that reaches the rate check (jobs later refused
+  by a cap included). An overflow is an op refusal (`rate-limited`) only
+  and never counts toward the 4008 breach window. One job runs per sid
+  (a second is refused `rate-limited`), and it has at most
+  `PRINT_CONCURRENCY` = 2 pages rendering or buffered. A page is neither
+  rendered nor sent while its socket holds more than
+  `PRINT_SEND_HIGH_WATER` = 4 MiB unsent (Bun's default 16 MiB
+  `backpressureLimit` is kept). A job's pages must fit
+  `PRINT_JOB_MAX_DECODED` = 1 GiB of RGBA together.
 - **Handshake windows [call]:** `ready window` 2 s from the MANIFEST
   (the one definition of the §6.2 rule-4 window; expiry CLOSEs with
   `ready-timeout`), **renew: a scheduling lead — the server sends RENEW
@@ -1530,7 +1557,7 @@ outcomes.
   | XLSX_TILE | ≤ 8 MiB | ≤ 64 MiB |
   | SHOW_PLAN | ≤ 8 MiB | ≤ 32 MiB |
   | NOTES_RASTER | ≤ 8 MiB | ≤ 64 MiB |
-  | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB |
+  | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB (as built, 2026-11-13: client per-job page cap = min(64 MiB, 44 MiB, the range's largest scale-2 unit cost); see below) |
   | text control message | ≤ 64 KiB | ≤ 64 KiB |
 
   *Amendment (2026-11-12, Stage 3a):* every server→client **text-service
@@ -1541,6 +1568,19 @@ outcomes.
   messages, ≤ 5,000 search hits, ≤ 20,000 select rects, copy ≤ 4 MiB,
   and a11y ≤ 4 MiB of text and ≤ 20,000 paragraphs. An over-limit answer
   fails its request; the session stays open.
+
+  *Amendment (2026-11-13, Stage 3b, as built):* PRINT_RASTER (kind 8) is
+  `u32 LE unitIndex` + the UNIT_RASTER body, admitted only on the reqId of
+  the client's running print job. Its encoded cap is `PRINT_ENCODED_CAP` =
+  8 MiB on both sides. The client's job grant from the aggregate below is
+  `8 MiB + 2 × pageCap` (the inflate peak: fragments, inflated chunks and
+  their contiguous copy), where `pageCap` (the per-page decoded cap) is the
+  range's largest unit cost at scale 2 plus the 16-byte page header, clamped to 64 MiB and to
+  `PRINT_PAGE_BODY_MAX` = (96 MiB − 8 MiB) / 2 = 44 MiB so that the grant
+  fits the 96 MiB aggregate. The client holds at most 192 MiB of print PNG
+  per job (`PRINT_JOB_MAX_BLOB_BYTES`). `print-start` and `print-done` are
+  text messages of a few dozen bytes (the wire tests pin them ≤ 48 KiB);
+  the client fails a job on one over 48 KiB.
 
   Admission is **streaming inflation** (round-10 F3): the compressed
   payload is inflated incrementally and the inflate/parse **aborts the
@@ -1804,6 +1844,33 @@ render pipeline.
       is withheld (`docs/validation/streaming-s3a.md`).
     - (e) A page with more than about 12k text pieces (> 3 MiB of
       recorded spans) is refused for text services.
+
+11. **Stage 3b print as built (2026-11-13; Stage 3 design §4.2 amendment).**
+    - (a) The `unit` op still serves screen rasters, so print caps limit
+      printing, not capture: a viewer who can see the pages can screenshot
+      them (the marks trace that, item 1).
+    - (b) Print caps are per sid and reset when the viewer opens the
+      document again (item 9).
+    - (c) A cancelled or failed job stays charged: its pages count toward
+      `maxSessionPages` though nothing printed.
+    - (d) A print page whose PNG body is over about 44 MiB
+      (`PRINT_PAGE_BODY_MAX`) cannot print on the stream path; the job
+      fails. Real PNGs are far smaller than their RGBA (44 MiB is about a
+      3,300 × 3,300 page of incompressible pixels).
+    - (e) A page whose raw size is fractional prints up to 1 device px
+      narrower or shorter than `ceil(unit × scale)` (the size contract,
+      `(unit − 1) × scale < w ≤ unit × scale`).
+    - (f) Open, pre-existing: the `unit` path's client admission grant
+      undercounts the same inflate peak the print grant now covers (the
+      encoded fragments, the inflated chunks and their contiguous copy are
+      held at once, about encoded + 2 × decoded). Only a hostile or buggy
+      server can reach it. Follow-up.
+    - (g) An audit store created before Stage 3b keeps its old `services`
+      rows with no print value; they read `print: false`, meaning "not
+      recorded".
+    - (h) Printing through the browser's own menu prints a blank page for
+      the remote view (its root is hidden in print media); only the Print
+      button or Ctrl/Cmd+P prints the document.
 
 ## 20. Appendix: command-projection extension (Stage 2+)
 

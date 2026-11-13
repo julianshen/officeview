@@ -2,6 +2,9 @@
  * session-owned rates, per-kind caps with raster fallback. */
 import { afterAll, describe, expect, it } from 'bun:test'
 import { AssetTable } from '../../src/stream/record/recorder'
+import { AuditTable } from '../src/audit'
+import { AuditStore } from '../src/audit-store'
+import type { AuthDecision } from '../src/hooks'
 import type { RenderedUnit } from '../src/render'
 import type { Pool } from '../src/pool'
 import { Client, disposePool, pool, start } from './harness'
@@ -39,10 +42,10 @@ describe('async open and close (review r2-1)', () => {
 
 describe('resume re-evaluates (review r2-2/r2-6)', () => {
   it('resume always calls authorize; a revoked viewer or changed policy is refused', async () => {
-    let calls = 0, mode: 'ok' | 'revoked' | 'no-print' = 'ok'
-    const h = await start({ authorize: async () => { calls++; return mode === 'revoked' ? null : { viewerId: 'alice', policy: mode === 'no-print' ? { print: false } : {} } } })
+    let calls = 0, mode: 'ok' | 'revoked' | 'viewer-mark' = 'ok'
+    const h = await start({ authorize: async () => { calls++; return mode === 'revoked' ? null : { viewerId: 'alice', policy: mode === 'viewer-mark' ? { visibleMark: 'viewer' as const } : {} } } })
     const a = new Client(h.url); const m = await a.hello(); await a.ready()
-    for (const next of ['revoked', 'no-print'] as const) {
+    for (const next of ['revoked', 'viewer-mark'] as const) {
       mode = next; const before = calls
       const b = new Client(h.url); await b.opened()
       b.send({ reqId: 1, type: 'hello', client: 'x', recVersions: [1], resume: { sid: m.session.sid, resumeProof: m.session.token } })
@@ -51,6 +54,29 @@ describe('resume re-evaluates (review r2-2/r2-6)', () => {
     }
     expect(a.ws.readyState).toBe(WebSocket.OPEN)
     a.close(); h.stop()
+  })
+  it('print caps may change on resume: accepted, carried in the manifest, recorded', async () => {
+    let print: AuthDecision['policy']['print'] = true
+    const store = AuditStore.open(':memory:')
+    const h = await start({ audit: new AuditTable({ store }), authorize: async () => ({ viewerId: 'alice', policy: { print } }) })
+    const a = new Client(h.url); const m = await a.hello(); await a.ready()
+    expect(m.caps.print).toEqual({ maxPages: null, maxSessionPages: null })
+    print = { maxPages: 1 }
+    const b = new Client(h.url)
+    const m2 = await b.hello({ resume: { sid: m.session.sid, resumeProof: m.session.token } })
+    expect(m2.session.sid).toBe(m.session.sid)
+    expect(m2.can.print).toBe(true)
+    expect(m2.caps.print).toEqual({ maxPages: 1, maxSessionPages: null })
+    expect(store.services(m.session.sid).map((r) => r.print)).toEqual([{ maxPages: 1, maxSessionPages: null }])
+    expect(h.stream.audit.get(m.session.sid)!.servicesChanged.map((r) => r.print)).toEqual([{ maxPages: 1, maxSessionPages: null }])
+    // Turning it off on resume is also accepted.
+    await b.ready(); print = false
+    const c = new Client(h.url)
+    const m3 = await c.hello({ resume: { sid: m.session.sid, resumeProof: b.manifest!.session.token } })
+    expect(m3.can.print).toBe(false); expect(m3.caps.print).toBeNull()
+    expect(store.services(m.session.sid).map((r) => r.print)).toEqual([{ maxPages: 1, maxSessionPages: null }, false])
+    for (const x of [a, b, c]) x.close()
+    h.stop()
   })
   it('a non-token proof needs the hook to grant it', async () => {
     const h = await start({ authorize: async (req) => ({ viewerId: 'alice', policy: {}, ...(req.token === 'granted-proof' ? { resumeGranted: true } : {}) }) })
