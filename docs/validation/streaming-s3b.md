@@ -117,6 +117,7 @@ Layer-1 marking. The largest job here, `lo-tdf104788.pptx` (6 pages,
 | client job checks, hostile servers, admission grant, blob ceiling, whole-job decoded budget (exact 1 GiB boundary, one step over, 17 × 2048² compressible pages), abort, socket end | `tests/stream/remote-print.test.ts` |
 | shared print surface (`printRasters`) | `tests/components/print-rasters.test.ts` and the existing print tests, unmodified |
 | remote print UI, guard, notices, Ctrl/Cmd+P, manifest change, document replacement | `tests/stream/remote-print-ui.test.tsx` |
+| session end during the network job, the lazy surface import and image loading (real `printRasters`; the frame never prints), dialog close, old-document guard | `tests/stream/remote-print-ended.test.tsx` |
 | browser end to end | `tests/browser/stream-print.spec.ts` (below) |
 
 **Browser end to end** (`tests/browser/stream-print.spec.ts`, Playwright

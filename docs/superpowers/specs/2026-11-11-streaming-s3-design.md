@@ -418,7 +418,12 @@ print rasters (parent T2 constructs).
 >   programmatic focus can still reach background controls (deferred, as in
 >   the pivot group dialog it follows). A replaced
 >   document aborts the old job and starts with no progress, range or
->   notice.
+>   notice. A session end (`doc.ended`, terminal or a host close) turns
+>   print off for that document: it aborts the network job and a surface
+>   still importing or loading its images (the frame never calls
+>   `print()`), closes the dialog, clears progress and notice (the
+>   viewer's "Viewing session ended" banner is the only message) and
+>   hides Print; an old document's late end changes nothing.
 > - **Evidence (Task 4 ruling).** The no-hidden-content check compares each
 >   printed page of the 13 hidden-construct fixtures with the print of a
 >   hidden-free copy by decoded pixels, with a mutation self-check that a

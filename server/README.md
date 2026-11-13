@@ -393,7 +393,11 @@ session stays open):
 many pages to print at once (limit: N pages).', 'This document is too large
 to print from the viewer.', 'Print limit for this session reached (N
 pages).', 'Too many requests. Try again shortly.', and 'The document could
-not be printed. Please try again.'. A cancel shows nothing.
+not be printed. Please try again.'. A cancel shows nothing. When the
+session ends, an unfinished print stops silently (including one whose
+pages have arrived but whose print frame is still loading them; it never
+opens the print dialog) and Print is hidden; the viewer's "Viewing session
+ended" line is the only message.
 
 **Honest limits.** The `unit` op still serves screen rasters, so print caps
 limit printing, not capture: what the viewer sees can be screenshotted, and

@@ -43,9 +43,20 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   // A resume may replace the manifest (caps and can.print): re-render and re-read.
   const [, setManifestRev] = useState(0)
   useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
+  // A session that ends (revoked, expired, closed…) can print nothing more:
+  // print is then off for this document, which stops the network job and a
+  // surface still importing or loading its images (the frame never prints).
+  // Keyed by the document, so an old document's late end changes nothing.
+  const [endedDoc, setEndedDoc] = useState<RemoteOfficeDoc>()
+  useEffect(() => {
+    let live = true
+    void doc.ended.then(() => { if (live) setEndedDoc(doc) })
+    return () => { live = false }
+  }, [doc])
+  const ended = endedDoc === doc
   // caps.print is null only when the server has print off: a `can.print`
   // that says otherwise is contradictory and fails closed.
-  const allowed = o.allowPrint && doc.manifest.can.print && doc.manifest.caps.print !== null
+  const allowed = o.allowPrint && !ended && doc.manifest.can.print && doc.manifest.caps.print !== null
   const caps = doc.manifest.caps.print
   const count = doc.manifest.units.list.length
 
@@ -66,6 +77,8 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
     stopAll()
     setRange(undefined); setProgress(undefined)
   }, [allowed])
+  // After a session end the viewer's ended banner is the only message.
+  useEffect(() => { if (ended) setNotice(undefined) }, [ended])
   useEffect(() => stopAll, [doc]) // eslint-disable-line react-hooks/exhaustive-deps
   // A replaced document starts clean: the old job's progress, range and notice
   // are reset during render (the old job is aborted by the cleanup above, and
