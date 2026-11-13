@@ -184,6 +184,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let checkedCells = 0
     let stage3Checked = 0
     let stage3BarWithheld = 0
+    let stage3BarEvidenced = 0
     let stage3NonBarChecked = 0
     let stage3NonBarWithheld = 0
 
@@ -225,15 +226,17 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
             // Ruling S3-A / OD-7: a bar cell whose bar:* capabilities are not verified in production is WITHHELD,
             // measured case or not. Non-bar rules in the case (DXF, scale) keep following the normal path below.
             const barCaps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
-            if (barCaps.length > 0 && !barCaps.every(id => VERIFIED_CAPABILITIES.has(id))) {
-              // The BAR is withheld (asserted per cell, on the bar descriptor itself, in "stage 3 bar cells are withheld
-              // until their evidence lands"). The cell style here may only come from the case's non-bar rules: Ruling
-              // S3-I "a bar never changes the fill slot ... A scale or DXF fill therefore keeps painting, but the bar
-              // itself paints over a fill only with bar:composition-with-scale or bar:composition-dxf-fill".
-              stage3BarWithheld++
+            if (barCaps.length > 0) {
+              // Withheld or painted (Task 23 published the verified bars), the BAR never reaches the cell style: its
+              // descriptor is checked per cell in "stage 3 bar cells follow the published evidence" and its pixels in
+              // the Lesson 1 conformance. The cell style here may only come from the case's non-bar rules: Ruling S3-I
+              // "a bar never changes the fill slot ... A scale or DXF fill therefore keeps painting, but the bar itself
+              // paints over a fill only with bar:composition-with-scale or bar:composition-dxf-fill".
+              if (barCaps.every(id => VERIFIED_CAPABILITIES.has(id))) stage3BarEvidenced++
+              else stage3BarWithheld++
               const nonBar = c.markers.filter(m => m.ruleType !== 'dataBar' && isCellInSqref(exp.ref, m.sqref))
               if (nonBar.length === 0) {
-                expect(gotMatched, `${cellKey}: only bar rules cover it, so no style may paint until ${barCaps.join(', ')} is verified`).toBe(false)
+                expect(gotMatched, `${cellKey}: only bar rules cover it (${barCaps.join(', ')}), so no style may paint`).toBe(false)
                 continue
               }
               if (underUnevidencedBarStop(c, exp.ref)) continue // Ruling S3-J: asserted in the S3-J tests below
@@ -290,7 +293,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
 
     // Ensures we audited the full Stage 1 cell corpus (220+ cells)
     expect(checkedCells).toBeGreaterThan(200)
-    // Stage 3 (reported separately from the 398/364/34 Stage 1/2 totals): every measured bar cell was withheld.
+    // Stage 3 (reported separately from the 398/364/34 Stage 1/2 totals): every measured bar cell is withheld or evidenced.
     // Pinned to the value derived from the manifest itself: every expected cell of a measured Stage 3 case that lies under
     // a dataBar marker with a capability production does not hold (a regression that skips or paints one moves it).
     const expectedStage3Withheld = manifest.cases
@@ -299,9 +302,18 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
         const caps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
         return caps.length > 0 && !caps.every(id => VERIFIED_CAPABILITIES.has(id))
       })).length
+    const expectedStage3Evidenced = manifest.cases
+      .filter(c => c.stage === 3 && c.status === 'measured')
+      .flatMap(c => (c.expected?.cells ?? []).filter(exp => {
+        const caps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+        return caps.length > 0 && caps.every(id => VERIFIED_CAPABILITIES.has(id))
+      })).length
     expect(expectedStage3Withheld).toBeGreaterThan(0)
     expect(stage3BarWithheld).toBe(expectedStage3Withheld)
-    expect(stage3BarWithheld).toBeLessThanOrEqual(stage3Checked)
+    // Task 23: the published set evidences most bar cells; their bars are compared with Excel in the Lesson 1 test.
+    expect(expectedStage3Evidenced).toBeGreaterThan(400)
+    expect(stage3BarEvidenced).toBe(expectedStage3Evidenced)
+    expect(stage3BarWithheld + stage3BarEvidenced).toBeLessThanOrEqual(stage3Checked)
     // Non-vacuous (Task 18b review): the non-bar outcomes on bar cells were compared with Excel's background.
     expect(stage3NonBarChecked).toBeGreaterThan(10)
     expect(stage3NonBarWithheld).toBe(Object.keys(STAGE3_NONBAR_WITHHELD).length)
@@ -623,7 +635,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
   /** A bar is withheld when the cell is not `ready` or its visual slot carries no data bar descriptor. */
   const barWithheld = (outcome: CfOutcome<CfCellState>): boolean => outcome.kind !== 'ready' || outcome.value.visual?.dataBar === undefined
 
-  it('stage 3 bar cells are withheld until their evidence lands', async () => {
+  it('stage 3 bar cells follow the published evidence: a bar only where every capability it needs is verified', async () => {
     // The guard itself has teeth: a ready cell that carries a bar descriptor is NOT withheld.
     expect(barWithheld({ kind: 'ready', value: { properties: {}, visual: { dataBar: { ruleId: 0, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: 0xff0000ff, isGradient: false, isNegative: false, showValue: true, direction: 'leftToRight' } } } })).toBe(false)
     expect(barWithheld({ kind: 'ready', value: { properties: {} } })).toBe(true)
@@ -634,13 +646,28 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(stage3.map(c => c.id)).toHaveLength(15)
     let checked = 0
     let barCells = 0
+    let painted = 0
+    let unevidencedWithheld = 0
+    const violations: string[] = []
+    // Columns whose MARKER names an unverified capability the SAVED bar does not need (each is also listed, with the
+    // same reason, in PAINTED_UNDESIGNATED of the Lesson 1 test, which checks their px against Excel).
+    const MARKER_ONLY: Record<string, string> = {
+      'stage3-bar-axis-negative:H': 'bar:negative-border-same-as-positive applies to the negative cells only, which stay withheld',
+      'stage3-bar-composition:H': 'bar:composition-bar-stopIfTrue: Excel dropped the flag on resave (S3-CLOSE)',
+      'stage3-bar-degenerate:G': 'bar:bounds-positional is non-discriminating; the saved bar\'s bounds and lengths are verified',
+      'stage3-bar-pairing:C': 'bar:pairing-standalone: Excel resaves the standalone bar in its paired form (S3-CLOSE)',
+    }
+    const markerOnlyPainted = new Set<string>()
     for (const c of stage3) {
       const bytes = new Uint8Array(readFileSync(join(REPO_ROOT, c.saved)))
       const doc = await parseXlsx(await OfficePackage.load(bytes))
       const sheet = doc.sheets.find(s => s.name === c.sheet) ?? doc.sheets[0]!
       expect(sheet.conditionalFormatting, `${c.id} must carry conditional formatting`).toBeDefined()
       const memory = createCfMemory()
-      const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence })
+      // The service gets the sheet's merges as production's text and paint paths pass them (a bar scope that
+      // intersects a merge is withheld without bar:scope-merged-cell).
+      const merges = (sheet.mergeRanges ?? []).map(m => ({ firstRow: m.minRow, lastRow: m.maxRow, firstCol: m.minCol, lastCol: m.maxCol }))
+      const service = createCfService(sheet.conditionalFormatting!, memory, { evidence: cfRuntimeEvidence, merges })
       const stamp = { owner: 'conformance', sheetId: sheet.sheetId ?? sheet.name, workbookValueGen: 0, cfGen: cfRulesVersion(sheet.conditionalFormatting!), viewGen: 0, structureGen: 0, clockGen: 0 }
       const source = residentSource(sheet, stamp, memory, 'engine')
       const rect = (() => {
@@ -654,8 +681,20 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
           const outcome = lease.value.at(row, col)
           checked++
           if (exp.barApplied === true) barCells++
-          // Production evidence: no bar:* capability is verified, so no cell may carry a bar.
-          expect(barWithheld(outcome), `${c.id}:${exp.ref} must withhold its bar until its evidence lands`).toBe(true)
+          // Production evidence (published by Task 23): a cell under a bar capability production does not hold never
+          // carries a bar; where every capability is held the bar may paint (its px are checked in the Lesson 1 test).
+          const caps = c.markers.filter(m => m.ruleType === 'dataBar' && isCellInSqref(exp.ref, m.sqref)).map(m => m.capabilityId)
+          if (!caps.every(id => VERIFIED_CAPABILITIES.has(id))) {
+            const col = exp.ref.replace(/\d+/, '')
+            if (!barWithheld(outcome)) {
+              if (MARKER_ONLY[`${c.id}:${col}`]) markerOnlyPainted.add(`${c.id}:${col}`)
+              else violations.push(`${exp.ref} of ${c.id}: ${caps.filter(id => !VERIFIED_CAPABILITIES.has(id)).join(', ')}`)
+            } else unevidencedWithheld++
+          }
+          if (!barWithheld(outcome)) {
+            expect(caps.length, `${c.id}:${exp.ref} paints a bar no marker covers`).toBeGreaterThan(0)
+            painted++
+          }
         }
       } finally {
         lease.release()
@@ -666,6 +705,11 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     // Non-vacuous: every designated bar cell and its control was visited.
     expect(checked).toBe(stage3.reduce((n, c) => n + c.expected.cells.length, 0))
     expect(barCells).toBeGreaterThan(200)
+    expect([...new Set(violations)].sort()).toEqual([])
+    expect([...markerOnlyPainted].sort()).toEqual(Object.keys(MARKER_ONLY).sort())
+    // Non-vacuous both ways: production paints the evidenced bars and withholds the unevidenced ones.
+    expect(painted).toBeGreaterThan(400)
+    expect(unevidencedWithheld).toBeGreaterThan(20)
 
     // Bar FINDINGS are withheld-only (extends the guard): a bar can never be recorded as painted.
     type BarFinding = { outcome: 'withheld'; reason: string }
@@ -683,8 +727,8 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
    *
    * Evidence is the audit's OWN result (auditStage3Manifest: the verified set, the selected layout and the measured
    * automatic colours), injected exactly on top of production's Stage 1/2 set before parsing (parse-time gates read it).
-   * Nothing Stage 3 is published yet; once Task 23 publishes, the published export must equal that same result (asserted
-   * below), so the injection is a no-op and this test runs against production evidence unchanged.
+   * Task 23 published it: the published export must equal that same result (asserted below), so the injection is a
+   * no-op and this test runs against production evidence unchanged.
    *
    * Geometry: layoutDataBar at the capture scale (1 device px per pt: zoom x DPR = 3/4 in viewer units, a pure unit
    * conversion of the sidecar's cellLeftPx/cellWidthPx and row heights) against the sidecar's raw px. Edges and the axis
@@ -707,8 +751,9 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId).sort()
     expect(verified.length).toBeGreaterThan(40)
     const published = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string> | undefined
-    if (published) {
-      expect([...published].sort(), 'the published Stage 3 set is the audit result').toEqual(verified)
+    expect(published, 'Task 23 publishes the Stage 3 set').toBeDefined()
+    {
+      expect([...published!].sort(), 'the published Stage 3 set is the audit result').toEqual(verified)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LAYOUT'), 'the published layout is the audit result').toEqual(audit.barLayout.layout)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_AUTO_BAR_COLORS'), 'the published colours are the audit result').toEqual(audit.autoBarColours)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT'), 'the published gradient is the audit result').toEqual(audit.barGradient)

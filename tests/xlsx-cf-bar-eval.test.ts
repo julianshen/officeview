@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
@@ -69,6 +69,12 @@ const STUB_EVIDENCE = [
 const num = (value: number): CfLiteral => ({ kind: 'number', value })
 
 /** Threshold resolution then evaluation, the service's per-cell path, as one pure call. */
+/** Task 23 published the Stage 3 exports. These evaluator tests run under stubbed evidence with an export injected or
+ * ABSENT, so each starts from explicitly absent exports (an empty export names nothing) and restores the published ones. */
+const NO_EXPORT = {}
+beforeEach(() => { injectCfBarLayout(NO_EXPORT); injectCfBarLengths(NO_EXPORT); injectCfBarAutoBounds(NO_EXPORT) })
+afterEach(() => { injectCfBarLayout(null); injectCfBarLengths(null); injectCfBarAutoBounds(null) })
+
 function evalBar(v: CfLiteral | number, def: BarDef, scope: number[], variant?: CfBarLayoutVariant) {
   const stats = makeStats(scope)
   const thresholds = resolveBarThresholds(def, stats)
@@ -130,7 +136,7 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
         expect([b0100.startFraction, b0100.endFraction]).toEqual([0, 0.25])
       })
     } finally {
-      injectCfBarLengths(null)
+      injectCfBarLengths(NO_EXPORT)
     }
     // Task 22b: the capability alone never lifts 10/90 (the linear reading is refuted for Excel's paired solid bars):
     // without the selected rule the bar is unresolved, while 0/100 still resolves.
@@ -161,7 +167,7 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
           return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
         })
       } finally {
-        injectCfBarLengths(null)
+        injectCfBarLengths(NO_EXPORT)
       }
     }
     expect(at(RUN7, 'x14', false)).toBe(0.85)
@@ -185,7 +191,7 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
           return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
         }))
       } finally {
-        injectCfBarLengths(null)
+        injectCfBarLengths(NO_EXPORT)
       }
     }
     const withGradient = STUB_EVIDENCE.filter(c => c !== 'bar:render-solid').concat('bar:render-gradient-stops')
@@ -206,7 +212,7 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
           return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
         }))
       } finally {
-        injectCfBarLengths(null)
+        injectCfBarLengths(NO_EXPORT)
       }
     }
     expect(underForm('half-min@x14', 'x14')).toEqual([0.05, 0.25, 0.85])
@@ -239,7 +245,7 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
     withExactCfEvidence(STUB_EVIDENCE.filter(c => c !== 'bar:bounds-automin'), () => {
       expect(resolveBarThresholds(bar({ bounds: [{ type: 'autoMin' }, { type: 'max' }] }), makeStats([20, 40, 60])).kind).toBe('unresolved')
     })
-    } finally { injectCfBarAutoBounds(null) }
+    } finally { injectCfBarAutoBounds(NO_EXPORT) }
   })
 
   it('Task 22c (S3-AUTO-BOUNDS): an automatic bound resolves only to the rule its capture verified', () => {
@@ -252,12 +258,12 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
           const out = resolveBarThresholds(both, st)
           return out.kind === 'ready' ? out.value : out.kind
         }))
-      } finally { injectCfBarAutoBounds(null) }
+      } finally { injectCfBarAutoBounds(NO_EXPORT) }
     }
     expect(under(ZERO_ANCHORED)).toEqual([[0, 60], [-60, 0]])
     expect(under({ autoMin: { rule: 'min-max', settledBy: ['bar:bounds-automin'] }, autoMax: { rule: 'min-max', settledBy: ['bar:bounds-automax'] } })).toEqual([[20, 60], [-60, -20]])
     // The capability alone, an unknown rule, or a rule without its capability resolves nothing.
-    expect(under(null)).toEqual(['unresolved', 'unresolved'])
+    expect(under(NO_EXPORT)).toEqual(['unresolved', 'unresolved'])
     expect(under({ autoMin: { rule: 'nearest', settledBy: ['bar:bounds-automin'] }, autoMax: ZERO_ANCHORED.autoMax })).toEqual(['unresolved', 'unresolved'])
     expect(under(ZERO_ANCHORED, STUB_EVIDENCE.filter(c => c !== 'bar:bounds-automax'))).toEqual(['unresolved', 'unresolved'])
   })
@@ -472,7 +478,7 @@ function columnSource(values: readonly (CfLiteral | number)[], numberFormats: 'r
 const injectLayout = (variant: CfBarLayoutVariant | undefined) => injectCfBarLayout(variant ? {
   allPositive: { ...variant, settledBy: ['bar:lengths-explicit-0-100', 'bar:lengths-default-10-90'] },
   mixedSign: { ...variant, settledBy: ['bar:axis-automatic'] },
-} : null)
+} : NO_EXPORT)
 
 async function prepareBars(rules: CfRule[], values: readonly (CfLiteral | number)[], evidence: readonly string[], variant: CfBarLayoutVariant | undefined,
   opts: { merges?: readonly SourceRect[]; hiddenRows?: readonly SourceRect[]; numberFormats?: 'resolved' | 'unknown' } = {}) {

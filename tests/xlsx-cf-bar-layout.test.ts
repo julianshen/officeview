@@ -70,11 +70,12 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
 
   it('rendering without --publish-stage3 is byte-identical to the committed file; publishing carries the layout export', () => {
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
-    expect(committed).not.toContain('VERIFIED_STAGE3_BAR_LAYOUT')
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed })).toBe(committed)
     const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { publishStage3: true })
     const block = renderBarLayoutBlock(auditStage3Manifest(manifest(), { rootDir: REPO_ROOT }).barLayout.layout)
     expect(published).toContain(block)
+    // Task 23 published it: the committed file is exactly the published rendering.
+    expect(committed).toBe(published)
     expect(block).toContain("allPositive: { origin: 'span', lengthBasis: 'cell', settledBy: ['bar:lengths-default-10-90', 'bar:lengths-explicit-0-100'] }")
     // A published block is carried over verbatim by a later --write without --publish-stage3, and is idempotent.
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: published })).toBe(published)
@@ -84,10 +85,13 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
   }, AUDIT_TIMEOUT_MS)
 
   it('production resolves a variant only from the export and only while its settling capabilities are verified', () => {
-    // Nothing published today: no variant, whatever the evidence.
+    // The published layout (Task 23): both scopes under production evidence; a scope whose settling capability is not
+    // verified drops out (allPositive is also settled by bar:lengths-default-10-90).
+    expect(barLayoutEvidence()).toEqual({ allPositive: SPAN_CELL, mixedSign: AXIS_SIDE })
     withExactCfEvidence(['bar:lengths-explicit-0-100', 'bar:axis-automatic', 'bar:axis-middle'], () => {
-      expect(barLayoutEvidence()).toBeUndefined()
+      expect(barLayoutEvidence()).toEqual({ mixedSign: AXIS_SIDE })
     })
+    withExactCfEvidence([], () => expect(barLayoutEvidence()).toBeUndefined())
     injectCfBarLayout({
       allPositive: { ...SPAN_CELL, settledBy: ['bar:lengths-explicit-0-100'] },
       mixedSign: { ...AXIS_SIDE, settledBy: ['bar:axis-automatic', 'bar:axis-middle'] },

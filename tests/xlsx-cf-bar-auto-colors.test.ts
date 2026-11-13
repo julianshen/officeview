@@ -238,7 +238,7 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
     expect(judgeBarAutoColour(undefined)).toMatchObject({ status: 'no-hypotheses' })
   })
 
-  it('the audit verifies both colours as white from the grey-cell capture, and production still withholds', () => {
+  it('the audit verifies both colours as white from the grey-cell capture, and production resolves exactly them', () => {
     const report = auditStage3Manifest(manifest(), { rootDir: REPO_ROOT })
     expect(report.ok).toBe(true)
     for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) {
@@ -246,8 +246,9 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
       expect(report.blockedCapabilities).not.toContain(cap)
     }
     expect(report.autoBarColours).toEqual(WHITE)
-    // Nothing is published (Task 23): production has no Stage 3 export, so no automatic colour resolves.
-    withExactCfEvidence(Object.keys(BAR_AUTO_COLOUR_CAPABILITIES), () => {
+    // Task 23 published the audit's colours: production resolves each, only through its capability.
+    for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) expect(autoBarColourEvidence(cap), cap).toBe(0xffffffff)
+    withExactCfEvidence([], () => {
       for (const cap of Object.keys(BAR_AUTO_COLOUR_CAPABILITIES)) expect(autoBarColourEvidence(cap), cap).toBeUndefined()
     })
     // Without a verified capture the audit blocks both and exports no colour.
@@ -276,10 +277,10 @@ describe('Stage 3 automatic bar colours (Ruling S3-F as amended, Task 19b)', () 
   it('rendering without --publish-stage3 is byte-identical to the committed file; publishing carries the colour export', () => {
     const committed = readFileSync(resolve(REPO_ROOT, 'src/xlsx/cf/verifiedCapabilities.ts'), 'utf8')
     expect(renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { committedSource: committed })).toBe(committed)
-    expect(committed).not.toContain('VERIFIED_STAGE3_AUTO_BAR_COLORS')
-    // Publishing (Task 23 only) would carry both measured colours.
+    // Publishing (Task 23) carries both measured colours, and the committed file is that publication.
     const published = renderVerifiedCapabilitiesSource(manifest(), REPO_ROOT, { publishStage3: true })
     expect(published).toContain(renderAutoBarColoursBlock(WHITE))
+    expect(committed).toBe(published)
     // Before the capture, publishing carries an empty colour block.
     expect(renderVerifiedCapabilitiesSource(precapture(), REPO_ROOT, { publishStage3: true }))
       .toContain('export const VERIFIED_STAGE3_AUTO_BAR_COLORS: Readonly<Record<string, string>> = {\n}\n')

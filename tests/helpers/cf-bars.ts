@@ -1,9 +1,11 @@
 /**
- * Data-bar fixtures for the Task 22 painting tests. Nothing Stage 3 is published (Task 22 addendum §1), so production
- * withholds every bar; these helpers paint bars under INJECTED evidence and an injected layout only. The numbers they
- * produce are the measured model run under stubs, never new Excel facts.
+ * Data-bar fixtures for the Task 22 painting tests. They paint bars under INJECTED evidence and an injected layout only:
+ * since Task 23 publishes the Stage 3 set, the injection is EXACT (production's Stage 1/2 sets plus the listed bar
+ * stubs, never the published Stage 3 set or its exports' capabilities), so `omit` still removes a gate and an export
+ * whose capability is not listed still reads as absent. The numbers they produce are the measured model run under
+ * stubs, never new Excel facts; production's own bars are checked against Excel in the conformance tests.
  */
-import { injectCfBarLayout, withInjectedCfEvidence } from '../../src/xlsx/cf/evidence'
+import { VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, injectCfBarLayout, withExactCfEvidence } from '../../src/xlsx/cf/evidence'
 import type { CfDefinition, CfRule } from '../../src/xlsx/cf/model'
 import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
 
@@ -25,11 +27,12 @@ export const BAR_LAYOUT = {
   mixedSign: { origin: 'axis', lengthBasis: 'side', settledBy: ['bar:axis-automatic', 'bar:axis-middle'] },
 }
 
-/** Runs `fn` with injected bar evidence (joined to production evidence) and the injected layout; both are cleared after. */
+/** Runs `fn` with exactly the Stage 1/2 production evidence plus the injected bar stubs, and the injected layout; both
+ * are cleared after. */
 export async function withBars<T>(fn: () => Promise<T> | T, options: { paint?: boolean; extra?: readonly string[]; omit?: readonly string[] } = {}): Promise<T> {
   injectCfBarLayout(BAR_LAYOUT)
   const caps = [...BAR_EVAL_EVIDENCE, ...BAR_PARSE_EVIDENCE, ...(options.paint === false ? [] : BAR_PAINT_EVIDENCE), ...(options.extra ?? [])].filter(c => !options.omit?.includes(c))
-  try { return await withInjectedCfEvidence(caps, async () => fn()) } finally { injectCfBarLayout(null) }
+  try { return await withExactCfEvidence([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES, ...caps], async () => fn()) } finally { injectCfBarLayout(null) }
 }
 
 export const BLUE = 0xff0000ff, RED = 0xffff0000, BLACK = 0xff000000, GREEN = 0xff00b050

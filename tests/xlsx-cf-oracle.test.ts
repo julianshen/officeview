@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -3247,12 +3248,19 @@ describe('CF oracle verifier', () => {
         expect(res.savedSha256).toBe(c.expected.savedSha256)
       }
     }
-    // Every Stage 3 capability is a bar:* capability with a ruling citation, and production holds none of them.
+    // Every Stage 3 capability is a bar:* capability with a ruling citation. Since Task 23 production holds exactly the
+    // published Stage 3 set (the audit's verified result, asserted in tests/xlsx-cf-stage3.test.ts), and never a
+    // non-discriminating, unsupported or unresolved one.
+    const published = Reflect.get(verifiedExports, 'VERIFIED_STAGE3_CAPABILITIES') as ReadonlySet<string>
+    expect(published.size).toBe(51)
     for (const entry of CF_STAGE3_CAPABILITIES) {
       expect(entry.capabilityId.startsWith('bar:')).toBe(true)
       expect(entry.failClosedDisposition).toMatch(/S3-[A-S]|Always unsupported/)
-      expect(hasEvidence(entry.capabilityId)).toBe(false)
-      expect(VERIFIED_CAPABILITIES.has(entry.capabilityId)).toBe(false)
+      expect(hasEvidence(entry.capabilityId), entry.capabilityId).toBe(published.has(entry.capabilityId))
+      expect(VERIFIED_CAPABILITIES.has(entry.capabilityId), entry.capabilityId).toBe(published.has(entry.capabilityId))
+      if (entry.capabilityId.startsWith('bar:unresolved-') || CF_STAGE3_UNSUPPORTED[entry.capabilityId] || CF_STAGE3_NONDISCRIMINATING[entry.capabilityId]) {
+        expect(hasEvidence(entry.capabilityId), entry.capabilityId).toBe(false)
+      }
     }
     expect(CF_STAGE3_CAPABILITIES.filter(e => barCapabilityKind(e.capabilityId) === 'settings').map(e => e.capabilityId).sort()).toEqual([
       'bar:pairing-base-only',
@@ -3557,7 +3565,8 @@ describe('CF oracle verifier', () => {
     expect(hasEvidence('bar:bounds-num')).toBe(false)
     expect(VERIFIED_CAPABILITIES.has('bar:bounds-num')).toBe(false)
     expect(CF_STAGE3_NONDISCRIMINATING['bar:bounds-automax']).toBeUndefined()
-    expect(hasEvidence('bar:bounds-automax')).toBe(false)
+    // Verified by stage3-bar-auto-bounds and published by Task 23.
+    expect(hasEvidence('bar:bounds-automax')).toBe(true)
   })
 
   describe('measured bar cases', () => {

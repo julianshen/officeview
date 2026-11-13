@@ -1,9 +1,10 @@
 /**
  * Task 22, Ruling S3-P: a painted data bar announces a fixed localized label with the value's position in its range;
  * the value text stays in the accessible name, and the bar adds no tab stop. Bars paint here under INJECTED evidence
- * only (tests/helpers/cf-bars.ts); production withholds every bar until Task 23 publishes.
+ * only (tests/helpers/cf-bars.ts, exact injection); production paints from the Stage 3 set Task 23 published.
  *
- * The zh-TW term 「資料橫條」 is Excel's zh-TW name for data bars; it was not re-read from a live Excel UI in this task.
+ * The zh-TW term 「資料橫條」 is Excel's zh-TW name for data bars: the orchestrator selected it by that exact name in Excel
+ * 16.114 zh-TW's Conditional Formatting style menu when authoring tests/fixtures/xlsx-cf/excel-authored-databar.xlsx.
  */
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/react'
@@ -19,6 +20,7 @@ import type { XlsxSheet } from '../src/xlsx/types'
 import type { FormatBudget } from '../src/xlsx/view/formatWorkspace'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 import { barSheet, paintScopeBars, withBars } from './helpers/cf-bars'
+import { VERIFIED_STAGE1_CAPABILITIES, VERIFIED_STAGE2_CAPABILITIES, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 
 function trackingBudget(): { budget: FormatBudget; settled: object[] } {
   const settled: object[] = []
@@ -100,10 +102,16 @@ describe('bar cell announces a bounded label with its position, without a tab st
   })
 
   it('an unresolved or withheld bar announces only the unavailable descriptor', async () => {
-    // Production evidence: nothing Stage 3 is published, so the bar is unresolved.
-    const plain = (await scopeOf(barSheet([0, 72, 100]), 3))!
-    expect(plain.describe(1, 0)).toEqual({ key: 'cf-unavailable', text: '無法使用條件式格式設定' })
-    plain.dispose()
+    // Without Stage 3 evidence (production's Stage 1/2 sets only, as before Task 23 published) the bar is unresolved.
+    await withExactCfEvidence([...VERIFIED_STAGE1_CAPABILITIES, ...VERIFIED_STAGE2_CAPABILITIES], async () => {
+      const plain = (await scopeOf(barSheet([0, 72, 100]), 3))!
+      expect(plain.describe(1, 0)).toEqual({ key: 'cf-unavailable', text: '無法使用條件式格式設定' })
+      plain.dispose()
+    })
+    // Production evidence since Task 23: the same bar paints and announces its position.
+    const published = (await scopeOf(barSheet([0, 72, 100]), 3))!
+    expect(published.describe(1, 0)).toEqual({ key: 'cf:dataBar', text: '資料橫條 72%' })
+    published.dispose()
     // Evaluated, but the painter withholds it (no paint gates): announced the same way, never as a bar.
     await withBars(async () => {
       const scope = (await scopeOf(barSheet([0, 72, 100]), 3, 'en-US'))!

@@ -3,14 +3,14 @@
  * Task 22: data bars paint in every view through one lazy painter (`src/xlsx/cf/dataBarPaint.ts`), reached by the eager
  * renderers only through `CfPaintBatch.barAt`/`paintBars`/`hidesTextAt`.
  *
- * Every bar here is painted under INJECTED evidence (tests/helpers/cf-bars.ts): nothing Stage 3 is published, so in
- * production every bar stays withheld until Task 23. The model constants are checked against the Excel sidecars; the
+ * Every bar here is painted under INJECTED evidence (tests/helpers/cf-bars.ts: exact, so the Stage 3 set Task 23
+ * published does not leak in) with the gradient exports injected or absent. The model constants are checked against the Excel sidecars; the
  * Lesson 1 geometry conformance against every measured cell lives in tests/xlsx-cf-oracle-conformance.test.ts.
  */
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createCanvas } from 'canvas'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { computeMetrics, computePrintMetrics, renderPrintPage, renderSheet } from '../src/xlsx/render'
 import { buildSheetGeometry } from '../src/xlsx/view/viewport'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
@@ -41,6 +41,11 @@ const rowTop = (s: Sidecar, ref: string): number => s.rowHeightsPt.slice(0, rowO
 const AT_CAPTURE = { zoom: 0.75, dpr: 1, output: 'device' as const }
 const ptCell = (left: number, top: number, width: number, height: number) => ({ x: left * 4 / 3, y: top * 4 / 3, width: width * 4 / 3, height: height * 4 / 3 })
 const ALL = (): boolean => true
+/** Task 23 published the gradient exports. These tests exercise the painter with an export injected or ABSENT, so each
+ * starts from an explicitly absent export (an empty export names no model) and restores the published one after. */
+const NO_EXPORT = {}
+beforeEach(() => { injectCfBarGradient(NO_EXPORT); injectCfBarGradientBorder(NO_EXPORT) })
+afterEach(() => { injectCfBarGradient(null); injectCfBarGradientBorder(null) })
 
 const bar = (overrides: Partial<CfBarDescriptor> = {}): CfBarDescriptor => ({
   ruleId: 1, axisFraction: 0, startFraction: 0, endFraction: 0.5, fillColor: BLUE, isGradient: false, isNegative: false,
@@ -118,7 +123,7 @@ describe('CF_BAR_RENDER_MODEL equals the measured sidecars', () => {
     const cell = ptCell(84, 30, 180, 30)
     expect(layoutDataBar(bar(), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.fill).toBeDefined()
     for (const cap of CF_BAR_PAINT_CAPABILITIES) expect(layoutDataBar(bar(), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, c => c !== cap), cap).toBeUndefined()
-    // Gradient: no verified gradient export (none is published), so never drawn (and never drawn solid instead).
+    // Gradient: with no verified gradient export (absent here), never drawn (and never drawn solid instead).
     expect(layoutDataBar(bar({ isGradient: true }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
     // Border: needs bar:render-border; with it the frame is borderPt wide.
     expect(layoutDataBar(bar({ borderColor: GREEN }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, c => c !== 'bar:render-border')).toBeUndefined()
@@ -128,6 +133,7 @@ describe('CF_BAR_RENDER_MODEL equals the measured sidecars', () => {
     expect(layoutDataBar(bar({ endFraction: 0.001 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
     expect(layoutDataBar(bar({ endFraction: 0 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toEqual({})
   })
+
 })
 
 /** Records every fill and text call with the transform it ran under, in order. */
@@ -283,7 +289,7 @@ describe('gradient bars (Task 22b): one painter, the verified model only, the me
       injectCfBarGradient({ 'bar-length': { endBlend: 0.847, settledBy: [] } })
       expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
     } finally {
-      injectCfBarGradient(null)
+      injectCfBarGradient(NO_EXPORT)
     }
   })
 
@@ -316,7 +322,7 @@ describe('gradient bars (Task 22b): one painter, the verified model only, the me
 
     injectCfBarGradient(GRADIENT_EXPORT)
     let views: Awaited<ReturnType<typeof paintAll>>
-    try { views = await paintAll() } finally { injectCfBarGradient(null) }
+    try { views = await paintAll() } finally { injectCfBarGradient(NO_EXPORT) }
     const end = [216, 216, 255]
     const rects: Record<string, string> = {}
     for (const [name, { ops, canvas }] of Object.entries(views)) {
@@ -363,12 +369,12 @@ describe('bordered gradient bars (Ruling S3-GRAD-BORDER): the verified shape onl
       injectCfBarGradientBorder({ 'frame-over-ramp': { settledBy: ['bar:render-gradient-border'] } })
       expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
       // The bordered model never paints a borderless gradient, which keeps its own export.
-      injectCfBarGradient(null)
+      injectCfBarGradient(NO_EXPORT)
       injectCfBarGradientBorder(exportOf('frame-over-ramp'))
       expect(layoutDataBar(bar({ isGradient: true, endFraction: 0.5 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
     } finally {
-      injectCfBarGradient(null)
-      injectCfBarGradientBorder(null)
+      injectCfBarGradient(NO_EXPORT)
+      injectCfBarGradientBorder(NO_EXPORT)
     }
   })
 
@@ -397,7 +403,7 @@ describe('bordered gradient bars (Ruling S3-GRAD-BORDER): the verified shape onl
           expect([0, 1, 2].map(j => img.data[(160 * 450 + 266 + L) * 4 + j])).toEqual([255, 255, 255])
         }
       } finally {
-        injectCfBarGradientBorder(null)
+        injectCfBarGradientBorder(NO_EXPORT)
       }
     })
   }

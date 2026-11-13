@@ -74,6 +74,7 @@ import { createCfStatistics } from '../../src/xlsx/cf/statistics'
 import { computeMetrics } from '../../src/xlsx/render'
 import type { FormatBudget } from '../../src/xlsx/view/formatWorkspace'
 import type { XlsxCell, XlsxSheet } from '../../src/xlsx/types'
+import type { CfLease, CfStamp, CfValuePage, CfValueSource } from '../../src/xlsx/cf/model'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -1224,12 +1225,291 @@ export async function pressureScaleWholeColumnExtents(): Promise<PressureSample>
   }
 }
 
+/* ---------------- Stage 3 bar pressure (Task 23) ---------------- */
+
+/** A paired (x14) solid min/max data bar at 0/100 lengths, left to right, no border or axis colour: the shape the Stage 3
+ * evidence verifies for all-positive data, so the scenarios below exercise painted bars, not withheld ones. */
+export const barRule = (priority: number, range: { firstRow: number; lastRow: number; firstCol: number; lastCol: number }, bounds?: unknown[]) => ({
+  id: priority,
+  priority,
+  documentOrder: priority,
+  stopIfTrue: false,
+  ranges: [range],
+  writes: new Set(['dataBar']),
+  definition: {
+    kind: 'dataBar',
+    bounds: bounds ?? [{ type: 'min' }, { type: 'max' }],
+    fillArgb: 0xff638ec6,
+    minLength: 0,
+    maxLength: 100,
+    gradient: false,
+    border: false,
+    negativeBarColorSameAsPositive: false,
+    negativeBarBorderColorSameAsPositive: true,
+    axisPosition: 'automatic',
+    direction: 'leftToRight',
+    showValue: true,
+    sheetRightToLeft: false,
+    pairing: 'x14',
+    dialect: 'x14',
+    formulas: [],
+  },
+})
+
+/** Whether a resident scope announces a painted data bar at the cell (Ruling S3-P label). */
+const announcesBar = (scope: { describe(row: number, col: number): { text: string } | undefined }, row: number, col: number): boolean =>
+  scope.describe(row, col)?.text.startsWith('Data bar') === true
+
+/** Wrap sheet cells to count EVERY read of a cell's value (not distinct cells): a scan repeated per rule multiplies it. */
+export function countingValueReads(sheet: XlsxSheet): { sheet: XlsxSheet; reads: () => number } {
+  let reads = 0
+  const rows = sheet.rows.map(band => ({
+    ...band,
+    cells: band.cells.map(cell => new Proxy(cell, {
+      get: (t, p, r) => {
+        if (p === 'value') reads++
+        return Reflect.get(t, p, r)
+      },
+    })),
+  }))
+  return { sheet: { ...sheet, rows } as unknown as XlsxSheet, reads: () => reads }
+}
+
+/**
+ * A 1M-row DECLARED `A:A` scope (100 stored cells) under 100 data bars and 100 colour scales. Two proofs:
+ * - statistics: the 200 rule scopes are one scope, so one sparse scan serves them all (`sourceReads` = 100 stored cells);
+ * - production: the resident text scope paints the first bar on every stored cell (S3-I-OVERLAP; whole-column and
+ *   duplicate-block bars are verified), and every value read during preparation is counted. A per-rule scan would read
+ *   each value 200 times; the shared scan keeps the total within a small multiple of the 100 cells.
+ * It is NOT a populated 1M-row scope (as Stage 2's M5 note).
+ */
+export async function pressureBar1MRowSharedScan(): Promise<PressureSample & { statisticsReads: number; valueReads: number; estimatorRefusedAll: boolean }> {
+  const started = Date.now()
+  const wholeCol = { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }
+  const rules = [
+    ...Array.from({ length: 100 }, (_, i) => barRule(i, wholeCol)),
+    ...Array.from({ length: 100 }, (_, i) => scaleRule(100 + i, wholeCol)),
+  ]
+  // Values 5 and 15 alternate: every bar is either the zero-length minimum or the full span, so none rounds away (the
+  // unmeasured minimum-visible-width branch would withhold it).
+  const cells: XlsxCell[] = Array.from({ length: 100 }, (_, row) => ({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row % 2) * 10 + 5, hasCachedValue: true }))
+  const inner = { name: 'P', sheetId: 'p', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  // Statistics: one scan for 200 identical scopes.
+  const memory = createCfMemory()
+  const stamp = { owner: 'audit', sheetId: inner.sheetId ?? inner.name, workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const session = createCfStatistics(memory, { retainEntries: true })
+  const outs = await session.prepareStatistics(rules.map(r => r.ranges), stamp, residentSource(inner, stamp, memory, 'engine'),
+    createCfWorkBudget({ noTimeLimit: true, maxUnits: 10_000_000 }), { signal: new AbortController().signal })
+  const ready = outs.find(o => o.kind === 'ready')
+  if (!ready || ready.kind !== 'ready') throw new Error('bar statistics scan must admit')
+  const statisticsReads = ready.value.value.storedCells
+  const statsPeak = memory.peakBytes
+  for (const o of outs) if (o.kind === 'ready') o.value.release()
+  session.dispose()
+  if (memory.currentBytes !== 0) throw new Error(`bar statistics leaked ${memory.currentBytes} B`)
+  // Production: the resident text scope. Its byte estimate is O(rules x cells) (every rule's property bytes per cell),
+  // so 200 rules over all 100 cells exceed the 8 MiB scratch bound and refuse before any read; 40 cells admit.
+  const { sheet, reads } = countingValueReads(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  let estimatorRefusedAll = false
+  try {
+    await prepareCfTextScope(sheet, { rects: [{ r0: 0, r1: 99, c0: 0, c1: 0 }], signal: new AbortController().signal, locale: 'en-US', budget })
+  } catch (error) {
+    if (!(error instanceof PackageError) || error.code !== 'resource-limit') throw error
+    estimatorRefusedAll = true
+  }
+  if (reads() !== 0 || net() !== 0) throw new Error(`the refused 100-cell request read ${reads()} values and left ${net()} B`)
+  const rows = 40
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: rows - 1, c0: 0, c1: 0 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  const valueReads = reads()
+  let painted = 0
+  // The bar paints (`barAt`); the cell announces unavailable formatting because its whole-column scales withhold
+  // (scale:scope-whole-column is unverified).
+  if (scope) for (let row = 0; row < rows; row++) if (scope.barAt?.(row, 0) !== undefined) painted++
+  const peakBytes = Math.max(peak(), statsPeak)
+  scope?.dispose()
+  return {
+    name: 'bar-sparse-1M-declared-shared-scan',
+    outcome: scope === undefined ? 'refused' : 'admitted',
+    peakBytes,
+    netBytes: net(),
+    sourceReads: statisticsReads,
+    cellsWithResults: painted,
+    statisticsReads,
+    valueReads,
+    estimatorRefusedAll,
+    wallMs: Date.now() - started,
+  }
+}
+
+/** An invalid (out-of-range) percentile bar withholds as unavailable while a min/max bar over another column still
+ * paints (it is not a sorted-copy refusal: that path is covered in tests/xlsx-cf-statistics.test.ts). */
+export async function pressureRefusedPercentileBarWithMinMax(): Promise<PressureSample> {
+  const started = Date.now()
+  const cells: XlsxCell[] = []
+  for (let col = 0; col < 2; col++) for (let row = 0; row < 10; row++) {
+    cells.push({ ref: `${'AB'[col]}${row + 1}`, row, col, styleIndex: 0, value: (row + 1) * 10, hasCachedValue: true })
+  }
+  const minMax = barRule(1, { firstRow: 0, lastRow: 9, firstCol: 0, lastCol: 0 })
+  const percentile = { ...barRule(2, { firstRow: 0, lastRow: 9, firstCol: 1, lastCol: 1 }, [{ type: 'percentile', value: -10 }, { type: 'max' }]), documentOrder: 1 }
+  const inner = {
+    name: 'P', sheetId: 'p', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [minMax, percentile] },
+  } as unknown as XlsxSheet
+  const { sheet, visits } = countingSheetCells(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: 9, c0: 0, c1: 0 }, { r0: 0, r1: 9, c0: 1, c1: 1 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  if (scope === undefined) throw new Error('scope must admit')
+  const visited = visits()
+  let painted = 0
+  for (let row = 0; row < 10; row++) {
+    if (announcesBar(scope, row, 0)) painted++
+    const b = scope.describe(row, 1)?.text
+    if (b !== 'Conditional formatting unavailable') throw new Error(`percentile bar B${row + 1} must withhold as unavailable, got ${b}`)
+    if (scope.barAt?.(row, 1) !== undefined) throw new Error(`percentile bar B${row + 1} must not report a bar`)
+  }
+  const peakBytes = peak()
+  scope.dispose()
+  return { name: 'invalid-percentile-bar-withheld-with-min-max-bar-painted', outcome: 'admitted', peakBytes, netBytes: net(), sourceReads: visited, cellsWithResults: painted, wallMs: Date.now() - started }
+}
+
+/** A whole-column bar does not extend the sheet's extents, and its scope paints the stored cells only. */
+export async function pressureBarWholeColumnExtents(): Promise<PressureSample> {
+  const started = Date.now()
+  const dataRows = 10
+  const inner = {
+    name: 'WCBar', sheetId: 'wcbar',
+    rows: Array.from({ length: dataRows }, (_, r) => ({ index: r, cells: [{ ref: `A${r + 1}`, row: r, col: 0, styleIndex: 0, value: (r + 1) * 10, hasCachedValue: true }] })),
+    cols: [], mergeRefs: [], mergeRanges: [],
+    conditionalFormatting: { diagnostics: [], rules: [barRule(1, { firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 })] },
+  } as unknown as XlsxSheet
+  const m = computeMetrics(inner)
+  if (m.rowHeightsPx.length !== dataRows || m.heightPx > 1000) {
+    throw new Error(`CF bar extended metrics extent: ${m.rowHeightsPx.length} rows, height ${m.heightPx}px`)
+  }
+  const { sheet, visits } = countingSheetCells(inner)
+  const { budget, net, peak } = createTrackingBudget()
+  const scope = await prepareCfTextScope(sheet, {
+    rects: [{ r0: 0, r1: dataRows - 1, c0: 0, c1: 0 }],
+    signal: new AbortController().signal,
+    locale: 'en-US',
+    budget,
+  })
+  if (scope === undefined) throw new Error('scope must admit')
+  const visited = visits()
+  let painted = 0
+  for (let r = 0; r < dataRows; r++) if (announcesBar(scope, r, 0)) painted++
+  const peakBytes = peak()
+  scope.dispose()
+  return { name: 'bar-whole-column-extents', outcome: 'admitted', peakBytes, netBytes: net(), sourceReads: visited, cellsWithResults: painted, wallMs: Date.now() - started }
+}
+
+/** Distinct-range bar pressure: 150 bars over distinct two-cell ranges; a 10-rect batch admits, paints and balances;
+ * 300 distinct rects exceed the per-call rect cap and refuse before enumeration with net zero. */
+export async function pressureBarDistinctRanges(): Promise<PressureSample> {
+  const started = Date.now()
+  const N = 300
+  // Two cells per rule: a single-cell scope is degenerate (S3-E keeps it unresolved), a pair is an ordinary min/max bar.
+  const rules = Array.from({ length: N / 2 }, (_, i) => barRule(i, { firstRow: 2 * i, lastRow: 2 * i + 1, firstCol: 0, lastCol: 0 }))
+  const cells: XlsxCell[] = []
+  for (let row = 0; row < N; row++) cells.push({ ref: `A${row + 1}`, row, col: 0, styleIndex: 0, value: (row % 2) * 10 + 5, hasCachedValue: true })
+  const inner = { name: 'DB', sheetId: 'db', rows: [{ index: 0, cells }], cols: [], mergeRefs: [], mergeRanges: [], conditionalFormatting: { diagnostics: [], rules } } as unknown as XlsxSheet
+  const { sheet, visits } = countingSheetCells(inner)
+  {
+    const { budget, net, peak } = createTrackingBudget()
+    const scope = await prepareCfTextScope(sheet, { rects: Array.from({ length: 10 }, (_, i) => ({ r0: i, r1: i, c0: 0, c1: 0 })), signal: new AbortController().signal, locale: 'en-US', budget })
+    if (scope === undefined) throw new Error('small distinct bar batch must admit')
+    let painted = 0
+    for (let row = 0; row < 10; row++) if (announcesBar(scope, row, 0)) painted++
+    if (painted !== 10) throw new Error(`small distinct bar batch painted ${painted}/10`)
+    const peakBytes = peak()
+    scope.dispose()
+    checkPressureSample({ name: 'bar-distinct-range-10', outcome: 'admitted', peakBytes, netBytes: net(), sourceReads: visits(), cellsWithResults: painted, wallMs: 0 }, { expectOutcome: 'admitted' })
+  }
+  const visitedBefore = visits()
+  const { budget, net, peak } = createTrackingBudget()
+  let scope: Awaited<ReturnType<typeof prepareCfTextScope>> | undefined
+  try {
+    scope = await prepareCfTextScope(sheet, { rects: Array.from({ length: N }, (_, i) => ({ r0: i, r1: i, c0: 0, c1: 0 })), signal: new AbortController().signal, locale: 'en-US', budget })
+  } catch (error) {
+    if (!(error instanceof PackageError) || error.code !== 'resource-limit') throw error
+  }
+  scope?.dispose()
+  return { name: 'bar-distinct-range-300', outcome: scope === undefined ? 'refused' : 'admitted', peakBytes: peak(), netBytes: net(), sourceReads: visits() - visitedBefore, cellsWithResults: 0, wallMs: Date.now() - started }
+}
+
+/** A synthetic column of `cells` numbers that charges one work unit per examined cell, as `residentSource` does. */
+function syntheticColumnSource(cells: number, stamp: CfStamp): CfValueSource & { reads: () => number } {
+  let reads = 0
+  return {
+    numberFormats: 'resolved',
+    stamp: () => stamp,
+    async bounds() { return { firstRow: 0, lastRow: Math.max(0, cells - 1), firstCol: 0, lastCol: 0 } },
+    async *pages(_id, _rects, budget, signal) {
+      const rows = new Uint32Array(1), cols = new Uint16Array(1)
+      for (let r = 0; r < cells; r++) {
+        if (signal.aborted) throw new Error('CF cancelled')
+        const work = budget.spend(1)
+        if (work === 'refused') throw new Error('CF work limit')
+        if (work === 'yield') budget.resume()
+        reads++
+        rows[0] = r; cols[0] = 0
+        yield { value: { rows, cols, values: [{ kind: 'number', value: (r % 100) + 1 }] }, bytes: 256, release() {}, transfer() { return { kind: 'unresolved', reason: 'borrowed-page' } } } as CfLease<CfValuePage>
+      }
+    },
+    reads: () => reads,
+  }
+}
+
+/**
+ * The 1,000,000-unit work cap (CF_LIMITS.workUnits) on a bar's statistics scan, under the default statistics budget a
+ * service builds (no time limit, default units). A scanned cell costs far more than the one unit the page charges (the
+ * statistics accounting, its checkpoints and its buffer growth: about 45 units per cell at 10,000 cells, measured), so
+ * 10,000 cells admit and 100,000 refuse `cf-resource-limit` part-way, with nothing left charged. Synthetic one-cell pages
+ * keep the column cheap to build.
+ */
+export async function pressureBarUnitCap(): Promise<{ name: string; admittedCells: number; admittedReads: number; admittedUnits: number; refusedCells: number; refusedReads: number; refusedUnits: number; refusedReason: string; netBytes: number; wallMs: number }> {
+  const started = Date.now()
+  const stamp = { owner: 'audit', sheetId: 'cap', workbookValueGen: 0, cfGen: 1, viewGen: 0, structureGen: 0, clockGen: 0 }
+  const run = async (cells: number) => {
+    const memory = createCfMemory()
+    const session = createCfStatistics(memory)
+    const source = syntheticColumnSource(cells, stamp)
+    const budget = createCfWorkBudget({ noTimeLimit: true })
+    const [out] = await session.prepareStatistics([[{ firstRow: 0, lastRow: 1048575, firstCol: 0, lastCol: 0 }]], stamp, source,
+      budget, { signal: new AbortController().signal })
+    const result = { kind: out!.kind, reason: out!.kind === 'unresolved' ? out!.reason : '', reads: source.reads(), units: budget.units }
+    if (out!.kind === 'ready') out!.value.release()
+    session.dispose()
+    return { ...result, net: memory.currentBytes }
+  }
+  const admittedCells = 10_000, refusedCells = 100_000
+  const admitted = await run(admittedCells)
+  if (admitted.kind !== 'ready') throw new Error(`bar scan of ${admittedCells} cells must admit, got ${admitted.kind} ${admitted.reason}`)
+  const refused = await run(refusedCells)
+  if (refused.kind !== 'unresolved') throw new Error(`bar scan of ${refusedCells} cells must refuse at the unit cap`)
+  return { name: 'bar-statistics-unit-cap', admittedCells, admittedReads: admitted.reads, admittedUnits: admitted.units, refusedCells, refusedReads: refused.reads,
+    refusedUnits: refused.units, refusedReason: refused.reason, netBytes: admitted.net + refused.net, wallMs: Date.now() - started }
+}
+
 export interface CycleSample {
   cycles: number
   reads: number
   maxPeakBytes: number
   maxNetBytes: number
   finalNetBytes: number
+  /** Bar states the ready reads carried (Stage 3 cycles read a bar range). */
+  barStates: number
   wallMs: number
 }
 
@@ -1239,11 +1519,13 @@ export interface CycleSample {
  * to a zero baseline — stability alone is not cleanup. Pre-aborted reads must
  * throw cancellation; a mid-flight abort must settle without charge and leave
  * the session usable. */
-export async function pressureCycles(rounds = 20): Promise<CycleSample> {
+export async function pressureCycles(rounds = 20, options: { fixture?: string; rect?: { r0: number; r1: number; c0: number; c1: number }; requireBars?: boolean } = {}): Promise<CycleSample> {
   const started = Date.now()
   const { openImportSession } = await import('../../src/xlsx/storage/pagedImport')
   const { createPagedWorkbookSource } = await import('../../src/xlsx/view/pagedSource')
-  const saved = readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/stage1-cellis-literals.xlsx'))
+  const saved = readFileSync(join(REPO_ROOT, options.fixture ?? 'tests/fixtures/xlsx-cf/stage1-cellis-literals.xlsx'))
+  const first = options.rect ?? { r0: 0, r1: 0, c0: 0, c1: 0 }
+  let barStates = 0
   let maxPeak = 0
   let maxNet = 0
   let finalNet = 0
@@ -1265,11 +1547,14 @@ export async function pressureCycles(rounds = 20): Promise<CycleSample> {
       // Complete read through the audited memory: peak proves real work.
       reads++
       const ready = await store.readConditionalFormatting?.({
-        rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }],
+        rects: [first],
         stamp: stamp('audit'),
         grantBytes: 2 * 1024 * 1024,
       }, memory, { signal: new AbortController().signal })
       if (!ready || ready.kind !== 'ready') throw new Error(`cycle ${i}: expected ready read`)
+      const bars = ready.states.filter(s => s.bar !== undefined).length
+      if (options.requireBars && bars === 0) throw new Error(`cycle ${i}: the ready read carried no bar state`)
+      barStates += bars
       if (memory.peakBytes <= 0) throw new Error(`cycle ${i}: ready read observed no allocation`)
       maxPeak = Math.max(maxPeak, memory.peakBytes)
       maxNet = Math.max(maxNet, memory.currentBytes)
@@ -1332,7 +1617,7 @@ export async function pressureCycles(rounds = 20): Promise<CycleSample> {
     finalNet = memory.currentBytes
     if (finalNet !== 0) throw new Error(`cycle ${i}: net bytes ${finalNet} after release`)
   }
-  return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, wallMs: Date.now() - started }
+  return { cycles: rounds, reads, maxPeakBytes: maxPeak, maxNetBytes: maxNet, finalNetBytes: finalNet, barStates, wallMs: Date.now() - started }
 }
 
 export interface NoCfBaseline {
@@ -1342,14 +1627,14 @@ export interface NoCfBaseline {
 }
 
 /** No-CF baseline: same shapes without conditional formatting do zero CF work. */
-export async function baselineNoCf(): Promise<NoCfBaseline> {
+export async function baselineNoCf(rule: Record<string, unknown> = cellIsRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown>): Promise<NoCfBaseline> {
   const { prepareCfPaint } = await import('../../src/xlsx/cf/render')
   const memory = createCfMemory()
   let reserves = 0
   let reads = 0
   const rawReserve = memory.reserve.bind(memory)
   ;(memory as { reserve: typeof rawReserve }).reserve = (...args: Parameters<typeof rawReserve>) => { reserves++; return rawReserve(...args) }
-  const sheet = numericSheet(100, cellIsRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }))
+  const sheet = numericSheet(100, rule)
   delete (sheet as { conditionalFormatting?: unknown }).conditionalFormatting
   const store = { get stamp(): never { throw new Error('no-CF stamp read') }, readRows: (...args: unknown[]) => { reads++; throw new Error(`no-CF read ${String(args)}`) } }
   let scopeBuilt = false
@@ -1442,6 +1727,7 @@ async function main(): Promise<void> {
 
   let stage1Pressure: { whole: PressureSample; shared: PressureSample; bounds: ReturnType<typeof pressureRangeBoundaries>; refusedSheet: PressureSample; stats: PressureSample } | undefined
   let stage2Pressure: { scaleShared: PressureSample; percentile: PressureSample; extents: PressureSample } | undefined
+  let stage3Pressure: { barShared: Awaited<ReturnType<typeof pressureBar1MRowSharedScan>>; barPercentile: PressureSample; barExtents: PressureSample; barDistinct: PressureSample; barUnitCap: Awaited<ReturnType<typeof pressureBarUnitCap>> } | undefined
 
   if (stage === 1) {
     const whole = await pressureWholeColumn()
@@ -1465,6 +1751,34 @@ async function main(): Promise<void> {
     console.log(`${stats.outcome} ${stats.name}: peak=${stats.peakBytes} net=${stats.netBytes} visits=${stats.sourceReads} span=${stats.cellsWithResults} (${stats.wallMs}ms context only)`)
     checkPressureSample(stats, { expectOutcome: 'admitted' })
     stage1Pressure = { whole, shared, bounds, refusedSheet, stats }
+  } else if (stage === 3) {
+    const barShared = await pressureBar1MRowSharedScan()
+    // eslint-disable-next-line no-console
+    console.log(`${barShared.outcome} ${barShared.name}: peak=${barShared.peakBytes} net=${barShared.netBytes} statisticsReads=${barShared.statisticsReads} valueReads=${barShared.valueReads} barsPainted=${barShared.cellsWithResults}/40 estimatorRefused100=${barShared.estimatorRefusedAll} (${barShared.wallMs}ms context only)`)
+    checkPressureSample(barShared, { expectOutcome: 'admitted' })
+    if (barShared.statisticsReads !== 100) throw new Error(`200 identical scopes must share one 100-cell scan, read ${barShared.statisticsReads}`)
+    if (barShared.cellsWithResults !== 40) throw new Error(`the first bar must paint all 40 requested cells, painted ${barShared.cellsWithResults}`)
+    if (!barShared.estimatorRefusedAll) throw new Error('the 100-cell text request of 200 rules must refuse at the byte estimate')
+    if (barShared.valueReads > 1000) throw new Error(`preparation read ${barShared.valueReads} values: the scan is not shared`)
+    const barPercentile = await pressureRefusedPercentileBarWithMinMax()
+    // eslint-disable-next-line no-console
+    console.log(`${barPercentile.outcome} ${barPercentile.name}: peak=${barPercentile.peakBytes} net=${barPercentile.netBytes} reads=${barPercentile.sourceReads} barsPainted=${barPercentile.cellsWithResults} (${barPercentile.wallMs}ms context only)`)
+    checkPressureSample(barPercentile, { expectOutcome: 'admitted' })
+    if (barPercentile.cellsWithResults !== 10) throw new Error(`the min/max bar must paint 10 cells, painted ${barPercentile.cellsWithResults}`)
+    const barExtents = await pressureBarWholeColumnExtents()
+    // eslint-disable-next-line no-console
+    console.log(`${barExtents.outcome} ${barExtents.name}: peak=${barExtents.peakBytes} net=${barExtents.netBytes} reads=${barExtents.sourceReads} barsPainted=${barExtents.cellsWithResults} (${barExtents.wallMs}ms context only)`)
+    checkPressureSample(barExtents, { expectOutcome: 'admitted' })
+    if (barExtents.cellsWithResults !== 10) throw new Error(`the whole-column bar must paint its 10 stored cells, painted ${barExtents.cellsWithResults}`)
+    const barDistinct = await pressureBarDistinctRanges()
+    // eslint-disable-next-line no-console
+    console.log(`${barDistinct.outcome} ${barDistinct.name}: peak=${barDistinct.peakBytes} net=${barDistinct.netBytes} reads=${barDistinct.sourceReads} (${barDistinct.wallMs}ms context only; the 10-rect batch admitted and painted 10)`)
+    checkPressureSample(barDistinct, { expectOutcome: 'refused' })
+    const barUnitCap = await pressureBarUnitCap()
+    // eslint-disable-next-line no-console
+    console.log(`${barUnitCap.name}: ${barUnitCap.admittedCells} cells admitted (reads=${barUnitCap.admittedReads}, units=${barUnitCap.admittedUnits}), ${barUnitCap.refusedCells} cells refused ${barUnitCap.refusedReason} (reads=${barUnitCap.refusedReads}, units=${barUnitCap.refusedUnits}) net=${barUnitCap.netBytes} (${barUnitCap.wallMs}ms context only)`)
+    if (barUnitCap.netBytes !== 0) throw new Error(`unit-cap scans leaked ${barUnitCap.netBytes} B`)
+    stage3Pressure = { barShared, barPercentile, barExtents, barDistinct, barUnitCap }
   } else {
     const scaleShared = await pressureScale1MRowSharedStatistics()
     // eslint-disable-next-line no-console
@@ -1486,13 +1800,17 @@ async function main(): Promise<void> {
   console.log(`${distinct.outcome} ${distinct.name}: peak=${distinct.peakBytes} net=${distinct.netBytes} reads=${distinct.sourceReads} cells=${distinct.cellsWithResults} (${distinct.wallMs}ms context only)`)
   checkPressureSample(distinct, { expectOutcome: 'refused' })
 
-  const cycles = await pressureCycles(20)
+  // Stage 3 cycles read a bar range of a Stage 3 workbook (B2:B12 of the default-lengths case), so every ready read
+  // carries bar states.
+  const cycles = stage === 3
+    ? await pressureCycles(20, { fixture: 'tests/fixtures/xlsx-cf/stage3-bar-lengths-default.xlsx', rect: { r0: 1, r1: 11, c0: 1, c1: 1 }, requireBars: true })
+    : await pressureCycles(20)
   // eslint-disable-next-line no-console
-  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
+  console.log(`cycles: ${cycles.cycles} open/read/cancel/close, reads=${cycles.reads} barStates=${cycles.barStates} maxPeak=${cycles.maxPeakBytes} maxNet=${cycles.maxNetBytes} finalNet=${cycles.finalNetBytes} (released baseline, ${cycles.wallMs}ms context only)`)
   if (cycles.maxPeakBytes <= 0) throw new Error('cycles observed no allocation')
   if (cycles.reads < cycles.cycles * 4) throw new Error(`cycles issued ${cycles.reads} reads, expected at least ${cycles.cycles * 4} (ready + cancelled + mid-flight + retry per cycle)`)
 
-  const baseline = await baselineNoCf()
+  const baseline = await baselineNoCf(stage === 3 ? barRule(0, { firstRow: 0, lastRow: 99, firstCol: 0, lastCol: 0 }) as unknown as Record<string, unknown> : undefined)
   // eslint-disable-next-line no-console
   console.log(`no-cf baseline: reserves=${baseline.paintReserves} reads=${baseline.sourceReads} scopeBuilt=${baseline.scopeBuilt}`)
   if (baseline.paintReserves !== 0 || baseline.sourceReads !== 0 || baseline.scopeBuilt) throw new Error('no-CF path did CF work')
@@ -1511,7 +1829,9 @@ async function main(): Promise<void> {
     mkdirSync(outDir, { recursive: true })
     const outData = stage === 1
       ? { report, ...stage1Pressure, distinct, cycles, baseline, eager }
-      : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
+      : stage === 3
+        ? { report, ...stage3Pressure, distinct, cycles, baseline, eager }
+        : { report, ...stage2Pressure, distinct, cycles, baseline, eager }
     writeFileSync(join(outDir, `stage${stage}-audit.json`), JSON.stringify(outData, null, 2))
   }
 

@@ -197,10 +197,13 @@ describe('CF Stage 3 data-bar model and parsing (Task 19)', () => {
     const xml = baseBar('B2:B6', 1, MINMAX + BLUE, G) +
       x14Block(companion('B2:B6', G, ' minLength="0" maxLength="100" gradient="0"', '<x14:cfvo type="min"/><x14:cfvo type="max"/><x14:negativeFillColor auto="1"/><x14:axisColor auto="1"/>'))
     const measured = { 'bar:color-auto-axis': 'FF404040', 'bar:color-auto-negative-fill': 'FFC00000' }
-    // Production: no automatic colour is published, so Excel's resave shape withholds exactly as before.
-    expect(autoBarColourEvidence('bar:color-auto-axis')).toBeUndefined()
+    // Production (Task 23): the published colours are the audit's measured white.
+    expect(autoBarColourEvidence('bar:color-auto-axis')).toBe(0xffffffff)
+    expect(autoBarColourEvidence('bar:color-auto-negative-fill')).toBe(0xffffffff)
     expect(only(withExactCfEvidence(BAR_PARSE_CAPS, () => parse(xml)).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
-    // The capability without a measured colour, or a measured colour without the capability, never resolves.
+    // The capability without a measured colour (an export that names none), or a measured colour without the
+    // capability, never resolves.
+    injectCfAutoBarColours({})
     expect(only(withExactCfEvidence([...BAR_PARSE_CAPS, ...AUTO_CAPS], () => parse(xml)).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
     injectCfAutoBarColours(measured)
     expect(only(withExactCfEvidence(BAR_PARSE_CAPS, () => parse(xml)).value.rules).definition).toMatchObject({ kind: 'unresolved', reason: 'cf-unsupported-rule' })
