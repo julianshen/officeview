@@ -3274,7 +3274,7 @@ describe('CF oracle verifier', () => {
     for (const id of Object.keys(CF_STAGE3_NONDISCRIMINATING)) {
       expect(CF_STAGE3_CAPABILITIES.some(e => e.capabilityId === id)).toBe(true)
     }
-  })
+  }, 60_000) // hashes every Stage 3 workbook/PNG and runs verifyCfCase on all 15 cases: ~2 s alone, 5.9 s on the CI runner
 
   it('bar marker pins cfvo, attributes, colours and pairing exactly', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-cf-bar-pin-'))
