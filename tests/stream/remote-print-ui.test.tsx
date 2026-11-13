@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
-import RemoteDocView from '../../src/components/remote/RemoteDocView'
+import RemoteDocView, { remotePrintGuard } from '../../src/components/remote/RemoteDocView'
 import { StreamSessionError } from '../../src/stream/remote/errors'
 import type { PrintedPage, RemoteOfficeDoc } from '../../src/stream/remote/remote-doc'
 
@@ -82,7 +82,9 @@ describe('remote print: button', () => {
     expect(doc.print.mock.calls[0]![0]).toEqual({ from: 0, to: 2 })
     const [pages, root, opts] = pr.printRasters.mock.calls[0]! as [PrintedPage[], HTMLElement, { signal: AbortSignal; title?: string }]
     expect(pages.map((p) => p.unitIndex)).toEqual([0, 1, 2])
-    expect(root).toBe(themeRoot(v))
+    // Hosted outside the view's root, which is hidden in print media.
+    expect(root).toBe(document.body)
+    expect(themeRoot(v).contains(root)).toBe(false)
     expect(opts.title).toBe('Quarterly')
     expect(opts.signal).toBe(doc.print.mock.calls[0]![1]!.signal)
     // The progress line clears once the job is handed to the print surface.
@@ -287,6 +289,14 @@ describe('remote print: Ctrl/Cmd+P', () => {
     expect(fireEvent.keyDown(themeRoot(v), { key: 'P', metaKey: true })).toBe(false)
     expect(dialog(v)).toBeTruthy()
   })
+  it('can.print=true with caps.print=null is contradictory: print unavailable, Ctrl+P swallowed', () => {
+    const doc = fakeDoc({ print: true, caps: null })
+    const v = view(doc)
+    expect(printBtn(v)).toBeNull()
+    expect(fireEvent.keyDown(themeRoot(v), { key: 'p', ctrlKey: true })).toBe(false)
+    expect(dialog(v)).toBeNull()
+    expect(doc.print).not.toHaveBeenCalled()
+  })
   it('with can.print=false is preventDefaulted and does nothing else; no button', () => {
     const doc = fakeDoc({ print: false, caps: null })
     const v = view(doc)
@@ -311,6 +321,27 @@ describe('remote print: the screen never prints', () => {
       await act(async () => {})
       expect(themeRoot(v).getAttribute('data-ov-print')).toBe('false')
     } finally { vi.unstubAllGlobals() }
+  })
+  it('carries its own print guard (no officeview.css loaded) that hides this root in print media', () => {
+    const v = view(fakeDoc())
+    const root = themeRoot(v)
+    const guard = root.querySelector('style[data-ov-print-guard]') as HTMLStyleElement
+    expect(guard).toBeTruthy()
+    const media = guard.sheet!.cssRules[0] as CSSMediaRule
+    expect(media.media.mediaText).toBe('print')
+    const rule = media.cssRules[0] as CSSStyleRule
+    expect(root.matches(rule.selectorText)).toBe(true)
+    expect(rule.style.getPropertyValue('display')).toBe('none')
+    expect(rule.style.getPropertyPriority('display')).toBe('important')
+    // Scoped to this instance: a second view's root is not matched by the first guard.
+    const w = view(fakeDoc())
+    const other = [...document.querySelectorAll('[data-ov-theme-root][data-ov-instance]')].find((r) => r !== root)!
+    expect(other.matches(rule.selectorText)).toBe(false)
+    void w
+  })
+  it('the guard escapes quotes and backslashes in the instance id', () => {
+    const css = remotePrintGuard('a"b\\c')
+    expect(css).toBe('@media print{[data-ov-theme-root][data-ov-instance="a\\22 b\\5c c"]{display:none!important}}')
   })
   it('the view registers no beforeprint listener', () => {
     const add = vi.spyOn(window, 'addEventListener')

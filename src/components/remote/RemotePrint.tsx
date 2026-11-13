@@ -21,7 +21,7 @@ export function printFailure(e: unknown): string {
   return FAILED
 }
 
-const capped = (caps: Manifest['caps']['print']) => !!caps && (caps.maxPages !== null || caps.maxSessionPages !== null)
+const capped = (caps: NonNullable<Manifest['caps']['print']>) => caps.maxPages !== null || caps.maxSessionPages !== null
 /** A 1-based page number in 1..count, or undefined. */
 const pageNo = (s: string, count: number) => {
   const n = s.trim() === '' ? NaN : Number(s)
@@ -43,7 +43,9 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   // A resume may replace the manifest (caps and can.print): re-render and re-read.
   const [, setManifestRev] = useState(0)
   useEffect(() => doc.onManifestChange?.(() => setManifestRev((n) => n + 1)), [doc])
-  const allowed = o.allowPrint && doc.manifest.can.print
+  // caps.print is null only when the server has print off: a `can.print`
+  // that says otherwise is contradictory and fails closed.
+  const allowed = o.allowPrint && doc.manifest.can.print && doc.manifest.caps.print !== null
   const caps = doc.manifest.caps.print
   const count = doc.manifest.units.list.length
 
@@ -81,7 +83,9 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
         const pages = await doc.print({ from, to }, { signal: ac.signal, onProgress: (done, total) => { if (live()) setProgress({ done, total }) } })
         if (!live()) return
         const m = await import('../paged/printDocument')
-        const root = o.themeRoot.current
+        // The frame is hosted outside the view's root, which is display:none in
+        // print media; the frame's own print() prints only the frame document.
+        const root = o.themeRoot.current?.ownerDocument.body
         if (!live() || !root) return
         surface.current = ac
         await m.printRasters(pages, root, {
@@ -98,8 +102,8 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   const closeDialog = () => { setRange(undefined); (printBtn.current ?? o.themeRoot.current)?.focus() }
   const start = () => {
     if (!allowed || job.current || range || count < 1) return
-    if (!capped(caps)) { run(0, count - 1); return }
-    setRange({ from: '1', to: String(Math.min(count, caps?.maxPages ?? count)) })
+    if (!caps || !capped(caps)) { run(0, count - 1); return }
+    setRange({ from: '1', to: String(Math.min(count, caps.maxPages ?? count)) })
   }
 
   const from = range ? pageNo(range.from, count) : undefined

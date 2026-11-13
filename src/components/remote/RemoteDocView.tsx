@@ -31,6 +31,14 @@ export const TEXT_UNAVAILABLE = 'text unavailable in this viewing mode'
  * marked data-ov-remote-chrome) never prints. Owned by this view, so local
  * documents' print behaviour is untouched. */
 const PRINT_CSS = '@media print { [data-ov-remote-chrome] { display: none !important; } }'
+/** The view's own print guard, so hiding the screen canvases never depends on
+ * officeview.css being loaded: this instance's root is display:none in print
+ * media. CSS string escaping (as in PagedChrome), not identifier escaping:
+ * React ids may contain punctuation. */
+export function remotePrintGuard(instance: string): string {
+  const quoted = instance.replace(/[\x00-\x1f\x7f"\\]/g, (c) => `\\${c.codePointAt(0)!.toString(16)} `)
+  return `@media print{[data-ov-theme-root][data-ov-instance="${quoted}"]{display:none!important}}`
+}
 
 /** Host props that do not apply to a remote document are ignored: the baked
  * mark is authoritative (no `watermark`), copy follows the server's `can.copy`,
@@ -41,6 +49,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
   const scroller = useRef<HTMLDivElement | null>(null)
   const text = useRemoteText(doc, scroller)
   const root = useRef<HTMLDivElement | null>(null)
+  const instance = useId()
   const print = useRemotePrint(doc, { allowPrint, themeRoot: root, ...(title !== undefined ? { title } : {}) })
   // The observer below is created per document; it reaches the latest a11y handler through this ref.
   const a11yVisible = useRef(text.a11yVisible)
@@ -86,7 +95,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
     // print guard (officeview.css) matches as
     // [data-ov-theme-root][data-ov-instance][data-ov-print="false"]. Printing
     // is server-drawn print rasters only (RemotePrint.tsx).
-    <div ref={root} {...themeRootProps(theme, useId())} data-ov-print="false" className={className} style={style}
+    <div ref={root} {...themeRootProps(theme, instance)} data-ov-print="false" className={className} style={style}
       onKeyDown={(e) => {
         if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'p') {
           // Always swallowed: the browser's own print would print the (hidden) screen.
@@ -96,6 +105,7 @@ export default function RemoteDocView({ document: doc, theme, className, style, 
         }
         text.onKeyDown(e)
       }}>
+      <style data-ov-print-guard="">{remotePrintGuard(instance)}</style>
       <style>{PRINT_CSS}</style>
       <div ref={scroller} data-officeview-root="" role="document" aria-label={title ?? doc.manifest.name} tabIndex={0}
         style={{ overflow: 'auto', height: '100%', background: background ?? 'var(--ov-color-backdrop)' }}>
