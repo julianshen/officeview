@@ -3244,7 +3244,7 @@ export interface BarGradientSample {
   span: number
   /** The solid-length model's length (0/100 bars only); the gradient's extent must equal it within 1 px (Ruling S3-M). */
   predictedLength?: number
-  pixels: Array<{ i: number; rgb: [number, number, number] }>
+  pixels: Array<{ i: number; y: number; rgb: [number, number, number] }>
 }
 export interface BarGradientObservation {
   samples: BarGradientSample[]
@@ -3377,7 +3377,7 @@ export function sampleBarGradients(
     if (length === 0) { why('no bar is drawn'); continue }
     const pixels: BarGradientSample['pixels'] = []
     for (let y = yTop; y <= yBottom; y++) {
-      for (let i = 0; i < length; i++) if (!ink(ins.l + i, y - box.y0)) pixels.push({ i, rgb: pixelAt(png, box.x0 + ins.l + i, y) })
+      for (let i = 0; i < length; i++) if (!ink(ins.l + i, y - box.y0)) pixels.push({ i, y, rgb: pixelAt(png, box.x0 + ins.l + i, y) })
     }
     let predictedLength: number | undefined
     if (b.minLength === 0 && b.maxLength === 100) {

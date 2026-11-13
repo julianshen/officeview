@@ -20,7 +20,8 @@ import { prepareCfWireScope } from '../src/xlsx/cf/text'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_BAR_PAINT_CAPABILITIES, CF_BAR_RENDER_MODEL, layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
+import { CF_BAR_PAINT_CAPABILITIES, CF_BAR_RENDER_MODEL, barGradientEndArgb, layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
+import { injectCfBarGradient } from '../src/xlsx/cf/evidence'
 import { getPaintables } from '../src/render/paint'
 import { decodePngSync } from '../scripts/cf-refs/verify'
 import { auditStage3Manifest } from '../scripts/cf-refs/audit'
@@ -99,13 +100,15 @@ describe('CF_BAR_RENDER_MODEL equals the measured sidecars', () => {
     expect(inked(zero.axisPx! - 1)).toBe(0)
     expect(inked(zero.axisPx! + CF_BAR_RENDER_MODEL.axisPt)).toBe(0)
 
-    // Unmeasured: gradient stops and the minimum visible width carry no value, and the harness verifies neither.
-    expect(CF_BAR_RENDER_MODEL.gradientStops).toBeUndefined()
+    // Unmeasured: the minimum visible width carries no value and the harness does not verify it. The gradient is not a
+    // model constant: it is the oracle's verified export (Task 22b), read through barGradientEvidence.
+    expect(CF_BAR_RENDER_MODEL.gradient).toBeUndefined()
     expect(CF_BAR_RENDER_MODEL.minVisiblePt).toBeUndefined()
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'tests/fixtures/xlsx-cf/manifest.json'), 'utf8')) as CfManifest
     const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
     const disposition = (cap: string) => audit.perCapability.find(p => p.capabilityId === cap)?.disposition
-    expect(disposition('bar:render-gradient-stops')).not.toBe('verified')
+    expect(disposition('bar:render-gradient-stops')).toBe('verified')
+    expect(audit.barGradient).toEqual({ 'bar-length': { endBlend: 0.847, settledBy: ['bar:render-gradient-stops'] } })
     expect(disposition('bar:geometry-min-visible-width')).not.toBe('verified')
     for (const cap of [...CF_BAR_PAINT_CAPABILITIES, 'bar:render-border']) expect(disposition(cap), cap).toBe('verified')
   }, 30_000)
@@ -114,7 +117,7 @@ describe('CF_BAR_RENDER_MODEL equals the measured sidecars', () => {
     const cell = ptCell(84, 30, 180, 30)
     expect(layoutDataBar(bar(), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.fill).toBeDefined()
     for (const cap of CF_BAR_PAINT_CAPABILITIES) expect(layoutDataBar(bar(), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, c => c !== cap), cap).toBeUndefined()
-    // Gradient: no measured stops, so never drawn (and never drawn solid instead).
+    // Gradient: no verified gradient export (none is published), so never drawn (and never drawn solid instead).
     expect(layoutDataBar(bar({ isGradient: true }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
     // Border: needs bar:render-border; with it the frame is borderPt wide.
     expect(layoutDataBar(bar({ borderColor: GREEN }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, c => c !== 'bar:render-border')).toBeUndefined()
@@ -244,6 +247,97 @@ describe('bars paint in the fill phase in all five views', () => {
       for (const [name, r] of Object.entries(sourceRects)) for (const k of ['x', 'y', 'w', 'h'] as const) expect(r[k], `${name}.${k}`).toBeCloseTo(reference[k], 9)
       resident.dispose(); paged.dispose()
     })
+  })
+})
+
+/** The gradient model the audit verifies (Task 22b), injected as Task 23's export would publish it. */
+const GRADIENT_EXPORT = { 'bar-length': { endBlend: 0.847, settledBy: ['bar:render-gradient-stops'] } }
+
+describe('gradient bars (Task 22b): one painter, the verified model only, the measured shape only', () => {
+  it('layoutDataBar draws the gradient from the export alone: fill at the left edge, the blend toward white at the right', () => {
+    const cell = ptCell(264, 150, 180, 30)
+    const g = bar({ isGradient: true, endFraction: 1 })
+    expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL), 'no export: withheld').toBeUndefined()
+    injectCfBarGradient(GRADIENT_EXPORT)
+    try {
+      const p = layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)!
+      expect(p.fill).toEqual({ x: 266, y: 152, w: 177, h: 26, argb: BLUE, gradientEnd: barGradientEndArgb(BLUE, 0.847) })
+      // 0.847 of the way to white: 0 + 255 x 0.847 = 215.985 -> 216 on red and green, blue stays 255.
+      expect(barGradientEndArgb(BLUE, 0.847)).toBe(0xffd8d8ff)
+      expect(barGradientEndArgb(0xff638ec6, 0.847)).toBe(0xffe7eef6)
+      // The export's capability gates it.
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, c => c !== 'bar:render-gradient-stops')).toBeUndefined()
+      // Only the measured shape paints: no right-to-left, border, axis, negative bar or filled host was ever measured.
+      expect(layoutDataBar({ ...g, direction: 'rightToLeft' }, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      expect(layoutDataBar({ ...g, borderColor: GREEN }, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      expect(layoutDataBar({ ...g, axisColor: 0xff000000, axisFraction: 0.25, startFraction: 0.25 }, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      expect(layoutDataBar({ ...g, isNegative: true, axisFraction: 1, startFraction: 0.5 }, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      expect(layoutDataBar(g, { ...cell, fill: '#ffff00' }, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      expect(layoutDataBar(g, { ...cell, fill: '#ffffff' }, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.fill?.gradientEnd).toBeDefined()
+      // A solid bar is unaffected by the export.
+      expect(layoutDataBar(bar({ endFraction: 1 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)!.fill!.gradientEnd).toBeUndefined()
+      // A malformed export never paints.
+      injectCfBarGradient({ 'bar-length': { endBlend: 1.5, settledBy: ['bar:render-gradient-stops'] } })
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      injectCfBarGradient({ 'bar-length': { endBlend: 0.847, settledBy: [] } })
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+    } finally {
+      injectCfBarGradient(null)
+    }
+  })
+
+  it('every view paints the same gradient bar through the one painter: blue at the left edge, the blend at the right', async () => {
+    const sheet = barSheet([0, 50, 100], { def: { gradient: true } })
+    const paintAll = async () => withBars(async () => {
+      const metrics = computeMetrics(sheet)
+      const resident = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const paged = await pagedBatch(sheet, 3, 1)
+      const S = 2
+      const views: Record<string, ReturnType<typeof recorder>> = {}
+      { const r = views.static = recorder(metrics.widthPx * S, metrics.heightPx * S); r.ctx.scale(S, S); renderSheet(sheet, r.ctx, metrics, undefined, { conditionalFormatting: resident }) }
+      const geometry = buildSheetGeometry(sheet)
+      for (const [name, batch] of [['resident', resident], ['paged', paged]] as const) {
+        const r = views[name] = recorder(metrics.widthPx * S, metrics.heightPx * S)
+        r.ctx.scale(S, S)
+        renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: S }, { conditionalFormatting: batch }, { cache: new LayoutCache() })
+      }
+      {
+        const print = computePrintMetrics(sheet, metrics)
+        const r = views.print = recorder(print.paperPx.width * S, print.paperPx.height * S)
+        r.ctx.scale(S, S)
+        renderPrintPage(sheet, r.ctx, metrics, print, 0, 0, undefined, { conditionalFormatting: resident })
+      }
+      const pages = await getPaintables({ sheets: [sheet] })
+      try { const r = views.export = recorder(pages[0]!.spec.widthPx * S, pages[0]!.spec.heightPx * S); r.ctx.scale(S, S); pages[0]!.paint(r.ctx) } finally { pages.dispose() }
+      resident.dispose(); paged.dispose()
+      return views
+    }, { extra: ['bar:render-gradient-stops'] })
+
+    injectCfBarGradient(GRADIENT_EXPORT)
+    let views: Awaited<ReturnType<typeof paintAll>>
+    try { views = await paintAll() } finally { injectCfBarGradient(null) }
+    const end = [216, 216, 255]
+    const rects: Record<string, string> = {}
+    for (const [name, { ops, canvas }] of Object.entries(views)) {
+      // The bar of the 100 (row 2) is the one fill whose style is a gradient object, not a colour string.
+      const grads = ops.filter(o => o.op === 'rect' && !o.style.startsWith('#') && !o.style.startsWith('rgb'))
+      expect(grads.length, `${name}: two gradient bars (the 0 draws none)`).toBe(2)
+      const b = grads[1]!
+      rects[name] = [b.w, b.h].map(v => v.toFixed(6)).join(',')
+      const img = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height)
+      const at = (x: number, y: number) => [0, 1, 2].map(k => img.data[(Math.floor(y) * img.width + Math.floor(x)) * 4 + k]!)
+      const midY = b.y + b.h / 2
+      // One column in from each edge: print's page origin is fractional, so its edge columns are partly covered.
+      const first = at(b.x + 1.5, midY), last = at(b.x + b.w - 1.5, midY)
+      expect(first.every((c, k) => Math.abs(c - [0, 0, 255][k]!) <= 8), `${name}: first column ${first}`).toBe(true)
+      expect(last.every((c, k) => Math.abs(c - end[k]!) <= 8), `${name}: last column ${last}`).toBe(true)
+    }
+    for (const [name, r] of Object.entries(rects)) expect(r, `${name} bar size`).toEqual(rects.static)
+
+    // Without the export no view paints a gradient bar (never solid instead).
+    for (const [name, { ops }] of Object.entries(await paintAll())) {
+      expect(ops.some(o => o.op === 'rect' && (o.style === '#0000ff' || (!o.style.startsWith('#') && !o.style.startsWith('rgb')))), `${name}: withheld`).toBe(false)
+    }
   })
 })
 

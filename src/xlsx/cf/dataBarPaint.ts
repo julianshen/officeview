@@ -4,14 +4,15 @@
  *
  * - The geometry is Excel's measured shape at 1 px/pt (copy picture, docs/validation/xlsx-cf.md §11), pinned in
  *   `CF_BAR_RENDER_MODEL` and gated by its `bar:*` capabilities (Rulings S3-M, S3-N). A value the captures did not
- *   measure (gradient stops, the minimum visible width) is absent from the model, and the branch that needs it withholds.
+ *   measure (the minimum visible width) is absent from the model, and the branch that needs it withholds. The gradient
+ *   fill (Task 22b) is the oracle's verified model, read from its export (`barGradientEvidence`), never a constant.
  * - Other zooms and DPRs scale the measured point geometry and snap each edge to the sheet-global device grid, as
  *   sparklines do (`sparklines/geometry.ts`), so a tile and the full render carry identical rects (OD-8: fidelity there
  *   is unverified, the fractions stay exact).
  * - Pure layout plus a small canvas replay: no DOM, no clock, no global state beyond the evidence lookup.
  */
 import type { CfBarDescriptor } from './model'
-import { hasEvidence as defaultHasEvidence } from './evidence'
+import { barGradientEvidence, hasEvidence as defaultHasEvidence, type CfBarGradient } from './evidence'
 import type { Rect } from '../view/textLayout'
 
 /** 1 pt in logical (CSS) px: the viewer's convention (`sparklines/geometry.ts`). At zoom × DPR = 3/4 a point is one
@@ -39,8 +40,14 @@ export interface CfBarRenderModel {
   /** `bar:geometry-min-visible-width`: unmeasured (non-discriminating), so absent; a non-zero length that rounds to
    * nothing withholds. */
   readonly minVisiblePt?: number
-  /** `bar:render-gradient-stops`: unmeasured, so absent; a gradient bar withholds (Ruling S3-M). */
-  readonly gradientStops?: readonly Readonly<{ at: number; argb: number }>[]
+  /**
+   * `bar:render-gradient-stops` (Task 22b): a gradient fills the bar rect left to right, linear in sRGB, from the fill
+   * colour at its left edge to the fill blended toward white by `endBlend` at its right edge (evaluated at pixel
+   * centres, as a canvas linear gradient is). Absent here: it comes from the verified export through
+   * `barGradientEvidence`, and with neither a gradient bar withholds (Ruling S3-M). Only the measured shape paints:
+   * left to right, no border, no axis, not negative, on a white host.
+   */
+  readonly gradient?: CfBarGradient
 }
 
 /** Values from the Stage 3 captures (refs/stage3-bar-geometry.json, refs/stage3-bar-rendering.json; pinned by
@@ -64,7 +71,22 @@ export const CF_BAR_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['bar:
 export function barPaintable(bar: CfBarDescriptor | undefined, model: CfBarRenderModel = CF_BAR_RENDER_MODEL, check: (cap: string) => boolean = defaultHasEvidence): bar is CfBarDescriptor {
   if (!bar) return false
   for (const cap of CF_BAR_PAINT_CAPABILITIES) if (!check(cap)) return false
-  return !bar.isGradient || model.gradientStops !== undefined
+  return !bar.isGradient || barGradientModel(model, check) !== undefined
+}
+
+/** The gradient model a gradient bar paints with: the model's own (tests), else the verified export. */
+export function barGradientModel(model: CfBarRenderModel = CF_BAR_RENDER_MODEL, check: (cap: string) => boolean = defaultHasEvidence): CfBarGradient | undefined {
+  return model.gradient ?? barGradientEvidence(check)
+}
+
+/** The gradient's end colour: each channel of the fill blended toward white by `endBlend`, rounded (opaque ARGB). */
+export function barGradientEndArgb(fill: number, endBlend: number): number {
+  let out = 0xff000000
+  for (const sh of [16, 8, 0]) {
+    const c = (fill >>> sh) & 0xff
+    out |= Math.min(255, Math.round(c + (255 - c) * endBlend)) << sh
+  }
+  return out >>> 0
 }
 
 /**
@@ -101,8 +123,9 @@ export function isWhiteFill(fill: string | undefined): boolean {
 /** A bar's host: its logical rect, and the fill painted under it (CSS `#RRGGBB`) when the renderer knows one. */
 export type CfBarHost = Rect & { readonly fill?: string }
 
-/** One axis-aligned rect in output units; colours stay ARGB. */
-export type CfBarRect = Readonly<{ x: number; y: number; w: number; h: number; argb: number }>
+/** One axis-aligned rect in output units; colours stay ARGB. `gradientEnd`, when present, is the colour at the rect's
+ * right edge of a left-to-right linear gradient that starts at `argb` on its left edge (Task 22b). */
+export type CfBarRect = Readonly<{ x: number; y: number; w: number; h: number; argb: number; gradientEnd?: number }>
 /** What one bar paints, in paint order: the fill, its border frame, the axis column in the gap colour, then the axis
  * dashes over it. Empty when the host is too small. */
 export type CfBarPrimitives = Readonly<{ fill?: CfBarRect; border?: readonly CfBarRect[]; axis?: CfBarRect; axisDashes?: readonly CfBarRect[] }>
@@ -137,6 +160,10 @@ export function layoutDataBar(
   for (const n of [bar.axisFraction, bar.startFraction, bar.endFraction]) if (!Number.isFinite(n) || n < 0 || n > 1) return undefined
   // A non-white axis over a filled host: the dash gap colour there is unmeasured.
   if (bar.axisColor !== undefined && (bar.axisColor & 0xffffff) !== (model.axisDash.gapArgb & 0xffffff) && !isWhiteFill(cell.fill)) return undefined
+  // Task 22b: a gradient paints only in the measured shape (left to right, no border, no axis, positive, white host).
+  const gradient = bar.isGradient ? barGradientModel(model, check) : undefined
+  if (bar.isGradient && (gradient === undefined || bar.direction !== 'leftToRight' || bar.borderColor !== undefined ||
+    bar.axisColor !== undefined || bar.axisFraction !== 0 || bar.isNegative || !isWhiteFill(cell.fill))) return undefined
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
   const devPerPx = zoom * dpr, devPerPt = devPerPx * PT_PX
@@ -189,7 +216,7 @@ export function layoutDataBar(
   const primitives: { fill?: CfBarRect; border?: CfBarRect[]; axis?: CfBarRect; axisDashes?: CfBarRect[] } = {}
   if (b > a) {
     const x = L + a, w = b - a, h = B - T
-    primitives.fill = rect(x, T, w, h, bar.fillColor)
+    primitives.fill = gradient ? { ...rect(x, T, w, h, bar.fillColor), gradientEnd: barGradientEndArgb(bar.fillColor, gradient.endBlend) } : rect(x, T, w, h, bar.fillColor)
     if (bar.borderColor !== undefined) {
       const bw = Math.max(1, dev(model.borderPt))
       const side = Math.min(bw, w), cap = Math.min(bw, h)
@@ -257,7 +284,13 @@ export function paintDataBars(
       if (transform) ctx.setTransform(1, 0, 0, 1, transform.e, transform.f)
       for (const r of [primitives.fill, ...(primitives.border ?? []), primitives.axis, ...(primitives.axisDashes ?? [])]) {
         if (!r) continue
-        ctx.fillStyle = css(r.argb)
+        if (r.gradientEnd !== undefined) {
+          // Left edge = the fill, right edge = the blended end: a canvas gradient samples pixel centres, as Excel does.
+          const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0)
+          g.addColorStop(0, css(r.argb))
+          g.addColorStop(1, css(r.gradientEnd))
+          ctx.fillStyle = g
+        } else ctx.fillStyle = css(r.argb)
         ctx.fillRect(r.x, r.y, r.w, r.h)
       }
     } finally { ctx.restore() }

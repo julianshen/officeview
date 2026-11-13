@@ -14,7 +14,7 @@
 import type { CfBarBound, CfBarDescriptor, CfDefinition, CfLiteral, CfOutcome, CfScaleBound } from './model'
 import type { CfRangeStatistics } from './statistics'
 import { resolveScaleThresholds, safeFraction } from './colorScale'
-import { barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarLayout } from './evidence'
+import { barDefaultLengthsRule, barLayoutEvidence, hasEvidence as defaultHasEvidence, type CfBarLayout } from './evidence'
 
 type CfDataBarDefinition = Extract<CfDefinition, { kind: 'dataBar' }>
 
@@ -118,7 +118,7 @@ export function evaluateDataBar(
   def: CfDataBarDefinition,
   thresholds: readonly [number, number],
   stats: Pick<CfRangeStatistics, 'min' | 'max'>,
-  options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant; layout?: CfBarLayout } = {},
+  options: { hasEvidence?: (cap: string) => boolean; variant?: CfBarLayoutVariant; layout?: CfBarLayout; lengthsRule?: string } = {},
 ): CfOutcome<Omit<CfBarDescriptor, 'ruleId'>> {
   const checkEvidence = options.hasEvidence ?? defaultHasEvidence
   const layout: CfBarLayout | undefined = options.variant ? { allPositive: options.variant, mixedSign: options.variant }
@@ -146,10 +146,15 @@ export function evaluateDataBar(
   if (v < lo || v > hi) return { kind: 'unresolved', reason: 'cf-value-beyond-bounds' }
 
   const isNegative = v < 0
-  const l0 = def.minLength / 100, l1 = def.maxLength / 100
-  const length = (f: number): number => l0 + f * (l1 - l0)
-
   const fullLengths = def.minLength === 0 && def.maxLength === 100
+  // Task 22b: lengths other than 0/100 follow the rule the oracle selected (the plain linear reading is refuted for
+  // Excel's paired solid bars). With no selected rule, or one this evaluator cannot apply, the bar is unresolved.
+  const lengthStart = fullLengths ? 0 : defaultLengthsStart(def, 'lengthsRule' in options ? options.lengthsRule : barDefaultLengthsRule(checkEvidence))
+  if (lengthStart === undefined) return unmeasured()
+  const l0 = lengthStart
+  const span = (def.maxLength - def.minLength) / 100
+  const length = (f: number): number => l0 + f * span
+
   // All-negative thresholds under `automatic` (bar:lengths-all-negative, the oracle's `axis` hypothesis): the bar grows
   // from the trailing edge, longest at v_min, as a share of the whole span. Measured at 0/100 lengths only; the capture
   // records no axis line there, so the descriptor carries none.
@@ -196,6 +201,24 @@ export function evaluateDataBar(
   }
 
   return finish(def, checkEvidence, { axisFraction, startFraction, endFraction, isNegative, axisColor: axis !== undefined ? def.axisArgb : undefined, direction })
+}
+
+/**
+ * Where a non-0/100 bar's length starts (as a share of the span) under the selected rule (`BAR_LENGTH_RULES`,
+ * scripts/cf-refs/verify.ts): `linear` at minLength, `half-min` at minLength / 2 (the slope is maxLength - minLength
+ * either way). A rule scoped to `solid` bars applies to gradient="0" only. Undefined (unresolved) with no rule, an
+ * `offset-9pt` rule on a bar it covers (a fixed point offset is not a share of the span), or an `x14`-scoped rule (the
+ * definition does not record its pairing form).
+ */
+function defaultLengthsStart(def: CfDataBarDefinition, rule: string | undefined): number | undefined {
+  if (rule === undefined) return undefined
+  const [form, cls] = rule.split('@')
+  const linear = def.minLength / 100
+  if (form === 'linear' && cls === undefined) return linear
+  if (cls !== 'all' && cls !== 'solid' && cls !== 'x14') return undefined
+  if (cls === 'solid' && def.gradient) return linear
+  if (cls === 'x14') return undefined
+  return form === 'half-min' ? def.minLength / 200 : undefined
 }
 
 /** Colours (S3-L, S3-F) and the finite-range check shared by every layout branch. */

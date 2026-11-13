@@ -15,10 +15,11 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
-import { CF_BAR_RENDER_MODEL, layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
-import { auditStage3Manifest } from '../scripts/cf-refs/audit'
+import { CF_BAR_RENDER_MODEL, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
+import { createCanvas } from 'canvas'
+import { auditStage3Manifest, barGradientsAcrossCases } from '../scripts/cf-refs/audit'
 import { stage3ObservedBars } from '../scripts/cf-compare'
 import { CF_LIMITS, createCfMemory } from '../src/xlsx/cf/limits'
 import { createCfService } from '../src/xlsx/cf/service'
@@ -710,6 +711,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect([...published].sort(), 'the published Stage 3 set is the audit result').toEqual(verified)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LAYOUT'), 'the published layout is the audit result').toEqual(audit.barLayout.layout)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_AUTO_BAR_COLORS'), 'the published colours are the audit result').toEqual(audit.autoBarColours)
+      expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT'), 'the published gradient is the audit result').toEqual(audit.barGradient)
     }
 
     // A pixel-measured bar production withholds, by case column, with why (withheld-only, like FINDINGS).
@@ -718,7 +720,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       'stage3-bar-degenerate:B': { outcome: 'withheld', reason: 'all values equal: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
       'stage3-bar-degenerate:C': { outcome: 'withheld', reason: 'single numeric cell: S3-E keeps the degenerate scope unresolved (Excel draws half length; not implemented)' },
       ...Object.fromEntries(['stage3-bar-degenerate:D', 'stage3-bar-degenerate:E',
-        ...['B', 'D', 'E', 'F', 'G', 'H', 'I'].map(col => `stage3-bar-rendering:${col}`),
+        ...['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map(col => `stage3-bar-rendering:${col}`),
         ...['B', 'C', 'D', 'E', 'F', 'H', 'I'].map(col => `stage3-bar-geometry:${col}`),
         'stage3-bar-showvalue:B', 'stage3-bar-showvalue:D',
       ].map(key => [key, { outcome: 'withheld', reason: 'num bounds: bar:bounds-num is non-discriminating (num 20/80 equals the data min/max), so unverified' } as Finding])),
@@ -739,6 +741,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     let painted = 0, withheldFound = 0, measuredPainted = 0, axes = 0, axisRows = 0, solidMutantFails = 0
     injectCfBarLayout(audit.barLayout.layout)
     injectCfAutoBarColours(audit.autoBarColours)
+    injectCfBarGradient(audit.barGradient)
     try {
       await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
         for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
@@ -807,11 +810,12 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     } finally {
       injectCfBarLayout(null)
       injectCfAutoBarColours(null)
+      injectCfBarGradient(null)
     }
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())
     expect([...usedPainted].sort()).toEqual(Object.keys(PAINTED_UNDESIGNATED).sort())
-    expect({ painted, measuredPainted, withheldFound, axes, axisRows }).toEqual({ painted: 140, measuredPainted: 123, withheldFound: 80, axes: 38, axisRows: 38 * 30 })
+    expect({ painted, measuredPainted, withheldFound, axes, axisRows }).toEqual({ painted: 140, measuredPainted: 123, withheldFound: 84, axes: 38, axisRows: 38 * 30 })
     // Mutant: a solid axis (the axis colour on every row) disagrees with Excel on every black dotted axis compared.
     expect(solidMutantFails, 'a solid axis fails on every explicit (black) axis').toBe(28)
   }, 60_000)
@@ -832,6 +836,72 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     expect(explicit).toBe(28)
     expect(failed, 'the solid mutant fails every explicit axis').toBe(28)
   })
+
+  /**
+   * Lesson 1 for the gradient fill (Task 22b): every gradient bar of the measured shape in every capture (the audit's own
+   * pooled samples: four cases, two fills, lengths 18..177 px) is laid out and PAINTED by the production painter on a
+   * real canvas at the capture scale, under the audit's own gradient export, and compared with Excel column by column on
+   * every bar row (the control's text ink masked, as the sampler masks it), within 8 per channel. A solid fill fails.
+   * No such bar reaches `barAt` today (num bounds and 10/90 lengths keep them withheld), so the descriptor is built from
+   * the sample: its fill and its measured length as a share of the span.
+   */
+  it('gradient colour conformance (Lesson 1, Task 22b): the painter reproduces every gradient bar; a solid fill fails', () => {
+    const audit = auditStage3Manifest(manifest, { rootDir: REPO_ROOT })
+    const verified = audit.perCapability.filter(p => p.disposition === 'verified').map(p => p.capabilityId)
+    expect(verified).toContain('bar:render-gradient-stops')
+    const pooled = barGradientsAcrossCases(manifest, REPO_ROOT)
+    expect(pooled.samples).toHaveLength(24)
+    let bars = 0, pixels = 0, worst = 0, solidFails = 0
+    injectCfBarGradient(audit.barGradient)
+    try {
+      withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], () => {
+        for (const s of pooled.samples) {
+          const [caseId, ref] = s.ref.split(':') as [string, string]
+          const c = manifest.cases.find(x => x.id === caseId)!
+          const sc = JSON.parse(readFileSync(join(REPO_ROOT, c.captures[0]!.sidecarPath), 'utf8')) as { rowHeightsPt: number[]; observedBars: Array<{ ref: string; cellLeftPx: number; cellWidthPx: number }> }
+          const o = sc.observedBars.find(b => b.ref === ref)!
+          const { row, col } = refToRowCol(ref)
+          const top = sc.rowHeightsPt.slice(0, row).reduce((a, b) => a + b, 0), height = sc.rowHeightsPt[row]!
+          const host = { x: o.cellLeftPx * 4 / 3, y: top * 4 / 3, width: o.cellWidthPx * 4 / 3, height: height * 4 / 3 }
+          const fill = (0xff000000 | (s.fill[0] << 16) | (s.fill[1] << 8) | s.fill[2]) >>> 0
+          const bar: CfBarDescriptor = { ruleId: 1, axisFraction: 0, startFraction: 0, endFraction: s.length / s.span, fillColor: fill, isGradient: true, isNegative: false, showValue: true, direction: 'leftToRight' }
+          const p = layoutDataBar(bar, host, { zoom: 0.75, dpr: 1, output: 'device' })!
+          expect(p?.fill, `${s.ref} lays out`).toBeDefined()
+          expect([p.fill!.x, p.fill!.w, p.fill!.y, p.fill!.y + p.fill!.h - 1], `${s.ref} rect`).toEqual([s.leftPx, s.length, s.topPx, s.bottomPx])
+          // Paint through the production painter on a real canvas (device output at the capture scale).
+          const canvas = createCanvas(o.cellLeftPx + o.cellWidthPx + 2, top + height + 2)
+          const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+          // The renderer's transform: logical px to device px at zoom x DPR = 3/4 (the painter clips in logical units).
+          ctx.setTransform(0.75, 0, 0, 0.75, 0, 0)
+          paintDataBars(ctx, new Map([[row * 16384 + col, bar]]), () => bar, () => host, { r0: row, c0: col, r1: row, c1: col }, { zoom: 0.75, dpr: 1, output: 'device' })
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const png = excelPng(c)
+          let solidMiss = false
+          for (const q of s.pixels) {
+            const x = s.leftPx + q.i
+            const excel = pixelArgb(png, x, q.y)
+            const k = (q.y * img.width + x) * 4
+            const ours = `FF${[0, 1, 2].map(j => img.data[k + j]!.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+            const d = argbDelta(ours, excel)
+            worst = Math.max(worst, d)
+            if (d > 8) expect(d, `${s.ref} (${x}, ${q.y}) ours ${ours} Excel ${excel}`).toBeLessThanOrEqual(8)
+            if (argbDelta(argbHex(fill), excel) > 8) solidMiss = true
+            pixels++
+          }
+          if (solidMiss) solidFails++
+          bars++
+        }
+      })
+    } finally {
+      injectCfBarGradient(null)
+    }
+    expect(bars).toBe(24)
+    expect(pixels).toBeGreaterThan(50_000)
+    expect(worst).toBeLessThanOrEqual(8)
+    // Mutant: the fill painted solid misses Excel on every gradient bar.
+    expect(solidFails).toBe(24)
+  }, 60_000)
 
   it('guard: FINDINGS structure strictly disallows non-withheld outcomes', () => {
     // Type definition allows only { outcome: 'withheld', reason: string }

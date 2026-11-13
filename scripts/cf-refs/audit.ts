@@ -292,6 +292,18 @@ export interface Stage3AuditReport extends Stage1AuditReport {
   barGradient: BarGradientExport
   /** The pooled gradient judgement, verified or not (for the report and the docs). */
   barGradientJudgement: string
+  /** Task 22b: the verified rule for Excel's default 10/90 lengths (empty until bar:lengths-default-10-90 verifies). */
+  barLengths: BarLengthsExport
+}
+
+/** The length rule production may apply to 10/90 bars: a `BAR_LENGTH_RULES` id matched by the owning capture. */
+export type BarLengthsExport = Partial<Record<'default-10-90', { rule: string; settledBy: string[] }>>
+
+/** The generated export of the verified 10/90 length rule (fixed key order, so `--write` stays idempotent). */
+export function renderBarLengthsBlock(lengths: BarLengthsExport): string {
+  const r = lengths['default-10-90']
+  const rows = r ? `  'default-10-90': { rule: '${r.rule}', settledBy: [${r.settledBy.map(c => `'${c}'`).join(', ')}] },\n` : ''
+  return `export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n${rows}}\n`
 }
 
 /** The gradient model production may draw: `bar-length`, from the fill toward white by `endBlend` over the bar length. */
@@ -506,6 +518,15 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
       barGradient['bar-length'] = { endBlend: pooledGradient.endBlend, settledBy: [BAR_GRADIENT_CAPABILITY] }
     } else gradientEntry.disposition = 'supported-structural'
   }
+  // Task 22b: the 10/90 rule is the owning capture's matched candidate, and only once the capability is verified.
+  const barLengths: BarLengthsExport = {}
+  const lengthsEntry = perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')
+  if (lengthsEntry?.disposition === 'verified') {
+    const own = evidence.get(lengthsEntry.caseId)
+    const rule = own?.kind === 'verified' ? own.matchedHypotheses?.['bar:lengths-default-10-90'] : undefined
+    if (rule !== undefined && (BAR_LENGTH_RULES as readonly string[]).includes(rule)) barLengths['default-10-90'] = { rule, settledBy: ['bar:lengths-default-10-90'] }
+    else lengthsEntry.disposition = 'supported-structural'
+  }
   const matchedByCase = [...evidence.values()].flatMap(r => r.kind === 'verified' && r.matchedHypotheses ? [r.matchedHypotheses] : [])
   const barLayout = deriveBarLayout(perCapability, matchedByCase)
   const stage3Ids = new Set(CF_STAGE3_CAPABILITIES.map(entry => entry.capabilityId))
@@ -525,6 +546,7 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
     barLayout,
     barGradient,
     barGradientJudgement: `${pooledGradient.status}: ${pooledGradient.reason}`,
+    barLengths,
     ok,
     perCase,
     perCapability,
@@ -576,6 +598,11 @@ const exportedGradient = (text: string | undefined): string | undefined => {
   return m ? m[0] : undefined
 }
 
+const exportedLengths = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_LENGTHS: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
 const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
   const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
   return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
@@ -600,6 +627,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   const layoutBlock = stage3Report ? renderBarLayoutBlock(stage3Report.barLayout.layout) : exportedLayout(options.committedSource)
   // Ruling S3-M (Task 22b): the verified gradient model travels the same way.
   const gradientBlock = stage3Report ? renderBarGradientBlock(stage3Report.barGradient) : exportedGradient(options.committedSource)
+  const lengthsBlock = stage3Report ? renderBarLengthsBlock(stage3Report.barLengths) : exportedLengths(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -610,7 +638,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */

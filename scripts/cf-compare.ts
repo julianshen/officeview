@@ -605,6 +605,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     evidence.injectExactCfEvidence([...evidence.VERIFIED_CAPABILITIES, ...verified])
     evidence.injectCfBarLayout(audit.barLayout.layout)
     evidence.injectCfAutoBarColours(audit.autoBarColours)
+    evidence.injectCfBarGradient(audit.barGradient)
+    evidence.injectCfBarLengths(audit.barLengths)
     console.log(`Evidence: audit (${verified.length} Stage 3 capabilities verified by the harness, unpublished)`)
   }
   let passCount = 0

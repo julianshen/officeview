@@ -8,7 +8,7 @@ import {
   type CfBarLayoutVariant,
 } from '../src/xlsx/cf/dataBar'
 import { resolveScaleThresholds } from '../src/xlsx/cf/colorScale'
-import { injectCfBarLayout, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { injectCfBarLayout, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { createResidentCfSource } from '../src/xlsx/cf/statistics'
 import { residentSource } from '../src/xlsx/cf/render'
@@ -108,19 +108,31 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
 
   it('all-positive lengths under stubbed variants', () => {
     const scope = range(0, 100)
+    const D1090_RULE = { 'default-10-90': { rule: 'linear', settledBy: ['bar:lengths-default-10-90'] } }
+    injectCfBarLengths(D1090_RULE)
+    try {
+      withExactCfEvidence(STUB_EVIDENCE, () => {
+        const d1090 = bar({ minLength: 10, maxLength: 90 })
+        const expected: Array<[number, number]> = [[0, 0.10], [25, 0.30], [50, 0.50], [100, 0.90]]
+        for (const [v, end] of expected) {
+          const b = ready(evalBar(v, d1090, scope, SPAN_CELL))
+          expect(b.startFraction, `v=${v}`).toBe(0)
+          expect(b.endFraction, `v=${v}`).toBeCloseTo(end, 12)
+          expect(b.isNegative).toBe(false)
+          expect(b.axisColor).toBeUndefined()
+          expect(b.fillColor).toBe(BLUE)
+        }
+        const b0100 = ready(evalBar(25, bar(), scope, SPAN_CELL))
+        expect([b0100.startFraction, b0100.endFraction]).toEqual([0, 0.25])
+      })
+    } finally {
+      injectCfBarLengths(null)
+    }
+    // Task 22b: the capability alone never lifts 10/90 (the linear reading is refuted for Excel's paired solid bars):
+    // without the selected rule the bar is unresolved, while 0/100 still resolves.
     withExactCfEvidence(STUB_EVIDENCE, () => {
-      const d1090 = bar({ minLength: 10, maxLength: 90 })
-      const expected: Array<[number, number]> = [[0, 0.10], [25, 0.30], [50, 0.50], [100, 0.90]]
-      for (const [v, end] of expected) {
-        const b = ready(evalBar(v, d1090, scope, SPAN_CELL))
-        expect(b.startFraction, `v=${v}`).toBe(0)
-        expect(b.endFraction, `v=${v}`).toBeCloseTo(end, 12)
-        expect(b.isNegative).toBe(false)
-        expect(b.axisColor).toBeUndefined()
-        expect(b.fillColor).toBe(BLUE)
-      }
-      const b0100 = ready(evalBar(25, bar(), scope, SPAN_CELL))
-      expect([b0100.startFraction, b0100.endFraction]).toEqual([0, 0.25])
+      expect(evalBar(25, bar({ minLength: 10, maxLength: 90 }), scope, SPAN_CELL).kind).toBe('unresolved')
+      expect(evalBar(25, bar(), scope, SPAN_CELL).kind).toBe('ready')
     })
     // 10/90 is gated by its own (blocked) capability: the capture shows Excel's default lengths are not linear.
     withExactCfEvidence(STUB_EVIDENCE.filter(c => c !== 'bar:lengths-default-10-90'), () => {
@@ -131,6 +143,33 @@ describe('CF Stage 3 Task 20 — data-bar evaluation (hypotheses under stubbed v
     withExactCfEvidence(STUB_EVIDENCE, () => {
       expect(evalBar(25, bar({ minLength: 5, maxLength: 95 }), scope, SPAN_CELL).kind).toBe('unresolved')
     })
+  })
+
+  it('10/90 under each selected length rule (Task 22b): only rules expressible as a share of the span apply', () => {
+    const scope = range(0, 100)
+    const under = (rule: string, gradient: boolean, evidence = STUB_EVIDENCE) => {
+      injectCfBarLengths({ 'default-10-90': { rule, settledBy: ['bar:lengths-default-10-90'] } })
+      try {
+        return withExactCfEvidence(evidence, () => [0, 25, 100].map(v => {
+          const out = evalBar(v, bar({ minLength: 10, maxLength: 90, gradient }), scope, SPAN_CELL)
+          return out.kind === 'ready' ? Number(out.value.endFraction.toFixed(12)) : out.kind
+        }))
+      } finally {
+        injectCfBarLengths(null)
+      }
+    }
+    const withGradient = STUB_EVIDENCE.filter(c => c !== 'bar:render-solid').concat('bar:render-gradient-stops')
+    expect(under('linear', false)).toEqual([0.1, 0.3, 0.9])
+    expect(under('half-min@all', false)).toEqual([0.05, 0.25, 0.85])
+    expect(under('half-min@solid', false)).toEqual([0.05, 0.25, 0.85])
+    expect(under('half-min@solid', true, withGradient)).toEqual([0.1, 0.3, 0.9])
+    // A fixed point offset is not a share of the span, and the definition does not record the pairing form.
+    expect(under('offset-9pt@all', false)).toEqual(['unresolved', 'unresolved', 'unresolved'])
+    expect(under('offset-9pt@solid', true, withGradient)).toEqual([0.1, 0.3, 0.9])
+    expect(under('half-min@x14', false)).toEqual(['unresolved', 'unresolved', 'unresolved'])
+    expect(under('nonsense', false)).toEqual(['unresolved', 'unresolved', 'unresolved'])
+    // The rule needs its capability too.
+    expect(under('linear', false, STUB_EVIDENCE.filter(c => c !== 'bar:lengths-default-10-90'))).toEqual(['unresolved', 'unresolved', 'unresolved'])
   })
 
   it('autoMin and autoMax bounds', () => {

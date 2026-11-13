@@ -6,6 +6,7 @@ import {
   BAR_LAYOUT_SETTLING,
   deriveBarLayout,
   renderBarLayoutBlock,
+  renderBarLengthsBlock,
   renderVerifiedCapabilitiesSource,
 } from '../scripts/cf-refs/audit'
 import type { CfManifest } from '../scripts/cf-refs/cases'
@@ -31,6 +32,17 @@ describe('Stage 3 bar layout variant (Ruling S3-B)', () => {
       mixedSign: { ...AXIS_SIDE, settledBy: ['bar:axis-automatic', 'bar:axis-middle'] },
     })
     expect(report.barLayout.findings).toEqual([])
+  }, AUDIT_TIMEOUT_MS)
+
+  it('Task 22b: no 10/90 rule is exported until bar:lengths-default-10-90 verifies; the block renders idempotently', () => {
+    const report = auditStage3Manifest(manifest(), { rootDir: REPO_ROOT })
+    expect(report.perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')?.disposition).toBe('supported-structural')
+    expect(report.barLengths).toEqual({})
+    expect(renderBarLengthsBlock({})).toBe('export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n}\n')
+    expect(renderBarLengthsBlock({ 'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] } }))
+      .toBe("export const VERIFIED_STAGE3_BAR_LENGTHS: Readonly<Record<string, { rule: string; settledBy: readonly string[] }>> = {\n  'default-10-90': { rule: 'half-min@x14', settledBy: ['bar:lengths-default-10-90'] },\n}\n")
+    // Every candidate rule keeps the span/cell layout: the rule changes lengths, not where a bar starts.
+    for (const v of Object.values(BAR_LAYOUT_SETTLING['bar:lengths-default-10-90']!.variants)) expect(v).toEqual(SPAN_CELL)
   }, AUDIT_TIMEOUT_MS)
 
   it('derivation pools every case, and disagreement or an unmapped match selects no variant', () => {
