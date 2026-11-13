@@ -24,6 +24,7 @@ import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, t
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
+import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, printArgs, runPrint, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
@@ -36,9 +37,9 @@ export const CLOSE = {
   'session-expired': 4004, 'revoked': 4005, 'layout-changed': 4006, 'rate-limited': 4008, 'policy-refused': 4009,
 } as const
 export type CloseName = keyof typeof CLOSE
-export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted'
+export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
 
-const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4 } as const
+const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, PRINT_RASTER: 8 } as const
 const HELLO_CAP = 4 * 1024, TEXT_CAP = 64 * 1024, FRAGMENT = 1 << 20
 const PROCESS_SOCKETS = 256
 const enc = new TextEncoder()
@@ -66,6 +67,8 @@ export interface StreamServerOptions {
   audit?: AuditTable
   /** TEST-ONLY: wedge each Layer-1 encode (forwarded only by a testHooks pool). */
   encodeHangMs?: number
+  /** TEST-ONLY: replaces the print job planner (e.g. to force a too-large refusal). */
+  planPrint?: typeof planPrint
 }
 
 interface Conn {
@@ -99,8 +102,8 @@ export function createStreamServer(o: StreamServerOptions) {
   const docs = new Map<string, DocState>()          // docRef → state
   /** Per-sid session entry. Its text state (in-flight search/select, the copy
    * queue and the quota counter `copiedParagraphs`) survives resume and is
-   * gone on teardown. */
-  const sessionDoc = new Map<string, TextSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
+   * gone on teardown. So does its print state (`printedPages`, the running job). */
+  const sessionDoc = new Map<string, TextSlot & PrintSlot & { doc: DocState; policy: EffectivePolicy; decision: AuthDecision; tokenExp: number; /** Layer-1 issuance, fixed for the sid's life (a resume keeps it). */ forensic?: Issued; /** The sid's in-flight search (R6: one per sid); survives resume. */ search?: SearchRun }>()
   const sockets = new Set<WS>()
   /** Per-sid rate state survives resume (it belongs to the session, not the socket). */
   const sessionRates = new Map<string, SessionRates>()
@@ -129,7 +132,7 @@ export function createStreamServer(o: StreamServerOptions) {
   }
   /** §14 per-kind encoded (`totalLen`) caps. A message over its cap is never
    * framed, so a conforming client never sees an encoded-cap rejection. */
-  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20 }
+  const ENCODED: Record<number, number> = { [KIND.MANIFEST]: 256 << 10, [KIND.ASSET_DEFINE]: 1 << 20, [KIND.UNIT_RASTER]: 8 << 20, [KIND.UNIT_COMMANDS]: 8 << 20, [KIND.PRINT_RASTER]: PRINT_ENCODED_CAP }
   const frame = (kind: number, reqId: number, payload: Uint8Array): Uint8Array[] | undefined => {
     const z = new Uint8Array(gzipSync(payload, { level: 6 }))
     if (z.length + 4 > ENCODED[kind]!) return undefined
@@ -214,7 +217,7 @@ export function createStreamServer(o: StreamServerOptions) {
         audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -273,6 +276,7 @@ export function createStreamServer(o: StreamServerOptions) {
     sessionDoc.delete(sid)
     if (sd?.search) { sd.search.stopped = true; sd.search = undefined }
     if (sd?.select) { sd.select.stopped = true; sd.select = undefined }
+    if (sd?.print) sd.print.stopped = true
     if (sd) releaseDoc(sd.doc.docRef)
   }
   /** Keep the session (and its document charge) for a resume until the grace
@@ -517,6 +521,67 @@ export function createStreamServer(o: StreamServerOptions) {
     })
   }
 
+  /** §4.2 print (Stage 3b P3): the whole job is checked, rate-charged, capped,
+   * audited and charged before `print-start`; everything after the token
+   * await up to `print-start` is synchronous, so two prints cannot both pass
+   * the running-job and quota checks. Pages are always final rasters, through
+   * the same cache → pool → Layer-1 → delivery-record step as `unit`. */
+  async function onPrint(ws: WS, msg: Record<string, unknown>) {
+    const a = await textOp(ws, msg)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const args = printArgs(msg, sd.doc.units.length)
+    if (!args) return refuse(ws, reqId, 'policy-refused')
+    // A 'print' overflow is a refusal only (never a breach toward 4008).
+    if (ws.data.rates.check('print', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
+    const caps = sd.policy.print
+    if (caps === false) return refuse(ws, reqId, 'policy-refused')
+    if (sd.print) return refuse(ws, reqId, 'rate-limited')
+    const { from, to } = args, n = to - from + 1
+    const plan = (o.planPrint ?? planPrint)(sd.doc.units, from, to)
+    if ('refused' in plan) return refuse(ws, reqId, 'print-too-large')
+    if (caps.maxPages !== null && n > caps.maxPages) return refuse(ws, reqId, 'print-too-large', { limit: caps.maxPages, requested: n })
+    if (caps.maxSessionPages !== null && sd.printedPages + n > caps.maxSessionPages) return refuse(ws, reqId, 'print-quota-exhausted', { limit: caps.maxSessionPages, requested: n })
+    if (fingerprintOf(sd.doc.contentPolicyId) !== sd.doc.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return refuse(ws, reqId, 'policy-refused')
+    const { scale } = plan
+    try { audit.recordPrint({ sid: s.sid, pages: n, fromUnit: from, toUnit: to, scale }) } catch { return refuse(ws, reqId, 'policy-refused') }
+    // P3: charged now; a job that fails later stays charged.
+    sd.printedPages += n
+    const job = { reqId, stopped: false }
+    sd.print = job
+    send(ws, { reqId, type: 'print-start', pages: n, scale })
+    const alive = () => !job.stopped && owns(ws, s.sid) && ws.data.phase === 'stream' && sessionDoc.get(s.sid) === sd
+    try {
+      await runPrint({
+        job, from, to, alive,
+        page: async (unitIndex) => {
+          // A long job can outlive the parse: every page re-charges it.
+          if (!ledger.touch(sd.doc.docRef, sd.policy.contentPolicy, sd.doc.bytes.length)) return 'policy-refused'
+          const unit = await obtainUnit(s.sid, sd, unitIndex, scale, 'final-raster')
+          if (!alive()) return undefined
+          if (typeof unit === 'string') return pageCode(unit)
+          if (unit.kind !== 'raster') return 'policy-refused'
+          const d = await deliverRaster(alive, s.sid, sd, unitIndex, scale, unit, (u) => { const f = frame(KIND.PRINT_RASTER, reqId, encodePrintBody(unitIndex, u.w, u.h, u.png)); return f ? [f] : undefined })
+          return d === undefined ? undefined : typeof d === 'string' ? pageCode(d) : d.messages
+        },
+        send: (m) => sendFrames(ws, m),
+        done: () => send(ws, { reqId, type: 'print-done', pages: n }),
+        refuse: (code) => refuse(ws, reqId, code),
+      })
+    } finally { if (sd.print === job) sd.print = undefined }
+  }
+
+  /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
+  const pageCode = (c: RefusalCode) => c === 'rate-limited' ? c : 'policy-refused'
+
+  /** Stops the sid's running job when `reqId` names it; anything else is ignored (no reply, ever). */
+  function onPrintCancel(ws: WS, msg: Record<string, unknown>) {
+    const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
+    if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid)) return
+    if (sd.print && isU32(msg.reqId) && sd.print.reqId === msg.reqId) sd.print.stopped = true
+  }
+
   /** The canonical-tier cache key (§9.3): never carries per-sid pixels. */
   function keyFields(doc: DocState, mark: MarkSpec, unitIndex: number, scale: number, projectionMode: 'final-raster' | 'commands', missing?: string[]): RenderKeyFields {
     return {
@@ -601,6 +666,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'select') return onSelect(ws, m)
     if (m.type === 'copy') return onCopy(ws, m)
     if (m.type === 'a11y') return onA11y(ws, m)
+    if (m.type === 'print') return onPrint(ws, m)
+    if (m.type === 'print-cancel') return onPrintCancel(ws, m)
     return refuse(ws, m.reqId, 'policy-refused')
   }
 

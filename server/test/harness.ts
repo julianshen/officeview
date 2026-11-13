@@ -32,7 +32,7 @@ export async function start(o: { policy?: AuthDecision['policy']; viewerId?: str
 }
 
 export type Msg = { text: Record<string, any>; /** UTF-8 bytes as received. */ bytes?: number } | { binary: { kind: number; reqId: number; payload: Uint8Array } }
-const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20] }
+const CAPS: Record<number, [number, number]> = { 1: [256 << 10, 256 << 10], 2: [1 << 20, 8 << 20], 3: [8 << 20, 64 << 20], 4: [8 << 20, 8 << 20], 8: [8 << 20, 64 << 20] }
 
 export class Client {
   ws: WebSocket
@@ -108,6 +108,19 @@ export class Client {
       const m = await this.next((m) => 'text' in m && m.text.reqId === msg.reqId, o.ms) as { text: Record<string, any>; bytes: number }
       if (!partial.includes(m.text.type)) return { parts, end: m.text }
       parts.push(m)
+    }
+  }
+  /** Sends `print` and collects its reqId: the `print-start`, every kind-8
+   * body, and the closing text (`print-done` or `refused`) as `end`. */
+  async print(reqId: number, from: number, to: number, o: { token?: string; ms?: number } = {}) {
+    this.send({ reqId, type: 'print', token: o.token ?? this.manifest!.session.token, from, to })
+    let start: Record<string, any> | undefined
+    const pages: Uint8Array[] = []
+    for (;;) {
+      const m = await this.next((m) => ('text' in m && m.text.reqId === reqId) || ('binary' in m && m.binary.reqId === reqId), o.ms)
+      if ('binary' in m) { if (m.binary.kind !== 8) throw new Error(`unexpected kind ${m.binary.kind} on print`); pages.push(m.binary.payload); continue }
+      if (m.text.type === 'print-start' && !start) { start = m.text; continue }
+      return { start, pages, end: m.text }
     }
   }
   close() { this.ws.close() }
