@@ -7,15 +7,16 @@ Plan: `docs/superpowers/plans/2026-11-13-streaming-s3b-print.md`.
 
 ## Verification (2026-11-13)
 
-Product code (`server/src`, `src/stream`, `src/components`) at `d1155a82`
-(the last product commit); tests at `80b2b50b`. Machine: Apple-silicon Mac.
+Product code and tests at `cbb36080` (after the final-review fixes: the
+client whole-job decoded budget, a session end stopping an unfinished
+print, and a `print-cancel` during validation). Machine: Apple-silicon Mac.
 
 | check | result |
 |---|---|
-| `cd server && bun test` | **844 pass, 0 fail** (47 files, 6,856 expects) |
+| `cd server && bun test` | **850 pass, 0 fail** (47 files, 6,884 expects) |
 | `bun run typecheck:server` | clean |
 | `bun run lint` (`tsc --noEmit`, the client typecheck; covers `tests/`, so the browser specs too) | clean |
-| `bunx vitest run` | **13,250 passed**, 64 skipped, 1 todo (671 files); no failures, no reruns needed |
+| `bunx vitest run` | **13,263 passed**, 64 skipped, 1 todo (672 files); no failures, no reruns needed |
 | `bun run test:browser:stream` | **23 passed** (6 new in `stream-print.spec.ts`) |
 | `bun run gates:core` | **FAIL, red as on `main`**: index closure 421,068 B (see below) |
 
