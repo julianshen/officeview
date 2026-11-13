@@ -139,7 +139,7 @@ test('the unit wrapper keeps the canvas sizing, also at a narrow viewport', asyn
   }
 })
 
-test('print hides the search bar, the hit and selection boxes and the status line; the canvases still print', async ({ page }) => {
+test('print hides the search bar, the hit and selection boxes and the status line, and (Stage 3b) the canvases', async ({ page }) => {
   await open(page, 'doc=lo-tdf123684.pptx&copy=cap3')
   await expect(painted(page)).toHaveCount(1)
   await search(page, 'Test')
@@ -158,7 +158,9 @@ test('print hides the search bar, the hit and selection boxes and the status lin
   // cap3 ⇒ 'focused' a11y: the screen-reader layer does not print either.
   await expect(page.locator('[data-a11y-layer]')).toHaveCount(1)
   await expect(page.locator('[data-a11y-layer]')).toBeHidden()
-  await expect(page.locator('canvas[data-unit="0"]')).toBeVisible()
+  // Stage 3b: the screen canvases never print (the remote root is hidden in
+  // print media); printing is server print rasters only (stream-print.spec.ts).
+  await expect(page.locator('canvas[data-unit="0"]')).toBeHidden()
   await page.emulateMedia({ media: 'screen' })
   await expect(page.getByTestId('officeview-search')).toBeVisible()
   await expect(page.locator('[data-sel]').first()).toBeVisible()
@@ -186,7 +188,8 @@ test("a11y=unit: page 1's accessibility tree holds the document text; the canvas
 
 test("a11y=focused: page 1's accessibility tree offers named read buttons and no document text until one is activated; a re-press does not re-request", async ({ page }) => {
   const sent = a11ySent(page)
-  await open(page, 'doc=pypptx-test.pptx&a11y=focused')
+  // print=off: no Print button ahead of the read buttons in the tab order (Stage 3b).
+  await open(page, 'doc=pypptx-test.pptx&a11y=focused&print=off')
   await expect(painted(page)).toHaveCount(1)
   const group = pageGroup(page)
   const first = group.getByRole('button', { name: 'Paragraph 1 of 2. Press Enter to read.', exact: true })
