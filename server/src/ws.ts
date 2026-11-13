@@ -433,12 +433,13 @@ export function createStreamServer(o: StreamServerOptions) {
 
   /** The onUnit preamble for a text op: stream phase, reqId, token, ownership
    * after the await, jti. Answers (refuse/close) and returns undefined on failure. */
-  async function textOp(ws: WS, msg: Record<string, unknown>) {
+  /** `cancelled`: checked after the token await; true ⇒ nothing is sent (a print cancelled while it was validated). */
+  async function textOp(ws: WS, msg: Record<string, unknown>, cancelled?: () => boolean) {
     const reqId = msg.reqId
     const sid = ws.data.sid, s = sid ? table.get(sid) : undefined, sd = sid ? sessionDoc.get(sid) : undefined
     if (ws.data.phase !== 'stream' || !s || !sd || !isU32(reqId) || reqId === 0) return void refuse(ws, reqId, 'policy-refused')
     const v = await verifyToken(o.keys.kToken, msg.token, { now: nowSec(), docRef: sd.doc.docRef, sid: s.sid })
-    if (!owns(ws, s.sid)) return
+    if (!owns(ws, s.sid) || cancelled?.()) return
     if (!v.ok) return void (v.reason === 'exp' ? close(ws, 'session-expired') : refuse(ws, reqId, 'policy-refused'))
     const jti = table.acceptJti(s.sid, v.claims.jti)
     if (jti === 'rotated') return void refuse(ws, reqId, 'session-rotated')
@@ -552,9 +553,23 @@ export function createStreamServer(o: StreamServerOptions) {
    * audited and charged before `print-start`; everything after the token
    * await up to `print-start` is synchronous, so two prints cannot both pass
    * the running-job and quota checks. Pages are always final rasters, through
-   * the same cache → pool → Layer-1 → delivery-record step as `unit`. */
+   * the same cache → pool → Layer-1 → delivery-record step as `unit`.
+   *
+   * The job takes the sid's one print slot synchronously, before the token
+   * await, when the slot is free (a `print` arriving while another is pending
+   * or running does not, and is refused `rate-limited` after validation as
+   * before). A `print-cancel` for it during validation marks it stopped; it
+   * then ends silently after the await: nothing sent, rated, audited or
+   * charged, and the slot freed. Only the one pending job is held (no
+   * record of unknown reqIds). */
   async function onPrint(ws: WS, msg: Record<string, unknown>) {
-    const a = await textOp(ws, msg)
+    const sid0 = ws.data.sid, sd0 = sid0 ? sessionDoc.get(sid0) : undefined
+    let job: PrintJob | undefined
+    if (ws.data.phase === 'stream' && sd0 && !sd0.print && sid0 && owns(ws, sid0) && isU32(msg.reqId) && msg.reqId !== 0) sd0.print = job = { reqId: msg.reqId, stopped: false }
+    try { await printOp(ws, msg, job) } finally { if (job && sd0 && sd0.print === job) sd0.print = undefined }
+  }
+  async function printOp(ws: WS, msg: Record<string, unknown>, pending: PrintJob | undefined) {
+    const a = await textOp(ws, msg, () => !!pending?.stopped)
     if (!a) return
     const { reqId, s, sd } = a
     const args = printArgs(msg, sd.doc.units.length)
@@ -563,7 +578,7 @@ export function createStreamServer(o: StreamServerOptions) {
     if (ws.data.rates.check('print', now()) !== 'ok') return refuse(ws, reqId, 'rate-limited')
     const caps = sd.policy.print
     if (caps === false) return refuse(ws, reqId, 'policy-refused')
-    if (sd.print) return refuse(ws, reqId, 'rate-limited')
+    if (sd.print && sd.print !== pending) return refuse(ws, reqId, 'rate-limited')
     const { from, to } = args, n = to - from + 1
     const plan = (o.planPrint ?? planPrint)(sd.doc.units, from, to)
     if ('refused' in plan) return refuse(ws, reqId, 'print-too-large')
@@ -575,7 +590,7 @@ export function createStreamServer(o: StreamServerOptions) {
     try { audit.recordPrint({ sid: s.sid, pages: n, fromUnit: from, toUnit: to, scale }) } catch { return refuse(ws, reqId, 'policy-refused') }
     // P3: charged now; a job that fails later stays charged.
     sd.printedPages += n
-    const job: PrintJob = { reqId, stopped: false }
+    const job: PrintJob = pending ?? { reqId, stopped: false }
     sd.print = job
     send(ws, { reqId, type: 'print-start', pages: n, scale })
     const alive = () => !job.stopped && owns(ws, s.sid) && ws.data.phase === 'stream' && sessionDoc.get(s.sid) === sd
@@ -605,7 +620,7 @@ export function createStreamServer(o: StreamServerOptions) {
   /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
   const pageCode = (c: RefusalCode) => c === 'rate-limited' ? c : 'policy-refused'
 
-  /** Stops the sid's running job when `reqId` names it; anything else is ignored (no reply, ever). */
+  /** Stops the sid's pending (still validating) or running job when `reqId` names it; anything else is ignored (no reply, ever). */
   function onPrintCancel(ws: WS, msg: Record<string, unknown>) {
     const sid = ws.data.sid, sd = sid ? sessionDoc.get(sid) : undefined
     if (ws.data.phase !== 'stream' || !sid || !sd || !owns(ws, sid)) return

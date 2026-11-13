@@ -315,8 +315,14 @@ print rasters (parent T2 constructs).
 >   takes a rate slot, refused ones included. A job that fails mid-way
 >   (render error, dropped send, socket loss, viewer cancel) prints
 >   nothing on the client, and its pages stay charged. Jobs are serialised
->   per sid: a `print` while a job runs, or while a cancelled job's
->   in-flight pages are still settling, is refused `rate-limited`.
+>   per sid: a `print` while a job runs, is still being validated, or
+>   while a cancelled job's in-flight pages are still settling, is
+>   refused `rate-limited`. A `print` takes the sid's one slot
+>   synchronously, before the token await, when the slot is free, so a
+>   `print-cancel` for it that arrives while its token is verified stops
+>   it: after the await it ends silently (no `print-start`, no `refused`,
+>   no rate slot, audit row or charge) and frees the slot. Only that one
+>   pending job is held; unknown reqIds leave no record.
 > - **P4 — print caps may change on resume**, as copy caps do. `print`
 >   leaves the resume policy match, the change is recorded through
 >   `recordServices`, and the pages already printed are kept and measured
@@ -342,7 +348,8 @@ print rasters (parent T2 constructs).
 >   the tracer still reproduces canonical bytes.
 > - **Wire (built).** Client → server `{reqId, type: 'print', token, from,
 >   to}` (0-based inclusive, `0 ≤ from ≤ to < units.count`) and `{reqId,
->   type: 'print-cancel'}` (unknown reqIds ignored, never answered).
+>   type: 'print-cancel'}` (stops the pending or running job with that
+>   reqId; unknown reqIds ignored, never answered).
 >   Server → client `print-start {pages, scale}`, then exactly `pages`
 >   PRINT_RASTER (kind 8) messages in ascending unit order, each `u32 LE
 >   unitIndex` + the UNIT_RASTER body, then `print-done {pages}`; or a

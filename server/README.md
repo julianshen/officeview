@@ -333,7 +333,7 @@ job is never truncated. Session totals:
 | message | meaning |
 |---|---|
 | `{ type: 'print', from, to }` | print units `from..to` (0-based, inclusive) |
-| `{ type: 'print-cancel' }` | stop the running job with this `reqId`; anything else is ignored, never answered |
+| `{ type: 'print-cancel' }` | stop the job with this `reqId`, running or still being validated (a job cancelled before `print-start` sends nothing and is not rated, audited or charged); anything else is ignored, never answered |
 
 Server → client on the job's `reqId`: `print-start { pages, scale }`, then
 exactly `pages` PRINT_RASTER (kind 8) messages in ascending unit order (body

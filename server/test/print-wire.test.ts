@@ -394,3 +394,65 @@ describe('print over the wire', () => {
     stop()
   }, 60_000)
 })
+
+describe('print: cancel before validation (final fix 3)', () => {
+  const ofReq = (c: Client, reqId: number) => c.msgs.filter((x) => ('text' in x && x.text.reqId === reqId) || ('binary' in x && x.binary.reqId === reqId))
+
+  test('print then print-cancel back to back: nothing is sent, charged, rated, audited or rendered; the slot is free', async () => {
+    const ins = instrumented()
+    // A session cap of 1 page: had the cancelled job been charged, the next print would be refused.
+    const { c, h, store, sid, stop } = await session({ pool: ins.pool, policy: { print: { maxPages: 5, maxSessionPages: 1 } } })
+    c.send({ reqId: 120, type: 'print', token: c.manifest!.session.token, from: 0, to: 5 })
+    c.send({ reqId: 120, type: 'print-cancel' })
+    await Bun.sleep(1500)
+    expect(ofReq(c, 120)).toEqual([])
+    expect(store.prints(sid)).toEqual([])
+    expect(h.stream.audit.get(sid)!.printed).toEqual({ jobs: 0, pages: 0 })
+    expect(ins.of(sid).calls).toBe(0)
+    // The slot is free and nothing was charged: the one allowed page still prints.
+    const r = await c.print(121, 0, 0)
+    expect(r.start).toEqual({ reqId: 121, type: 'print-start', pages: 1, scale: 2 })
+    expect(r.end).toEqual({ reqId: 121, type: 'print-done', pages: 1 })
+    stop()
+  }, 60_000)
+
+  test('rate: a job cancelled before validation takes no print rate slot', async () => {
+    const { c, stop } = await session()
+    c.send({ reqId: 200, type: 'print', token: c.manifest!.session.token, from: 0, to: 0 })
+    c.send({ reqId: 200, type: 'print-cancel' })
+    await Bun.sleep(300)
+    for (let i = 0; i < PRINT_RATE_PER_MIN; i++) expect((await c.print(201 + i, 0, 0)).end.type).toBe('print-done')
+    stop()
+  }, 60_000)
+
+  test('a second print during the first one\'s validation is refused rate-limited; the first completes', async () => {
+    const { c, stop } = await session()
+    c.send({ reqId: 130, type: 'print', token: c.manifest!.session.token, from: 0, to: 0 })
+    const second = c.print(131, 0, 0)
+    expect((await second).end).toEqual(refused(131, 'rate-limited'))
+    const end = await c.next((x) => 'text' in x && x.text.reqId === 130 && x.text.type === 'print-done')
+    expect((end as { text: object }).text).toEqual({ reqId: 130, type: 'print-done', pages: 1 })
+    stop()
+  }, 60_000)
+
+  test('a cancel for another reqId during validation does not stop the job', async () => {
+    const { c, stop } = await session()
+    c.send({ reqId: 140, type: 'print', token: c.manifest!.session.token, from: 0, to: 0 })
+    c.send({ reqId: 141, type: 'print-cancel' })
+    const end = await c.next((x) => 'text' in x && x.text.reqId === 140 && x.text.type === 'print-done')
+    expect((end as { text: object }).text).toEqual({ reqId: 140, type: 'print-done', pages: 1 })
+    expect(ofReq(c, 141)).toEqual([])
+    stop()
+  }, 60_000)
+
+  test('a pending job refused in validation (bad token) frees the slot; a cancel after it is ignored', async () => {
+    const { c, stop } = await session()
+    c.send({ reqId: 150, type: 'print', token: 'not.a.token', from: 0, to: 0 })
+    c.send({ reqId: 150, type: 'print-cancel' })
+    await Bun.sleep(300)
+    // A malformed token fails before the cancel is read: at most that one refusal.
+    expect(ofReq(c, 150).map((x) => 'text' in x && x.text)).toEqual([refused(150, 'policy-refused')])
+    expect((await c.print(151, 0, 0)).end.type).toBe('print-done')
+    stop()
+  }, 60_000)
+})
