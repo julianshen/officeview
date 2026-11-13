@@ -33,7 +33,7 @@ export interface PresentOptions {
 }
 
 export interface SlideShowSession {
-  /** 0-based, in deck order (hidden slides keep their index). */
+  /** 0-based. Local deck: deck order (hidden slides keep their index). Streamed deck: over the shown slides only (hidden not counted). */
   readonly slideIndex: number
   /** Click checkpoint within the slide. */
   readonly buildIndex: number
@@ -172,12 +172,23 @@ export interface PresentRequest {
   allowCopy?: boolean
   /** The viewer's document epoch: aborting it cancels the start or ends the show. */
   signal?: AbortSignal
+  launch?: ShowLaunch
 }
 
 /** @internal Tests defer or fail the chunk through this. */
 export const showLoader = { load: () => import('../slideshow') }
-/** @internal The streamed deck's show (design §4.3), lazy as the local chunk. */
-export const remoteShowLoader = { load: () => import('../stream/remote/show') }
+
+/** The start handed to a launch once its chunk has loaded. */
+export type ShowHandoff = Omit<ShowStart, 'doc' | 'handle' | 'source' | 'isCurrent' | 'callbacks'> & { callbacks: Partial<SlideShowCallbacks> }
+
+/**
+ * A caller-prepared start (a streamed deck, stream/remote/present-start.ts):
+ * the caller has already made its own document checks; this loads its lazy
+ * runner. The shared prologue (allow, activation, token, popup per
+ * `opts.presenterView`, full screen, host, cleanup) stays here; the eager
+ * start knows nothing else about the document.
+ */
+export type ShowLaunch = () => Promise<(s: ShowHandoff) => Promise<SlideShowSession>>
 
 /**
  * The start sequence. Everything up to the import runs synchronously inside
@@ -187,12 +198,9 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   const { doc, host, opts = {}, platform: P } = req
   const from = opts.from ?? 'beginning'
   const d = host.ownerDocument, w = d.defaultView!
-  // A streamed deck (design §4.3) is read from its manifest, synchronously: its slides
-  // are the units not hidden, `from` a streamed index (R19); Presenter View needs can.notes.
-  const m = (doc as RemoteOfficeDoc).kind == 'remote' && (doc as RemoteOfficeDoc).manifest
-  const slides = m ? m.units.list.filter((u) => !u.hidden) : 'slides' in doc && doc.slides
-  const code: SlideShowErrorCode | 0 = !req.allow || !slides || m && (!m.can.present || !slides.length || opts.presenterView === true && !m.can.notes) ? 'not-presentable'
-    : typeof from == 'number' && !slides[from] ? 'invalid-slide'
+  const L = req.launch
+  const code: SlideShowErrorCode | 0 = !req.allow || !(L || 'slides' in doc) ? 'not-presentable'
+    : typeof from == 'number' && !(L || (doc as PptxDocument).slides[from]) ? 'invalid-slide'
     : P.hasActivation(w) === false ? 'gesture-required' : 0
   const token = code ? 0 : acquireShowToken(host)
   if (!token) return Promise.reject(new SlideShowError(code || 'already-presenting'))
@@ -203,7 +211,7 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   // A throwing open is a blocked popup, so the token is never held by a dead start.
   let popup: Window | null | undefined = null
   try {
-    popup = pv === true || pv == 'auto' && screen && (!m || m.can.notes) ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
+    popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
   } catch {}
   let done: unknown, handed: unknown, entered: unknown
   const ac = new AbortController(), signal = ac.signal
@@ -242,13 +250,10 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   host.focus()
   return Promise.race([
     new Promise<never>((_, no) => signal.addEventListener('abort', () => handed || no(new SlideShowError('cancelled')))),
-    (m ? remoteShowLoader.load() : showLoader.load()).then((x) => {
+    (L ? L() : showLoader.load().then((m) => (s: ShowHandoff) => m.runShow({ ...s, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), callbacks: { ...m.viewerCallbacks(host, back), ...s.callbacks } }))).then((run) => {
       if (signal.aborted) return
       handed = 1
-      const s = { ...req, ...opts, token, fullscreen, retryFullscreen, from, signal, cleanup, popup }
-      // The remote viewer supplies its own navigation callbacks (unit indices).
-      return 'runRemoteShow' in x ? x.runRemoteShow({ ...s, doc: doc as RemoteOfficeDoc, callbacks: req.callbacks as SlideShowCallbacks })
-        : x.runShow({ ...s, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), callbacks: { ...x.viewerCallbacks(host, back), ...req.callbacks } })
+      return run({ ...req, ...opts, token, fullscreen, retryFullscreen, from, signal, cleanup, popup })
     }),
   ]).catch((e) => {
     cleanup()

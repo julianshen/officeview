@@ -13,10 +13,13 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { createRef } from 'react'
 import { OfficeDoc } from '../../src/components/OfficeDoc'
 import RemoteDocView from '../../src/components/remote/RemoteDocView'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
-  acquireShowToken, preparedPlacement, remoteShowLoader, showLoader, SlideShowError, startPresent,
+  acquireShowToken, preparedPlacement, showLoader, SlideShowError, startPresent,
   type OfficeViewerHandle, type PresentPlatform, type SlideShowSession,
 } from '../../src/components/present'
+import { presentRemote, remoteShowLoader } from '../../src/stream/remote/present-start'
 import type { RemoteShowStart } from '../../src/stream/remote/show'
 import type { RemoteOfficeDoc } from '../../src/stream/remote/remote-doc'
 
@@ -98,7 +101,7 @@ const remoteModule = () => ({
 }) as unknown as RemoteShowModule
 
 function start(doc: Fake, host: HTMLElement, platform: PresentPlatform, opts: Parameters<typeof startPresent>[0]['opts'] = {}) {
-  return startPresent({
+  return presentRemote({
     doc: asRemote(doc), host, platform, generation: 1, allow: true, motion: 'auto', opts,
     callbacks: { currentSlide: () => 0, scrollToSlide: () => {}, restoreFocus: () => {} },
   })
@@ -188,6 +191,16 @@ describe('startPresent on a streamed document: the synchronous prologue', () => 
     expect(acquireShowToken(host)).toBeDefined()
   })
 
+  it('the eager starter knows nothing remote: a stream handed to startPresent without its launch is not-presentable', async () => {
+    const host = freshHost()
+    const run = startPresent({ doc: asRemote(fakeDoc()), host, platform: fakePlatform(log), generation: 1, allow: true, motion: 'auto', callbacks: {} })
+    expect(await codeOf(run)).toBe('not-presentable')
+    expect(log).toEqual([])
+    // Lazy boundary: no manifest reading, hidden filtering or remote show loader in the eager module.
+    const src = readFileSync(resolve(__dirname, '../../src/components/present.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')
+    expect(src).not.toMatch(/stream\/remote\/show|manifest|\.hidden\b|can\.notes|runRemoteShow/)
+  })
+
   it('a local deck never loads the remote show module', async () => {
     const host = freshHost()
     const deck = { slides: [{ index: 0, widthEmu: 9144000, heightEmu: 6858000, shapes: [] }], slideWidthEmu: 9144000, slideHeightEmu: 6858000, images: [] }
@@ -225,6 +238,42 @@ describe('RemoteDocView: Present button, F5 and the show host', () => {
     expect(presentBtn(v)).toBeNull()
     expect(await codeOf(presentRef.current!())).toBe('not-presentable')
     expect(log).toEqual([])
+  })
+
+  it('a session that ends while the show module is still loading cancels the start at once', async () => {
+    let end!: () => void
+    const doc = fakeDoc()
+    doc.ended = new Promise<void>((r) => { end = r })
+    const v = view(doc)
+    fireEvent.click(presentBtn(v)!)
+    expect(showHost(v)!.style.visibility).toBe('visible')
+    end()
+    await flush()
+    // The eager cleanup ran: host hidden, token released, without waiting for the import.
+    expect(showHost(v)!.style.visibility).toBe('hidden')
+    expect(acquireShowToken(showHost(v)!)?.release()).toBeUndefined()
+    // The import resolving later starts nothing.
+    release[0]!(remoteModule())
+    await flush()
+    expect(started).toEqual([])
+    expect(log).not.toContain('runRemoteShow')
+  })
+
+  it('a session end aborts only its own document epoch: a new document can still present', async () => {
+    let end!: () => void
+    const first = fakeDoc()
+    first.ended = new Promise<void>((r) => { end = r })
+    const v = view(first)
+    const second = fakeDoc()
+    v.rerender(<RemoteDocView document={asRemote(second)} __presentPlatform={fakePlatform(log)} />)
+    end()
+    await flush()
+    fireEvent.click(presentBtn(v)!)
+    expect(showHost(v)!.style.visibility).toBe('visible')
+    release[0]!(remoteModule())
+    await flush()
+    expect(started.length).toBe(1)
+    expect(started[0]!.signal.aborted).toBe(false)
   })
 
   it('a chunk that fails to load says so in the view', async () => {

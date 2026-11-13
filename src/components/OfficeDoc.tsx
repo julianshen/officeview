@@ -960,7 +960,7 @@ export const OfficeDoc = forwardRef(function OfficeDoc(props: OfficeDocProps, re
   // A streamed deck presents through its (lazy) view while mounted; until then, and
   // for a spreadsheet, the handle says not-presentable. The legacy viewer sets its own.
   const remoteStart = useRef<OfficeViewerHandle['present']>(null)
-  useImperativeHandle(sheet || remote ? ref : null, () => remote ? { present: (o) => remoteStart.current?.(o) ?? SHEET.present() } : SHEET, [remote, sheet])
+  useImperativeHandle(sheet || remote ? ref : null, () => ({ present: (o) => remoteStart.current?.(o) ?? SHEET.present() }), [])
   if (remote) return <Suspense><RemoteDocView {...rest} document={remote} presentRef={remoteStart} /></Suspense>
   if (sheet) {
     return (

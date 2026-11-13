@@ -13,7 +13,8 @@
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactElement } from 'react'
 import type { RemoteOfficeDoc } from '../../stream/remote/remote-doc'
-import { defaultPlatform, startPresent, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type SlideShowDiagnostic, type SlideShowMotion } from '../present'
+import { presentRemote } from '../../stream/remote/present-start'
+import { defaultPlatform, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type SlideShowDiagnostic, type SlideShowMotion } from '../present'
 import { themeRootProps, type ThemeMode } from '../theme'
 import { BUTTON, useRemotePrint } from './RemotePrint'
 import { UnitWrap, useRemoteText } from './RemoteText'
@@ -174,14 +175,15 @@ export default function RemoteDocView({
 /**
  * Presenting a streamed deck: offered while the server's `can.present`, the
  * host's `allowPresent` and the session all allow it (re-read on a resume).
- * `start` calls the eager `startPresent` synchronously (the gesture rule);
- * the start belongs to the document epoch (a new document, unmount or
- * `allowPresent` withdrawn cancels it or ends the show). The navigation
+ * `start` calls `presentRemote` (the eager prologue) synchronously (the
+ * gesture rule); the start belongs to the document epoch (a new document,
+ * unmount, `allowPresent` withdrawn or the session's end cancels it, even
+ * while the show module is still loading, or ends the show). The navigation
  * callbacks speak unit (page) indices.
  */
 function useRemotePresent(doc: RemoteOfficeDoc, scroller: MutableRefObject<HTMLDivElement | null>, canvases: MutableRefObject<Array<HTMLCanvasElement | null>>, gap: number, o: {
   allowPresent: boolean; slideShowMotion: SlideShowMotion; platform: PresentPlatform
-  callbacks: Parameters<typeof startPresent>[0]['callbacks']
+  callbacks: Parameters<typeof presentRemote>[0]['callbacks']
 }) {
   const host = useRef<HTMLDivElement | null>(null)
   const epoch = useRef<AbortController | null>(null)
@@ -198,6 +200,8 @@ function useRemotePresent(doc: RemoteOfficeDoc, scroller: MutableRefObject<HTMLD
   useLayoutEffect(() => {
     const c = epoch.current = new AbortController()
     gen.current++
+    // A terminal end (revoked, expired, closed) aborts this document's epoch only.
+    void doc.ended.then(() => c.abort())
     return () => c.abort()
   }, [doc, o.allowPresent])
   const allow = o.allowPresent && endedDoc !== doc
@@ -205,7 +209,7 @@ function useRemotePresent(doc: RemoteOfficeDoc, scroller: MutableRefObject<HTMLD
     setNotice('')
     const r = scroller.current
     const back = r?.ownerDocument.activeElement ?? null
-    const run = startPresent({
+    const run = presentRemote({
       doc, host: host.current!, opts, platform: o.platform, generation: gen.current, allow, motion: o.slideShowMotion, signal: epoch.current!.signal,
       callbacks: {
         ...o.callbacks,
