@@ -20,8 +20,9 @@ import { prepareCfWireScope } from '../src/xlsx/cf/text'
 import { cfRulesVersion, prepareCfRemote } from '../src/xlsx/view/pagedSource'
 import { createCfMemory, createCfWorkBudget } from '../src/xlsx/cf/limits'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { CF_BAR_PAINT_CAPABILITIES, CF_BAR_RENDER_MODEL, barGradientEndArgb, layoutDataBar } from '../src/xlsx/cf/dataBarPaint'
-import { injectCfBarGradient } from '../src/xlsx/cf/evidence'
+import { CF_BAR_PAINT_CAPABILITIES, CF_BAR_RENDER_MODEL, barGradientEndArgb, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
+import { injectCfBarGradient, injectCfBarGradientBorder } from '../src/xlsx/cf/evidence'
+import { predictBarGradientBorderPixel } from '../scripts/cf-refs/verify'
 import { getPaintables } from '../src/render/paint'
 import { decodePngSync } from '../scripts/cf-refs/verify'
 import { auditStage3Manifest } from '../scripts/cf-refs/audit'
@@ -339,6 +340,67 @@ describe('gradient bars (Task 22b): one painter, the verified model only, the me
       expect(ops.some(o => o.op === 'rect' && (o.style === '#0000ff' || (!o.style.startsWith('#') && !o.style.startsWith('rgb')))), `${name}: withheld`).toBe(false)
     }
   })
+})
+
+describe('bordered gradient bars (Ruling S3-GRAD-BORDER): the verified shape only, painted as the harness predicts', () => {
+  const cell = ptCell(264, 150, 180, 30)
+  const shapes = ['frame-over-ramp', 'frame-inner-ramp', 'gradient-frame', 'no-frame', 'frame-solid-fill'] as const
+  const exportOf = (shape: string) => ({ [shape]: { ...(shape === 'frame-solid-fill' ? {} : { endBlend: 0.847 }), settledBy: ['bar:render-gradient-border'] } })
+
+  it('withholds without the bordered export, even with the borderless gradient export', () => {
+    const g = bar({ isGradient: true, endFraction: 0.5, borderColor: GREEN })
+    injectCfBarGradient(GRADIENT_EXPORT)
+    try {
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      injectCfBarGradientBorder(exportOf('frame-over-ramp'))
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)?.fill).toBeDefined()
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, c => c !== 'bar:render-gradient-border')).toBeUndefined()
+      // An export naming two shapes, an unknown one or no blend never paints.
+      injectCfBarGradientBorder({ ...exportOf('frame-over-ramp'), ...exportOf('no-frame') })
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      injectCfBarGradientBorder({ 'frame-around': { endBlend: 0.847, settledBy: ['bar:render-gradient-border'] } })
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      injectCfBarGradientBorder({ 'frame-over-ramp': { settledBy: ['bar:render-gradient-border'] } })
+      expect(layoutDataBar(g, cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+      // The bordered model never paints a borderless gradient, which keeps its own export.
+      injectCfBarGradient(null)
+      injectCfBarGradientBorder(exportOf('frame-over-ramp'))
+      expect(layoutDataBar(bar({ isGradient: true, endFraction: 0.5 }), cell, AT_CAPTURE, CF_BAR_RENDER_MODEL, ALL)).toBeUndefined()
+    } finally {
+      injectCfBarGradient(null)
+      injectCfBarGradientBorder(null)
+    }
+  })
+
+  for (const shape of shapes) {
+    it(`${shape}: the painter reproduces the harness prediction pixel by pixel, at bar lengths 5 to 177`, () => {
+      injectCfBarGradientBorder(exportOf(shape))
+      try {
+        for (const [L, border] of [[5, GREEN], [9, BLUE], [18, GREEN], [89, BLUE], [177, GREEN]] as const) {
+          const b = bar({ isGradient: true, endFraction: L / 177, borderColor: border })
+          const canvas = createCanvas(450, 190)
+          const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 450, 190)
+          ctx.setTransform(0.75, 0, 0, 0.75, 0, 0)
+          paintDataBars(ctx, new Map([[5 * 16384 + 2, b]]), () => b, () => cell, { r0: 5, c0: 2, r1: 5, c1: 2 }, AT_CAPTURE, ALL)
+          const img = (ctx as unknown as { getImageData(x: number, y: number, w: number, h: number): ImageData }).getImageData(0, 0, 450, 190)
+          const rgb = (n: number) => [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff] as [number, number, number]
+          const sample = { ref: 'C6', fill: rgb(BLUE), border: rgb(border), leftPx: 266, topPx: 152, bottomPx: 177, length: L, span: 177, pixels: [] }
+          let worst = 0
+          for (let y = 152; y <= 177; y++) for (let i = 0; i < L; i++) {
+            const want = predictBarGradientBorderPixel(shape, sample, i, y, 0.847).map(Math.round)
+            const k = (y * 450 + 266 + i) * 4
+            worst = Math.max(worst, ...[0, 1, 2].map(j => Math.abs(img.data[k + j]! - want[j]!)))
+          }
+          expect(worst, `${shape} L=${L}`).toBeLessThanOrEqual(2)
+          // Nothing outside the bar's rect.
+          expect([0, 1, 2].map(j => img.data[(160 * 450 + 266 + L) * 4 + j])).toEqual([255, 255, 255])
+        }
+      } finally {
+        injectCfBarGradientBorder(null)
+      }
+    })
+  }
 })
 
 /** Two 200 px columns; the bar host B crosses the 256 px tile seam. */

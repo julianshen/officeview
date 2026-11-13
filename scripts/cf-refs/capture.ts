@@ -147,6 +147,19 @@ function integerToArgb(val: number): string {
   return `FF${r}${g}${b}`
 }
 
+/**
+ * The per-cell probes are unrolled AppleScript, and osacompile overflows its tables ("Internal table overflow", -2707)
+ * near 500 cells (stage3-bar-lengths-default has 510). Each probe therefore runs over chunks of at most this many cells,
+ * the results concatenated in order. Every case up to 100 cells (all of them before Task 22b) runs as one chunk,
+ * exactly as before.
+ */
+export const PROBE_CHUNK_CELLS = 100
+export function probeRefChunks(refs: readonly string[], size = PROBE_CHUNK_CELLS): string[][] {
+  const out: string[][] = []
+  for (let i = 0; i < refs.length; i += size) out.push(refs.slice(i, i + size))
+  return out.length > 0 ? out : [[]]
+}
+
 export function buildTextProbeScript(workbookName: string, sheetName: string, cellRefs: readonly string[]): string[] {
   return [
     `set wb to workbook "${q(workbookName)}"`,
@@ -463,17 +476,19 @@ export function probeLiveExcelCellObservations(
     const name = openWorkbook(savedAbs)
     try {
       const refs = c.expected.cells.map(x => x.ref)
-      const textScriptLines = buildTextProbeScript(name, c.sheet, refs)
-      const textOut = runScript(textScriptLines, 30_000)
-      const texts = textOut.split('|||')
+      // Chunked (PROBE_CHUNK_CELLS): each chunk's results, split, then joined in cell order.
+      const chunked = (build: (refs: readonly string[]) => string[]): Array<string | undefined> =>
+        probeRefChunks(refs).flatMap(chunk => {
+          const parts = runScript(build(chunk), 30_000).split('|||')
+          return chunk.map((_, i) => parts[i])
+        })
+      const texts = chunked(chunk => buildTextProbeScript(name, c.sheet, chunk))
       const cellTexts: Record<string, string> = {}
       refs.forEach((ref, idx) => {
         if (texts[idx] !== undefined) cellTexts[ref] = texts[idx]
       })
 
-      const decScriptLines = buildDecorationProbeScript(name, c.sheet, refs)
-      const decOut = runScript(decScriptLines, 30_000)
-      const decs = decOut.split('|||')
+      const decs = chunked(chunk => buildDecorationProbeScript(name, c.sheet, chunk))
       const cellDecorations: Record<string, { underline: 'none' | 'single' | 'double'; strikethrough: boolean }> = {}
       refs.forEach((ref, idx) => {
         const parts = decs[idx]?.split(':::')
@@ -488,7 +503,6 @@ export function probeLiveExcelCellObservations(
         }
       })
 
-      const colorScriptLines = buildColorProbeScript(name, c.sheet, refs)
       const cellColors: Record<
         string,
         {
@@ -499,8 +513,7 @@ export function probeLiveExcelCellObservations(
         }
       > = {}
       try {
-        const colorOut = runScript(colorScriptLines, 30_000)
-        const colorParts = colorOut.split('|||')
+        const colorParts = chunked(chunk => buildColorProbeScript(name, c.sheet, chunk))
         refs.forEach((ref, idx) => {
           const parts = colorParts[idx]?.split(':::')
           if (parts && parts.length === 2) {

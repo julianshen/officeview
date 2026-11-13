@@ -55,6 +55,8 @@ export function barEvaluationRequiredCapabilities(def: CfDataBarDefinition): Set
     : def.minLength === 10 && def.maxLength === 90 ? 'bar:lengths-default-10-90' : BAR_LENGTHS_UNMEASURED)
   req.add(def.gradient ? 'bar:render-gradient-stops' : 'bar:render-solid')
   if (def.border) req.add('bar:render-border')
+  // Ruling S3-GRAD-BORDER: a bordered gradient (Excel's UI preset) is its own measured shape.
+  if (def.border && def.gradient) req.add('bar:render-gradient-border')
   if (def.axisPosition === 'middle') req.add('bar:axis-middle')
   else if (def.axisPosition === 'none') req.add('bar:axis-none')
   if (def.direction === 'leftToRight') req.add('bar:direction-ltr')

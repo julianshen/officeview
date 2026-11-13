@@ -15,7 +15,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx, type ParseXlsxOptions } from '../src/xlsx/parse'
 import { prepareCfPaint, residentSource } from '../src/xlsx/cf/render'
 import { cfRuntimeEvidence } from '../src/xlsx/cf/predicates'
-import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
+import { VERIFIED_CAPABILITIES, injectCfAutoBarColours, injectCfBarGradient, injectCfBarLayout, injectCfBarGradientBorder, injectCfBarLengths, withExactCfEvidence } from '../src/xlsx/cf/evidence'
 import * as verifiedExports from '../src/xlsx/cf/verifiedCapabilities'
 import { CF_BAR_RENDER_MODEL, layoutDataBar, paintDataBars } from '../src/xlsx/cf/dataBarPaint'
 import { createCanvas } from 'canvas'
@@ -713,6 +713,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_AUTO_BAR_COLORS'), 'the published colours are the audit result').toEqual(audit.autoBarColours)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT'), 'the published gradient is the audit result').toEqual(audit.barGradient)
       expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_LENGTHS'), 'the published 10/90 rule is the audit result').toEqual(audit.barLengths)
+      expect(Reflect.get(verifiedExports, 'VERIFIED_STAGE3_BAR_GRADIENT_BORDER'), 'the published bordered gradient is the audit result').toEqual(audit.barGradientBorder)
     }
 
     // A pixel-measured bar production withholds, by case column, with why (withheld-only, like FINDINGS).
@@ -744,6 +745,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
     injectCfAutoBarColours(audit.autoBarColours)
     injectCfBarGradient(audit.barGradient)
     injectCfBarLengths(audit.barLengths)
+    injectCfBarGradientBorder(audit.barGradientBorder)
     try {
       await withExactCfEvidence([...VERIFIED_CAPABILITIES, ...verified], async () => {
         for (const c of manifest.cases.filter(x => x.stage === 3 && x.status === 'measured')) {
@@ -814,6 +816,7 @@ describe('production viewer conditional formatting oracle conformance (C1 & C3)'
       injectCfAutoBarColours(null)
       injectCfBarGradient(null)
       injectCfBarLengths(null)
+      injectCfBarGradientBorder(null)
     }
     // No stale finding or exception, and pinned counts (a regression that withholds or paints one more moves them).
     expect([...usedFindings].sort()).toEqual(Object.keys(BAR_FINDINGS).sort())

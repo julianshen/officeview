@@ -12,7 +12,7 @@
  * - Pure layout plus a small canvas replay: no DOM, no clock, no global state beyond the evidence lookup.
  */
 import type { CfBarDescriptor } from './model'
-import { barGradientEvidence, hasEvidence as defaultHasEvidence, type CfBarGradient } from './evidence'
+import { barGradientBorderEvidence, barGradientEvidence, hasEvidence as defaultHasEvidence, type CfBarGradient, type CfBarGradientBorder } from './evidence'
 import type { Rect } from '../view/textLayout'
 
 /** 1 pt in logical (CSS) px: the viewer's convention (`sparklines/geometry.ts`). At zoom × DPR = 3/4 a point is one
@@ -48,6 +48,12 @@ export interface CfBarRenderModel {
    * left to right, no border, no axis, not negative, on a white host.
    */
   readonly gradient?: CfBarGradient
+  /**
+   * Ruling S3-GRAD-BORDER: how a gradient bar with a border paints (frame over the ramp, frame around an inner ramp, a
+   * ramped frame, no frame, or a solid fill in a frame) and its blend. Absent here: it comes from the verified export
+   * through `barGradientBorderEvidence`; with neither, a bordered gradient bar withholds.
+   */
+  readonly gradientBorder?: CfBarGradientBorder
 }
 
 /** Values from the Stage 3 captures (refs/stage3-bar-geometry.json, refs/stage3-bar-rendering.json; pinned by
@@ -71,7 +77,13 @@ export const CF_BAR_PAINT_CAPABILITIES: readonly string[] = Object.freeze(['bar:
 export function barPaintable(bar: CfBarDescriptor | undefined, model: CfBarRenderModel = CF_BAR_RENDER_MODEL, check: (cap: string) => boolean = defaultHasEvidence): bar is CfBarDescriptor {
   if (!bar) return false
   for (const cap of CF_BAR_PAINT_CAPABILITIES) if (!check(cap)) return false
-  return !bar.isGradient || barGradientModel(model, check) !== undefined
+  if (!bar.isGradient) return true
+  return bar.borderColor !== undefined ? barGradientBorderModel(model, check) !== undefined : barGradientModel(model, check) !== undefined
+}
+
+/** The bordered-gradient model a bordered gradient bar paints with: the model's own (tests), else the verified export. */
+export function barGradientBorderModel(model: CfBarRenderModel = CF_BAR_RENDER_MODEL, check: (cap: string) => boolean = defaultHasEvidence): CfBarGradientBorder | undefined {
+  return model.gradientBorder ?? barGradientBorderEvidence(check)
 }
 
 /** The gradient model a gradient bar paints with: the model's own (tests), else the verified export. */
@@ -123,9 +135,10 @@ export function isWhiteFill(fill: string | undefined): boolean {
 /** A bar's host: its logical rect, and the fill painted under it (CSS `#RRGGBB`) when the renderer knows one. */
 export type CfBarHost = Rect & { readonly fill?: string }
 
-/** One axis-aligned rect in output units; colours stay ARGB. `gradientEnd`, when present, is the colour at the rect's
- * right edge of a left-to-right linear gradient that starts at `argb` on its left edge (Task 22b). */
-export type CfBarRect = Readonly<{ x: number; y: number; w: number; h: number; argb: number; gradientEnd?: number }>
+/** One axis-aligned rect in output units; colours stay ARGB. `gradientEnd`, when present, makes the rect a left-to-right
+ * linear gradient from `argb` to `gradientEnd` over [`gradientFrom`, `gradientTo`] (default: the rect's own left and
+ * right edges; Task 22b, Ruling S3-GRAD-BORDER), clamped to its end colours outside that span. */
+export type CfBarRect = Readonly<{ x: number; y: number; w: number; h: number; argb: number; gradientEnd?: number; gradientFrom?: number; gradientTo?: number }>
 /** What one bar paints, in paint order: the fill, its border frame, the axis column in the gap colour, then the axis
  * dashes over it. Empty when the host is too small. */
 export type CfBarPrimitives = Readonly<{ fill?: CfBarRect; border?: readonly CfBarRect[]; axis?: CfBarRect; axisDashes?: readonly CfBarRect[] }>
@@ -160,9 +173,11 @@ export function layoutDataBar(
   for (const n of [bar.axisFraction, bar.startFraction, bar.endFraction]) if (!Number.isFinite(n) || n < 0 || n > 1) return undefined
   // A non-white axis over a filled host: the dash gap colour there is unmeasured.
   if (bar.axisColor !== undefined && (bar.axisColor & 0xffffff) !== (model.axisDash.gapArgb & 0xffffff) && !isWhiteFill(cell.fill)) return undefined
-  // Task 22b: a gradient paints only in the measured shape (left to right, no border, no axis, positive, white host).
-  const gradient = bar.isGradient ? barGradientModel(model, check) : undefined
-  if (bar.isGradient && (gradient === undefined || bar.direction !== 'leftToRight' || bar.borderColor !== undefined ||
+  // Task 22b: a gradient paints only in the measured shape (left to right, no axis, positive, white host); a border is
+  // the separately verified bordered shape (Ruling S3-GRAD-BORDER).
+  const gradientBorder = bar.isGradient && bar.borderColor !== undefined ? barGradientBorderModel(model, check) : undefined
+  const gradient = bar.isGradient && bar.borderColor === undefined ? barGradientModel(model, check) : undefined
+  if (bar.isGradient && ((gradient === undefined && gradientBorder === undefined) || bar.direction !== 'leftToRight' ||
     bar.axisColor !== undefined || bar.axisFraction !== 0 || bar.isNegative || !isWhiteFill(cell.fill))) return undefined
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
@@ -216,14 +231,22 @@ export function layoutDataBar(
   const primitives: { fill?: CfBarRect; border?: CfBarRect[]; axis?: CfBarRect; axisDashes?: CfBarRect[] } = {}
   if (b > a) {
     const x = L + a, w = b - a, h = B - T
-    primitives.fill = gradient ? { ...rect(x, T, w, h, bar.fillColor), gradientEnd: barGradientEndArgb(bar.fillColor, gradient.endBlend) } : rect(x, T, w, h, bar.fillColor)
-    if (bar.borderColor !== undefined) {
-      const bw = Math.max(1, dev(model.borderPt))
-      const side = Math.min(bw, w), cap = Math.min(bw, h)
-      primitives.border = [
-        rect(x, T, w, cap, bar.borderColor), rect(x, B - cap, w, cap, bar.borderColor),
-        rect(x, T, side, h, bar.borderColor), rect(x + w - side, T, side, h, bar.borderColor),
-      ]
+    const shape = gradientBorder?.shape
+    const ramp = (argb: number, endBlend: number, from = x, to = x + w) => ({ gradientEnd: barGradientEndArgb(argb, endBlend), ...(from !== x || to !== x + w ? { gradientFrom: out(from), gradientTo: out(to) } : {}) })
+    const bw = Math.max(1, dev(model.borderPt))
+    const side = Math.min(bw, w), cap = Math.min(bw, h)
+    if (gradient) primitives.fill = { ...rect(x, T, w, h, bar.fillColor), ...ramp(bar.fillColor, gradient.endBlend) }
+    else if (gradientBorder && shape !== 'frame-solid-fill') {
+      // The fill's ramp over the outer length, or over the inner one inside the frame.
+      const inner = shape === 'frame-inner-ramp'
+      primitives.fill = inner && w - 2 * side <= 0 ? rect(x, T, w, h, bar.fillColor)
+        : { ...rect(x, T, w, h, bar.fillColor), ...(inner ? ramp(bar.fillColor, gradientBorder.endBlend, x + side, x + w - side) : ramp(bar.fillColor, gradientBorder.endBlend)) }
+    } else primitives.fill = rect(x, T, w, h, bar.fillColor)
+    if (bar.borderColor !== undefined && shape !== 'no-frame') {
+      const frame = (rx: number, ry: number, rw: number, rh: number): CfBarRect => shape === 'gradient-frame'
+        ? { ...rect(rx, ry, rw, rh, bar.borderColor!), ...{ gradientEnd: barGradientEndArgb(bar.borderColor!, gradientBorder!.endBlend), gradientFrom: out(x), gradientTo: out(x + w) } }
+        : rect(rx, ry, rw, rh, bar.borderColor!)
+      primitives.border = [frame(x, T, w, cap), frame(x, B - cap, w, cap), frame(x, T, side, h), frame(x + w - side, T, side, h)]
     }
   }
   if (axis && bar.axisColor !== undefined) {
@@ -288,7 +311,7 @@ export function paintDataBars(
         if (!r) continue
         if (r.gradientEnd !== undefined) {
           // Left edge = the fill, right edge = the blended end: a canvas gradient samples pixel centres, as Excel does.
-          const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0)
+          const g = ctx.createLinearGradient(r.gradientFrom ?? r.x, 0, r.gradientTo ?? r.x + r.w, 0)
           g.addColorStop(0, css(r.argb))
           g.addColorStop(1, css(r.gradientEnd))
           ctx.fillStyle = g

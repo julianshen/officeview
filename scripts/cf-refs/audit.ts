@@ -26,8 +26,12 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BAR_AUTO_COLOUR_CAPABILITIES,
+  BAR_GRADIENT_BORDER_CAPABILITY,
   BAR_GRADIENT_CAPABILITY,
   BAR_LENGTH_RULES,
+  isCellInSqref,
+  fitBarGradientBlend,
+  judgeBarGradientBorder,
   drawsBarAutoColour,
   drawsBarGradient,
   isBarAutoColourCapability,
@@ -294,6 +298,20 @@ export interface Stage3AuditReport extends Stage1AuditReport {
   barGradientJudgement: string
   /** Task 22b: the verified rule for Excel's default 10/90 lengths (empty until bar:lengths-default-10-90 verifies). */
   barLengths: BarLengthsExport
+  /** Ruling S3-GRAD-BORDER: the verified bordered-gradient shape and its blend (empty until it verifies). */
+  barGradientBorder: BarGradientBorderExport
+}
+
+/** The bordered-gradient shape production may draw (a `BAR_GRADIENT_BORDER_HYPOTHESES` id), with its fitted blend. */
+export type BarGradientBorderExport = Partial<Record<string, { endBlend?: number; settledBy: string[] }>>
+
+/** The generated export of the verified bordered-gradient shape (one key at most, so `--write` stays idempotent). */
+export function renderBarGradientBorderBlock(border: BarGradientBorderExport): string {
+  const rows = Object.keys(border).sort().map(shape => {
+    const v = border[shape]!
+    return `  '${shape}': { ${v.endBlend !== undefined ? `endBlend: ${v.endBlend}, ` : ''}settledBy: [${v.settledBy.map(c => `'${c}'`).join(', ')}] },\n`
+  }).join('')
+  return `export const VERIFIED_STAGE3_BAR_GRADIENT_BORDER: Readonly<Record<string, { endBlend?: number; settledBy: readonly string[] }>> = {\n${rows}}\n`
 }
 
 /** The length rule production may apply to 10/90 bars: a `BAR_LENGTH_RULES` id matched by the owning capture. */
@@ -518,6 +536,21 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
       barGradient['bar-length'] = { endBlend: pooledGradient.endBlend, settledBy: [BAR_GRADIENT_CAPABILITY] }
     } else gradientEntry.disposition = 'supported-structural'
   }
+  // Ruling S3-GRAD-BORDER: the owning capture's matched shape, recomputed with its fitted blend, only once verified.
+  const barGradientBorder: BarGradientBorderExport = {}
+  const borderEntry = perCapability.find(p => p.capabilityId === BAR_GRADIENT_BORDER_CAPABILITY)
+  if (borderEntry?.disposition === 'verified') {
+    const own = evidence.get(borderEntry.caseId)
+    const owned = own?.kind === 'verified' ? own.matchedHypotheses?.[BAR_GRADIENT_BORDER_CAPABILITY] : undefined
+    const owningCase = manifest.cases.find(c => c.id === borderEntry.caseId)
+    const capture = owningCase ? loadBarScreenCapture(owningCase, rootDir) : undefined
+    const refs = owningCase ? new Set(owningCase.expected.cells.filter(cell => cell.matched && owningCase.markers.some(m => m.capabilityId === BAR_GRADIENT_BORDER_CAPABILITY && isCellInSqref(cell.ref, m.sqref))).map(cell => cell.ref.toUpperCase())) : undefined
+    const blend = owningCase && capture ? fitBarGradientBlend(sampleBarGradients(owningCase, capture.parts, capture.png, capture.geom).samples) : undefined
+    const judged = owningCase && capture ? judgeBarGradientBorder(sampleBarGradients(owningCase, capture.parts, capture.png, capture.geom, refs, 'bordered'), blend) : undefined
+    if (judged?.status === 'discriminating' && judged.matched !== undefined && judged.matched === owned) {
+      barGradientBorder[judged.matched] = { ...(judged.endBlend !== undefined ? { endBlend: judged.endBlend } : {}), settledBy: [BAR_GRADIENT_BORDER_CAPABILITY] }
+    } else borderEntry.disposition = 'supported-structural'
+  }
   // Task 22b: the 10/90 rule is the owning capture's matched candidate, and only once the capability is verified.
   const barLengths: BarLengthsExport = {}
   const lengthsEntry = perCapability.find(p => p.capabilityId === 'bar:lengths-default-10-90')
@@ -547,6 +580,7 @@ export function auditStage3Manifest(manifest: CfManifest, options: { rootDir?: s
     barGradient,
     barGradientJudgement: `${pooledGradient.status}: ${pooledGradient.reason}`,
     barLengths,
+    barGradientBorder,
     ok,
     perCase,
     perCapability,
@@ -603,6 +637,11 @@ const exportedLengths = (text: string | undefined): string | undefined => {
   return m ? m[0] : undefined
 }
 
+const exportedGradientBorder = (text: string | undefined): string | undefined => {
+  const m = text === undefined ? null : /export const VERIFIED_STAGE3_BAR_GRADIENT_BORDER: [^\n]* = \{\n[\s\S]*?\n?\}\n/.exec(text)
+  return m ? m[0] : undefined
+}
+
 const exportedSet = (text: string | undefined, name: string): string[] | undefined => {
   const m = text === undefined ? null : new RegExp(`export const ${name}: ReadonlySet<string> = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(text)
   return m ? [...m[1]!.matchAll(/'([^']+)'/g)].map(x => x[1]!) : undefined
@@ -628,6 +667,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
   // Ruling S3-M (Task 22b): the verified gradient model travels the same way.
   const gradientBlock = stage3Report ? renderBarGradientBlock(stage3Report.barGradient) : exportedGradient(options.committedSource)
   const lengthsBlock = stage3Report ? renderBarLengthsBlock(stage3Report.barLengths) : exportedLengths(options.committedSource)
+  const borderBlock = stage3Report ? renderBarGradientBorderBlock(stage3Report.barGradientBorder) : exportedGradientBorder(options.committedSource)
   const list = (ids: readonly string[]): string => ids.map(id => `  '${id}',`).join('\n')
   const allVerified = [...new Set([...stage1Verified, ...stage2Verified, ...(stage3Verified ?? [])])].sort()
   const block = (name: string, ids: readonly string[]): string => `export const ${name}: ReadonlySet<string> = new Set([\n${list(ids)}\n])\n`
@@ -638,7 +678,7 @@ export function renderVerifiedCapabilitiesSource(manifest: CfManifest, rootDir: 
  */
 ${block('VERIFIED_STAGE1_CAPABILITIES', stage1Verified)}
 ${block('VERIFIED_STAGE2_CAPABILITIES', stage2Verified)}
-${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
+${stage3Verified !== undefined ? `${block('VERIFIED_STAGE3_CAPABILITIES', stage3Verified)}\n` : ''}${stage3Verified !== undefined && autoColoursBlock !== undefined ? `${autoColoursBlock}\n` : ''}${stage3Verified !== undefined && layoutBlock !== undefined ? `${layoutBlock}\n` : ''}${stage3Verified !== undefined && gradientBlock !== undefined ? `${gradientBlock}\n` : ''}${stage3Verified !== undefined && lengthsBlock !== undefined ? `${lengthsBlock}\n` : ''}${stage3Verified !== undefined && borderBlock !== undefined ? `${borderBlock}\n` : ''}${block('VERIFIED_CAPABILITIES', allVerified)}`
 }
 
 /* ---------------- pressure + lifecycle scenarios ---------------- */
@@ -1348,6 +1388,9 @@ async function main(): Promise<void> {
     const d = r3.barLengths['default-10-90']
     // eslint-disable-next-line no-console
     console.log(`bar 10/90 lengths (Task 22b): ${d ? `${d.rule} (${d.settledBy.join(', ')})` : 'none selected'}`)
+    const bb = Object.entries(r3.barGradientBorder)
+    // eslint-disable-next-line no-console
+    console.log(`bar bordered gradient (S3-GRAD-BORDER): ${bb.length ? bb.map(([k, v]) => `${k}${v?.endBlend !== undefined ? ` endBlend=${v.endBlend}` : ''}`).join(', ') : 'none selected'}`)
   }
   // eslint-disable-next-line no-console
   console.log('--- pressure ---')

@@ -119,7 +119,22 @@ What to check afterwards:
 
 ## 2c. The default-lengths case (Task 22b)
 
-`stage3-bar-lengths-default` owns `bar:lengths-default-10-90`. The captures so far show two 10/90 curves at one 180 pt width: the paired solid bar of `stage3-bar-lengths` B is 9 px shorter than 10/90 linear, and every base-only gradient bar is exactly 10/90 linear. The case crosses paired solid (B:D), paired gradient (E:G) and base-only (H:J) bars at 180, 270 and 360 pt, with values 0, 10, ..., 100 on each, so that one candidate rule of `BAR_LENGTH_RULES` (scripts/cf-refs/verify.ts) matches. Run it like the other cases, with the same preconditions, close checks and rerun rule:
+`stage3-bar-lengths-default` owns `bar:lengths-default-10-90`. The captures so far show two 10/90 curves at one 180 pt width: the paired solid bar of `stage3-bar-lengths` B is 9 px shorter than 10/90 linear, and every base-only gradient bar is exactly 10/90 linear. The case crosses paired solid (B:D), paired gradient (E:G) and base-only (H:J) bars at 180, 270 and 360 pt, with values 0, 10, ..., 100 on each, so that one candidate rule of `BAR_LENGTH_RULES` (scripts/cf-refs/verify.ts) matches.
+
+Ruling S3-GRAD-BORDER adds columns K:V, which own `bar:render-gradient-border`. They are paired gradient bars with `border="1"` and an `<x14:borderColor>`, in the shape of Excel's UI gradient preset, but with min/max bounds instead of the preset's autoMin/autoMax:
+
+| Columns | Border colour | Lengths |
+|---|---|---|
+| K:M | the fill FF0000FF | 0/100 |
+| N:P | a contrasting FF00B050 | 0/100 |
+| Q:S | the fill FF0000FF | 10/90 |
+| T:V | a contrasting FF00B050 | 10/90 |
+
+Each set covers 180, 270 and 360 pt, with values 0..100 by 10, plus 3 and 5 in rows 13–14. The short bars separate a ramp over the bar's outer length from a ramp over its inner length.
+
+The case has 510 cells, so the per-cell probes run in chunks of 100 (`PROBE_CHUNK_CELLS`): unrolled AppleScript overflows osacompile near 500 cells. Allow for about five times a normal case's probe time.
+
+Run it like the other cases, with the same preconditions, close checks and rerun rule:
 
 ```
 bun scripts/cf-refs/build.ts   --stage 3 --case stage3-bar-lengths-default --refresh-clock-date
@@ -132,7 +147,12 @@ What to check afterwards:
 
 - The resave keeps every bar paired (B:G) or base-only (H:J), and B:D stay `gradient="0"`. Excel drops `minLength="10" maxLength="90"` and `gradient="1"` from the companions, since they are the schema defaults. If the resave pairs the base-only bars, record it: H:J then no longer test the base-only form.
 - `audit.ts --stage 3` lists `bar:lengths-default-10-90` as verified and prints the matched rule (`matchedHypotheses` of the case). If it is refused with `bar-hypothesis-none`, no candidate fits. Record the px from the sidecar as a finding. Do not add a fitted rule.
-- Never run `--write` here. The rule is published only by Task 23 (`--write --publish-stage3`), as `VERIFIED_STAGE3_BAR_LENGTHS`.
+- The resave keeps K:V paired, with `border="1"` and their `<x14:borderColor>` (FF0000FF on K:M and Q:S, FF00B050 on N:P and T:V). If Excel drops or rewrites the border colour, record it: the judge reads the saved colour.
+- `audit.ts --stage 3` lists `bar:render-gradient-border` as verified and prints the matched shape (`bar bordered gradient (S3-GRAD-BORDER): <shape> endBlend=<t>`). The shapes are `frame-over-ramp`, `frame-inner-ramp`, `gradient-frame`, `no-frame` and `frame-solid-fill`. The ramps use the blend of the same capture's borderless gradient bars (E:J). It should be 0.847, as in every earlier capture; if not, record it.
+- If the bordered judge says `none`, no shape fits. Record the bordered px of one short (rows 13–14) and one long bar as a finding.
+- If it says `non-discriminating`, the short bars did not separate the shapes. Record which pair. Never refit the blend per shape.
+- The 0/100 bordered extents (K:P) must equal the solid-length model within 1 px (Ruling S3-M). If they do not, the judge refuses, and the px are the finding.
+- Never run `--write` here. The rule is published only by Task 23 (`--write --publish-stage3`), as `VERIFIED_STAGE3_BAR_LENGTHS`, and the bordered shape as `VERIFIED_STAGE3_BAR_GRADIENT_BORDER`.
 
 ## 3. The unresolved-shapes case (named explicitly)
 

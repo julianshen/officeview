@@ -2931,6 +2931,13 @@ export function evaluateBarCapabilities(
       out[cap] = judgeBarAutoColour(sampleBarAutoColours(c, parts, png, geom, measured)[cap])
       continue
     }
+    if (cap === BAR_GRADIENT_BORDER_CAPABILITY) {
+      const refs = new Set(c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref))).map(cell => cell.ref.toUpperCase()))
+      const blend = fitBarGradientBlend(sampleBarGradients(c, parts, png, geom).samples)
+      const { endBlend: _t, maxError: _e, ...judged } = judgeBarGradientBorder(sampleBarGradients(c, parts, png, geom, refs, 'bordered'), blend)
+      out[cap] = judged
+      continue
+    }
     if (cap === BAR_GRADIENT_CAPABILITY) {
       // The designated cells of the capability (the pooled, cross-case judgement is the audit's).
       const refs = new Set(c.expected.cells.filter(cell => cell.matched && c.markers.some(m => m.capabilityId === cap && isCellInSqref(cell.ref, m.sqref))).map(cell => cell.ref.toUpperCase()))
@@ -3244,6 +3251,8 @@ export interface BarGradientSample {
   span: number
   /** The solid-length model's length (0/100 bars only); the gradient's extent must equal it within 1 px (Ruling S3-M). */
   predictedLength?: number
+  /** The authored border colour (bordered samples only, Ruling S3-GRAD-BORDER). */
+  border?: [number, number, number]
   pixels: Array<{ i: number; y: number; rgb: [number, number, number] }>
 }
 export interface BarGradientObservation {
@@ -3262,6 +3271,8 @@ interface SavedGradientBar {
   minLength: number
   maxLength: number
   fill: string | undefined
+  /** `<x14:borderColor>` as rgb, when the bar draws a border. */
+  borderColor?: string
 }
 
 function readSavedGradientBars(parts: Map<string, Uint8Array>): SavedGradientBar[] {
@@ -3290,6 +3301,7 @@ function readSavedGradientBars(parts: Map<string, Uint8Array>): SavedGradientBar
       minLength: Number(attr(bar, 'minLength') ?? '10'),
       maxLength: Number(attr(bar, 'maxLength') ?? '90'),
       fill,
+      ...(x14 && rgbOf(asNode(bar?.borderColor)) ? { borderColor: rgbOf(asNode(bar?.borderColor)) } : {}),
     }
   }
   for (const ext of asArray(asNode(docRoot.extLst)?.ext).map(asNode)) {
@@ -3336,6 +3348,8 @@ export function sampleBarGradients(
   png: DecodedPng,
   geom: WorksheetRangeGeometry,
   refs?: ReadonlySet<string>,
+  /** `bordered` samples only the bordered gradient bars (Ruling S3-GRAD-BORDER); `plain` only the borderless ones. */
+  shape: 'plain' | 'bordered' = 'plain',
 ): BarGradientObservation {
   const facts = readBarSheetFacts(parts)
   const bars = readSavedGradientBars(parts)
@@ -3350,7 +3364,9 @@ export function sampleBarGradients(
     if (covering.length !== 1) { why('more than one bar rule covers it'); continue }
     const b = covering[0]!
     if (c.markers.some(m => m.ruleType !== 'dataBar' && isCellInSqref(ref, m.sqref))) { why('another rule covers it'); continue }
-    if (b.border) { why('a bordered gradient bar was never measured'); continue }
+    if (shape === 'plain' && b.border) { why('a bordered gradient bar is judged by bar:render-gradient-border'); continue }
+    if (shape === 'bordered' && !b.border) continue
+    if (shape === 'bordered' && !b.borderColor) { why('its border colour is not an rgb colour'); continue }
     if (b.direction === 'rightToLeft' || (b.direction === 'context' && facts.rightToLeft)) { why('a right-to-left gradient bar was never measured'); continue }
     if (b.axisPosition === 'middle' || (b.axisPosition === 'automatic' && scopeHasMixedSigns(b.sqref, facts))) { why('a gradient bar with an axis was never measured'); continue }
     const v = facts.values.get(ref)
@@ -3385,7 +3401,7 @@ export function sampleBarGradients(
       if (p.kind === 'bar') predictedLength = p.rightPx - p.leftPx + 1
       else if (p.kind === 'none') predictedLength = 0
     }
-    out.samples.push({ ref, fill: hexRgb(b.fill), leftPx: box.x0 + ins.l, topPx: yTop, bottomPx: yBottom, length, span, ...(predictedLength !== undefined ? { predictedLength } : {}), pixels })
+    out.samples.push({ ref, fill: hexRgb(b.fill), leftPx: box.x0 + ins.l, topPx: yTop, bottomPx: yBottom, length, span, ...(predictedLength !== undefined ? { predictedLength } : {}), ...(b.borderColor ? { border: hexRgb(b.borderColor) } : {}), pixels })
   }
   return out
 }
@@ -3496,6 +3512,102 @@ export function judgeBarGradient(o: BarGradientObservation | undefined): BarGrad
     reason: `matched ${matched[0]} with t ${t} on ${o.samples.length} bars (${o.samples.map(s => s.ref).join(', ')}), ${pixels} pixels; max errors: ${errors}`,
     matched: matched[0],
     endBlend: t,
+    maxError,
+  }
+}
+
+/* ---------------- Stage 3: bordered gradient fill (bar:render-gradient-border, Ruling S3-GRAD-BORDER) ---------------- */
+
+export const BAR_GRADIENT_BORDER_CAPABILITY = 'bar:render-gradient-border'
+
+/**
+ * Candidate shapes of a gradient bar with `border="1"` (Excel's UI gradient preset), each predicting every pixel of the
+ * bar's outer rect (its measured extent L, its first and last rows) from the fill f, the authored border colour B and the
+ * blend t of the SAME capture's borderless gradient bars (`fitBarGradientBlend`). The blend is not refitted per shape:
+ * a refit lets every ramp collapse onto the solid shape, so no pair could be told apart. The frame is the rect's 1 px edge (Ruling S3-M border):
+ * - `frame-over-ramp`: the ramp over the outer length, a solid frame in B drawn over it;
+ * - `frame-inner-ramp`: a solid frame, the ramp over the inner length L - 2 inside it;
+ * - `gradient-frame`: the frame is itself a ramp from B toward white over the outer length, around the fill's ramp;
+ * - `no-frame`: the border is ignored, the ramp alone;
+ * - `frame-solid-fill`: a solid frame around a solid fill (a gradient never drawn).
+ * The short bars of the case (5 to 18 px) separate the outer ramp from the inner one by more than the colour separation.
+ */
+export const BAR_GRADIENT_BORDER_HYPOTHESES = ['frame-over-ramp', 'frame-inner-ramp', 'gradient-frame', 'no-frame', 'frame-solid-fill'] as const
+export type BarGradientBorderHypothesis = (typeof BAR_GRADIENT_BORDER_HYPOTHESES)[number]
+
+/** What one hypothesis paints at a pixel: a ramp from `base` at position `at`, or a solid colour. */
+type BorderPixelSource = { base: readonly number[]; at: number } | { solid: readonly number[] }
+
+function borderPixelSource(h: BarGradientBorderHypothesis, s: BarGradientSample, i: number, y: number): BorderPixelSource {
+  const L = s.length
+  const frame = i === 0 || i === L - 1 || y === s.topPx || y === s.bottomPx
+  const B = s.border ?? s.fill
+  switch (h) {
+    case 'frame-over-ramp': return frame ? { solid: B } : { base: s.fill, at: (i + 0.5) / L }
+    case 'frame-inner-ramp': return frame ? { solid: B } : { base: s.fill, at: (i - 0.5) / Math.max(1, L - 2) }
+    case 'gradient-frame': return { base: frame ? B : s.fill, at: (i + 0.5) / L }
+    case 'no-frame': return { base: s.fill, at: (i + 0.5) / L }
+    case 'frame-solid-fill': return { solid: frame ? B : s.fill }
+  }
+}
+
+/** One bordered hypothesis's predicted colour of a pixel under blend `t` (unrounded). */
+export function predictBarGradientBorderPixel(h: BarGradientBorderHypothesis, s: BarGradientSample, i: number, y: number, t: number): number[] {
+  const src = borderPixelSource(h, s, i, y)
+  return 'solid' in src ? [...src.solid] : src.base.map(f => f + (255 - f) * t * src.at)
+}
+
+export interface BarGradientBorderJudgement extends BarCapabilityEvaluation {
+  /** The blend the ramps were predicted with (the capture's borderless gradient blend), when the match has a ramp. */
+  endBlend?: number
+  maxError?: Partial<Record<BarGradientBorderHypothesis, number>>
+}
+
+/**
+ * Judges the bordered gradient from its samples like `judgeBarGradient`: the 0/100 extents must equal the solid model
+ * within 1 px (Ruling S3-M), every pair of hypotheses must differ by `BAR_COLOR_SEPARATION` at some sampled pixel, and
+ * exactly one must match within `BAR_COLOR_TOLERANCE` at every sampled pixel, every ramp under the blend `t` of the
+ * capture's borderless gradient bars (no blend: `no-hypotheses`).
+ */
+export function judgeBarGradientBorder(o: BarGradientObservation | undefined, t: number | undefined): BarGradientBorderJudgement {
+  if (t === undefined) return { status: 'no-hypotheses', reason: 'the capture has no borderless gradient bar to fix the ramp\'s blend' }
+  if (!o || o.samples.length === 0) {
+    return { status: 'no-hypotheses', reason: `no bordered gradient bar of the measured shape was sampled${o?.unsampled.length ? ` (${o.unsampled.join('; ')})` : ''}` }
+  }
+  const off = o.samples.filter(s => s.predictedLength !== undefined && Math.abs(s.length - s.predictedLength) > 1)
+  if (off.length > 0) {
+    return { status: 'none', reason: `the bordered gradient extent is not the solid-length model's: ${off.map(s => `${s.ref} ${s.length} px vs ${s.predictedLength} px`).join(', ')} (Ruling S3-M)` }
+  }
+  const hyps = BAR_GRADIENT_BORDER_HYPOTHESES
+  const maxError: Partial<Record<BarGradientBorderHypothesis, number>> = {}
+  const sep = new Map<string, number>()
+  for (const s of o.samples) {
+    for (const p of s.pixels) {
+      const preds = hyps.map(h => predictBarGradientBorderPixel(h, s, p.i, p.y, t).map(Math.round))
+      hyps.forEach((h, a) => {
+        maxError[h] = Math.max(maxError[h] ?? 0, ...[0, 1, 2].map(k => Math.abs(preds[a]![k]! - p.rgb[k]!)))
+        for (let b = a + 1; b < hyps.length; b++) {
+          const key = `${h}/${hyps[b]}`
+          sep.set(key, Math.max(sep.get(key) ?? 0, ...[0, 1, 2].map(k => Math.abs(preds[a]![k]! - preds[b]![k]!))))
+        }
+      })
+    }
+  }
+  const errors = hyps.map(h => `${h} ${maxError[h]}`).join(', ')
+  const close = [...sep].filter(([, d]) => d < BAR_COLOR_SEPARATION)
+  if (close.length > 0) {
+    return { status: 'non-discriminating', reason: `hypotheses ${close.map(([k, d]) => `${k} (${d})`).join(', ')} differ by less than ${BAR_COLOR_SEPARATION} at every sampled pixel`, maxError }
+  }
+  const matched = hyps.filter(h => maxError[h]! <= BAR_COLOR_TOLERANCE)
+  if (matched.length !== 1) {
+    return { status: 'none', reason: `${matched.length === 0 ? 'no' : matched.length} bordered gradient hypothesis matches within ${BAR_COLOR_TOLERANCE} (max errors: ${errors}; t ${t})`, maxError }
+  }
+  const pixels = o.samples.reduce((n, s) => n + s.pixels.length, 0)
+  return {
+    status: 'discriminating',
+    reason: `matched ${matched[0]} with t ${t} on ${o.samples.length} bars, ${pixels} pixels; max errors: ${errors}`,
+    matched: matched[0],
+    ...(matched[0] !== 'frame-solid-fill' ? { endBlend: t } : {}),
     maxError,
   }
 }
@@ -3800,7 +3912,7 @@ function verifyBarCapture(
       if (!same) return fail('sidecar-mismatch', `Sidecar observedBars for ${cell.ref} disagrees with the PNG measurement`)
     }
     // The probe, the automatic colours and the gradient model are observations recomputed above from the PNG.
-    if (cap !== 'bar:settings-precondition-probe' && !isBarAutoColourCapability(cap) && cap !== BAR_GRADIENT_CAPABILITY) {
+    if (cap !== 'bar:settings-precondition-probe' && !isBarAutoColourCapability(cap) && cap !== BAR_GRADIENT_CAPABILITY && cap !== BAR_GRADIENT_BORDER_CAPABILITY) {
       const hyps = recordedHyps?.[cap]
       if (!hyps) return fail('unobserved-expectation', `Capability ${cap} claims ${label} but the sidecar records no hypotheses to discriminate`)
       if (JSON.stringify(hyps) !== JSON.stringify(rec.hypotheses ?? null)) {

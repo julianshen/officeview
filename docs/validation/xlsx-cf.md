@@ -343,7 +343,7 @@ Task 18 prepares the Stage 3 evidence machinery. **Nothing here is Excel evidenc
 | Case ID | Sheet & Range | Question settled | Rulings | Status |
 |---|---|---|---|---|
 | `stage3-bar-settings-probe` | `Sheet1!A1:G12` | S3-A precondition probe against defaults and a default control; calibration columns 10/30/60 and one solid DXF cell; schema defaults for a base-only bar | S3-A, S3-Q | recipe-pending |
-| `stage3-bar-lengths-default` | `Sheet1!A1:J24` | Default 10/90 lengths (Task 22b): paired solid, paired gradient and base-only bars at 180/270/360 pt, values 0..100 by 10 | S3-B, S3-M | recipe-pending |
+| `stage3-bar-lengths-default` | `Sheet1!A1:V28` | Default 10/90 lengths (Task 22b): paired solid, paired gradient and base-only bars at 180/270/360 pt, values 0..100 by 10; bordered gradients K:V (S3-GRAD-BORDER): border = fill or green, at 0/100 and 10/90, plus values 3 and 5 | S3-B, S3-M, S3-GRAD-BORDER | recipe-pending |
 | `stage3-bar-lengths` | `Sheet1!A1:J12` | Solid bar lengths (the midpoint cell at 50 is not designated for 10/90 vs 0/100): default 10/90 vs explicit 0/100, min/max, num 20/80, percent 25/75, percentile 10/90, autoMin and autoMax (autoMin differs from min), all-negative | S3-B, S3-C, S3-L | recipe-pending |
 | `stage3-bar-degenerate` | `Sheet1!A1:H12` | Equal values, a single numeric cell, inverted num 80 to 20, values beyond bounds, percent -10/150, Excel 2007 `min val="0"`, `min` placed second | S3-D, S3-E | recipe-pending |
 | `stage3-bar-axis-negative` | `Sheet1!A1:I12` | Mixed {-50..100} under automatic/middle/none, negative fill and border colours vs same-as-positive, all-positive automatic control | S3-K, S3-L | recipe-pending |
@@ -389,6 +389,7 @@ Every row is `unverified` (or refused) until the orchestrator's captures land; "
 | `bar:negative-border-same-as-positive` | `stage3-bar-axis-negative` | pixel-measured | S3-L | recipe-pending (unverified) |
 | `bar:render-solid` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
 | `bar:render-gradient-stops` | `stage3-bar-rendering` (pooled over every capture) | pixel-measured | S3-M | verified (Task 22b): `bar-length`, endBlend 0.847 |
+| `bar:render-gradient-border` | `stage3-bar-lengths-default` | pixel-measured | S3-M, S3-GRAD-BORDER | recipe-pending: blocked until the case is captured |
 | `bar:render-border` | `stage3-bar-rendering` | pixel-measured | S3-M | recipe-pending (unverified) |
 | `bar:direction-ltr` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
 | `bar:direction-rtl` | `stage3-bar-rendering` | pixel-measured | S3-K | recipe-pending (unverified) |
@@ -808,3 +809,26 @@ An unknown, reasonless or doubly registered id fails the audit.
 | refused-unsupported | 15 | the 12 `bar:unresolved-*` and the 3 above |
 | blocked | 1 | `bar:lengths-default-10-90`, pending the capture |
 | unaccounted | 0 | — |
+
+### Ruling S3-GRAD-BORDER (2026-11-14): the bordered gradient joins the default-lengths case
+
+No Excel was run. A bordered gradient is probably what Excel's UI gradient preset writes. It was never measured, so it withholds. The same uncaptured case now settles it as well.
+
+- **Fixture.** `stage3-bar-lengths-default` gains columns K:V, which own the new `bar:render-gradient-border`. They are paired gradient bars with `border="1"` and an `<x14:borderColor>`, the form `excel-authored-databar.xlsx` uses for a bordered bar:
+
+  | Columns | Border colour | Lengths |
+  |---|---|---|
+  | K:M | the fill | 0/100 |
+  | N:P | green | 0/100 |
+  | Q:S | the fill | 10/90 |
+  | T:V | green | 10/90 |
+
+  Each set spans 180/270/360 pt, with values 0..100 by 10 plus 3 and 5. The preset's autoMin/autoMax bounds are replaced by min/max: `bar:bounds-automax` is non-discriminating and would withhold the bars anyway.
+- **Hypotheses.** Five shapes: `frame-over-ramp`, `frame-inner-ramp`, `gradient-frame`, `no-frame` and `frame-solid-fill`.
+  - Every ramp uses the blend of the same capture's borderless gradient bars. Refitting the blend per shape let every ramp collapse onto the solid shape, which a synthetic test showed.
+  - The 3 and 5 values give 5–18 px bars, which separate the outer ramp from the inner one by more than the 17 colour separation. At 18 px or more they differ by at most about 11.
+  - The 0/100 extents must equal the solid model (Ruling S3-M).
+  - On a synthetic capture of the case, each planted shape is the only match, and a 2 px frame matches none.
+- **Export.** `VERIFIED_STAGE3_BAR_GRADIENT_BORDER`, rendered only with `--publish-stage3`.
+- **Production.** A bordered gradient paints only the exported shape (`barGradientBorderEvidence`, gated by the capability) and needs `bar:render-gradient-border` at evaluation. Without the export it withholds, as now. Painted pixels equal the harness prediction within 2 per channel for every shape at lengths 5 to 177.
+- **Probes.** The case now has 510 cells, and the unrolled per-cell AppleScript probes overflow osacompile ("Internal table overflow", -2707). `capture.ts` therefore runs them in chunks of 100 cells (`PROBE_CHUNK_CELLS`). Every earlier case has at most 88 cells, so it runs as one chunk, exactly as before.

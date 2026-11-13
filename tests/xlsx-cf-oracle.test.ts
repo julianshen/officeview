@@ -37,6 +37,8 @@ import {
   buildBarSidecarExtras,
   buildDecorationProbeScript,
   buildTextProbeScript,
+  PROBE_CHUNK_CELLS,
+  probeRefChunks,
   captureAndCloseOwned,
   captureUnderLockGuard,
   staleCaptureSidecar,
@@ -989,10 +991,13 @@ describe('CF oracle verifier', () => {
   it.skipIf(!hasOsacompile)('compiles all probe AppleScripts under osacompile with zero syntax errors', () => {
     for (const c of CF_CASES) {
       const refs = c.expected.cells.map(x => x.ref)
+      // The per-cell probes run in chunks of PROBE_CHUNK_CELLS, as capture.ts runs them (osacompile overflows near 500).
       const scripts = [
-        buildTextProbeScript(`${c.id}.xlsx`, c.sheet, refs),
-        buildDecorationProbeScript(`${c.id}.xlsx`, c.sheet, refs),
-        buildColorProbeScript(`${c.id}.xlsx`, c.sheet, refs),
+        ...probeRefChunks(refs).flatMap(chunk => [
+          buildTextProbeScript(`${c.id}.xlsx`, c.sheet, chunk),
+          buildDecorationProbeScript(`${c.id}.xlsx`, c.sheet, chunk),
+          buildColorProbeScript(`${c.id}.xlsx`, c.sheet, chunk),
+        ]),
         buildColorScaleCriteriaProbeScript(`${c.id}.xlsx`, c.sheet),
         ...(c.stage === 3 ? [buildDataBarSettingsProbeScript(`${c.id}.xlsx`, c.sheet)] : []),
       ]
@@ -1003,6 +1008,18 @@ describe('CF oracle verifier', () => {
       }
     }
   }, 120_000)
+
+  it('probe chunks keep every cell in order and leave every case of up to 100 cells as one chunk', () => {
+    expect(PROBE_CHUNK_CELLS).toBe(100)
+    const refs = Array.from({ length: 510 }, (_, i) => `A${i + 1}`)
+    const chunks = probeRefChunks(refs)
+    expect(chunks.map(c => c.length)).toEqual([100, 100, 100, 100, 100, 10])
+    expect(chunks.flat()).toEqual(refs)
+    expect(probeRefChunks(refs.slice(0, 88))).toEqual([refs.slice(0, 88)])
+    expect(probeRefChunks([])).toEqual([[]])
+    // Every case before Task 22b fits one chunk, so its probes are byte-identical to the unchunked ones.
+    for (const c of CF_CASES.filter(x => x.id !== 'stage3-bar-lengths-default')) expect(c.expected.cells.length, c.id).toBeLessThanOrEqual(PROBE_CHUNK_CELLS)
+  })
 
   it('correctly validates cell coordinates within range even with hidden rows (stage2-scale-scope)', () => {
     const scopeCase = CF_CASES.find(c => c.id === 'stage2-scale-scope')!

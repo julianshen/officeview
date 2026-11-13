@@ -3850,6 +3850,8 @@ const MIN_MAX: readonly CfBarCfvo[] = [{ type: 'min' }, { type: 'max' }]
 const SOLID_0_100: Readonly<Record<string, string>> = { minLength: '0', maxLength: '100', gradient: '0' }
 const VALUES_5: readonly S3Value[] = [0, 25, 50, 75, 100]
 const VALUES_11: readonly S3Value[] = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+/** Ruling S3-GRAD-BORDER: 0..100 by 10, plus two short bars that separate an outer-length ramp from an inner one. */
+const VALUES_BORDERED: readonly S3Value[] = [...VALUES_11, 3, 5]
 /**
  * Ruling S3-AUTO-GREY: the static cell fill of stage3-bar-auto-colors. Excel's "White, Background 1, Darker 35%". White
  * must be bar ink against it, so it sits at least BAR_STRONG_DELTA (64) below white (89 here); it is at least the colour
@@ -3968,9 +3970,9 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
   // cross-check at one width.
   rect(
     'stage3-bar-lengths-default',
-    'Excel\'s default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (180, 270, 360 pt: at least 30 characters, S3-A step 4, so the value text stays clear of every bar edge) with eleven values each, min/max bounds, on white cells, left to right, no border.',
+    'Excel\'s default 10/90 lengths. The captures show two curves at one width: the paired solid bar of stage3-bar-lengths B measures 9/44/80/115/150 px for 0/25/50/75/100 percent of a 177 px span (10/90 linear on the span minus 9 px, or 5/85), while every base-only gradient bar measures 10/90 linear (18/53/89/124/159). Fill type and pairing form are confounded, and every 10/90 bar sits on one 180 pt column. This case crosses paired solid, paired gradient and base-only (gradient) bars over three widths (180, 270, 360 pt: at least 30 characters, S3-A step 4, so the value text stays clear of every bar edge) with eleven values each, min/max bounds, on white cells, left to right, no border. Ruling S3-GRAD-BORDER adds paired gradient bars with border="1" (columns K:V), the shape of Excel\'s UI gradient preset (x14 minLength 0 / maxLength 100, border="1" with an <x14:borderColor>, as excel-authored-databar.xlsx writes a bordered bar; min/max bounds instead of the preset\'s autoMin/autoMax, which bar:bounds-automax cannot settle): a border equal to the fill and a contrasting green one, each at 0/100 and at the default 10/90, at the same three widths. Their values are 0..100 by 10 plus 3 and 5, whose short bars (5 to 18 px) tell a ramp over the bar\'s outer length from one over its inner length.',
     {
-      n: 11,
+      n: 13,
       cols: [
         col('B', 'Solid180', VALUES_11, 30),
         col('C', 'Solid270', VALUES_11, 45),
@@ -3981,6 +3983,8 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         col('H', 'Base180', VALUES_11, 30),
         col('I', 'Base270', VALUES_11, 45),
         col('J', 'Base360', VALUES_11, 60),
+        ...(['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V'] as const).map((c, i) =>
+          col(c, `GradBorder${['Fill', 'Green'][Math.floor(i / 3) % 2]}${['0100', '1090'][Math.floor(i / 6)]}${[180, 270, 360][i % 3]}`, VALUES_BORDERED, [30, 45, 60][i % 3])),
       ],
       rules: [
         bar('bar:lengths-default-10-90', 'B2:B12', 1, { x14Attrs: { minLength: '10', maxLength: '90', gradient: '0' }, colors: { fill: BLUE } }),
@@ -3992,6 +3996,12 @@ export const CF_STAGE3_FIXTURES: readonly S3Fixture[] = [
         bar('bar:lengths-default-10-90', 'H2:H12', 7, { pairing: 'base-only', colors: { fill: BLUE } }),
         bar('bar:lengths-default-10-90', 'I2:I12', 8, { pairing: 'base-only', colors: { fill: BLUE } }),
         bar('bar:lengths-default-10-90', 'J2:J12', 9, { pairing: 'base-only', colors: { fill: BLUE } }),
+        // Ruling S3-GRAD-BORDER: bordered gradients (K:M border = fill, N:P green; 0/100), then the same at 10/90 (Q:V).
+        ...(['K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V'] as const).map((c, i) =>
+          bar('bar:render-gradient-border', `${c}2:${c}14`, 10 + i, {
+            x14Attrs: { ...(i < 6 ? { minLength: '0', maxLength: '100' } : { minLength: '10', maxLength: '90' }), gradient: '1', border: '1' },
+            colors: { fill: BLUE, border: Math.floor(i / 3) % 2 === 0 ? BLUE : GREEN },
+          })),
       ],
     },
   ),
@@ -4529,6 +4539,7 @@ const S3_RULINGS: Record<string, string> = {
   'bar:negative-border-same-as-positive': 'S3-L',
   'bar:render-solid': 'S3-M (a solid bar needs bar:render-solid; never drawn instead of a gradient)',
   'bar:render-gradient-stops': 'S3-M (a gradient bar needs its measured stops; never drawn solid instead)',
+  'bar:render-gradient-border': 'S3-M and S3-GRAD-BORDER (a bordered gradient bar, Excel\'s UI gradient preset, paints only the verified frame-and-ramp shape; withheld until then)',
   'bar:render-border': 'S3-M (a bordered bar needs its measured stroke; never drawn borderless)',
   'bar:direction-ltr': 'S3-K (direction leftToRight)',
   'bar:direction-rtl': 'S3-K (direction rightToLeft)',
