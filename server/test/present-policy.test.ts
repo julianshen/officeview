@@ -2,7 +2,8 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { buildDocx } from '../../src/testdata/ooxml-builders'
 import { canNotes, effectivePolicy, type AuthDecision } from '../src/hooks'
-import { hiddenSlideDeck } from './fixtures'
+import { hiddenUnits, DocumentHost, RenderRefusal } from '../src/render'
+import { entryHiddenSlideDeck, hiddenSlideDeck } from './fixtures'
 import { Client, disposePool, start } from './harness'
 
 afterAll(() => disposePool())
@@ -112,10 +113,55 @@ describe('hidden slides', () => {
     expect(h.stream.hiddenOf(m.session.sid)!.size).toBe(0)
     c.close(); h.stop()
   })
+  test("a slide hidden only by its presentation entry: 'full' flags it, 'visible-only' drops it (same rule as the projection)", async () => {
+    const doc = await entryHiddenSlideDeck()
+    const h = await start({ doc, policy: { contentPolicy: 'full' } }), c = new Client(h.url)
+    const m = await c.hello()
+    expect(m.units.count).toBe(3)
+    expect(m.units.list.map((u) => 'hidden' in u)).toEqual([false, true, false])
+    expect(m.units.list[1]).toMatchObject({ hidden: true })
+    c.close(); h.stop()
+    const v = await start({ doc }), d = new Client(v.url)
+    const n = await d.hello()
+    expect(n.units.count).toBe(2)
+    expect(n.units.list.some((u) => 'hidden' in u)).toBe(false)
+    d.close(); v.stop()
+  })
   test('a deck without hidden slides flags nothing', async () => {
     const h = await start({ policy: { contentPolicy: 'full' } }), c = new Client(h.url)
     const m = await c.hello()
     expect(m.units.list.some((u) => 'hidden' in u)).toBe(false)
     c.close(); h.stop()
+  })
+})
+
+describe('hidden detection failure releases the paintables', () => {
+  test('a slide list that does not line up with the units refuses the open', async () => {
+    const host = new DocumentHost()
+    let disposed = 0
+    host.hiddenReader = async (doc, paintables) => {
+      const dispose = paintables.dispose
+      paintables.dispose = () => { disposed++; dispose() }
+      return hiddenUnits(doc, paintables.length + 1)
+    }
+    const err = await host.open('d0', await hiddenSlideDeck(), 'full').catch((e) => e)
+    expect(err).toBeInstanceOf(RenderRefusal)
+    expect(err.code).toBe('unsupported-format')
+    expect(disposed).toBe(1)
+    expect(host.docCount).toBe(0)
+  })
+  test('any throw from the hidden reader disposes the lease and leaves no document', async () => {
+    const host = new DocumentHost()
+    let disposed = 0
+    host.hiddenReader = async (_doc, paintables) => {
+      const dispose = paintables.dispose
+      paintables.dispose = () => { disposed++; dispose() }
+      throw new Error('boom')
+    }
+    await expect(host.open('d1', await hiddenSlideDeck(), 'full')).rejects.toThrow('boom')
+    expect(disposed).toBe(1)
+    expect(host.docCount).toBe(0)
+    // The default reader then opens the same bytes normally.
+    expect((await new DocumentHost().open('d1', await hiddenSlideDeck(), 'full')).hidden).toEqual([1])
   })
 })

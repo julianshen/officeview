@@ -1,6 +1,5 @@
-import { attrs } from '../../../src/core/xml'
 import type { PptxPackageHandle } from '../../../src/pptx/types'
-import { all, attr, local, remove, type Context, type Node } from './tree'
+import { all, attr, local, readTree, remove, type Context, type Node } from './tree'
 
 const shapes = new Set(['sp', 'pic', 'grpSp', 'graphicFrame', 'cxnSp'])
 const isTrue = (value: string | undefined) => ['1', 'true', 'on'].includes(value ?? '')
@@ -11,17 +10,24 @@ function targetPath(target: string): string {
   for (const segment of segments) { if (segment === '..') result.pop(); else if (segment && segment !== '.') result.push(segment) }
   return result.join('/')
 }
+/** The hiding rule shared by the visible-only projection and the 'full'
+ * flagger (`hiddenSlideUnits`), so the two cannot drift: a slide is hidden by
+ * its root (`<p:sld show="0">`) or by its presentation entry (`<p:sldId show="0">`). */
+const slideTargets = (rels: Node | undefined) => new Map((rels ? all(rels, 'Relationship') : []).filter(r => attr(r,'TargetMode') !== 'External').map(r => [attr(r,'Id'), targetPath(attr(r,'Target') ?? '')]))
+const slideIdPath = (slideId: Node, targets: Map<string | undefined, string>) => targets.get(slideId.attrs['r:id'] ?? Object.entries(slideId.attrs).find(([key]) => key.includes(':') && local(key) === 'id')?.[1])
+const hiddenByRoot = (root: Node) => { const slide = all(root, 'sld')[0]; return !!slide && isFalse(attr(slide,'show')) }
+const hiddenByEntry = (slideId: Node) => isFalse(attr(slideId,'show'))
+
 export function projectPptx(ctx: Context): void {
   const presentation = ctx.parts.get('ppt/presentation.xml')
-  const rels = ctx.parts.get('ppt/_rels/presentation.xml.rels')
-  const targets = new Map((rels ? all(rels, 'Relationship') : []).filter(r => attr(r,'TargetMode') !== 'External').map(r => [attr(r,'Id'), targetPath(attr(r,'Target') ?? '')]))
+  const targets = slideTargets(ctx.parts.get('ppt/_rels/presentation.xml.rels'))
   const hidden = new Set<string>()
   for (const [part, root] of [...ctx.parts]) {
     if (!part.startsWith('ppt/')) continue
     if (/^ppt\/(notesSlides|notesMasters|comments|commentAuthors)\//.test(part) || /^ppt\/(commentAuthors|comments)[^/]*\.xml$/.test(part)) { ctx.dropPart(part); continue }
     if (/^ppt\/slides\/[^/]+\.xml$/.test(part)) {
       const slide = all(root, 'sld')[0]
-      if (slide && isFalse(attr(slide,'show'))) { hidden.add(part); ctx.dropPart(part); ctx.diagnostics.push({code:'hidden-stripped',part,element:slide.name,attr:'show',value:attr(slide,'show')}); continue }
+      if (slide && hiddenByRoot(root)) { hidden.add(part); ctx.dropPart(part); ctx.diagnostics.push({code:'hidden-stripped',part,element:slide.name,attr:'show',value:attr(slide,'show')}); continue }
       if (slide && isTrue(attr(slide,'show'))) ctx.handled.add(slide)
     }
     function visit(node: Node) {
@@ -37,8 +43,8 @@ export function projectPptx(ctx: Context): void {
     visit(root)
   }
   if (presentation) for (const slideId of all(presentation, 'sldId')) {
-    const path = targets.get(slideId.attrs['r:id'] ?? Object.entries(slideId.attrs).find(([key]) => key.includes(':') && local(key) === 'id')?.[1])
-    if (isFalse(attr(slideId,'show')) || (path && hidden.has(path))) {
+    const path = slideIdPath(slideId, targets)
+    if (hiddenByEntry(slideId) || (path && hidden.has(path))) {
       remove(presentation, slideId)
       if (path && ctx.parts.has(path)) { ctx.dropPart(path); ctx.diagnostics.push({code:'hidden-stripped',part:'ppt/presentation.xml',element:slideId.name,attr:'show',value:attr(slideId,'show')}) }
     } else if (isTrue(attr(slideId,'show'))) ctx.handled.add(slideId)
@@ -46,15 +52,26 @@ export function projectPptx(ctx: Context): void {
 }
 
 /** Under `'full'` hidden slides stay units, so the show must be told to skip
- * them: the unit indices whose slide root says `show="0"` (the projection's
- * own test above), read from the original package once at open.
- * `handle.slideParts[i]` is unit i (the parser's lease keeps them aligned). */
+ * them: the unit indices the visible-only projection above would drop (same
+ * predicates), read from the original package once at open.
+ * `handle.slideParts[i]` is unit i (the parser's lease keeps them aligned).
+ * Its reads are uncached afterwards, whether or not it throws. */
 export async function hiddenSlideUnits(handle: PptxPackageHandle): Promise<number[]> {
-  const out: number[] = []
-  for (const [i, path] of handle.slideParts.entries()) {
-    const root = await handle.pkg.xml(path)
-    if (isFalse(attrs(root).show as string | undefined)) out.push(i)
-  }
-  handle.pkg.dropCache()
-  return out
+  try {
+    const read = async (path: string) => { const text = await handle.pkg.text(path); return text === undefined ? undefined : readTree(text) }
+    const presentation = await read('ppt/presentation.xml')
+    const targets = slideTargets(await read('ppt/_rels/presentation.xml.rels'))
+    const hiddenParts = new Set<string>()
+    for (const slideId of presentation ? all(presentation, 'sldId') : []) {
+      const path = slideIdPath(slideId, targets)
+      if (path && hiddenByEntry(slideId)) hiddenParts.add(path)
+    }
+    const out: number[] = []
+    for (const [i, path] of handle.slideParts.entries()) {
+      if (hiddenParts.has(path)) { out.push(i); continue }
+      const root = await read(path)
+      if (root && hiddenByRoot(root)) { hiddenParts.add(path); out.push(i) }
+    }
+    return out
+  } finally { handle.pkg.dropCache() }
 }

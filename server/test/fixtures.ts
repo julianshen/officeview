@@ -5,9 +5,9 @@ import { hiddenFixtures, type Fixture } from '../../scripts/stream-s0/hidden-fix
 import { buildPptxDeck } from '../../src/testdata/ooxml-builders'
 
 /** Three slides; the middle one is hidden by its slide root (`<p:sld show="0">`). No corpus deck has one. */
-export const hiddenSlideDeck = () => buildPptxDeck({
+export const hiddenSlideDeck = (hidden = true) => buildPptxDeck({
   slides: ['One', 'Two (hidden)', 'Three'].map((text, i) => ({
-    hidden: i === 1,
+    hidden: hidden && i === 1,
     shapes: [{ off: ['457200', '457200'] as [string, string], ext: ['4572000', '914400'] as [string, string], paragraphs: [{ runs: [{ text }] }] }],
   })),
 })
@@ -21,4 +21,15 @@ export async function augmentedFixtures(): Promise<Array<Fixture & { withHidden:
     out.push({ ...f, withHidden: await zip.generateAsync({ type: 'uint8array' }) })
   }
   return out
+}
+
+/** The same deck with the middle slide hidden only by its presentation entry
+ * (`<p:sldId … show="0"/>`); its slide root carries no `show`. */
+export async function entryHiddenSlideDeck(): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(await hiddenSlideDeck(false))
+  const pres = await zip.file('ppt/presentation.xml')!.async('string')
+  const marked = pres.replace('<p:sldId id="257" ', '<p:sldId id="257" show="0" ')
+  if (marked === pres) throw new Error('fixture: no second sldId')
+  zip.file('ppt/presentation.xml', marked)
+  return zip.generateAsync({ type: 'uint8array' })
 }

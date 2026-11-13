@@ -123,7 +123,7 @@ function paintMark(ctx: CanvasRenderingContext2D, page: { widthPx: number; heigh
 /** Hidden slides of a deck opened under `'full'`, read from the original
  * package (there the projection is the identity). A slide list that does not
  * line up with the units refuses the open: never guess which unit is hidden. */
-async function hiddenUnits(doc: PptxDocument, units: number): Promise<number[]> {
+export async function hiddenUnits(doc: PptxDocument, units: number): Promise<number[]> {
   const handle = pptxPackageHandle(doc)
   if (!handle || handle.slideParts.length !== units) throw new RenderRefusal('unsupported-format', 'slide list does not match the units')
   return hiddenSlideUnits(handle)
@@ -135,6 +135,8 @@ export class DocumentHost {
   private served: ServedCache
   parses = 0
   pages = 0
+  /** Reads a 'full' deck's hidden units after its paintables exist (TEST-ONLY override: fault injection). */
+  hiddenReader: (doc: PptxDocument, paintables: PaintableArray) => Promise<number[]> = (doc, paintables) => hiddenUnits(doc, paintables.length)
   constructor(backend = serverBackend(), servedCacheBytes?: number) { this.backend = backend; installCanvasBackend(backend); this.served = new ServedCache(servedCacheBytes) }
 
   async open(docRef: string, bytes: Uint8Array, contentPolicy: 'visible-only' | 'full'): Promise<OpenResult> {
@@ -151,7 +153,11 @@ export class DocumentHost {
       const paintables = await getPaintables(parsed, { registerFont })
       this.parses++
       const raw = paintables.map((p) => ({ widthPx: p.spec.widthPx, heightPx: p.spec.heightPx }))
-      const hidden = contentPolicy === 'full' && admitted.format === 'pptx' ? await hiddenUnits(parsed as PptxDocument, raw.length) : []
+      let hidden: number[] = []
+      // The lease is ours until the doc is cached: a refusal here must release it.
+      if (contentPolicy === 'full' && admitted.format === 'pptx') {
+        try { hidden = await this.hiddenReader(parsed as PptxDocument, paintables) } catch (e) { paintables.dispose(); throw e }
+      }
       doc = { key, paintables, raw, hidden, units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
       this.docs.set(key, doc)
     }
