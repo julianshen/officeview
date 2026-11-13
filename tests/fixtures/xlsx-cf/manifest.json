@@ -12733,7 +12733,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -12744,7 +12744,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -12755,7 +12755,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -12766,7 +12766,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "non-discriminating"
             }
           },
           {
@@ -16409,7 +16409,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -16420,7 +16420,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -16431,7 +16431,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -16442,7 +16442,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {
@@ -16453,7 +16453,7 @@
             "fillSource": "unverified",
             "barEvidence": {
               "settings": "unverified",
-              "geometry": "unverified"
+              "geometry": "pixel-measured"
             }
           },
           {

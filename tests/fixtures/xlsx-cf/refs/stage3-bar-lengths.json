@@ -441,59 +441,178 @@
     "bar:lengths-default-10-90": {
       "B2": [
         {
-          "id": "effective",
-          "question": "effective",
+          "id": "linear",
+          "question": "linear",
           "leftPx": 86,
           "rightPx": 103
         },
         {
-          "id": "full",
-          "question": "full",
-          "leftPx": 0,
-          "rightPx": 0,
-          "noBar": true
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 94
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 94
         }
       ],
       "B3": [
         {
-          "id": "effective",
-          "question": "effective",
+          "id": "linear",
+          "question": "linear",
           "leftPx": 86,
           "rightPx": 138
         },
         {
-          "id": "full",
-          "question": "full",
+          "id": "half-min@all",
+          "question": "half-min@all",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 129
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
           "leftPx": 86,
           "rightPx": 129
         }
       ],
       "B5": [
         {
-          "id": "effective",
-          "question": "effective",
+          "id": "linear",
+          "question": "linear",
           "leftPx": 86,
           "rightPx": 209
         },
         {
-          "id": "full",
-          "question": "full",
+          "id": "half-min@all",
+          "question": "half-min@all",
           "leftPx": 86,
-          "rightPx": 218
+          "rightPx": 200
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 200
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 200
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 200
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 200
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 200
         }
       ],
       "B6": [
         {
-          "id": "effective",
-          "question": "effective",
+          "id": "linear",
+          "question": "linear",
           "leftPx": 86,
           "rightPx": 244
         },
         {
-          "id": "full",
-          "question": "full",
+          "id": "half-min@all",
+          "question": "half-min@all",
           "leftPx": 86,
-          "rightPx": 262
+          "rightPx": 235
+        },
+        {
+          "id": "half-min@x14",
+          "question": "half-min@x14",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "half-min@solid",
+          "question": "half-min@solid",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "offset-9pt@all",
+          "question": "offset-9pt@all",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "offset-9pt@x14",
+          "question": "offset-9pt@x14",
+          "leftPx": 86,
+          "rightPx": 235
+        },
+        {
+          "id": "offset-9pt@solid",
+          "question": "offset-9pt@solid",
+          "leftPx": 86,
+          "rightPx": 235
         }
       ]
     },
