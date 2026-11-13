@@ -270,6 +270,127 @@ too long'.
 prepares every corpus unit and prints, per format, the spans served and the
 withheld spans by cause (`docs/validation/streaming-s3a.md`).
 
+## Printing (Stage 3b)
+
+Spec: `docs/superpowers/specs/2026-11-11-streaming-s3-design.md` §4.2 and
+its 2026-11-13 amendment; measurements and test map:
+`docs/validation/streaming-s3b.md`.
+
+**What prints.** The server draws each page again for print (scale 2, or
+scale 1 when a page or the whole job is too large at 2) with the session's
+marks, both of them, exactly as on screen. The viewer prints those print
+rasters through a hidden iframe. It never prints the canvases it shows: the
+remote view is hidden in print media, so the browser's own Print menu
+prints a blank page. A page is one streamed unit: a DOCX page, a PPTX slide
+(no notes pages or handouts), an XLSX sheet unit as it streams. In a
+`visible-only` session hidden slides are not units and never print; in an
+audited `contentPolicy: 'full'` session they print as they show.
+
+**Turning it on or capping it** — in your `authorize` hook:
+
+```ts
+authorize: async (req) => ({
+  viewerId: 'alice@example.com',
+  policy: {
+    print: { maxPages: 20, maxSessionPages: 100 },  // or true (default, uncapped), or false
+  },
+})
+```
+
+- `print`: `true` (the default) prints the whole document with no dialog.
+  `false` turns print off: no Print button, and Ctrl/Cmd+P inside the view
+  does nothing.
+  `{ maxPages, maxSessionPages? }` caps each job and, optionally, the
+  session's total. A cap that is not a positive safe integer, or any other
+  value, turns print **off** (fail closed).
+- The manifest carries `can.print` and
+  `caps.print: null | { maxPages, maxSessionPages }` (uncapped ⇒ both
+  `null`; print off ⇒ `null`).
+- With a cap, Print opens a "Print pages" dialog with From and To page
+  numbers (defaults 1 and the smaller of the page count and `maxPages`) and
+  the lines "Up to N pages per print." / "Up to N pages in this session.".
+
+**Caps.** A job over `maxPages`, or one that would take the session past
+`maxSessionPages`, is **refused with the cap stated** and prints nothing. A
+job is never truncated. Session totals:
+- are held per stream session (sid) in server memory, as a running total:
+  printing a page twice counts twice;
+- survive a resume. If `authorize` returns different print caps on resume,
+  the new caps apply and the pages already printed are kept and measured
+  against them;
+- **reset when the viewer opens the document again** (a new session);
+- are charged when the job is accepted, before its first page. A job that
+  is cancelled or fails part-way (render error, lost connection) stays
+  charged, and nothing prints on the viewer.
+
+**Wire** (client → server, with `reqId` and `token`):
+
+| message | meaning |
+|---|---|
+| `{ type: 'print', from, to }` | print units `from..to` (0-based, inclusive) |
+| `{ type: 'print-cancel' }` | stop the running job with this `reqId`; anything else is ignored, never answered |
+
+Server → client on the job's `reqId`: `print-start { pages, scale }`, then
+exactly `pages` PRINT_RASTER (kind 8) messages in ascending unit order (body
+`u32 LE unitIndex` + the UNIT_RASTER body: `u32 w, u32 h, u32 pngLen, PNG`),
+then `print-done { pages }`. A page's raster size `w` satisfies
+`(unit.w − 1) × scale < w ≤ unit.w × scale` (the same for `h`), where `unit`
+is the manifest size: the renderer rounds after scaling and the manifest
+before. A failure at any point is one `refused` and nothing more.
+
+**Refusals** (`{ reqId, type: 'refused', code, limit?, requested? }`; the
+session stays open):
+
+| code | when |
+|---|---|
+| `print-too-large` | over `maxPages` (`limit` = the cap, `requested` = the job's pages); or the pages fit neither scale 2 nor 1 (each page ≤ 8192 px per axis and ≤ 64 MiB of RGBA, the job ≤ 1 GiB of RGBA in all): no `limit` |
+| `print-quota-exhausted` | the session total would pass `maxSessionPages` (`limit` = the cap, `requested` = the job's pages) |
+| `rate-limited` | over the `'print'` rate, a job already running on the session (or a cancelled job's last pages still settling), or the render pool is saturated |
+| `policy-refused` | print off, a malformed range or token, a page outside the size contract, a dropped send, or an internal failure |
+| `session-rotated` | a `print` under a superseded token: the viewer re-issues it once under the new token (nothing was charged). A job whose connection drops mid-way is not re-issued (it stays charged). |
+
+**Rates and limits.**
+- Rate class `'print'`: 10 jobs per minute per session, counting every
+  `print` request that reaches the rate check (jobs then refused by a cap
+  included). An overflow is refused `rate-limited` and never counts toward
+  the breach window that closes the socket (4008).
+- One job at a time per session; at most 2 pages rendering or waiting to be
+  sent. A page is not rendered or sent while the socket holds more than
+  4 MiB unsent (`PRINT_SEND_HIGH_WATER`); sockets keep Bun's default 16 MiB
+  `backpressureLimit`.
+- PRINT_RASTER: 8 MiB encoded, 64 MiB decoded. The viewer reserves
+  `8 MiB + 2 × pageCap` from its 96 MiB per-session admission for a job,
+  with `pageCap` at most 44 MiB, so **a page whose PNG is over about
+  44 MiB cannot print** from a stream (the job fails). It holds at most
+  192 MiB of PNG per job (beyond: "This document is too large to print
+  from the viewer.").
+- The viewer checks every page against the job (index, order, count, scale,
+  size) and prints nothing when anything does not match.
+
+**Audit.**
+- `prints (sid, pages, from_unit, to_unit, scale, at)`: one row per
+  accepted job, durable before `print-start` (a failed write refuses the
+  job). Refused jobs write none.
+- With the forensic mark on, each page also gets a `deliveries` row like a
+  screen unit (the same unit and scale already delivered on screen is not
+  repeated).
+- The open row's services (`AuditRow.services`) include the resolved
+  `print`, and `services` (one row per resume that changes the services)
+  gains a `print` column. A store created before Stage 3b is migrated
+  in place (`ALTER TABLE`). Its older rows have no print value and read
+  `print: false`, which means "not recorded", not "print was off".
+- `AuditTable.get(sid).printed` is `{ jobs, pages }`.
+
+**Viewer messages** (exact): 'Preparing pages D of T…' (with Cancel), 'Too
+many pages to print at once (limit: N pages).', 'This document is too large
+to print from the viewer.', 'Print limit for this session reached (N
+pages).', 'Too many requests. Try again shortly.', and 'The document could
+not be printed. Please try again.'. A cancel shows nothing.
+
+**Honest limits.** The `unit` op still serves screen rasters, so print caps
+limit printing, not capture: what the viewer sees can be screenshotted, and
+the marks trace it. See parent spec §19 item 11.
+
 ## The browser side (Stage 1d)
 
 ```tsx

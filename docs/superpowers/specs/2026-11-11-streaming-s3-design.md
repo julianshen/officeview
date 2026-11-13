@@ -288,6 +288,138 @@ boundary; printed rasters carry both marks (the forensic mark detects on
 a print-resolution page via the Stage 2b detector); no hidden content in
 print rasters (parent T2 constructs).
 
+> **Amendment (2026-11-13, Stage 3b as built).** Rulings taken while
+> planning (P1–P7, plan `docs/superpowers/plans/2026-11-13-streaming-s3b-print.md`)
+> and while building. Validation: `docs/validation/streaming-s3b.md`.
+>
+> - **P1 — print resolution is scale 2, falling back to 1.** The fallback
+>   is per job: it applies when any page's scale-2 surface fails
+>   `unitSurfaceAllowed` (≤ 8192 px per axis and ≤ 64 MiB of RGBA), or the
+>   job's Σ w·h·4 passes `PRINT_JOB_MAX_DECODED` (1 GiB). A job that fits
+>   at neither scale is refused `print-too-large` with no `limit`, before
+>   anything is charged. This matches the local viewer's `PRINT_SCALE = 2`.
+>   Higher scales would need render and tracer changes (the Stage 2b
+>   tracer keys chips on `unit@scale` within `SCALE_BUCKETS`).
+> - **P2 — "print units never reuse screen rasters" means the client never
+>   prints what it shows.** The server may serve print pages from the
+>   canonical render cache, the bytes the tracer reproduces. Layer-1 is
+>   applied per print page, per request, as on screen. A `deliveries` row
+>   deduplicates against a screen delivery of the same unit and scale.
+> - **P3 — charging.** A job is validated whole before any frame. The order
+>   as built (`server/src/ws.ts` `onPrint`) is: token, range arguments,
+>   the `'print'` rate, print off, a job already running, `planPrint`, the
+>   per-job cap, the session quota, the layout fingerprint, the parse
+>   ledger (re-charged on every page of a long job), the audit row
+>   (`recordPrint`; a failed write refuses `policy-refused`), the charge,
+>   `print-start`, then pages. Every request that reaches the rate check
+>   takes a rate slot, refused ones included. A job that fails mid-way
+>   (render error, dropped send, socket loss, viewer cancel) prints
+>   nothing on the client, and its pages stay charged. Jobs are serialised
+>   per sid: a `print` while a job runs, or while a cancelled job's
+>   in-flight pages are still settling, is refused `rate-limited`.
+> - **P4 — print caps may change on resume**, as copy caps do. `print`
+>   leaves the resume policy match, the change is recorded through
+>   `recordServices`, and the pages already printed are kept and measured
+>   against the new caps.
+> - **P5 — a page is a streamed unit, under every content policy.** Under
+>   `visible-only`, hidden slides are dropped before parsing and are never
+>   units or pages. Under audited `contentPolicy: 'full'` they print,
+>   exactly as they show. This narrows "hidden slides are not pages" above
+>   to `visible-only` sessions.
+> - **P6 — a page Layer-1 cannot mark (`unmarked: 'capacity' |
+>   'all-masked'`) prints as it shows**, with the visible mark only and an
+>   `unmarked` delivery row, the same as on screen.
+> - **P7 — print off is refused `policy-refused`.** The client never sends
+>   `print` when `can.print` is false.
+> - **Page size contract (built).** The renderer sizes a raster
+>   `sizeCeil(raw × scale)` while the manifest rounds first
+>   (`sizeCeil(raw)`), so for a fractional raw page size a scale-2 raster
+>   can be 1 px under `ceil(unit.w × 2)`. The contract is
+>   `(unit.w − 1) × scale < w ≤ unit.w × scale`, and the same for `h`,
+>   where `unit` is the manifest size. The server fails the job
+>   `policy-refused` for a page outside it (before mark, record or send);
+>   the client fails the job for one too. The render size is unchanged, so
+>   the tracer still reproduces canonical bytes.
+> - **Wire (built).** Client → server `{reqId, type: 'print', token, from,
+>   to}` (0-based inclusive, `0 ≤ from ≤ to < units.count`) and `{reqId,
+>   type: 'print-cancel'}` (unknown reqIds ignored, never answered).
+>   Server → client `print-start {pages, scale}`, then exactly `pages`
+>   PRINT_RASTER (kind 8) messages in ascending unit order, each `u32 LE
+>   unitIndex` + the UNIT_RASTER body, then `print-done {pages}`; or a
+>   single `refused {code, limit?, requested?}` and nothing more for that
+>   reqId. `print-too-large` (over `maxPages`) and `print-quota-exhausted`
+>   carry `limit` and `requested`; `print-too-large` from `planPrint` has
+>   neither.
+> - **Server pacing (built).** At most `PRINT_CONCURRENCY` (2) pages are in
+>   flight or buffered per job. A page is neither rendered nor sent while
+>   the socket holds more than `PRINT_SEND_HIGH_WATER` (4 MiB) unsent. The
+>   sockets keep Bun's default 16 MiB `backpressureLimit`; a load-time
+>   assertion keeps `PRINT_SEND_HIGH_WATER` + one framed page (8 MiB +
+>   fragment headers) under it, leaving about 4 MiB for interleaved unit
+>   and text output. A send the transport drops fails the job
+>   `policy-refused`.
+> - **Client admission (built).** A job claims the client's one print slot
+>   at once (a second `print()` rejects `rate-limited` without sending),
+>   then takes a grant from the session's 96 MiB aggregate admission, the
+>   same one units use, and sends `print` only once the grant is held. The
+>   grant is `8 MiB + 2 × pageCap`, the inflate peak (encoded fragments,
+>   inflated chunks and their contiguous copy). `pageCap` is the range's
+>   largest unit cost at scale 2 plus the 16-byte page header, clamped to
+>   64 MiB and to
+>   `PRINT_PAGE_BODY_MAX = (96 MiB − 8 MiB) / 2 = 44 MiB`. A page whose body
+>   is larger fails the job (honest limit, parent §19). The client holds
+>   PNG blobs only, never RGBA, up to `PRINT_JOB_MAX_BLOB_BYTES` (192 MiB;
+>   beyond, `print-too-large` with no `limit`, a `print-cancel`, and the
+>   blobs released). Every page is checked against the job: index, order,
+>   count, scale, size and `print-done.pages`, and `print-start` /
+>   `print-done` are held to 48 KiB like text answers. Anything else fails
+>   the job `policy-refused` and nothing prints; the session survives. On
+>   every settlement the job drops its partial reassembly
+>   (`Reassembler.drop`), releases its grant and abort listener, and
+>   settles once even if a send throws; a cancel sends `print-cancel` best
+>   effort. A `session-rotated` refusal before `print-start` (a RENEW race,
+>   nothing charged) re-issues the job once; a socket drop mid-job fails
+>   it (`session-rotated`, shown as "could not be printed") and it is
+>   never re-issued, since the server kept it charged.
+> - **The remote view never prints its canvases.** Its root carries
+>   `data-ov-print="false"` at all times and an inline
+>   `<style data-ov-print-guard>` that hides this instance's root in print
+>   media (it does not depend on `officeview.css`). The `beforeprint`
+>   paint path is gone, and Ctrl/Cmd+P pressed inside the view is always
+>   swallowed (with focus outside the view the browser's own print runs
+>   and prints the view blank). Print rasters
+>   go through the local viewer's hidden-iframe surface (`printRasters`,
+>   shared with `printDocument`, loaded on demand), whose frame is hosted
+>   on `document.body`, outside the hidden root. A manifest with
+>   `can.print: true` and `caps.print: null` is contradictory and fails
+>   closed (no Print button). `printRasters` also refuses page sizes that
+>   are not finite, positive and ≤ `PRINT_MAX_AXIS` (16384) with "The
+>   document could not be printed. Please try again." (Task 6 ruling).
+> - **How the cap is surfaced (the "my call" above).** Uncapped, Print
+>   prints the whole document with no dialog. With any cap, Print opens a
+>   "Print pages" dialog with 1-based "From"/"To" inputs (defaults 1 and
+>   `min(count, maxPages ?? count)`) and the lines "Up to N pages per
+>   print." / "Up to N pages in this session.". Progress reads "Preparing
+>   pages D of T…" with a Cancel button. Notices (exact): "Too many pages
+>   to print at once (limit: N pages).", "This document is too large to
+>   print from the viewer.", "Print limit for this session reached (N
+>   pages).", "Too many requests. Try again shortly.", "The document could
+>   not be printed. Please try again."; an abort shows none. The dialog is
+>   modal and keeps focus inside it (Tab wraps; Escape closes). A replaced
+>   document aborts the old job and starts with no progress, range or
+>   notice.
+> - **Evidence (Task 4 ruling).** The no-hidden-content check compares each
+>   printed page of the 13 hidden-construct fixtures with the print of a
+>   hidden-free copy by decoded pixels, with a mutation self-check that a
+>   planted marker is caught, instead of comparing a print to its own
+>   canonical render (which a contaminated renderer would pass).
+> - **Audit.** New `prints (sid, pages, from_unit, to_unit, scale, at)`
+>   table, one row per accepted job, written before `print-start`.
+>   `services` gains a `print` column (a store from before Stage 3b is
+>   migrated with `ALTER TABLE`; its old rows read `print: false`, meaning
+>   "not recorded", not "print was off"). `AuditTable.get(sid).printed` is
+>   `{jobs, pages}`.
+
 ### 4.3 Piece 3 — presenting, slide by slide, with notes (parent 3b)
 
 The parent §12a.8 3b list, verbatim in intent: present a streamed deck;
