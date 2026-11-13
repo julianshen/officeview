@@ -4,8 +4,11 @@
  * A show paces its own unit requests so the server's `'unit'` rate class
  * (60/min; third breach in 60 s closes 4008) is never tripped: at most
  * `budgetPerMin` (48) requests are issued in any 60 s window (a sliding
- * window of issue times, charged when `io.paint` is called and never
- * refunded). The first `want` entry (the navigation target) is always next
+ * window of server-charged sends: the io calls `charge()` once per unit send,
+ * the first and any validation/replay re-send (ruling R16); never refunded).
+ * A request is issued only while the window, counting requests issued but not
+ * yet charged, has room; re-sends of requests in flight may take the window
+ * past the budget, within the server's 60. The first `want` entry (the navigation target) is always next
  * in line, paced (ruling R14): a new target goes out at once when no target
  * went out in the last TARGET_GAP_MS, else once it has been unchanged for
  * TARGET_SETTLE_MS, so a held arrow costs about one request per 400 ms and
@@ -31,7 +34,8 @@ export interface ImageBitmapLike {
 }
 
 export interface ShowFetchIo {
-  paint(unit: number, scale: number, dpr: number, signal: AbortSignal): Promise<ImageBitmapLike>
+  /** Paints `unit`; calls `charge()` once per unit request it sends (the server charges each). */
+  paint(unit: number, scale: number, dpr: number, signal: AbortSignal, charge: () => void): Promise<ImageBitmapLike>
 }
 
 export interface ShowFetchClock {
@@ -64,7 +68,7 @@ const TARGET_SETTLE_MS = 250
 const PREFETCH_SETTLE_MS = 1_000
 
 interface Entry { readonly unit: number; readonly key: string; readonly bmp: ImageBitmapLike }
-interface Req { readonly key: string; readonly ctl: AbortController }
+interface Req { readonly key: string; readonly ctl: AbortController; charged: boolean }
 
 const bucketKey = (scale: number, dpr: number) => `${scale}@${dpr}`
 const close = (b: ImageBitmapLike) => { try { b.close?.() } catch { /* already released */ } }
@@ -82,7 +86,7 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
   let lastTargetIssue = -Infinity
   /** No bucket ⇒ nothing is issued (the caller sets one before the first paint). */
   let bucket: { scale: number; dpr: number; key: string } | undefined
-  /** Issue times inside the current window, oldest first. */
+  /** Charged send times inside the current window, oldest first. */
   const stamps: number[] = []
   /** `${unit}|${bucketKey}` → entry; Map order is LRU order (oldest first). */
   const cache = new Map<string, Entry>()
@@ -118,20 +122,21 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     }
   }
 
-  const issue = (unit: number, now: number) => {
+  const issue = (unit: number) => {
     const b = bucket!
-    const req: Req = { key: b.key, ctl: new AbortController() }
-    stamps.push(now)
+    const req: Req = { key: b.key, ctl: new AbortController(), charged: false }
     inflight.set(unit, req)
+    // Stamped even after an abort: a send that went out was charged by the server.
+    const charge = () => { req.charged = true; if (!disposed) stamps.push(clock.now()) }
     let p: Promise<ImageBitmapLike>
-    try { p = io.paint(unit, b.scale, b.dpr, req.ctl.signal) } catch (e) { p = Promise.reject(e) }
+    try { p = io.paint(unit, b.scale, b.dpr, req.ctl.signal, charge) } catch (e) { p = Promise.reject(e) }
     // An aborted request is already out of `inflight`; whatever it settles with is ours to drop.
     p.then((bmp) => {
       if (disposed || req.ctl.signal.aborted) return close(bmp)
       inflight.delete(unit)
       store(unit, req.key, bmp)
       pump()
-      for (const cb of [...readyCbs]) cb(unit)
+      dispatch(readyCbs, (cb) => cb(unit))
     }, (err: unknown) => {
       if (disposed || req.ctl.signal.aborted) return
       inflight.delete(unit)
@@ -141,8 +146,16 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
       if (code === 'rate-limited') pausedUntil = clock.now() + BACKOFF_MS
       else failed.set(unit, clock.now())
       pump()
-      for (const cb of [...errorCbs]) cb(unit, code)
+      dispatch(errorCbs, (cb) => cb(unit, code))
     })
+  }
+
+  /** Calls each listener still subscribed, stopping once a listener disposes the fetcher. */
+  function dispatch<T>(set: Set<T>, call: (cb: T) => void) {
+    for (const cb of [...set]) {
+      if (disposed) return
+      if (set.has(cb)) call(cb)
+    }
   }
 
   function pump() {
@@ -158,7 +171,9 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     const key = bucket.key
     const settled = (unit: number) => !!entryOf(unit, key) || failed.has(unit)
     const outOfBudget = (reserve: number) => {
-      if (budget - stamps.length > reserve) return false
+      let unsent = 0 // issued, not yet sent: their first send is spoken for
+      for (const req of inflight.values()) if (!req.charged) unsent++
+      if (budget - stamps.length - unsent > reserve) return false
       if (stamps.length) schedule(now, stamps[0]! + WINDOW_MS + 1)
       return true
     }
@@ -167,14 +182,14 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
       if (now - lastTargetIssue < TARGET_GAP_MS && now - targetSince < TARGET_SETTLE_MS) return schedule(now, targetSince + TARGET_SETTLE_MS)
       if (outOfBudget(0)) return
       lastTargetIssue = now
-      issue(target, now)
+      issue(target)
     }
     if (!settled(target)) return
     if (now - wantedSince < PREFETCH_SETTLE_MS) return schedule(now, wantedSince + PREFETCH_SETTLE_MS)
     for (const unit of wanted.slice(1)) {
       if (settled(unit) || inflight.has(unit)) continue
       if (outOfBudget(RESERVE)) return
-      issue(unit, now)
+      issue(unit)
     }
   }
 
@@ -208,8 +223,8 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
       bucket = { scale, dpr, key }
       pump()
     },
-    onReady(cb) { readyCbs.add(cb); return () => { readyCbs.delete(cb) } },
-    onError(cb) { errorCbs.add(cb); return () => { errorCbs.delete(cb) } },
+    onReady(cb) { if (disposed) return () => {}; readyCbs.add(cb); return () => { readyCbs.delete(cb) } },
+    onError(cb) { if (disposed) return () => {}; errorCbs.add(cb); return () => { errorCbs.delete(cb) } },
     dispose() {
       if (disposed) return
       disposed = true

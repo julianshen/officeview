@@ -2,6 +2,16 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { createShowFetcher, type ImageBitmapLike } from '../../src/stream/remote/show-fetch'
 import { StreamSessionError } from '../../src/stream/remote/errors'
+// The real server rate gates (server/src/rate.ts), loaded by a non-literal path so
+// the client typecheck does not walk the Bun-only server graph. The module imports
+// the notes/print renderers only for two per-minute constants; those pull Bun-only
+// modules, so stand in for them here ('unit' gating does not use them).
+const RATE_MODULE = '../../server/src/rate'
+const loadSessionRates = async () => (await import(/* @vite-ignore */ RATE_MODULE) as {
+  SessionRates: new () => { check(kind: 'unit', now: number): 'ok' | 'refuse' | 'close' }
+}).SessionRates
+vi.mock('../../server/src/notes', () => ({ NOTES_RATE_PER_MIN: 30 }))
+vi.mock('../../server/src/print', () => ({ PRINT_RATE_PER_MIN: 10 }))
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0))
 
@@ -44,7 +54,8 @@ function fakeIo(clock: ReturnType<typeof fakeClock>, autoMs?: number) {
   const calls: Call[] = []
   return {
     calls,
-    paint(unit: number, scale: number, dpr: number, signal: AbortSignal) {
+    paint(unit: number, scale: number, dpr: number, signal: AbortSignal, charge?: () => void) {
+      charge?.() // one server-charged send, at once
       return new Promise<ImageBitmapLike>((res, rej) => {
         const call: Call = {
           unit, scale, dpr, signal, at: clock.now(),
@@ -318,5 +329,125 @@ describe('createShowFetcher', () => {
     expect(() => f.setBucket(1, Number.NaN)).toThrow(RangeError)
     f.setBucket(2, 1)
     expect(io.calls.map((c) => c.scale)).toEqual([2])
+  })
+
+  describe('fix round 1: no callback after dispose', () => {
+    it('a ready listener that disposes stops the dispatch: no later ready listener runs', async () => {
+      const { io, f } = setup()
+      const events: string[] = []
+      let disposed = false
+      f.onReady(() => { events.push('first'); f.dispose(); disposed = true })
+      f.onReady(() => { events.push(disposed ? 'AFTER DISPOSE' : 'second') })
+      f.want([7])
+      io.calls.at(-1)!.resolve()
+      await flush()
+      expect(events).toEqual(['first'])
+    })
+
+    it('an error listener that disposes stops the dispatch: no later error listener runs', async () => {
+      const { io, f } = setup()
+      const events: string[] = []
+      let disposed = false
+      f.onError(() => { events.push('first'); f.dispose(); disposed = true })
+      f.onError(() => { events.push(disposed ? 'AFTER DISPOSE' : 'second') })
+      f.want([7])
+      io.calls.at(-1)!.reject(new StreamSessionError('unit-failed'))
+      await flush()
+      expect(events).toEqual(['first'])
+    })
+
+    it('a listener unsubscribed during dispatch is skipped', async () => {
+      const { io, f } = setup()
+      const events: string[] = []
+      let off = () => {}
+      f.onReady(() => { events.push('first'); off() })
+      off = f.onReady(() => { events.push('second') })
+      f.want([7])
+      io.calls.at(-1)!.resolve()
+      await flush()
+      expect(events).toEqual(['first'])
+    })
+
+    it('onReady/onError after dispose register nothing and return a callable no-op', () => {
+      const { f } = setup()
+      f.dispose()
+      expect(() => f.onReady(() => {})()).not.toThrow()
+      expect(() => f.onError(() => {})()).not.toThrow()
+    })
+  })
+
+  describe('fix round 1: R16 every server-charged send consumes budget', () => {
+    it('each charge() is stamped: two charges per paint halve the requests the budget admits', async () => {
+      const clock = fakeClock()
+      const calls: number[] = []
+      const f = createShowFetcher({
+        paint(unit, _s, _d, _sig, charge) { calls.push(unit); charge?.(); charge?.(); return new Promise(() => {}) },
+      }, clock, { budgetPerMin: 4 })
+      f.setBucket(1, 1)
+      for (let i = 0; i < 4; i++) { f.want([i]); await clock.advance(400) }
+      expect(calls).toEqual([0, 1])
+    })
+
+    it('a request issued but not yet charged holds its budget until it charges', async () => {
+      const clock = fakeClock()
+      const calls: number[] = []
+      const f = createShowFetcher({
+        paint(unit) { calls.push(unit); return new Promise(() => {}) }, // waiting on admission: no send yet
+      }, clock, { budgetPerMin: 2 })
+      f.setBucket(1, 1)
+      // 0 stays wanted (as prefetch) and unsent, so it keeps its budget share.
+      f.want([0]); await clock.advance(400)
+      f.want([1, 0]); await clock.advance(400)
+      f.want([2, 1, 0]); await clock.advance(400)
+      expect(calls).toEqual([0, 1])
+    })
+
+    it('after a rate-limited refusal, no retry into a full window even once 2 s have passed', async () => {
+      const clock = fakeClock()
+      const calls: { unit: number; at: number; reject(e: unknown): void; resolve(b: ImageBitmapLike): void }[] = []
+      const f = createShowFetcher({
+        paint(unit, _s, _d, _sig, charge) {
+          charge?.()
+          return new Promise((resolve, reject) => { calls.push({ unit, at: clock.now(), resolve, reject }) })
+        },
+      }, clock, { budgetPerMin: 2 })
+      f.setBucket(1, 1)
+      f.want([0]); calls[0]!.resolve(bitmap()); await clock.advance(400)
+      f.want([1]); calls[1]!.reject(new StreamSessionError('rate-limited')); await flush()
+      await clock.advance(10_000)
+      expect(calls).toHaveLength(2)
+      await clock.advance(60_000)
+      expect(calls.map((c) => c.unit)).toEqual([0, 1, 1])
+    })
+
+    it('reviewer model: every paint charges twice (validation retry), real SessionRates — no close over 60 s of 400 ms navigation', async () => {
+      const clock = fakeClock()
+      const rates = new (await loadSessionRates())()
+      const verdicts: { at: number; result: string }[] = []
+      const charges: number[] = []
+      const f = createShowFetcher({
+        paint(_unit, _s, _d, signal, charge) {
+          return new Promise<ImageBitmapLike>((resolve, reject) => {
+            const send = () => {
+              if (signal.aborted) return false
+              charge?.(); charges.push(clock.now())
+              const result = rates.check('unit', clock.now())
+              if (result !== 'ok') { verdicts.push({ at: clock.now(), result }); reject(new StreamSessionError('rate-limited')); return false }
+              return true
+            }
+            if (!send()) return
+            // The first answer fails validation; the session re-sends once, which is charged too.
+            clock.wake(40, () => { if (send()) clock.wake(40, () => resolve(bitmap())) })
+          })
+        },
+      }, clock)
+      f.setBucket(1, 1)
+      for (let i = 0; i < 150; i++) { f.want([i % 40, (i + 1) % 40, (i + 2) % 40, (i + 39) % 40]); await clock.advance(400) }
+      await clock.advance(5_000)
+      f.want([5, 6, 7, 4]); await clock.advance(70_000) // idle: prefetch with retries
+      expect(verdicts.filter((v) => v.result === 'close')).toEqual([])
+      expect(verdicts).toEqual([])
+      expect(maxInWindow(charges)).toBeLessThanOrEqual(56)
+    })
   })
 })
