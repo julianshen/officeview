@@ -58,6 +58,7 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   const stopAll = () => { job.current?.abort(); job.current = null; surface.current?.abort(); surface.current = null }
   const printBtn = useRef<HTMLButtonElement | null>(null)
   const fromInput = useRef<HTMLInputElement | null>(null)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
 
   // Losing permission (or a new document) aborts a running job silently and closes the dialog.
   useEffect(() => {
@@ -66,7 +67,11 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
     setRange(undefined); setProgress(undefined)
   }, [allowed])
   useEffect(() => stopAll, [doc]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setNotice(undefined) }, [doc])
+  // A replaced document starts clean: the old job's progress, range and notice
+  // are reset during render (the old job is aborted by the cleanup above, and
+  // its late callbacks are dropped by `live()`).
+  const [shownDoc, setShownDoc] = useState(doc)
+  if (shownDoc !== doc) { setShownDoc(doc); setRange(undefined); setProgress(undefined); setNotice(undefined) }
   useEffect(() => { if (range) fromInput.current?.focus() }, [range !== undefined]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = (from: number, to: number) => {
@@ -113,6 +118,14 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
   const onDialogKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDialog() }
     else if (e.key === 'Enter' && (e.target as Element).tagName === 'INPUT') { e.preventDefault(); e.stopPropagation(); submit() }
+    else if (e.key === 'Tab') {
+      // Focus stays inside the modal (the PivotGroupDialog pattern).
+      const nodes = [...(dialogRef.current?.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input') ?? [])].filter((n) => !n.disabled)
+      if (!nodes.length) return
+      const first = nodes[0]!, last = nodes[nodes.length - 1]!, active = dialogRef.current?.ownerDocument.activeElement
+      if (e.shiftKey && active === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus() }
+    }
   }
 
   const numberInput = (label: 'From' | 'To', key: 'from' | 'to') => (
@@ -134,7 +147,7 @@ export function useRemotePrint(doc: RemoteOfficeDoc, o: { allowPrint: boolean; t
       ) : null}
       {notice ? <span role="alert" data-ov-print-notice="" style={{ ...SURFACE, overflowWrap: 'anywhere' }}>{notice}</span> : null}
       {range && allowed ? (
-        <div role="dialog" aria-modal="true" aria-label="Print pages" data-ov-remote-chrome="" onKeyDown={onDialogKey}
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Print pages" data-ov-remote-chrome="" onKeyDown={onDialogKey}
           style={{ ...SURFACE, position: 'absolute', top: '100%', left: 0, marginTop: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 220, zIndex: 7, boxShadow: 'var(--ov-shadow-popover, 0 4px 12px rgba(0,0,0,.2))' }}>
           <strong>Print pages</strong>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>{numberInput('From', 'from')}{numberInput('To', 'to')}</div>

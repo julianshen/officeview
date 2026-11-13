@@ -276,6 +276,72 @@ describe('remote print: progress and cancel', () => {
   })
 })
 
+describe('remote print: document replacement', () => {
+  const asDoc = (d: Fake) => d as unknown as RemoteOfficeDoc
+  it('a pending job on A leaves nothing behind on B; A settling late changes nothing', async () => {
+    const a = fakeDoc(), b = fakeDoc({ count: 2 })
+    let settle!: (p: PrintedPage[]) => void, progress!: (d: number, t: number) => void
+    a.print.mockImplementation((_r, po) => new Promise((ok) => { settle = ok; progress = po!.onProgress! }))
+    const v = render(<RemoteDocView document={asDoc(a)} />)
+    fireEvent.click(printBtn(v)!)
+    await waitFor(() => expect(a.print).toHaveBeenCalledTimes(1))
+    expect(v.container.textContent).toContain('Preparing pages 0 of 3…')
+    v.rerender(<RemoteDocView document={asDoc(b)} />)
+    expect(a.print.mock.calls[0]![1]!.signal!.aborted).toBe(true)
+    expect(v.container.textContent).not.toContain('Preparing pages')
+    expect(printBtn(v)!.disabled).toBe(false)
+    await act(async () => { progress(2, 3); settle([]) })
+    expect(v.container.textContent).not.toContain('Preparing pages')
+    expect(pr.printRasters).not.toHaveBeenCalled()
+    expect(printBtn(v)!.disabled).toBe(false)
+    fireEvent.click(printBtn(v)!)
+    await waitFor(() => expect(b.print).toHaveBeenCalledTimes(1))
+    expect(b.print.mock.calls[0]![0]).toEqual({ from: 0, to: 1 })
+  })
+  it("an open dialog on A is closed on B (A's range never carries over)", () => {
+    const a = fakeDoc({ caps: { maxPages: 2, maxSessionPages: null } }), b = fakeDoc({ count: 5, caps: { maxPages: 4, maxSessionPages: null } })
+    const v = render(<RemoteDocView document={asDoc(a)} />)
+    fireEvent.click(printBtn(v)!)
+    fireEvent.change(v.getByLabelText('From'), { target: { value: '2' } })
+    v.rerender(<RemoteDocView document={asDoc(b)} />)
+    expect(dialog(v)).toBeNull()
+    fireEvent.click(printBtn(v)!)
+    expect([(v.getByLabelText('From') as HTMLInputElement).value, (v.getByLabelText('To') as HTMLInputElement).value]).toEqual(['1', '4'])
+  })
+  it("A's notice is cleared on B", async () => {
+    const a = fakeDoc(), b = fakeDoc()
+    a.print.mockRejectedValueOnce(new StreamSessionError('rate-limited'))
+    const v = render(<RemoteDocView document={asDoc(a)} />)
+    fireEvent.click(printBtn(v)!)
+    await waitFor(() => expect(v.getByText('Too many requests. Try again shortly.')).toBeTruthy())
+    v.rerender(<RemoteDocView document={asDoc(b)} />)
+    expect(v.queryByText('Too many requests. Try again shortly.')).toBeNull()
+  })
+})
+
+describe('remote print: dialog focus', () => {
+  it('is modal: focus starts in From and Tab / Shift+Tab wrap inside the dialog', () => {
+    const v = view(fakeDoc({ caps: { maxPages: 2, maxSessionPages: null } }))
+    fireEvent.click(printBtn(v)!)
+    const d = dialog(v)!
+    expect(d.getAttribute('aria-modal')).toBe('true')
+    const from = v.getByLabelText('From'), submit = within(d).getByRole('button', { name: 'Print' })
+    expect(document.activeElement).toBe(from)
+    submit.focus()
+    expect(fireEvent.keyDown(submit, { key: 'Tab' })).toBe(false)
+    expect(document.activeElement).toBe(from)
+    expect(fireEvent.keyDown(from, { key: 'Tab', shiftKey: true })).toBe(false)
+    expect(document.activeElement).toBe(submit)
+  })
+  it('Escape returns focus to the Print button', () => {
+    const v = view(fakeDoc({ caps: { maxPages: 2, maxSessionPages: null } }))
+    printBtn(v)!.focus()
+    fireEvent.click(printBtn(v)!)
+    fireEvent.keyDown(v.getByLabelText('From'), { key: 'Escape' })
+    expect(document.activeElement).toBe(printBtn(v))
+  })
+})
+
 describe('remote print: Ctrl/Cmd+P', () => {
   it('with print allowed opens the same flow', async () => {
     const doc = fakeDoc()
