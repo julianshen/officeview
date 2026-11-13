@@ -1,3 +1,5 @@
+import { attrs } from '../../../src/core/xml'
+import type { PptxPackageHandle } from '../../../src/pptx/types'
 import { all, attr, local, remove, type Context, type Node } from './tree'
 
 const shapes = new Set(['sp', 'pic', 'grpSp', 'graphicFrame', 'cxnSp'])
@@ -41,4 +43,18 @@ export function projectPptx(ctx: Context): void {
       if (path && ctx.parts.has(path)) { ctx.dropPart(path); ctx.diagnostics.push({code:'hidden-stripped',part:'ppt/presentation.xml',element:slideId.name,attr:'show',value:attr(slideId,'show')}) }
     } else if (isTrue(attr(slideId,'show'))) ctx.handled.add(slideId)
   }
+}
+
+/** Under `'full'` hidden slides stay units, so the show must be told to skip
+ * them: the unit indices whose slide root says `show="0"` (the projection's
+ * own test above), read from the original package once at open.
+ * `handle.slideParts[i]` is unit i (the parser's lease keeps them aligned). */
+export async function hiddenSlideUnits(handle: PptxPackageHandle): Promise<number[]> {
+  const out: number[] = []
+  for (const [i, path] of handle.slideParts.entries()) {
+    const root = await handle.pkg.xml(path)
+    if (isFalse(attrs(root).show as string | undefined)) out.push(i)
+  }
+  handle.pkg.dropCache()
+  return out
 }

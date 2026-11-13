@@ -22,6 +22,9 @@ export interface AuthDecision {
     /** Screen-reader text. `false` always turns it off; `true` serves per-unit
      * text when copy is off. Otherwise it follows `copy` (see `a11yMode`). */
     textA11y?: boolean
+    /** Speaker notes in Presenter View (Stage 3c), presenter role only. On by
+     * default; anything but `undefined` or `true` turns it off (fail closed, R3). */
+    notes?: boolean
   }
 }
 export type Authorize = (req: AuthRequest) => Promise<AuthDecision | null>
@@ -50,6 +53,8 @@ export interface EffectivePolicy {
   copy: CopyPolicy
   /** Resolved a11y mode. Mutable on resume. */
   textA11y: A11yMode
+  /** What the developer allowed for notes; only a presenter gets them (`canNotes`). Mutable on resume. */
+  notes: boolean
 }
 export type CopyPolicy = false | { maxParagraphs: number | null; maxSessionParagraphs: number | null }
 export type PrintPolicy = false | { maxPages: number | null; maxSessionPages: number | null }
@@ -85,10 +90,14 @@ function a11yMode(copy: CopyPolicy, textA11y: unknown): A11yMode {
   return textA11y === true ? 'unit' : 'off'
 }
 
+/** Notes are served only to a presenter whose policy allows them (§12a.5). */
+export function canNotes(p: EffectivePolicy): boolean { return p.role === 'presenter' && p.notes }
+
 /** The policy fields a resume must match exactly (R3): every field but the
- * mutable services (text, and print caps per Stage 3b P4). */
-export function resumeInvariant(p: EffectivePolicy): Omit<EffectivePolicy, 'copy' | 'textA11y' | 'print'> {
-  const { copy: _c, textA11y: _a, print: _p, ...rest } = p
+ * mutable services (text, print caps per Stage 3b P4, and notes per Stage 3c).
+ * `role` stays invariant. */
+export function resumeInvariant(p: EffectivePolicy): Omit<EffectivePolicy, 'copy' | 'textA11y' | 'print' | 'notes'> {
+  const { copy: _c, textA11y: _a, print: _p, notes: _n, ...rest } = p
   return rest
 }
 
@@ -109,6 +118,6 @@ export function effectivePolicy(d: AuthDecision): EffectivePolicy {
     contentPolicy, projection, visibleMark, forensicMark: forensicRequested, forensicRequested,
     print: printPolicy(p.print), role: d.role === 'presenter' ? 'presenter' : 'audience',
     relaxed: contentPolicy !== 'visible-only' || projection !== 'final-raster' || visibleMark === 'off' || !forensicRequested,
-    copy, textA11y: a11yMode(copy, p.textA11y),
+    copy, textA11y: a11yMode(copy, p.textA11y), notes: p.notes === undefined || p.notes === true,
   }
 }

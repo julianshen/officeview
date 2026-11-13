@@ -24,7 +24,7 @@ export interface CopyRecord { sid: string; kind: 'copy' | 'a11y'; paragraphs: nu
 /** One print job answered to a sid (Stage 3b): its page count, unit range and render scale. Never deduplicated. */
 export interface PrintRecord { sid: string; pages: number; fromUnit: number; toUnit: number; scale: 1 | 2; at: number }
 /** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). */
-export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; at: number }
+export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean; at: number }
 export interface DetectionLog { at: number; osUser: string; investigator?: string; imageSha256: string; docRefs: string[]; unitIndex: number; answer: string; sid?: string }
 
 const SCHEMA = `
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS copies (sid TEXT NOT NULL REFERENCES rows (sid), kind
 CREATE INDEX IF NOT EXISTS copies_sid ON copies (sid);
 CREATE TABLE IF NOT EXISTS prints (sid TEXT NOT NULL REFERENCES rows (sid), pages INTEGER NOT NULL, from_unit INTEGER NOT NULL, to_unit INTEGER NOT NULL, scale REAL NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS prints_sid ON prints (sid);
-CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, notes INTEGER, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS services_sid ON services (sid);
 CREATE TABLE IF NOT EXISTS counters (gen INTEGER PRIMARY KEY, next INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS detections (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, log TEXT NOT NULL);
@@ -73,7 +73,10 @@ export class AuditStore {
     db.exec('PRAGMA foreign_keys = ON')
     db.exec(SCHEMA)
     // A store created before Stage 3b has no `services.print` column (CREATE IF NOT EXISTS leaves it alone); add it, null = not recorded.
-    if (!db.query<{ name: string }, []>('PRAGMA table_info(services)').all().some((c) => c.name === 'print')) db.exec('ALTER TABLE services ADD COLUMN print TEXT')
+    const servicesColumns = db.query<{ name: string }, []>('PRAGMA table_info(services)').all().map((c) => c.name)
+    if (!servicesColumns.includes('print')) db.exec('ALTER TABLE services ADD COLUMN print TEXT')
+    // One created before Stage 3c has no `services.notes` column; add it, null = not recorded (reads as notes off).
+    if (!servicesColumns.includes('notes')) db.exec('ALTER TABLE services ADD COLUMN notes INTEGER')
     // The sidecars now exist (WAL mode, schema written). Do not rely on the VFS
     // copying the db's mode, nor on the umask: pre-existing or recreated
     // sidecars hold session rows (IPs, viewer ids) until checkpoint.
@@ -129,11 +132,11 @@ export class AuditStore {
   /** Appends one services change; throws for a sid with no row. */
   putServices(r: ServicesRecord): void {
     this.writable()
-    this.db.query('INSERT INTO services (sid, copy, text_a11y, print, at) VALUES (?, ?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, JSON.stringify(r.print), r.at)
+    this.db.query('INSERT INTO services (sid, copy, text_a11y, print, notes, at) VALUES (?, ?, ?, ?, ?, ?)').run(r.sid, JSON.stringify(r.copy), r.textA11y, JSON.stringify(r.print), r.notes ? 1 : 0, r.at)
   }
   services(sid: string): ServicesRecord[] {
-    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; print: string | null; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
-      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, print: r.print === null ? false : JSON.parse(r.print) as PrintPolicy, at: r.at }))
+    return this.db.query<{ sid: string; copy: string; text_a11y: A11yMode; print: string | null; notes: number | null; at: number }, [string]>('SELECT * FROM services WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, copy: JSON.parse(r.copy) as CopyPolicy, textA11y: r.text_a11y, print: r.print === null ? false : JSON.parse(r.print) as PrintPolicy, notes: r.notes === 1, at: r.at }))
   }
   /** The token `takeToken(gen)` would return. */
   nextToken(gen: number): number {

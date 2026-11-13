@@ -50,7 +50,7 @@ describe('demo server end to end', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ov-audit-')), path = join(dir, 'audit.db')
     try {
       const pre = AuditStore.open(path)
-      const row = { ip: '1.2.3.4', keyGeneration: 1, policyId: 'p', markSettings: { visible: 'off' as const, forensicRequested: false }, relaxed: false, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const }, services: { copy: false as const, textA11y: 'off' as const, print: false as const } }
+      const row = { ip: '1.2.3.4', keyGeneration: 1, policyId: 'p', markSettings: { visible: 'off' as const, forensicRequested: false }, relaxed: false, forensic: null, docRef: 'd', contentPolicy: 'visible-only' as const, visibleMark: { kind: 'off' as const }, services: { copy: false as const, textA11y: 'off' as const, print: false as const, notes: false } }
       pre.putRow('old', { ...row, startedAt: 0 }); pre.putRow('fresh', { ...row, startedAt: Math.floor(Date.now() / 1000) - AUDIT_RETENTION_SEC + 3600 }); pre.close()
       const s = await startServer(['--port', '0', '--doc-dir', corpusDir, '--origin', 'http://a'], { OV_STREAM_KEY: btoa('k'.repeat(32)), OV_AUDIT_DB: path })
       expect(s.stream.audit.get('old')).toBeUndefined()

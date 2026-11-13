@@ -26,7 +26,7 @@ describe('§6.2 handshake', () => {
     expect(m.recorder.projection).toBe('final-raster')
     expect(m.recorder.requiredFaces).toEqual([])
     expect(m.notices.filter((n) => n.startsWith('forensic'))).toEqual([])
-    expect(m.can).toMatchObject({ print: true, search: true, copy: false, textA11y: false, notes: false })
+    expect(m.can).toMatchObject({ print: true, search: true, copy: false, textA11y: false, present: true, notes: false })
     expect(h.stream.audit.get(m.session.sid)).toMatchObject({ viewerId: 'alice', markSettings: { visible: 'fixed', forensic: false }, forensicLayers: [] })
     await c.ready()
     c.unit(10)

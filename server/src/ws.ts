@@ -20,7 +20,7 @@ import { deriveBasisKey } from './mark/basis'
 import { LeaseFull, ScratchLease } from './scratch'
 import { createRenderCache, DocumentLedger, renderKey, type RenderKeyFields } from './cache'
 import { loadPack, requiredFacesOf } from './fonts'
-import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
+import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
@@ -88,7 +88,8 @@ interface Conn {
 }
 type WS = ServerWebSocket<Conn>
 
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+/** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
@@ -239,10 +240,10 @@ export function createStreamServer(o: StreamServerOptions) {
       // The issuance row is durable before anything is committed or sent; a failed write refuses the session.
       const startedAt = nowSec()
       try {
-        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
+        audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy) }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -266,7 +267,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const tokenProof = v.ok && ['current', 'rotating'].includes(table.acceptJti(s.sid, v.claims.jti))
     const d = await o.authorize({ ...req, resume: { sid: s.sid }, ...(tokenProof ? {} : { token: resume.resumeProof }) })
     if (gone(ws)) return
-    // R3: copy, textA11y and the print caps (Stage 3b P4) may change on resume; every other field is exact-match.
+    // R3: copy, textA11y, the print caps (Stage 3b P4) and notes (Stage 3c) may change on resume; every other field, role included, is exact-match.
     const policy = d ? effectivePolicy(d) : undefined
     const ok = !!d && !!policy && (tokenProof || d.resumeGranted === true) && d.viewerId === s.viewerId && JSON.stringify(resumeInvariant(policy)) === JSON.stringify(resumeInvariant(s.effectivePolicy))
     if (!ok || table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
@@ -275,8 +276,8 @@ export function createStreamServer(o: StreamServerOptions) {
     if (table.get(s.sid) !== s || s.jti !== generation) return close(ws, 'auth-failed')
     // A change of the mutable text services is durable before it takes effect
     // (the open row stays write-once); a failed write refuses the resume.
-    if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print])) {
-      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print }) } catch { return close(ws, 'policy-refused') }
+    if (JSON.stringify([policy!.copy, policy!.textA11y, policy!.print, canNotes(policy!)]) !== JSON.stringify([sd.policy.copy, sd.policy.textA11y, sd.policy.print, canNotes(sd.policy)])) {
+      try { audit.recordServices(s.sid, { copy: policy!.copy, textA11y: policy!.textA11y, print: policy!.print, notes: canNotes(policy!) }) } catch { return close(ws, 'policy-refused') }
     }
     const old = s.activeSocket as unknown as WS | undefined
     if (old && old !== ws && old.data) { old.data.phase = 'closed'; for (const t of old.data.timers) clearTimeout(t); wakeDrain(old) }
@@ -319,12 +320,12 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)!, p = sd.policy
     const m: Manifest = {
       v: 1, docRef: sd.doc.docRef, kind: sd.doc.format, name: sd.doc.name,
-      units: { count: sd.doc.units.length, list: sd.doc.units },
+      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : u) },
       layoutFingerprint: sd.doc.fingerprint,
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
-      // Presentation, notes and links land later in Stage 3.
-      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: false, notes: false, links: false },
+      // Links land later in Stage 3.
+      can: { search: true, copy: p.copy !== false, print: p.print !== false, textA11y: p.textA11y !== 'off', present: sd.doc.format === 'pptx', notes: canNotes(p), links: false },
       caps: { copy: p.copy === false ? null : { ...p.copy }, a11y: p.textA11y, print: p.print === false ? null : { ...p.print } },
       recorder: { commands: 'ovsd-1', textMode: 'text', scalesBuckets: [...SCALE_BUCKETS], requiredFaces: p.projection === 'commands' ? requiredFacesOf(pack.faces.map((f) => f.id), pack) : [], projection: p.projection },
       limits: { maxUnitPx: 8192, maxAssetBytes: 8 * 1024 * 1024, wsFrameBytes: FRAGMENT, tilePx: 512 },
@@ -777,6 +778,8 @@ export function createStreamServer(o: StreamServerOptions) {
       return true
     },
     audit,
+    /** The sid's hidden slide units (tests). */
+    hiddenOf: (sid: string) => sessionDoc.get(sid)?.doc.hidden,
     /** The sid's Layer-1 issuance (tests and the validation script). */
     forensicOf: (sid: string) => sessionDoc.get(sid)?.forensic,
     /** TEST-ONLY view: the canonical cached PNG this session's raster unit is built from. */

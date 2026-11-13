@@ -2,6 +2,15 @@
  * comment cases (the generator's comment fixtures carry only the control). */
 import JSZip from 'jszip'
 import { hiddenFixtures, type Fixture } from '../../scripts/stream-s0/hidden-fixtures'
+import { buildPptxDeck } from '../../src/testdata/ooxml-builders'
+
+/** Three slides; the middle one is hidden by its slide root (`<p:sld show="0">`). No corpus deck has one. */
+export const hiddenSlideDeck = () => buildPptxDeck({
+  slides: ['One', 'Two (hidden)', 'Three'].map((text, i) => ({
+    hidden: i === 1,
+    shapes: [{ off: ['457200', '457200'] as [string, string], ext: ['4572000', '914400'] as [string, string], paragraphs: [{ runs: [{ text }] }] }],
+  })),
+})
 
 export async function augmentedFixtures(): Promise<Array<Fixture & { withHidden: Uint8Array }>> {
   const out = []

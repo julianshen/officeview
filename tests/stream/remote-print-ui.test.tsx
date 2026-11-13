@@ -17,7 +17,7 @@ function fakeDoc(o: { print?: boolean; caps?: PrintCaps; count?: number } = {}) 
   const list = Array.from({ length: count }, () => ({ w: 200, h: 100 }))
   const manifest = {
     name: 'deck.pptx', kind: 'pptx', units: { count, list },
-    can: { search: true, copy: false, print: o.print ?? true, textA11y: false, present: false, notes: false, links: false },
+    can: { search: true, copy: false, print: o.print ?? true, textA11y: false, present: true, notes: false, links: false },
     caps: { copy: null, a11y: 'off', print: o.caps === undefined ? { maxPages: null, maxSessionPages: null } : o.caps },
     recorder: { scalesBuckets: [1, 2] }, notices: [],
   }

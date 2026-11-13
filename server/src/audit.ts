@@ -38,7 +38,8 @@ export interface AuditRow {
   /** Print jobs recorded for this sid and the pages they carried. */
   printed: { jobs: number; pages: number }
 }
-export interface TextServices { copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy }
+/** `notes` is whether this sid may get speaker notes (`canNotes`: presenter role and policy), Stage 3c. */
+export interface TextServices { copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean }
 export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings' | 'servicesChanged' | 'copied' | 'printed'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
 
 export interface Issued { token24: number; salt8: number; msg40: Uint8Array; code: Int8Array }
@@ -101,7 +102,7 @@ export class AuditTable {
   /** A resume changed `sid`'s resolved text services: durable before they take effect. Throws for an unknown or expired sid. */
   recordServices(sid: string, s: TextServices): void {
     if (!this.store.getRow(sid)) throw new Error(`no audit row for ${sid}`)
-    this.store.putServices({ sid, copy: s.copy, textA11y: s.textA11y, print: s.print, at: Math.floor(Date.now() / 1000) })
+    this.store.putServices({ sid, copy: s.copy, textA11y: s.textA11y, print: s.print, notes: s.notes, at: Math.floor(Date.now() / 1000) })
   }
   /** Frozen view: issuance plus what has been delivered so far (distinct delivery records). */
   get(sid: string): AuditRow | undefined {
@@ -112,15 +113,16 @@ export class AuditTable {
     const forensicLayers: Array<'l1'> = marked ? ['l1'] : []
     const copies = this.store.copies(sid).filter((c) => c.kind === 'copy')
     const prints = this.store.prints(sid)
-    // A row stored before Stage 3a reads as off; one stored before 3b has no print record and reads as print off.
-    const stored = (r as Partial<StoredRow>).services
-    const services: TextServices = stored ? { ...stored, print: stored.print ?? false } : { copy: false, textA11y: 'off', print: false }
+    // A row stored before Stage 3a reads as off; one stored before 3b has no print record and reads as print off;
+    // one stored before 3c has no notes record and reads as notes off.
+    const stored = (r as Partial<StoredRow>).services as Partial<TextServices> | undefined
+    const services: TextServices = stored ? { ...stored as TextServices, print: stored.print ?? false, notes: stored.notes ?? false } : { copy: false, textA11y: 'off', print: false, notes: false }
     return Object.freeze({
       ...r, visibleMark: Object.freeze({ ...r.visibleMark }), markSettings: Object.freeze({ ...r.markSettings, forensic: forensicLayers.length > 0 }), forensic: r.forensic && Object.freeze({ ...r.forensic }),
       forensicLayers: Object.freeze(forensicLayers) as Array<'l1'>, delivered: Object.freeze({ marked, unmarked: ds.length - marked }),
       untraceable: r.markSettings.visible === 'off' && forensicLayers.length === 0,
       services: Object.freeze({ ...services }),
-      servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, print: x.print, at: x.at }))) as AuditRow['servicesChanged'],
+      servicesChanged: Object.freeze(this.store.services(sid).map((x) => Object.freeze({ copy: x.copy, textA11y: x.textA11y, print: x.print, notes: x.notes, at: x.at }))) as AuditRow['servicesChanged'],
       copied: Object.freeze({ events: copies.length, paragraphs: copies.reduce((n, c) => n + c.paragraphs, 0) }),
       printed: Object.freeze({ jobs: prints.length, pages: prints.reduce((n, p) => n + p.pages, 0) }),
     })

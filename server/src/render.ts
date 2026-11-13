@@ -20,6 +20,9 @@ import { UNIT_RASTER_DECODED_CAP } from '../../src/stream/raster'
 import { serverBackend } from './backend'
 import { facesUsed, loadPack, pinFonts } from './fonts'
 import { admit, projectPackage, type PolicyDiagnostic } from './policy'
+import { hiddenSlideUnits } from './policy/pptx'
+import { pptxPackageHandle } from '../../src/pptx/parse'
+import type { PptxDocument } from '../../src/pptx/types'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
@@ -71,8 +74,9 @@ export function layoutFingerprint(contentPolicyId: string): string {
   return h.digest('hex')
 }
 
-interface OpenDoc { key: string; paintables: PaintableArray; units: UnitSize[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx' }
-export interface OpenResult { docKey: string; units: UnitSize[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
+interface OpenDoc { key: string; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx' }
+/** `hidden`: unit indices of hidden slides (pptx under `'full'` only; elsewhere they are not units). */
+export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
 
 const registerFont = () => { throw new Error('stream server: embedded fonts are not registered in Stage 1') }
 
@@ -116,6 +120,15 @@ function paintMark(ctx: CanvasRenderingContext2D, page: { widthPx: number; heigh
   paintWatermark(ctx, page, mark)
 }
 
+/** Hidden slides of a deck opened under `'full'`, read from the original
+ * package (there the projection is the identity). A slide list that does not
+ * line up with the units refuses the open: never guess which unit is hidden. */
+async function hiddenUnits(doc: PptxDocument, units: number): Promise<number[]> {
+  const handle = pptxPackageHandle(doc)
+  if (!handle || handle.slideParts.length !== units) throw new RenderRefusal('unsupported-format', 'slide list does not match the units')
+  return hiddenSlideUnits(handle)
+}
+
 export class DocumentHost {
   readonly backend: CanvasBackend
   private docs = new Map<string, OpenDoc>()
@@ -138,10 +151,11 @@ export class DocumentHost {
       const paintables = await getPaintables(parsed, { registerFont })
       this.parses++
       const raw = paintables.map((p) => ({ widthPx: p.spec.widthPx, heightPx: p.spec.heightPx }))
-      doc = { key, paintables, raw, units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
+      const hidden = contentPolicy === 'full' && admitted.format === 'pptx' ? await hiddenUnits(parsed as PptxDocument, raw.length) : []
+      doc = { key, paintables, raw, hidden, units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
       this.docs.set(key, doc)
     }
-    return { docKey: key, units: doc.units, layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
+    return { docKey: key, units: doc.units, hidden: doc.hidden, layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
