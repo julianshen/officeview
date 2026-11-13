@@ -14,6 +14,9 @@ export type StreamErrorCode =
   | 'manifest-invalid' | 'connect-failed' | 'unit-failed' | 'closed'
   /** Text-op refusals (Stage 3a): the service is off, or a copy cap was hit. */
   | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted'
+  /** Print refusals (Stage 3b): a job over the per-job cap (or too large to
+   * plan, or over the client's blob ceiling: no `limit`), or over the session total. */
+  | 'print-too-large' | 'print-quota-exhausted'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'
