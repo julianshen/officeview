@@ -3,6 +3,7 @@
  * driver. A job is checked whole before any frame; its pages render at most
  * PRINT_CONCURRENCY at a time and go out strictly in ascending unit order.
  */
+import { EXT01_BYTES, HEADER_BYTES, MAX_FRAGMENTS } from '../../src/stream/frame'
 import { encodeRasterBody } from '../../src/stream/raster'
 import { unitSurfaceAllowed, type UnitSize } from './render'
 
@@ -10,14 +11,20 @@ export const PRINT_RATE_PER_MIN = 10
 export const PRINT_CONCURRENCY = 2
 /** §14 PRINT_RASTER (kind 8) encoded cap; its decoded cap is the UNIT_RASTER one (64 MiB). */
 export const PRINT_ENCODED_CAP = 8 * 1024 * 1024
-/** A print page is neither rendered nor sent while the socket holds more than
- * this many bytes unsent: at most one maximal page sits queued, and one more
- * always fits under SOCKET_BACKPRESSURE_LIMIT, so a conforming send is never dropped. */
-export const PRINT_SEND_HIGH_WATER = PRINT_ENCODED_CAP
-/** The websocket's backpressure limit (Bun drops sends beyond it): the high-water
- * mark, one maximal page and its fragment headers, plus a page of headroom for
- * the session's other output (units, text). */
-export const SOCKET_BACKPRESSURE_LIMIT = 3 * PRINT_ENCODED_CAP
+/** Bun's default websocket `backpressureLimit` (node_modules/bun-types/serve.d.ts,
+ * `@default 1024 * 1024 * 16`); sends beyond it are dropped. The server keeps the default. */
+export const BUN_DEFAULT_BACKPRESSURE_LIMIT = 16 * 1024 * 1024
+/** The most bytes one PRINT_RASTER message can put on the socket: its encoded
+ * cap plus a header per fragment (at most MAX_FRAGMENTS) and the ext01 block. */
+export const PRINT_MAX_FRAMED_BYTES = PRINT_ENCODED_CAP + MAX_FRAGMENTS * HEADER_BYTES + EXT01_BYTES
+/** A pre-send threshold: a print page is neither rendered nor sent while the
+ * socket holds more than this many bytes unsent. The socket can then hold at
+ * most PRINT_SEND_HIGH_WATER + one framed page (~12 MiB) of print output, which
+ * leaves ~4 MiB under Bun's default limit for interleaved unit and text output. */
+export const PRINT_SEND_HIGH_WATER = 4 * 1024 * 1024
+// Load-time guard (TS cannot check arithmetic at compile time; print-wire.test.ts pins it too):
+// a print page sent at the high-water mark always fits under Bun's default limit.
+if (PRINT_SEND_HIGH_WATER + PRINT_MAX_FRAMED_BYTES > BUN_DEFAULT_BACKPRESSURE_LIMIT) throw new Error('print: high-water + one framed page exceeds the backpressure limit')
 /** The whole job's decoded budget (Σ w·h·4 over its pages). */
 export const PRINT_JOB_MAX_DECODED = 1024 * 1024 * 1024
 

@@ -24,7 +24,7 @@ import { effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, t
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, type Pool } from './pool'
-import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, SOCKET_BACKPRESSURE_LIMIT, type PrintJob, type PrintSlot } from './print'
+import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
 import { layoutFingerprint, SCALE_BUCKETS, type MarkSpec, type RenderedUnit, type UnitSize } from './render'
 import { SessionTable, type Session } from './sessionTable'
@@ -718,8 +718,6 @@ export function createStreamServer(o: StreamServerOptions) {
     },
     websocket: {
       maxPayloadLength: FRAGMENT,
-      backpressureLimit: SOCKET_BACKPRESSURE_LIMIT,
-      closeOnBackpressureLimit: false,
       drain(ws: WS) { wakeDrain(ws) },
       open(ws: WS) {
         sockets.add(ws)

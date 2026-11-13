@@ -6,7 +6,7 @@ import { AuditTable } from '../src/audit'
 import { AuditStore } from '../src/audit-store'
 import type { AuthDecision } from '../src/hooks'
 import { AdmissionRefused, type Pool } from '../src/pool'
-import { planPrint, PRINT_CONCURRENCY, PRINT_JOB_MAX_DECODED, PRINT_RATE_PER_MIN, PRINT_SEND_HIGH_WATER, printSizeOk } from '../src/print'
+import { BUN_DEFAULT_BACKPRESSURE_LIMIT, planPrint, PRINT_CONCURRENCY, PRINT_ENCODED_CAP, PRINT_JOB_MAX_DECODED, PRINT_MAX_FRAMED_BYTES, PRINT_RATE_PER_MIN, PRINT_SEND_HIGH_WATER, printSizeOk } from '../src/print'
 import { Client, corpus, disposePool, pool, start } from './harness'
 
 afterAll(() => disposePool())
@@ -81,6 +81,16 @@ describe('planPrint', () => {
     expect(planPrint([{ w: 960, h: 720 }, { w: 8192, h: 8192 }], 0, 1)).toEqual({ refused: 'too-large' })
     expect(planPrint([{ w: 960, h: 720 }, { w: 8192, h: 8192 }], 0, 0)).toEqual({ scale: 2 })
     expect(planPrint(pages(300, 1000, 1000), 0, 299)).toEqual({ refused: 'too-large' })
+  })
+})
+
+describe('print send bound', () => {
+  test('a page sent at the high-water mark fits under Bun\'s default backpressure limit, with ~4 MiB to spare', () => {
+    expect(PRINT_SEND_HIGH_WATER).toBe(4 * 1024 * 1024)
+    expect(BUN_DEFAULT_BACKPRESSURE_LIMIT).toBe(16 * 1024 * 1024)
+    expect(PRINT_MAX_FRAMED_BYTES).toBe(PRINT_ENCODED_CAP + 256 * 23 + 10)
+    const spare = BUN_DEFAULT_BACKPRESSURE_LIMIT - PRINT_SEND_HIGH_WATER - PRINT_MAX_FRAMED_BYTES
+    expect(spare).toBeGreaterThan(4 * 1024 * 1024 - 8 * 1024)
   })
 })
 
