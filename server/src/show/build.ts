@@ -628,7 +628,9 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
         ...(s.eligibility === 'composited' ? { track: { fps: 15 as const, count: Math.max(1, s.frames ?? 1) } } : {}),
       }))
       const diags = [...diagnostics, ...(e.extraDiagnostics ?? [])].filter(d => D21.has(d.code)).slice(0, MAX_DIAGNOSTICS)
-      return { ...record, layers: layerRecords(list), steps: stepRecords, entry: ENTRY_ASSET_ID, diagnostics: diags }
+      // Each trigger the classifier cut (§6a) says so, so the client animates only the others.
+      const triggers = record.triggers.map(t => (c.triggers.get(t.spid) === 'cut' ? { ...t, cut: true as const } : t))
+      return { ...record, triggers, layers: layerRecords(list), steps: stepRecords, entry: ENTRY_ASSET_ID, diagnostics: diags }
     }
     const planBytes = (plan: ShowPlanRecord): number | undefined => {
       try { return encodeShowMessage({ tag: 1, plan }).length - 1 } catch (err) { if (err instanceof PlanRejected) return undefined; throw err }

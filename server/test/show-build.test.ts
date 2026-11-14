@@ -211,6 +211,17 @@ describe('buildShowPlan', () => {
   describe('fix round 1: triggers and autoplay keep the layers that draw them', () => {
     const showOf = (host: DocumentHost, docKey: string) => (host as unknown as { docs: Map<string, { show: Parameters<typeof trackInputs>[0] }> }).docs.get(docKey)!.show
 
+    it('a trigger record carries cut: true exactly when the classifier cut it', async () => {
+      const fade = await openDeck(await triggerFadeDeck())
+      const layered = built(await fade.host.showPlan(fade.docKey, job({ mark: { kind: 'off' } })))
+      expect(layered.plan.triggers).toEqual([expect.objectContaining({ spid: '3' })])
+      expect(layered.plan.triggers[0]!.cut).toBeUndefined()
+      expect(layered.plan.diagnostics.map(d => d.code)).not.toContain('trigger-cut')
+      const wipe = await openDeck(await withFilter(await triggerFadeDeck(), 'fade', 'wipe(right)'))
+      const cut = built(await wipe.host.showPlan(wipe.docKey, job({ mark: { kind: 'off' } })))
+      expect(cut.plan.triggers.map(t => [t.spid, t.cut])).toEqual([['3', true]])
+    }, 60_000)
+
     it('a cut trigger ships the layers that draw its end state, reconstructable from the shipped assets', async () => {
       const deck = await withFilter(await triggerFadeDeck(), 'fade', 'wipe(right)')
       const { host, docKey } = await openDeck(deck)

@@ -21,8 +21,9 @@
  *   begins. A frame not yet decoded holds the previous picture (D23). A track
  *   not there when the step begins (`'pending'`) makes the step a cut to its
  *   end frame, once that arrives (`step-deferred`).
- * - **Triggers** (§6a): with `trigger-cut`, triggered targets are drawn at
- *   their end state.
+ * - **Triggers** (§6a): a trigger the server cut (`cut: true`) draws the
+ *   targets of its sequences at their end state once fired; the others
+ *   animate from the layers.
  * - **Transitions.** The outgoing frame is what was on screen, composited by
  *   `flattenCurrent` with a Canvas 2D compositor into a workspace-leased
  *   canvas (a still slide's from-frame is its still). The incoming frame is
@@ -188,19 +189,31 @@ const isContainer = (l: PlanLayerRecord | PlanContainerRecord): l is PlanContain
 const inRect = (r: Rect, x: number, y: number) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
 const nexts = (c: SlideCursor) => c.events.reduce((n, e) => n + (e.kind === 'next' ? 1 : 0), 0)
 
-/** The target keys of `tree` under an interactive (trigger) sequence, with their text items. */
-function triggerTargets(tree: TimingTree | undefined, items: ReadonlyMap<TargetKey, readonly TargetKey[]> | undefined): Set<TargetKey> {
-  const out = new Set<TargetKey>()
+/** Per trigger shape (spid): the target keys its interactive sequences animate, with their text items. */
+function triggerTargets(tree: TimingTree | undefined, items: ReadonlyMap<TargetKey, readonly TargetKey[]> | undefined): Map<string, Set<TargetKey>> {
+  const out = new Map<string, Set<TargetKey>>()
   if (!tree) return out
-  const walk = (n: TimeNode, under: boolean, depth: number) => {
+  const walk = (n: TimeNode, under: readonly string[], depth: number) => {
     if (depth > 128) return
-    if ('children' in n) { for (const c of n.children) walk(c, under || n.ctn.nodeType === 'interactiveSeq', depth + 1); return }
-    if (!under || !('spid' in n.target)) return
+    if ('children' in n) {
+      let here = under
+      if (n.ctn.nodeType === 'interactiveSeq') {
+        const spids = n.ctn.start.flatMap(c => (c.target && 'spid' in c.target ? [c.target.spid] : []))
+        here = [...under, ...spids]
+      }
+      for (const c of n.children) walk(c, here, depth + 1)
+      return
+    }
+    if (!under.length || !('spid' in n.target)) return
     const k = targetKey(n.target)
-    out.add(k)
-    for (const i of items?.get(k) ?? []) out.add(i)
+    for (const spid of under) {
+      let set = out.get(spid)
+      if (!set) out.set(spid, set = new Set())
+      set.add(k)
+      for (const i of items?.get(k) ?? []) set.add(i)
+    }
   }
-  walk(tree.root, false, 0)
+  walk(tree.root, [], 0)
   return out
 }
 
@@ -229,7 +242,8 @@ interface Slide {
   hidden: Set<TargetKey>
   entrances: Map<TargetKey, Set<TimeNode>>
   fan: ReadonlyMap<BehaviourNode, IterateFan> | undefined
-  triggerKeys: Set<TargetKey>
+  /** Per trigger spid, the targets its sequences animate (`cut` triggers draw them at their end state). */
+  triggerKeys: Map<string, Set<TargetKey>>
   rng: Rng
   /** Uploaded sources by key, at an epoch. */
   ups: Map<string, Up>
@@ -465,17 +479,23 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     return state
   }
 
-  /** The live state, with `trigger-cut` triggered targets at their end state (§6a). */
+  /** The live state, the targets of each fired `cut` trigger at their end state (§6a); `layers` triggers animate. */
   function liveState(p: Slide, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined): RenderState {
     const state = stateOf(p, cursor, slideT, timeline)
-    if (!cursor || !p.triggerKeys.size || !p.data?.plan.diagnostics.some(d => d.code === 'trigger-cut') || !cursor.events.some(e => e.kind === 'trigger')) return state
+    if (!cursor || !p.data) return state
+    const keys = new Set<TargetKey>()
+    for (const trig of p.data.plan.triggers) {
+      if (!trig.cut || !cursor.events.some(e => e.kind === 'trigger' && e.spid === trig.spid)) continue
+      for (const k of p.triggerKeys.get(trig.spid) ?? []) keys.add(k)
+    }
+    if (!keys.size) return state
     if (!p.cutNoted) {
       p.cutNoted = true
       sink.add({ code: 'trigger-cut', slideIndex: p.index, message: 'A triggered effect the layers cannot prove jumps to its end state' })
     }
     const settled = stateOf(p, cursor, SETTLED_MS, timeline)
     const out = new Map(state)
-    for (const k of p.triggerKeys) {
+    for (const k of keys) {
       const s = settled.get(k)
       if (s) out.set(k, s)
       else out.delete(k)

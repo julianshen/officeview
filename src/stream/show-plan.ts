@@ -66,7 +66,11 @@ export interface ShowPlanRecord {
   layers: Array<PlanLayerRecord | PlanContainerRecord>
   base: Array<[string, BaseGeometry]>
   steps: PlanStepRecord[]
-  triggers: Array<{ spid: string; rects: Rect[] }>
+  /**
+   * `cut` (controller ruling, Task 8 follow-up): the classifier cut this trigger (§6a): its effects jump to their
+   * end state. Absent: they play from the layers. Only `true` is valid.
+   */
+  triggers: Array<{ spid: string; rects: Rect[]; cut?: true }>
   linkRegions: Array<{ rect: Rect; action: { kind: 'slide'; index: number } | { kind: 'jump'; verb: string } | { kind: 'withheld' } }>
   iterate: { keys: Array<[string, string[]]>; groups: Array<[string, { wd?: string[][]; lt?: string[][] }]> }
   entry: number
@@ -439,8 +443,9 @@ function validatePlan(v: unknown, expect: { unit: number; maxDecoded: number }):
   })
   if (frames > SHOW_PLAN_LIMITS.slideKeyframes) fail('steps')
   arr(o.triggers, 'triggers', SHOW_PLAN_LIMITS.triggers).forEach((t, i) => {
-    const p = ix('triggers', i), to = obj(t, p, ['spid', 'rects'])
+    const p = ix('triggers', i), to = obj(t, p, ['spid', 'rects'], ['cut'])
     str(to.spid, at(p, 'spid'))
+    opt(to, 'cut', p, yes)
     arr(to.rects, at(p, 'rects'), SHOW_PLAN_LIMITS.rectsPerStep).forEach((r, j) => rect(r, ix(at(p, 'rects'), j), W, H))
   })
   arr(o.linkRegions, 'linkRegions', SHOW_PLAN_LIMITS.links).forEach((l, i) => {

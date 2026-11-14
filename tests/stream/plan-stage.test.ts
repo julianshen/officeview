@@ -14,7 +14,7 @@ import type { StageModel } from '../../src/slideshow/player/stage'
 import type { BehaviourNode, CTn, ContainerNode, Lease, ShowSlide, SlideShowWorkspace, TimingTree, TransitionSpec, Compositor, LayerHandle } from '../../src/slideshow/types'
 import { decodeShowMessage, encodeShowMessage, SHOW_PLAN_LIMITS, type MorphPlanRecord, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { ImageBitmapLike } from '../../src/stream/remote/show-fetch'
-import { flyInDeck, loadShowDeck } from '../../src/testdata/show-decks'
+import { flyInDeck, loadShowDeck, triggerFadeDeck } from '../../src/testdata/show-decks'
 
 // A WebGL2 stand-in, off unless a test turns it on (jsdom has no WebGL2).
 const gl = vi.hoisted(() => ({ on: false, made: [] as Array<{ uploads: number; lost: boolean }> }))
@@ -83,9 +83,11 @@ const morphViaWire = (morph: MorphPlanRecord): MorphPlanRecord =>
   (decodeShowMessage(encodeShowMessage({ tag: 5, morph }), { unit: 0, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { morph: MorphPlanRecord }).morph
 
 let flyTiming: ShowSlide['timing']
+let triggerTiming: ShowSlide['timing']
 beforeAll(async () => {
   const deck = await loadShowDeck(await flyInDeck())
   flyTiming = (await deck.meta(0)).timing
+  triggerTiming = (await (await loadShowDeck(await triggerFadeDeck())).meta(0)).timing
 })
 
 const assetsOf = (m: Map<number, ImageBitmapLike>): PlanAssets => ({ bitmap: (id) => m.get(id), bytes: (id) => { const b = m.get(id); return b ? b.width * b.height * 4 : 0 } })
@@ -508,6 +510,48 @@ describe('PlanStage', () => {
     expect(r.stage.hitTest(48, 36, c1, 250, on)).toBeUndefined()
     // Not a trigger the timeline knows: passes.
     expect(r.stage.hitTest(48, 36, tl.checkpoint(1), 0, { triggers: [], links: [] })).toBeUndefined()
+  })
+
+  describe('triggers (§6a): layers triggers animate, cut ones jump to their end state', () => {
+    /** triggerFadeDeck: button `sp:3` fades in box `sp:2` (500 ms) from an interactive sequence. */
+    const triggerSlide = (cut: boolean) => {
+      const { assets } = flyIn()
+      return {
+        plan: viaWire({
+          ...flyIn().plan, show: { timing: triggerTiming, builds: [] }, steps: [], base: [['sp:2', { x: 380, y: 200, w: 200, h: 200, rot: 0 }]],
+          layers: [
+            { id: 0, bounds: { x: 0, y: 0, w: W, h: H }, z: 0, assetId: 1, decodedBytes: OW * OH * 4, scale: S, background: true },
+            { id: 1, key: 'sp:2', bounds: { x: 380, y: 200, w: 200, h: 200 }, z: 1, assetId: 2, decodedBytes: 20 * 20 * 4, scale: S },
+          ],
+          triggers: [{ spid: '3', rects: [{ x: 80, y: 560, w: 160, h: 80 }], ...(cut ? { cut: true as const } : {}) }],
+          diagnostics: cut ? [{ code: 'trigger-cut' }] : [],
+        }),
+        assets,
+      }
+    }
+    const play = async (cut: boolean) => {
+      const r = rig({ slides: [triggerSlide(cut)] })
+      await r.enter(0)
+      const tl = r.timelines.get(0)!
+      expect(r.stage.frame(tl.initial(), 0)!.get('sp:2')!.visible).toBe(false)
+      const fired = tl.trigger(tl.initial(), '3', 100)!
+      return { r, mid: r.stage.frame(fired, 100 + 250)!.get('sp:2')!, end: r.stage.frame(fired, 100 + 5000)!.get('sp:2')! }
+    }
+    it('a layers trigger animates: its mid-effect state differs from its end', async () => {
+      const { r, mid, end } = await play(false)
+      expect(end.opacity).toBe(1)
+      expect(mid.visible).toBe(true)
+      expect(mid.opacity).toBeGreaterThan(0.1)
+      expect(mid.opacity).toBeLessThan(0.9)
+      expect(r.sink.list().map((d) => d.code)).not.toContain('trigger-cut')
+    })
+    it('a cut trigger jumps to its end state', async () => {
+      const { r, mid, end } = await play(true)
+      expect(mid).toEqual(end)
+      expect(mid.visible).toBe(true)
+      expect(mid.opacity).toBe(1)
+      expect(r.sink.list().filter((d) => d.code === 'trigger-cut')).toHaveLength(1)
+    })
   })
 
   it('withheld link region returns {kind:\'withheld\'}', async () => {

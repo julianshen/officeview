@@ -239,6 +239,14 @@ describe('hostile plan records', () => {
     expect(rej(mutated((p) => { p.steps = Array.from({ length: 6 }, () => ({ trigger: 'click', eligibility: 'composited', track: { fps: 15, count: 90 } })) }))).toBe('steps')
   })
   it('rejects 33 rects in a step', () => expect(rej(mutated((p) => { p.triggers[0].rects = Array.from({ length: 33 }, () => ({ x: 0, y: 0, w: 1, h: 1 })) }))).toBe('triggers[0].rects'))
+  it('accepts a trigger marked cut: true', () => {
+    expect(() => decodeShowMessage(mutated((p) => { p.triggers[0].cut = true }), E)).not.toThrow()
+  })
+  it('rejects a trigger cut other than true', () => {
+    expect(rej(mutated((p) => { p.triggers[0].cut = false }))).toBe('triggers[0].cut')
+    expect(rej(mutated((p) => { p.triggers[0].cut = 'x' }))).toBe('triggers[0].cut')
+  })
+  it('rejects an unknown trigger key', () => expect(rej(mutated((p) => { p.triggers[0].extra = 1 }))).toBe('triggers[0].extra'))
   it('rejects 65 triggers', () => expect(rej(mutated((p) => { p.triggers = Array.from({ length: 65 }, (_, i) => ({ spid: String(i), rects: [] })) }))).toBe('triggers'))
   it('rejects 65 link regions', () => {
     expect(rej(mutated((p) => { p.linkRegions = Array.from({ length: 65 }, () => ({ rect: { x: 0, y: 0, w: 1, h: 1 }, action: { kind: 'withheld' } })) }))).toBe('linkRegions')
