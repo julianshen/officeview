@@ -1257,6 +1257,20 @@ One per slide, framed with the §7.1 `SHOW_PLAN` kind:
 - **Refused behaviours:** `cmd` (OLE) dropped with diagnostics; the rest
   plays.
 
+*Amendment (2026-11-14, Stage 3 piece 4, owner decision 2; piece-4 design
+§5, §11):* charging. Each of these is **one charged `'unit'` send**:
+
+- an animated slide's bundle, which is its plan, its entry frame and every
+  layer, as several `SHOW_PLAN` messages under one `reqId` (§14
+  amendment);
+- a `composited` step's keyframe track, fetched just in time;
+- a Morph pair, keyed by `(from, to, fromStep)`.
+
+No new rate class is added. The limit keeps meaning "slides per minute",
+and the 128 MiB per-show budget bounds the bytes. The client's
+session-wide send log (§14, R28) counts these sends exactly as it counts
+units, so an animated show never trips 4008.
+
 ### 12a.3 No hidden content in layers — eligibility on final observable appearance
 
 A layer can hold content that never appears **observably** — including by
@@ -1301,6 +1315,19 @@ battery (round-9 finding 7 names it here explicitly, replacing draft 6's
 "unacceptably" wording), and any subset failing it (or whose
 moving layer-local marks would stop being a page-anchored mark) plays as
 **server-composed marked keyframes**. Measured in T5/T7.
+
+*Amendment (2026-11-14, Stage 3 piece 4, owner decision 1; piece-4 design
+§7, §11):* a moving layer's visible mark **travels with the layer**
+during its motion and is drawn at the layer's rest (step-end) position. At
+every step boundary the layer composite matches the composite-once
+reference mark within `MARK_FIDELITY` (`{ meanAbs: 0.004, rowMax: 0.02 }`).
+A layer with more than one distinct rest plays its later moving steps
+`composited` (`mark-rest`). This replaces the "moving layer-local marks
+→ composited" rule above as the default. The strict page-anchored reading
+stays available as the server option `animation.strictMarks: true`,
+under which every moving step plays `composited`. Both marks remain on
+every transmitted pixel: the forensic mark is applied per session at send
+time, on the page basis cropped to each layer's rest bounds.
 
 ### 12a.5 Speaker notes
 
@@ -1654,6 +1681,25 @@ outcomes.
   | NOTES_RASTER | ≤ 8 MiB | ≤ 64 MiB |
   | PRINT_RASTER | ≤ 8 MiB | ≤ 64 MiB (as built, 2026-11-13: client per-job page cap = min(64 MiB, 44 MiB, the range's largest scale-2 unit cost); see below) |
   | text control message | ≤ 64 KiB | ≤ 64 KiB |
+
+  *Amendment (2026-11-14, Stage 3 piece 4, D1):* one charged show request
+  may answer with **several** `SHOW_PLAN` messages under its `reqId`, each
+  within the per-message caps above, as print does. A 128-layer bundle
+  cannot fit one 8 MiB message. A text header comes first:
+  `show-plan-start`, `show-track-start` or `show-morph-start`
+  `{ reqId, unit, messages, decodedBytes }`, ≤ 64 KiB. The client takes
+  its admission grant from that header, then admits each message. Every
+  kind-6 payload is `u8 tag` + body:
+
+  - tag 1: the plan record, UTF-8 JSON, ≤ 4 MiB decoded;
+  - tag 2: a layer asset;
+  - tag 3: the entry frame;
+  - tag 4: a keyframe;
+  - tag 5: a Morph record.
+
+  An asset body is `u32 LE unit` + `u32 LE assetId` + the UNIT_RASTER
+  body, ≤ 64 MiB decoded. `Reassembler` restarts at seq 0 for each
+  message.
 
   *Amendment (2026-11-12, Stage 3a):* every server→client **text-service
   answer** (`search-result`, `search-done`, `select-result`,

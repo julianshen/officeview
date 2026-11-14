@@ -1,6 +1,8 @@
 /**
  * Stage 1d browser harness page: <OfficeFile data={{ kind: 'stream', url }}>
- * against server/test/app.ts. Query: ?doc=<corpus file>&relaxed=1&srv=short&fonts=1&copy=full|cap3|off&a11y=unit|focused|off&print=on|off|cap2|session3&role=presenter&notes=off&present=off.
+ * against server/test/app.ts. Query: ?doc=<corpus file>&deck=fly|morph|cube&backend=webgl2|canvas2d&relaxed=1&srv=short&fonts=1&copy=full|cap3|off&a11y=unit|focused|off&print=on|off|cap2|session3&role=presenter&notes=off&present=off.
+ * deck= opens a synthetic show deck (piece 4); backend=canvas2d makes WebGL2 unavailable to the page, so the show
+ * composites on Canvas 2D (webgl2, the default, leaves the browser as it is).
  * present=off sets allowPresent={false} (no Present button in the view; the harness buttons are then refused).
  * Assertions read window.__ovStream (notices, error) and the DOM. The Present and
  * Presenter View buttons call the ref's present() (Stage 3c).
@@ -13,10 +15,15 @@ import type { StreamNotice } from '../stream/remote/session'
 import '../styles/officeview.css'
 
 const q = new URLSearchParams(location.search)
+if (q.get('backend') === 'canvas2d') {
+  // The forced Canvas 2D path, as a browser without WebGL2 has it: no 'webgl2' context, ever.
+  const getContext = HTMLCanvasElement.prototype.getContext as (this: HTMLCanvasElement, id: string, o?: unknown) => RenderingContext | null
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, id: string, o?: unknown) { return id === 'webgl2' ? null : getContext.call(this, id, o) } as typeof HTMLCanvasElement.prototype.getContext
+}
 const P = Number(q.get('port') ?? 4181)
 const wsPort = q.get('srv') === 'short' ? P + 2 : P
-const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}), ...(q.get('print') ? { print: q.get('print')! } : {}), ...(q.get('role') ? { role: q.get('role')! } : {}), ...(q.get('notes') ? { notes: q.get('notes')! } : {}) })
-const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined }
+const params = new URLSearchParams({ doc: q.get('doc') ?? 'pypptx-test.pptx', ...(q.get('relaxed') ? { relaxed: '1' } : {}), ...(q.get('copy') ? { copy: q.get('copy')! } : {}), ...(q.get('a11y') ? { a11y: q.get('a11y')! } : {}), ...(q.get('print') ? { print: q.get('print')! } : {}), ...(q.get('role') ? { role: q.get('role')! } : {}), ...(q.get('notes') ? { notes: q.get('notes')! } : {}), ...(q.get('deck') ? { deck: q.get('deck')! } : {}) })
+const state = { notices: [] as StreamNotice[], error: undefined as string | undefined, present: undefined as string | undefined, endedAt: undefined as number | undefined }
 ;(window as unknown as { __ovStream: typeof state }).__ovStream = state
 
 function App() {
@@ -25,7 +32,7 @@ function App() {
   // Called inside the click (the gesture rule); the outcome lands in __ovStream.present.
   const present = (presenterView?: boolean) => {
     state.present = 'starting'
-    ref.current?.present(presenterView ? { presenterView } : {}).then((s) => { state.present = 'started'; void s.ended.then(() => { state.present = 'ended' }) }, (e: { code?: string }) => { state.present = e.code ?? 'error' })
+    ref.current?.present(presenterView ? { presenterView } : {}).then((s) => { state.present = 'started'; void s.ended.then(() => { state.present = 'ended'; state.endedAt = performance.now() }) }, (e: { code?: string }) => { state.present = e.code ?? 'error' })
   }
   return (
     <div style={{ height: '100vh' }}>

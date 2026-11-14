@@ -15,6 +15,8 @@
  *          on = true; off = false; cap2 = {maxPages: 2}; session3 = {maxPages: 5, maxSessionPages: 3}.
  *   ?role=presenter makes the viewer a presenter (Stage 3c); absent = the demo's role (audience).
  *   ?notes=off sets the session's notes policy to false (Stage 3c); absent = the demo default (on).
+ *   ?deck=fly|morph|cube opens a synthetic show deck (piece 4 Task 14: `flyInDeck`, `morphDeck`, `cubeDeck` from
+ *          src/testdata/show-decks.ts) instead of `?doc=`.
  *   P + 1  controls: POST /drop|/revoke|/oversize?sid=&srv=short, GET /sessions,
  *          GET /fontpack/* (CORS), GET /__stream-harness (identity)
  */
@@ -24,6 +26,7 @@ import { demoHooks } from '../src/demo-hooks'
 import { deriveKeys } from '../src/keys'
 import { Pool } from '../src/pool'
 import { createStreamServer } from '../src/ws'
+import { cubeDeck, flyInDeck, morphDeck } from '../../src/testdata/show-decks'
 
 const P = Number(process.env.OV_STREAM_PORT ?? 4181)
 const ORIGINS = [`http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`, `http://localhost:${process.env.IV_HARNESS_PORT ?? 4173}`]
@@ -40,9 +43,15 @@ const PRINT = { on: true, off: false, cap2: { maxPages: 2 }, session3: { maxPage
 /** TEST-ONLY `?role=presenter` and `?notes=off` (Stage 3c Task 7). */
 const ROLE = { presenter: 'presenter', audience: 'audience' } as const
 const NOTES = { off: false } as const
+/** TEST-ONLY `?deck=` (piece 4 Task 14): the synthetic show decks, built once. */
+const DECKS = { fly: flyInDeck(), morph: morphDeck(), cube: cubeDeck() } as const
 const pick = <T extends object>(table: T, v: string | null): T[keyof T] | undefined => (v !== null && v in table ? table[v as keyof T] : undefined)
 const hooks = {
   ...demo,
+  resolveDocument: async (req: Parameters<typeof demo.resolveDocument>[0], d: Parameters<typeof demo.resolveDocument>[1]) => {
+    const deck = pick(DECKS, req.url.searchParams.get('deck'))
+    return deck ? { bytes: await deck, name: `${req.url.searchParams.get('deck')}.pptx` } : demo.resolveDocument(req, d)
+  },
   authorize: async (req: Parameters<typeof demo.authorize>[0]) => {
     const d = await demo.authorize(req)
     if (!d) return d

@@ -19,6 +19,7 @@ import { enrichSlideAppearance } from '../../src/pptx/appearance'
 import type { PptxDocument } from '../../src/pptx/types'
 import type { RenderState, SlideShowDiagnostic } from '../../src/slideshow/types'
 import { slideSize } from '../../src/slideshow/render/scene'
+import type { WatermarkOptions } from '../../src/core/watermark'
 
 export interface ShowSeams {
   clock: ManualClock
@@ -102,6 +103,8 @@ export interface ShowOptions {
   size?: { width: number; height: number }
   motion?: 'auto' | 'reduced' | 'full'
   callbacks?: Partial<SlideShowCallbacks>
+  /** Additive (piece 4 Task 14): the show's visible mark (`ShowStart.watermark`), as the stream parity harness draws it. */
+  watermark?: WatermarkOptions
 }
 
 /** Starts a show of `doc` from the beginning, as the eager start sequence hands it to the lazy chunk. */
@@ -126,6 +129,7 @@ export async function startShow(doc: PptxDocument, opts: ShowOptions): Promise<S
     fullscreen: Promise.resolve('entered' as const),
     retryFullscreen: async () => 'entered' as const,
     from: 'beginning' as const, motion: opts.motion ?? 'auto',
+    ...(opts.watermark ? { watermark: opts.watermark } : {}),
     callbacks: {
       onStart: () => log.push('onStart'), onEnd: () => log.push('onEnd'),
       onSlideChange: (i: number, b: number) => log.push(`change:${i}:${b}`),

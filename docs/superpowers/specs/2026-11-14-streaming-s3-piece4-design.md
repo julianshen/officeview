@@ -222,6 +222,26 @@ its end (amended at planning). Over the per-show budget, prefetch stops and the 
 admitted. A slide still too big plays as its piece-3 still image with a
 `show-budget` diagnostic. It never plays with content withheld.
 
+*Amendments (2026-11-14, as built; plan D1, D7):*
+- **D1, the wire shape.** One charged request answers with
+  `show-plan-start {reqId, unit, messages, decodedBytes}`, then `messages`
+  kind-6 messages. Each is `u8 tag` + body:
+  - tag 1: the plan;
+  - tag 3: the entry frame;
+  - tag 2: the layers, in z order;
+  - tag 4: keyframes;
+  - tag 5: a Morph record.
+
+  An asset body is `u32 LE unit` + `u32 LE assetId` + the raster body.
+  `show-track` (tag 4 frames) and `show-morph` (tag 5, then tag 2 layers,
+  or tag 4 frames for a composited Morph) answer the same way. Tracks
+  are fetched just in time (D4), not with the bundle.
+- **D7, the forensic mark on layers.** The forensic mark is applied per
+  session at send time. It uses the page-keyed basis cropped to the
+  layer's rest bounds, with the chips translated into layer-local px, so
+  the page mark holds at rest. A layer that keeps no carrier still ships,
+  audited unmarked with reason `layer-capacity`.
+
 **Layer assets** are marked rasters at the audience bucket. Growth
 behaviours above the bucket request a larger asset, capped at `maxUnitPx`
 (§12a.7).
@@ -424,6 +444,17 @@ Before the first client playback code merges, these must be green:
   marked assets are cached per mark settings as well, because the visible
   mark text is per viewer, as the unit cache already is. The forensic mark
   is applied per session at send time (amended at planning).
+
+  *Amendment (2026-11-14, as built; plan D6):* the cache has two levels:
+
+  | Level | Key | Holds |
+  |---|---|---|
+  | L1 | `(docRef, contentPolicyId, fingerprint, bucket, motion)` | the classification, the plan and the unmarked layer rasters |
+  | L2 | L1 + `markSettings` + `strictMarks` | the visibly marked assets and the §7 validation verdict |
+
+  Refusals, timeouts included, are cached under L1 as well, so a repeat
+  request does not rebuild the slide or retire a worker. Track and Morph
+  refusals are cached at pool level.
 - **Hit regions** are rectangles (§5.1).
 - **Reduced motion:** the client applies local mode's `reducedTransition`.
   Behaviours play as local reduced mode does.

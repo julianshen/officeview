@@ -417,8 +417,9 @@ bitmaps:
 - single-screen Presenter View (Alt+F5) or a presenter window.
 
 Hidden slides never appear and are not counted: `slideIndex`, `goTo()` and
-the counter count shown slides only. There are no animations, transitions
-or media yet; each slide shows its final image. A slide that fails to
+the counter count shown slides only. Builds, transitions and Morph play on
+animated slides (piece 4, next section); there is no media yet, and an
+unanimated slide shows its final image. A slide that fails to
 stream shows "Slide n could not be shown (code)" and the show stays
 navigable. Revocation or expiry ends the show (`ended` resolves). The show
 never renders the file locally.
@@ -514,6 +515,115 @@ or one `{ reqId, type: 'error', code }` and nothing more:
 - a presenter can retype what the notes show (the marks trace screenshots,
   not retyping);
 - hidden flags are fixed when the session opens.
+
+## Presenting with animation (Stage 3, piece 4)
+
+Spec: `docs/superpowers/specs/2026-11-14-streaming-s3-piece4-design.md`
+(binding) and parent §12a; test map, parity table and measurements:
+`docs/validation/streaming-s3-p4.md`.
+
+**What it does.** A streamed deck presents with local mode's builds,
+transitions, animations and Morph. The server prepares each animated slide
+(the manifest marks it `units.list[i].anim: true`) as marked layer bitmaps
+plus a per-slide show plan (`OVSP`). The browser plays them on the shared
+show driver. No package, shapes or text runs reach the browser, and the
+browser never renders the file itself. A step the server cannot prove
+safe to play from layers (spec §6) plays as server-composed, marked
+keyframes at 15 fps (`composited`). A slide it cannot plan plays its
+piece-3 still.
+
+**Wire** (client → server, with `reqId` and `token`):
+
+| message | answer |
+|---|---|
+| `{ type: 'show-plan', unit, scale, motion }` | `show-plan-start { unit, messages, decodedBytes }`, then `messages` SHOW_PLAN (kind 6) messages: the plan record (tag 1), the entry frame (tag 3), the layers in z order (tag 2) |
+| `{ type: 'show-track', unit, step, scale, motion }` | `show-track-start`, then the step's keyframes (tag 4) |
+| `{ type: 'show-morph', from, to, fromStep, scale, motion }` | `show-morph-start`, then the Morph record (tag 5), then its layers (tag 2), or, for a composited Morph, its keyframes (tag 4) |
+
+- `scale` is 1 or 2, and `motion` is `'full'` or `'reduced'`.
+- Each kind-6 payload is `u8 tag` + body. An asset body is `u32 LE unit`
+  + `u32 LE assetId` + the UNIT_RASTER body.
+- A refusal is one `{ reqId, type: 'error', code }` and nothing more.
+  Diagnostics ride `{ type: 'diag', code }` text on the same `reqId`
+  (`morph-composited`, `cmd-dropped`, `forensic-unmarked`, …).
+
+| code | when |
+|---|---|
+| `still` | the slide cannot be planned safely, for example a trigger slide whose triggers move geometry, an unproven autoplay, or layers that cannot be shipped. Play the piece-3 still. |
+| `show-limits` | over 64 steps, or over 128 text-build items. Play the still. |
+| `show-budget` | the slide exceeds its classification budget (4,096 compositions) or its byte budget. Play the still. |
+| `show-plan-timeout` | the build exceeded its 10 s deadline. Play the still, or cut the step for a track (a Morph track plays the fade). Refusals are cached. |
+| `morph-fallback` | the Morph match itself is refused. Play the fade. |
+| `invalid-unit` | out of range, hidden, not animated, a bad step or Morph pair, or a Morph under `reduced` motion |
+| `rate-limited` | over the `'unit'` rate, or the render pool is full |
+| `policy-refused` | not a deck, a bad scale, motion or token, or an audit write failure |
+
+**Charging (owner decision 2).** Each of these is one charged `'unit'`
+send:
+
+- a slide bundle, however many messages it has;
+- a composited step's keyframe track, fetched just in time (D4);
+- a Morph pair.
+
+No new rate class is added: 60 per minute, and a third breach inside 60 s
+closes 4008. The viewer holds every charged send to 48 in any 60 s. In
+priority order, it keeps 2 sends back for tracks, 4 for Morph pairs and 8
+for prefetch. A track it has no room for plays as a cut
+(`step-deferred`). A late Morph plays the fade (`morph-late`). A held
+arrow key slows fetching and never trips 4008. A revisit charges its
+tracks and Morph pair again.
+
+**Caps.**
+
+- Per message, SHOW_PLAN is ≤ 8 MiB encoded and ≤ 32 MiB decoded. The
+  plan record is ≤ 4 MiB, and one asset is ≤ 64 MiB decoded.
+- Per slide: ≤ 128 layers (above that, every step is composited), ≤ 64
+  steps (above that, the still), ≤ 512 track frames, ≤ 90 frames per track
+  (a longer step plays its first 6 s, then cuts: `step-truncated`), ≤ 32
+  hit rectangles per step, and ≤ 64 link regions.
+- Per show: ≤ 128 MiB of decoded layers, tracks and plan records
+  together.
+- Every count over its cap rejects the whole record (`SHOW_PLAN_LIMITS`
+  in `src/stream/show-plan.ts`).
+
+**Marks.**
+
+- Both marks are burned into every layer, keyframe and entry frame
+  (`source-atop` on layers). No browser overlay replays them.
+- A moving object's visible mark travels with it and is exact at every
+  rest (owner decision 1).
+- `animation.strictMarks: true` (`--strict-marks`, or `OV_STRICT_MARKS=1`)
+  plays every moving step `composited` instead, with a page-anchored mark.
+- The forensic mark is applied per session at send time, on the page
+  basis cropped to each layer's rest bounds (D7). A layer too small to
+  carry a mark ships unmarked and is audited `forensic-unmarked` with
+  reason `layer-capacity`.
+- Classification, the plan and the unmarked layers are cached per
+  `(doc, policy, fingerprint, bucket, motion)`. Marked assets are cached
+  with the mark settings as well (D6).
+
+**Audit.** `show_deliveries (sid, unit_index, kind, asset_count, unmarked,
+reason, at)`: one durable row per delivered bundle, track or Morph pair,
+written before its messages go out.
+
+**Diagnostics** a show can report: `step-composited`, `step-truncated`,
+`step-deferred`, `trigger-cut`, `morph-late`, `morph-composited`,
+`morph-fallback`, `show-budget`, `show-limits`, `show-plan-timeout`,
+`link-withheld`, `preview-reduced`, `plan-stage-pressure`, `mark-rest`
+and `cmd-dropped`.
+
+**Known differences from local mode** (each is in the validation doc):
+
+- Link and trigger hit regions are static rectangles.
+- Morph starts from a settled checkpoint (D11).
+- A slide over 64 steps plays its still (D3).
+- Marks travel with movers.
+- Track frame `i` shows `(i + 1)/15` s, so it leads the clock by 1/15 s.
+- A trigger slide plays from layers only with no dropped or masked
+  pixels. Otherwise, or if any of its triggers moves geometry, it plays
+  its still.
+- A wipe (a masked draw) composites its step.
+- `cmd` nodes are dropped.
 
 ## The browser side (Stage 1d)
 
