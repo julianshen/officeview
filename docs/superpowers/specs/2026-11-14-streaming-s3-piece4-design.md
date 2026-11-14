@@ -85,7 +85,9 @@ makes slides move.
    as server-composed keyframes (`step-composited`). The fallback rate is
    recorded.
 4. Piece 3's guarantees carry over:
-   - both marks on every transmitted pixel;
+   - both marks on every transmitted asset, as for units: the forensic
+     mark lives in opaque cells only, so a fully transparent layer region
+     carries none (amended at planning);
    - the session unit budget (no 4008);
    - revocation exits;
    - a failed slide shows a typed error and the show goes on;
@@ -211,8 +213,12 @@ One per slide, on the reserved `SHOW_PLAN` frame kind, fetched under the
 - every field gets an encoded and decoded cap and a hostile test (Stage 3
   §5).
 
-Over a per-slide limit, every step of that slide plays `composited`. Over
-the per-show budget, prefetch stops and the current slide alone is
+Over the 128-layer limit, every step of that slide plays `composited`.
+Over the 64-step limit, the slide plays as its piece-3 still image with a
+`show-limits` diagnostic. This is the one recorded step-count difference
+from local. The 512 cap counts `composited` keyframe frames per slide,
+which are shared out in step order; a step left without frames cuts to
+its end (amended at planning). Over the per-show budget, prefetch stops and the current slide alone is
 admitted. A slide still too big plays as its piece-3 still image with a
 `show-budget` diagnostic. It never plays with content withheld.
 
@@ -224,7 +230,9 @@ behaviours above the bucket request a larger asset, capped at `maxUnitPx`
 limit is meant to stop a show being used as a bulk-export path, and it
 counts slides. Piece 4 keeps that meaning:
 - **A slide bundle is one charged send:** its plan, every layer and its
-  entry frame stream as fragments of one `SHOW_PLAN` reply.
+  entry frame stream as several `SHOW_PLAN` messages under one request id.
+  One message cannot hold 128 layers under the 8 MiB per-message cap
+  (amended at planning).
 - **A `composited` step's keyframe track is one charged send.**
 - **A Morph pair plan is one charged send.**
 
@@ -361,9 +369,11 @@ It samples at `(slide, step, pct ∈ {0,25,50,75,100})`, as
   and is re-run on layer assets and keyframes.
 - **Tolerance:** per frame, the existing slideshow
   `Tolerance{meanAbs,rowMax}` for the deck's catalogue row. It is widened
-  only by the published per-script-family renderer tolerance (§7.4 item 5,
-  T4 fixtures), because server node-canvas text is not the browser's
-  hinted painter.
+  only by the server-versus-client renderer difference, because server
+  node-canvas text is not the browser's hinted painter. That difference is
+  not yet published (§7.4 item 5): this piece measures it per corpus deck
+  and publishes it, with a ceiling of `TOLERANCE_APPROX` (amended at
+  planning).
 - **`composited` steps** are compared at their keyframe times (which they
   hit by construction) with the same tolerance. Between keyframes they are
   expected to differ, and are not sampled.
@@ -409,9 +419,11 @@ Before the first client playback code merges, these must be green:
   stays +2 next, +1 previous. The bytes are bounded by the 128 MiB show
   budget; the rate stays slides per minute.
 - **Server cost.** Classification composes up to 4,096 frames per slide,
-  per viewer bucket. Plans and assets are cached per
-  `(doc, policy, fingerprint, bucket)`, not per viewer, before marking.
-  Marks are applied per session at send time, as for units today.
+  per viewer bucket. The classification, plan and unmarked layers are
+  cached per `(doc, policy, fingerprint, bucket, motion)`. The visibly
+  marked assets are cached per mark settings as well, because the visible
+  mark text is per viewer, as the unit cache already is. The forensic mark
+  is applied per session at send time (amended at planning).
 - **Hit regions** are rectangles (§5.1).
 - **Reduced motion:** the client applies local mode's `reducedTransition`.
   Behaviours play as local reduced mode does.
