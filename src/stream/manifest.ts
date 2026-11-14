@@ -17,8 +17,9 @@ export interface Manifest {
   limits: { maxUnitPx: number; maxAssetBytes: number; wsFrameBytes: number; tilePx: number }
   notices: string[]
 }
-/** `hidden`: a hidden slide under contentPolicy 'full' (it is a unit, but a show skips it). Only `true` is valid. */
-export interface ManifestUnit { w: number; h: number; hidden?: true }
+/** `hidden`: a hidden slide under contentPolicy 'full' (it is a unit, but a show skips it). Only `true` is valid.
+ * `anim`: the slide has timing, a transition, or both, so a show asks for its SHOW_PLAN (piece 4 D5). Only `true` is valid; without it the slide is a still. */
+export interface ManifestUnit { w: number; h: number; hidden?: true; anim?: true }
 export type ManifestResult = { ok: true; manifest: Manifest } | { ok: false; field: string }
 
 export const MANIFEST_CAP = 256 * 1024
@@ -44,9 +45,9 @@ export function validateManifest(json: unknown): ManifestResult {
     const units = obj(m.units, 'units')
     const list = arr(units.list, 'units.list', MAX_UNITS).map((u, i): ManifestUnit => {
       const o = obj(u, `units.list[${i}]`), size = { w: int(o.w, `units.list[${i}].w`, 1, 8192), h: int(o.h, `units.list[${i}].h`, 1, 8192) }
-      if (o.hidden === undefined) return size
-      if (o.hidden !== true) throw new Bad(`units.list[${i}].hidden`)
-      return { ...size, hidden: true }
+      if (o.hidden !== undefined && o.hidden !== true) throw new Bad(`units.list[${i}].hidden`)
+      if (o.anim !== undefined && o.anim !== true) throw new Bad(`units.list[${i}].anim`)
+      return { ...size, ...(o.hidden ? { hidden: true as const } : {}), ...(o.anim ? { anim: true as const } : {}) }
     })
     if (int(units.count, 'units.count', 0, MAX_UNITS) !== list.length) throw new Bad('units.count')
     const s = obj(m.session, 'session'), p = obj(m.policy, 'policy'), c = obj(m.can, 'can'), r = obj(m.recorder, 'recorder'), l = obj(m.limits, 'limits'), k = obj(m.caps, 'caps')

@@ -68,11 +68,13 @@ const RESUME_BACKOFF_MS = [250, 500, 1000]
 const PRINT_ENCODED_CAP = 8 << 20
 /** NOTES_RASTER encoded cap (§14; twin of the server's NOTES_ENCODED_CAP). */
 const NOTES_ENCODED_CAP = 8 << 20
-const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
+export const CAPS: Partial<Record<Kind, [encoded: number, decoded: number]>> = {
   [Kind.MANIFEST]: [256 << 10, 256 << 10], [Kind.ASSET_DEFINE]: [1 << 20, 8 << 20],
   [Kind.UNIT_RASTER]: [8 << 20, 64 << 20], [Kind.UNIT_COMMANDS]: [8 << 20, 8 << 20],
   [Kind.PRINT_RASTER]: [PRINT_ENCODED_CAP, 64 << 20],
   [Kind.NOTES_RASTER]: [NOTES_ENCODED_CAP, 64 << 20],
+  // SHOW_PLAN (piece 4): one message ≤ 8 MiB encoded / 32 MiB decoded (parent §14); a bundle is several messages.
+  [Kind.SHOW_PLAN]: [8 << 20, 32 << 20],
 }
 /** The notes image (twins of server/src/notes.ts): exactly 720 × scale device px
  * wide, 1..NOTES_MAX_PX device px tall. */
