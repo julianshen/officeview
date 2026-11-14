@@ -316,6 +316,57 @@ export function twinDeck(): Promise<Uint8Array> {
   }])
 }
 
+/**
+ * One slide: the ink box (id 2) under an opaque cover (id 3). Click 1 enters the ink and pulses its opacity
+ * 0 → 1 → 1 → 0 over 1 s (keys at 0, 25, 75, 100 %); clicking the cover hides it. The ink shows only when the
+ * cover is hidden while the pulse is up: a trigger mid-step, or the step played after the trigger.
+ */
+export function triggerPulseMainDeck(): Promise<Uint8Array> {
+  const id = ids()
+  const pulse: Effect = {
+    cls: 'entr', preset: 10, behaviours: id => [
+      setVisibility(id, 2, 'visible'), animNum(id, 2, 'style.opacity', 1000, [[0, 0], [25000, 1], [75000, 1], [100000, 0]]),
+    ],
+  }
+  const main = clickStep(id, [pulse])
+  id() // The main sequence takes the next id (`mainSeqXml`).
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Cover', 360, 260, 240, 200, '336699')],
+    timingXml: timingXmlOf(mainSeqXml([main]) + interactiveSeq(id, 3, [disappear(3)])),
+  }])
+}
+
+/**
+ * One slide: the ink box (id 2, static) under an opaque cover (id 3) whose click pulses the cover's opacity
+ * 1 → 0 → 0 → 1 over 1 s: the ink shows mid-pulse only, never at the trigger's end state.
+ */
+export function triggerPulseDeck(): Promise<Uint8Array> {
+  const id = ids()
+  const pulse: Effect = { cls: 'emph', preset: 9, behaviours: id => [animNum(id, 3, 'style.opacity', 1000, [[0, 1], [25000, 0], [75000, 0], [100000, 1]])] }
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Ink', 400, 300, 160, 120, HIDDEN_INK), rect(3, 'Cover', 360, 260, 240, 200, '336699')],
+    timingXml: timingXmlOf(interactiveSeq(id, 3, [pulse])),
+  }])
+}
+
+/**
+ * One slide: a trigger button (id 3) below a box (id 2) in z-order, so they share no layer boundary over the
+ * background: the button's click fades the box in. Nothing is ever covered, so no layer needs a drop or mask.
+ */
+export function triggerFadeDeck(): Promise<Uint8Array> {
+  const id = ids()
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [
+      rect(3, 'Button', 80, 560, 160, 80, 'F4B183'),
+      rect(2, 'Box', 380, 200, 200, 200, '336699'),
+    ],
+    timingXml: timingXmlOf(interactiveSeq(id, 3, [fadeIn(2)])),
+  }])
+}
+
 /** `moverReveal`'s cover dart, started by a click on a trigger button (id 4) instead of the main sequence. */
 export function triggerDartDeck(): Promise<Uint8Array> {
   const id = ids()

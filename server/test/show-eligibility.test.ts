@@ -8,7 +8,7 @@ import { installCanvasBackend, type CanvasBackend } from '../../src/core/canvas-
 import { createSlideTimeline } from '../../src/slideshow/engine/steps'
 import type { PreparedSlide } from '../../src/slideshow/prepare'
 import {
-  MOVER_REVEAL, adversaryDeck, autoplayRevealDeck, triggerRevealDeck, twinDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
+  MOVER_REVEAL, adversaryDeck, autoplayRevealDeck, triggerFadeDeck, triggerPulseDeck, triggerPulseMainDeck, triggerRevealDeck, twinDeck, flashColourDeck, flyInDeck, loadShowDeck, longStepDeck, manyLayersDeck, moveTwiceDeck, spinStepsDeck, triggerColourDeck, triggerDartDeck, triggerDeck,
 } from '../../src/testdata/show-decks'
 import { serverBackend } from '../src/backend'
 import {
@@ -147,7 +147,7 @@ describe('show eligibility', () => {
   it('strictMarks: every moving step composited', async () => {
     const { c } = await classify(await flyInDeck(), { strictMarks: true })
     expect(c.steps[0]).toMatchObject({ eligibility: 'composited', reason: 'strict-marks' })
-    const fade = await classify(await triggerDeck(), { strictMarks: true })
+    const fade = await classify(await triggerFadeDeck(), { strictMarks: true })
     expect(fade.c.steps).toEqual([])
     expect(fade.c.triggers.get('3')).toBe('layers')
   })
@@ -179,7 +179,7 @@ describe('show eligibility', () => {
   }, 60_000)
 
   it('a visibility-only trigger plays from layers', async () => {
-    const { c } = await classify(await triggerDeck())
+    const { c } = await classify(await triggerFadeDeck())
     expect(c.triggers.get('3')).toBe('layers')
   })
 
@@ -238,7 +238,7 @@ describe('show eligibility', () => {
     })
 
     it('every fixture classification reconstructs at every boundary', async () => {
-      for (const bytes of [await flyInDeck(), await adversaryDeck('cover'), await adversaryDeck('moverReveal'), await moveTwiceDeck(), await triggerDeck()]) {
+      for (const bytes of [await flyInDeck(), await adversaryDeck('cover'), await adversaryDeck('moverReveal'), await moveTwiceDeck(), await triggerFadeDeck()]) {
         const run = await classify(bytes)
         for (let k = 0; k <= run.timeline.steps; k++) expect(reconstruct(run, run.timeline.checkpoint(k), 0).diff).toBe(0)
       }
@@ -257,6 +257,65 @@ describe('show eligibility', () => {
       for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 0 && Math.abs(px[i] - 0x33) <= 6 && Math.abs(px[i + 1] - 0x66) <= 6 && Math.abs(px[i + 2] - 0xcc) <= 6) blue++
       expect(blue).toBeGreaterThan(0)
       expect(reconstruct(run, tl.checkpoint(1), 0).diff).toBe(0)
+    })
+  
+  })
+
+  describe('trigger histories (fix round 2)', () => {
+    /** Each history must either not play from layers at all (the still) or reconstruct exactly. */
+    const safe = (run: Awaited<ReturnType<typeof classify>>, cursor: Parameters<typeof reconstruct>[1], t: number) => {
+      if (run.c.fallback === 'still') return
+      expect(reconstruct(run, cursor, t).diff).toBe(0)
+    }
+
+    it('a trigger mid-step, while the main pulse is up', async () => {
+      const run = await classify(await triggerPulseMainDeck())
+      const tl = run.timeline
+      const mid = tl.trigger(tl.next(tl.checkpoint(0), 0), '3', 500)!
+      expect(reconstruct({ ...run, c: { ...run.c, fallback: undefined, drop: new Set(), masks: new Map() } }, mid, 510).inkOriginal).toBeGreaterThan(1000)
+      safe(run, mid, 510)
+    })
+
+    it('the main step played after the trigger', async () => {
+      const run = await classify(await triggerPulseMainDeck())
+      const tl = run.timeline
+      const after = tl.next(tl.trigger(tl.checkpoint(0), '3', 0)!, 100)
+      safe(run, after, 610)
+    })
+
+    it('an opacity-pulse trigger, first activation', async () => {
+      const run = await classify(await triggerPulseDeck())
+      const tl = run.timeline
+      const first = tl.trigger(tl.checkpoint(0), '3', 0)!
+      expect(reconstruct({ ...run, c: { ...run.c, fallback: undefined, drop: new Set(), masks: new Map() } }, first, 500).inkOriginal).toBeGreaterThan(1000)
+      safe(run, first, 500)
+    })
+
+    it('an opacity-pulse trigger fired twice', async () => {
+      const run = await classify(await triggerPulseDeck())
+      const tl = run.timeline
+      const twice = tl.trigger(tl.trigger(tl.checkpoint(0), '3', 0)!, '3', 1100)!
+      safe(run, twice, 1600)
+    })
+
+    it('a trigger slide whose layers need no drop or mask stays layers', async () => {
+      const run = await classify(await triggerFadeDeck())
+      expect(run.c.fallback).toBeUndefined()
+      expect(run.c.drop.size + run.c.masks.size).toBe(0)
+      expect(run.c.triggers.get('3')).toBe('layers')
+      const tl = run.timeline
+      for (const t of [0, 100, 250, 500, 900]) expect(reconstruct(run, tl.trigger(tl.checkpoint(0), '3', 0)!, t).diff).toBe(0)
+    })
+
+    it('a trigger slide needing a drop or a mask plays the still', async () => {
+      // The pulses' ink is never observed; triggerDeck's background is covered by its button.
+      for (const bytes of [await triggerPulseDeck(), await triggerPulseMainDeck(), await triggerDeck()]) {
+        const { c } = await classify(bytes)
+        expect(c.drop.size + c.masks.size).toBe(0)
+        expect(c.fallback).toBe('still')
+        expect(c.diagnostics).toContainEqual({ code: 'step-composited' })
+        expect([...c.triggers.values()].every(v => v === 'cut')).toBe(true)
+      }
     })
   })
 })

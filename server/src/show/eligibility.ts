@@ -33,6 +33,10 @@
  *    - any other mismatch plays the still.
  * 6. **Frames (D3, `allocateFrames`) and triggers (6a).** A trigger plays from layers only if it is
  *    visibility and opacity only, by sample and by timing, in every combination.
+ *    - Fix round 2: a slide with any trigger plays from layers only if nothing is dropped or masked and
+ *      every click step is `layers`. Otherwise it plays the still.
+ *    - The trigger combinations above still feed the envelope: they are reachable histories, and they can
+ *      show a layer's full ink.
  */
 import { invert, stateMatrix } from '../../../src/slideshow/affine'
 import type { SchedulerSnapshot } from '../../../src/slideshow/engine/scheduler'
@@ -598,7 +602,11 @@ export function classifySlide(input: ClassifyInput): Classification {
     }
     if (composer.takeDiagnostics().length) throw new Still('mask')
 
-    // Rule 6a.
+    // Rule 6a (fix round 2, controller ruling): trigger histories interleave with the main sequence and with each
+    // other without bound, so no finite sample proves them. A slide with triggers plays from layers only when
+    // every shipped layer is its full raster (no drop, no mask: any history then composes from complete layers
+    // exactly as locally) and every click step plays from layers (a keyframe track cannot carry trigger effects).
+    if (triggers.length && (out.drop.size > 0 || out.masks.size > 0 || steps.some(st => st.eligibility !== 'layers'))) throw new Still('mask')
     for (const spid of triggers) out.triggers.set(spid, triggerOk.get(spid) ? 'layers' : 'cut')
     if (budgetCut.size) out.diagnostics.push({ code: 'show-budget' })
     return finish(steps)
