@@ -612,6 +612,62 @@ describe('showValue=0 hides canvas text only under evidence (S3-O)', () => {
   })
 })
 
+describe('the active cell of a coarse frame keeps its bar or its text (PR #74 P2, S3-O)', () => {
+  const tile = (sheet: XlsxSheet, batch: CfPaintBatch, options: { coarse: boolean; active?: { row: number; col: number } }) => {
+    const metrics = computeMetrics(sheet)
+    const r = recorder(metrics.widthPx, metrics.heightPx)
+    const geometry = buildSheetGeometry(sheet)
+    const result = renderSheetViewport(sheet, r.ctx, geometry, { box: { x: 0, y: 0, width: metrics.widthPx, height: metrics.heightPx }, zoom: 1, deviceScale: 1 }, { conditionalFormatting: batch }, {
+      cache: new LayoutCache(), ...(options.active ? { activeCell: options.active } : {}), ...(options.coarse ? { frameBudget: { records: 0, gridlines: 0 } } : {}),
+    })
+    return { kind: result.kind, texts: r.ops.filter(o => o.op === 'text' && !/^Zoom in /.test(o.text!)).map(o => o.text), bars: r.ops.filter(o => o.op === 'rect' && o.style === '#0000ff') }
+  }
+  it('showValue="0": a coarse frame still paints the active cell\'s bar (and keeps its text hidden)', async () => {
+    await withBars(async () => {
+      const sheet = barSheet([10, 40, 70], { def: { showValue: false } })
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const got = tile(sheet, batch, { coarse: true, active: { row: 1, col: 0 } })
+      expect(got.kind).toBe('coarse')
+      expect(got.bars).toHaveLength(1) // the active cell's bar only: the summarized cells paint none
+      expect(got.texts).toEqual([])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
+  })
+  it('showValue on: a coarse frame draws the active cell\'s text and its bar', async () => {
+    await withBars(async () => {
+      const sheet = barSheet([10, 40, 70])
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const got = tile(sheet, batch, { coarse: true, active: { row: 1, col: 0 } })
+      expect(got.kind).toBe('coarse')
+      expect(got.bars).toHaveLength(1)
+      expect(got.texts).toEqual(['40'])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
+  })
+  it('a coarse frame without an active cell paints no bar and no text', async () => {
+    await withBars(async () => {
+      const sheet = barSheet([10, 40, 70], { def: { showValue: false } })
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const got = tile(sheet, batch, { coarse: true })
+      expect(got.kind).toBe('coarse')
+      expect(got.bars).toHaveLength(0)
+      expect(got.texts).toEqual([])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
+  })
+  it('the detail plan is unchanged: every bar paints and the active cell is not painted twice', async () => {
+    await withBars(async () => {
+      const sheet = barSheet([10, 40, 70], { def: { showValue: false } })
+      const batch = (await prepareCfPaint(sheet, { evidence: cfRuntimeEvidence }))!
+      const got = tile(sheet, batch, { coarse: false, active: { row: 1, col: 0 } })
+      expect(got.kind).toBe('detail')
+      expect(got.bars).toHaveLength(2)
+      expect(got.texts).toEqual([])
+      batch.dispose()
+    }, { extra: [BAR_SHOWVALUE_EVIDENCE] })
+  })
+})
+
 describe('the axis is Excel\'s dotted column (fix round 1)', () => {
   const axisBar = bar({ axisFraction: 1 / 3, startFraction: 1 / 3, endFraction: 2 / 3, axisColor: 0xff000000 })
   /** The colour each device row of the axis column paints: the gap underlay, overpainted by the dashes. */

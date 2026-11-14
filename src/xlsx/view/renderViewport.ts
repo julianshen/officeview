@@ -288,8 +288,10 @@ export function renderSheetViewport(
     const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
     for (const record of records) replay(record, 'fill')
     if (extraActive) replay(extraActive, 'fill')
-    // Data bars (Task 22): over the fills, under the text, on exactly the hosts this frame painted.
-    if (cf && plan.kind === 'detail') {
+    // Data bars (Task 22): over the fills, under the text, on exactly the hosts this frame painted. A coarse frame's
+    // only exact host is the retained active cell (`records` is empty), and the content replay hides its text through
+    // `hidesTextAt` whatever the plan kind, so the bar pass runs here too: text is hidden only where a bar is painted.
+    if (cf) {
       const hosts = new Map<number, Rect & { fill?: string }>()
       let r0 = Infinity, c0 = Infinity, r1 = -1, c1 = -1
       for (const record of extraActive ? [...records, extraActive] : records) {
