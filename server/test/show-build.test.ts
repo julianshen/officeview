@@ -11,9 +11,8 @@ import { createRng } from '../../src/slideshow/rng'
 import { trackInputs } from '../src/show/build'
 import { drawsAt, slideStateAt } from '../src/show/compose'
 import type { DocumentHost } from '../src/render'
-import { appearMoveDeck, autoplayFadeDeck, withFilter, withoutEntrance, withTriggeredMove } from './show-fixtures'
-import { compareMarkContribution } from '../src/show/marks'
-import { markFrame } from '../src/show/build'
+import { appearMoveDeck, autoplayFadeDeck, revealThenMoveDeck, withFilter, withoutEntrance, withTriggeredMove } from './show-fixtures'
+import { triggersMoveGeometry } from '../src/show/build'
 import { createSlideComposer } from '../src/show/compose'
 import { canvasBackend } from '../../src/core/canvas-backend'
 import type { LayerBitmap } from '../../src/slideshow/types'
@@ -245,37 +244,33 @@ describe('buildShowPlan', () => {
       } finally { o.dispose(); s2.dispose() }
     }, 60_000)
 
-    it('fix round 2: a triggered motion entrance is marked at its trigger end rest (or refused still)', async () => {
-      const deck = await withTriggeredMove(await triggerFadeDeck())
-      const { host, docKey } = await openDeck(deck)
-      const marked = await host.showPlan(docKey, job())
-      if ('refused' in marked) { expect(marked.refused).toBe('still'); return }
-      const plain = built(await host.showPlan(docKey, job({ mark: { kind: 'off' } })))
-      expect(marked.plan.diagnostics.map(d => d.code)).toContain('trigger-cut')
-      const box = R(marked.plan).find(l => l.key === 'sp:2')!
-      expect(marked.assets.find(a => a.assetId === box.assetId)!.rest.x).toBe(box.bounds.x + 240)
-      // The mark's own contribution at the trigger's end state, composed from the shipped assets.
-      const { ps, timeline } = trackInputs(showOf(host, docKey), job())
-      const cur = timeline.trigger(timeline.checkpoint(0), '3', 0)!
-      const keys = timeline.keyTimes(cur, 0, Number.POSITIVE_INFINITY)
-      const draws = drawsAt(ps, slideStateAt(ps, timeline, cur, keys[keys.length - 1]!, createRng(1), createDiagnosticSink()))
-      const composeFrom = (b: BuiltShowPlan) => {
-        const m = new Map<(typeof ps.layers)[number], LayerBitmap>()
-        for (const rec of R(b.plan)) {
-          const a = b.assets.find(x => x.assetId === rec.assetId)!, d = decodePng(a.png)
-          const c = canvasBackend().createCanvas(d.w, d.h), x = c.getContext('2d') as unknown as CanvasRenderingContext2D
-          const img = x.createImageData(d.w, d.h); img.data.set(d.rgba); x.putImageData(img, 0, 0)
-          m.set(ps.layers[rec.id]!, { canvas: c as never, bounds: rec.bounds, scale: rec.scale, bytes: d.w * d.h * 4 })
-        }
-        const comp = createSlideComposer(ps, m, 1)
-        try { return { width: comp.width, height: comp.height, data: new Uint8ClampedArray(comp.compose(draws)) } as unknown as ImageData } finally { comp.dispose() }
-      }
-      const cm = composeFrom(marked), cu = composeFrom(plain)
-      const rm = { width: cu.width, height: cu.height, data: markFrame(cu.data, cu.width, cu.height, 1, { w: 960, h: 720 }, { kind: 'fixed' }) } as unknown as ImageData
-      expect(compareMarkContribution(cm, cu, rm, cu).pass).toBe(true)
+    it('fix round 3: a trigger that moves a layer refuses the slide still (mark-rest)', async () => {
+      // Round 2's single-trigger motion entrance: its rest is no longer enumerated, it is refused by construction.
+      const { host, docKey } = await openDeck(await withTriggeredMove(await triggerFadeDeck()))
+      const r = await host.showPlan(docKey, job())
+      expect('refused' in r && r.refused).toBe('still')
+      expect('refused' in r && r.diagnostics.map(d => d.code)).toContain('mark-rest')
     }, 60_000)
 
-    it('fix round 2: a trigger moving a shown layer to a second rest is refused still (mark-rest)', async () => {
+    it('fix round 3: reveal-then-move over two triggers is refused still (mark-rest)', async () => {
+      const { host, docKey } = await openDeck(await revealThenMoveDeck())
+      const r = await host.showPlan(docKey, job())
+      expect('refused' in r && r.refused).toBe('still')
+      expect('refused' in r && r.diagnostics.map(d => d.code)).toContain('mark-rest')
+    }, 60_000)
+
+    it('fix round 3: geometry in trigger sequences is detected; visibility, opacity, colour and masks are not', () => {
+      const leaf = (kind: string, attrNames: string[] = []) => ({ kind, attrNames, ctn: { start: [] } })
+      const seq = (child: unknown) => ({ root: { kind: 'par', ctn: { start: [] }, children: [{ kind: 'seq', ctn: { nodeType: 'interactiveSeq', start: [] }, children: [child] }] }, build: [] }) as never
+      for (const k of ['animMotion', 'animRot', 'animScale']) expect(triggersMoveGeometry(seq(leaf(k)))).toBe(true)
+      expect(triggersMoveGeometry(seq(leaf('anim', ['ppt_x'])))).toBe(true)
+      expect(triggersMoveGeometry(seq(leaf('set', ['ppt_w'])))).toBe(true)
+      for (const n of [leaf('set', ['style.visibility']), leaf('anim', ['style.opacity']), leaf('animClr', ['fillcolor']), leaf('animEffect')]) expect(triggersMoveGeometry(seq(n))).toBe(false)
+      // A main-sequence motion is not a trigger's.
+      expect(triggersMoveGeometry({ root: { kind: 'par', ctn: { start: [] }, children: [leaf('animMotion')] }, build: [] } as never)).toBe(false)
+    })
+
+    it('fix round 3: a trigger moving a shown layer to a second rest is refused still (mark-rest)', async () => {
       const deck = await withoutEntrance(await withTriggeredMove(await triggerFadeDeck()))
       const { host, docKey } = await openDeck(deck)
       const r = await host.showPlan(docKey, job())

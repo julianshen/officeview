@@ -380,40 +380,32 @@ function bitmapOf(w: number, h: number, rgba: Uint8ClampedArray, bounds: Rect, s
   return { canvas, bounds: { ...bounds }, scale, bytes: w * h * 4 }
 }
 
-/** Each trigger's end state from every main checkpoint (fix round 2), as draws; triggers that do not fire are skipped. */
-function triggerEndDraws(ps: PreparedSlide, timeline: SlideTimeline, spids: readonly string[]): DrawnLayer[][] {
-  if (!spids.length) return []
-  const rng = createRng(0x5eed + ps.index), sink = createDiagnosticSink(), measure = measureCtx()
-  const busy = timeline.busyUntil(timeline.initial())
-  const t0 = Number.isFinite(busy) && busy > 0 ? busy : 0
-  const out: DrawnLayer[][] = []
-  for (const spid of spids) {
-    for (let k = 0; k <= timeline.steps; k++) {
-      const cur = timeline.trigger(timeline.checkpoint(k), spid, t0)
-      if (!cur) continue
-      const keys = timeline.keyTimes(cur, t0, Number.POSITIVE_INFINITY)
-      const end = keys.length ? Math.max(t0, keys[keys.length - 1]!) : t0
-      out.push(drawsAt(ps, slideStateAt(ps, timeline, cur, end, rng, sink), { measure, resolveFont }))
-    }
-  }
-  return out
-}
+/** Attributes that only show, hide, fade or recolour a target: they never change its settled transform. */
+const NON_GEOMETRIC = new Set(['style.visibility', 'style.opacity', 'fillcolor', 'stroke.color', 'style.color', 'fill.on', 'stroke.on', 'fill.type', 'fill.opacity', 'stroke.opacity'])
 
-/** The distinct draw matrices (D8 distinctness) a layer is displayed at across `lists`. */
-function restsOf(layer: PlanLayer, lists: readonly DrawnLayer[][], scale: number): number[][] {
-  const out: number[][] = []
-  for (const list of lists) {
-    const d = list.find(x => x.layer === layer)
-    if (!d || !d.state.visible || !(d.state.opacity > 0)) continue
-    const m = stateMatrixOf(d.state)
-    if (!out.some(r => sameRest(r, m, scale))) out.push(m)
+/**
+ * Fix round 3 (controller ruling): whether any interactive (trigger) sequence of `tree` holds a behaviour that can
+ * change a layer's settled transform: a motion path, scale or rotation, or a set/anim of any attribute other than
+ * visibility, opacity and colour. Trigger histories (any order, overlap, repetition) cannot be enumerated, so a
+ * trigger slide is proven only when its triggers never move a layer: its rests are then exactly the main-boundary
+ * rests, which D8 and the mark validation prove.
+ */
+export function triggersMoveGeometry(tree: TimingTree | undefined): boolean {
+  if (!tree) return false
+  const geometric = (n: TimeNode, depth: number): boolean => {
+    if (depth > 256) return true
+    if ('children' in n) return n.children.some(c => geometric(c, depth + 1))
+    if (n.kind === 'animMotion' || n.kind === 'animRot' || n.kind === 'animScale') return true
+    if (n.kind === 'anim' || n.kind === 'set') return n.attrNames.some(a => !NON_GEOMETRIC.has(a))
+    return false
   }
-  return out
-}
-/** D8: the same rest unless any linear difference, or a translation over 0.5 device px. */
-function sameRest(a: readonly number[], b: readonly number[], scale: number): boolean {
-  for (let i = 0; i < 4; i++) if (Math.abs(a[i]! - b[i]!) > 1e-6) return false
-  return Math.abs(a[4]! - b[4]!) <= 0.5 / scale && Math.abs(a[5]! - b[5]!) <= 0.5 / scale
+  const interactive = (n: TimeNode): boolean => n.ctn.nodeType === 'interactiveSeq' || n.ctn.start.some(c => c.evt !== undefined && c.target !== undefined)
+  const walk = (n: TimeNode, depth: number): boolean => {
+    if (depth > 256) return true
+    if (interactive(n)) return geometric(n, depth)
+    return 'children' in n && n.children.some(c => walk(c, depth + 1))
+  }
+  return walk(tree.root, 0)
 }
 
 /** The draws of each step boundary `0..steps` (settled checkpoints). */
@@ -492,6 +484,11 @@ export function buildShowPlan(doc: ShowHost, job: ShowPlanJob, opts: ShowBuildOp
 
 function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOptions, check: () => void): BuiltShowPlan | ShowRefusal {
   const ps = e.ps!, timeline = e.timeline!, rasters = e.rasters!, record = e.record!
+  // Fix round 3 (controller ruling): a trigger that can move a layer leaves its rests unprovable (trigger histories
+  // cannot be enumerated): the slide plays its still, before any classification work.
+  if (timeline.triggers().length > 0 && triggersMoveGeometry(ps.meta.timing && !('refused' in ps.meta.timing) ? ps.meta.timing : undefined)) {
+    return { refused: 'still', diagnostics: [{ code: 'step-composited' }, { code: 'trigger-cut' }, { code: 'mark-rest' }] }
+  }
   const c = classificationOf(e, job)
   check()
   if (c.fallback === 'still') {
@@ -507,11 +504,6 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
   try {
     const n = timeline.steps
     const boundaries = boundaryDraws(ps, timeline)
-    // Fix round 2 (controller ruling): every trigger's end state, from every main checkpoint (the states Task 5
-    // observes), is a displayed rest too: a cut trigger jumps there, a layers trigger settles there.
-    const triggerEnds = triggerEndDraws(ps, timeline, [...c.triggers.keys()])
-    /** Every settled state the layers display: the main boundaries, then the trigger end states. */
-    const displayed = [...boundaries, ...triggerEnds]
     // The entry frame: the slide before step 1, composed from the original rasters, marked once (as a unit).
     const entryRgba = markFrame(composer.compose(boundaries[0]!), PW, PH, scale, page, job.mark)
     check()
@@ -559,7 +551,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
         const bmp = classified.get(layer)
         if (!bmp) return
         let rest: Rect = { ...bmp.bounds }
-        for (const list of displayed) {
+        for (const list of boundaries) {
           const d = list.find(x => x.layer === layer)
           if (!d || !d.state.visible || !(d.state.opacity > 0)) continue
           const m = stateMatrixOf(d.state)
@@ -570,13 +562,6 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
         }
         shipped.push({ layer, index, bmp, rest })
       })
-      // Fix round 2: on a trigger slide (which cannot composite), a layer displayed at more than one distinct rest
-      // (D8: any linear difference, or over 0.5 device px) across the main boundaries and the trigger end states
-      // cannot be served by one marked asset: the slide plays its still.
-      if (c.triggers.size > 0 && shipped.some(s => restsOf(s.layer, displayed, scale).length > 1)) {
-        diagnostics.push({ code: 'mark-rest' })
-        return stillIfInteractive()!
-      }
       // A rest that is not a pure translation cannot carry a page-anchored mark: fail closed.
       if (shipped.some(s => !Number.isFinite(s.rest.x))) {
         allComposited('mark-rest'); diagnostics.push({ code: 'mark-rest' }); shipped = []
@@ -659,7 +644,7 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
 
     // §7 validation at every boundary, on the decoded shipped PNGs with the validation code's Layer-1 applied.
     if (shipped.length) {
-      const ok = validate(ps, rasters, c, shipped.map((s, i) => ({ layer: s.layer, bounds: s.bmp.bounds, scale: s.bmp.scale, asset: layerAssets[i]! })), displayed, { scale, PW, PH, page, job, docKey: show.docKey, compose: opts.compose, check })
+      const ok = validate(ps, rasters, c, shipped.map((s, i) => ({ layer: s.layer, bounds: s.bmp.bounds, scale: s.bmp.scale, asset: layerAssets[i]! })), boundaries, { scale, PW, PH, page, job, docKey: show.docKey, compose: opts.compose, check })
       if (!ok) {
         allComposited('marks')
         const still = stillIfInteractive()

@@ -171,3 +171,33 @@ export async function withoutEntrance(bytes: Uint8Array): Promise<Uint8Array> {
   zip.file(path, out)
   return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
 }
+
+/** An interactive sequence started by a click on `trigger`, holding `body` in one effect. */
+function triggerSeq(id: () => number, trigger: number, body: string, cls: 'entr' | 'path' = 'entr'): string {
+  const seq = id(), par = id(), own = id()
+  const cond = `<p:cond evt="onClick" delay="0">${tgt(trigger)}</p:cond>`
+  return `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${seq}" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq">` +
+    `<p:stCondLst>${cond}</p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>` +
+    `<p:par><p:cTn id="${par}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:par><p:cTn id="${own}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${body}</p:childTnLst></p:cTn></p:par>` +
+    `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:nextCondLst>${cond}</p:nextCondLst></p:seq>`
+}
+
+/**
+ * The reviewer's reveal-then-move probe (fix round 3), on `triggerFadeDeck`'s layout: trigger A, a click on the
+ * button (id 3), fades the initially hidden box (id 2) in; trigger B, a click on the box itself, moves it 240 px
+ * right (a held motion path, no entrance). Only "A, then B" shows the box at its moved rest.
+ */
+export function revealThenMoveDeck(): Promise<Uint8Array> {
+  let n = 3
+  const id = () => n++
+  const reveal = triggerSeq(id, 3, appear(id, 2) + `<p:animEffect transition="in" filter="fade"><p:cBhvr>${ctn(id(), 500)}${tgt(2)}</p:cBhvr></p:animEffect>`)
+  const move = triggerSeq(id, 2, `<p:animMotion path="M 0 0 L 0.25 0 E"><p:cBhvr>${ctn(id(), 500)}${tgt(2)}<p:attrNameLst><p:attrName>ppt_x</p:attrName><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr></p:animMotion>`, 'path')
+  return buildPptxDeck({
+    slides: [{
+      bg: { solid: 'FFFFFF' },
+      shapes: [rect(3, 'Button', 80, 560, 160, 80, 'F4B183'), rect(2, 'Box', 380, 200, 200, 200, '336699')],
+      timingXml: timingXmlOf(reveal + move),
+    }],
+  })
+}
