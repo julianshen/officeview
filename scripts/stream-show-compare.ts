@@ -325,7 +325,16 @@ interface Wire {
   diagnostics: string[]
 }
 
-async function fetchWire(bytes: Uint8Array, marks: MarkSpec): Promise<Wire> {
+/**
+ * The show-plan refusals production plays as the piece-3 unit image (`show-fetch.ts`, `show.ts`): only these become
+ * unit stills here. Any other show-plan error fails the comparison (fix round 1).
+ */
+export const SHOW_STILL_CODES: ReadonlySet<string> = new Set(['still', 'show-budget', 'show-limits', 'show-plan-timeout'])
+
+/** TEST-ONLY hooks for the harness's own negative tests. `showPlanEnd` replaces a show-plan reply with an end message. */
+export interface HarnessTestOnly { showPlanEnd?: (unit: number) => { type: string; code: string } | undefined }
+
+async function fetchWire(bytes: Uint8Array, marks: MarkSpec, testOnly: HarnessTestOnly = {}): Promise<Wire> {
   const { Client, start } = await import('../server/test/harness')
   const { decodeShowMessage, SHOW_PLAN_LIMITS } = await import('../src/stream/show-plan')
   const visibleMark = marks.kind
@@ -351,7 +360,10 @@ async function fetchWire(bytes: Uint8Array, marks: MarkSpec): Promise<Wire> {
       if (list[u]!.anim) {
         await fresh()
         const r = await c.showPlan(u, 1, 'full', { ms: 60_000 })
+        const forced = testOnly.showPlanEnd?.(u)
+        if (forced) r.end = forced
         for (const x of r.extra) if (x.type === 'diag') w.diagnostics.push(`${u}:${x.code}${x.reason ? `/${x.reason}` : ''}`)
+        if (r.end && !SHOW_STILL_CODES.has(String(r.end.code))) throw new Error(`unit ${u}: show-plan refused ${String(r.end.code)}, which production does not play as a still`)
         if (r.end) w.refused.set(u, String(r.end.code))
         else {
           plan = (decodeShowMessage(r.messages[0]!, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: typeof plan }).plan!
@@ -450,7 +462,7 @@ function wantedDraw(smp: Sample, step: number, span: number, morphDur: number, p
   return undefined
 }
 
-export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows?: Set<string>; widening?: Tolerance; family?: string }): Promise<StreamDeckResult> {
+export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows?: Set<string>; widening?: Tolerance; family?: string; testOnly?: HarnessTestOnly }): Promise<StreamDeckResult> {
   await installDom()
   const bytes = await deckBytes(deck)
   const { planDeck } = await import('./slideshow-capture-plan')
@@ -466,7 +478,7 @@ export async function compareStreamDeck(deck: string, o: { marks: MarkSpec; rows
   const { decodeShowMessage, SHOW_PLAN_LIMITS } = await import('../src/stream/show-plan')
 
   // --- The wire first: which steps are composited, which slides are stills. ---
-  const wire = await fetchWire(bytes, o.marks)
+  const wire = await fetchWire(bytes, o.marks, o.testOnly)
   const planOf = new Map<number, import('../src/stream/show-plan').ShowPlanRecord>()
   for (const [u, p] of wire.plans) planOf.set(u, (decodeShowMessage(p.reply[0]!, { unit: u, maxDecoded: SHOW_PLAN_LIMITS.showDecoded }) as { plan: import('../src/stream/show-plan').ShowPlanRecord }).plan)
   const morphRec = new Map<number, import('../src/stream/show-plan').MorphPlanRecord>()
@@ -793,13 +805,32 @@ function parseArgs(args: string[]): { deck: string; marks: Array<'fixed' | 'off'
   return deck ? { deck, marks, widening } : 'usage: bun scripts/stream-show-compare.ts --deck <name|all> [--marks fixed|off] [--no-widening]'
 }
 
-export async function runStreamCompareCli(args: string[]): Promise<number> {
+/**
+ * Why a deck's result fails the show-parity gate (empty: it passes). A compared frame over its tolerance, a sample
+ * only one show plays (`unmatched`), or a structure difference that the ruled still adjustment does not excuse
+ * (fix round 1). Unit stills are reported apart and never fail it (controller ruling).
+ */
+export function deckVerdict(r: StreamDeckResult): string[] {
+  const out: string[] = []
+  const fails = r.outcomes.filter((x) => x.status === 'fail').length
+  const unmatched = r.outcomes.filter((x) => x.status === 'unmatched').length
+  if (fails) out.push(`${fails} frame(s) over tolerance`)
+  if (unmatched) out.push(`${unmatched} unmatched sample(s)`)
+  if (!r.structure.equal && !r.structure.equalExceptStills) out.push('structure differs from local')
+  return out
+}
+
+/** Injectable for the CLI's own regression test: the decks, the measurement, the comparison, and whether to write. */
+export interface CliDeps { decks?: string[]; measure?: typeof measureWidening; compare?: typeof compareStreamDeck; write?: boolean }
+
+export async function runStreamCompareCli(args: string[], deps: CliDeps = {}): Promise<number> {
+  const measure = deps.measure ?? measureWidening, compare = deps.compare ?? compareStreamDeck
   const opts = parseArgs(args)
   if (typeof opts === 'string') { console.error(`stream-show-compare: ${opts}`); return 2 }
   const { TOLERANCE_APPROX } = await import('../src/slideshow/catalogue')
   const corpus = existsSync(join(REPO, 'corpus')) ? readdirSync(join(REPO, 'corpus')).filter((f) => f.endsWith('.pptx')).sort() : []
-  const decks = opts.deck === 'all' ? [...Object.keys(SYNTHETIC), ...corpus] : [opts.deck]
-  if (opts.deck === 'all' && corpus.length === 0) { console.error('stream-show-compare: no corpus decks (run bun scripts/fetch-corpus.ts)'); return 2 }
+  const decks = deps.decks ?? (opts.deck === 'all' ? [...Object.keys(SYNTHETIC), ...corpus] : [opts.deck])
+  if (!deps.decks && opts.deck === 'all' && corpus.length === 0) { console.error('stream-show-compare: no corpus decks (run bun scripts/fetch-corpus.ts)'); return 2 }
   await installDom()
   // 1. The renderer widening, measured and frozen before any parity sample (D20).
   const wrows: WideningRow[] = []
@@ -808,7 +839,7 @@ export async function runStreamCompareCli(args: string[]): Promise<number> {
   const deckWidening = new Map<string, Tolerance>()
   for (const d of decks) {
     try {
-      const rows = await measureWidening(d, await deckBytes(d))
+      const rows = await measure(d, deps.measure ? new Uint8Array() : await deckBytes(d))
       wrows.push(...rows)
       const counts = new Map<string, number>()
       for (const r of rows) counts.set(r.family, (counts.get(r.family) ?? 0) + 1)
@@ -827,24 +858,26 @@ export async function runStreamCompareCli(args: string[]): Promise<number> {
   // 2. Parity, per deck and mark pass.
   /** Unit stills (pre-existing unit path): reported, excluded from the show-parity exit status (controller ruling). */
   const unitStills: Array<{ deck: string; marks: string; slide: number; source: string; pass: boolean; meanAbs: number; rowMax: number; tol: Tolerance }> = []
-  const results: Array<Omit<StreamDeckResult, 'outcomes'> & { frames: Record<string, number>; worst?: FrameOutcome; failures: FrameOutcome[]; stillFrames: FrameOutcome[]; error?: string }> = []
+  const results: Array<Omit<StreamDeckResult, 'outcomes'> & { frames: Record<string, number>; gate?: string[]; worst?: FrameOutcome; failures: FrameOutcome[]; stillFrames: FrameOutcome[]; error?: string }> = []
   for (const d of decks) {
     for (const mk of opts.marks) {
       const family = deckFamily.get(d) ?? 'latin'
       const widening = (opts.widening && deckWidening.get(d)) || { meanAbs: 0, rowMax: 0 }
       const t0 = performance.now()
       try {
-        const r = await compareStreamDeck(d, { marks: { kind: mk } as MarkSpec, widening, family })
+        const r = await compare(d, { marks: { kind: mk } as MarkSpec, widening, family })
         const frames: Record<string, number> = {}
         for (const x of r.outcomes) frames[x.status] = (frames[x.status] ?? 0) + 1
         const failures = r.outcomes.filter((x) => x.status === 'fail')
-        if (failures.length) failed = true
+        const verdict = deckVerdict(r)
+        if (verdict.length) failed = true
         const compared = r.outcomes.filter((x) => x.status === 'pass' || x.status === 'fail')
         const worst = compared.sort((a, b) => b.rowMax - a.rowMax)[0]
         const { outcomes: _o, ...rest } = r
-        results.push({ ...rest, frames, ...(worst ? { worst } : {}), failures, stillFrames: r.outcomes.filter((x) => x.status === 'unit-still') })
+        results.push({ ...rest, frames, gate: verdict, ...(worst ? { worst } : {}), failures, stillFrames: r.outcomes.filter((x) => x.status === 'unit-still') })
         for (const x of r.outcomes) if (x.status === 'unit-still') unitStills.push({ deck: d, marks: mk, slide: x.slide, source: x.unitStill!.source, pass: x.unitStill!.pass, meanAbs: x.meanAbs, rowMax: x.rowMax, tol: x.tol })
         console.log(`${d} [marks ${mk}]: ${JSON.stringify(frames)} structure ${r.structure.equal ? 'equal' : r.structure.equalExceptStills ? 'equal except stills' : 'DIFFERENT'} fallback ${r.fallback.composited}/${r.fallback.steps} (${Math.round(performance.now() - t0)} ms)`)
+        if (verdict.length) console.log(`  GATE FAIL: ${verdict.join('; ')}`)
         for (const x of failures) console.log(`  FAIL ${x.slide}-${x.step}-${x.pct} ${x.kind} ${x.detail} tol ${x.tol.meanAbs.toFixed(4)}/${x.tol.rowMax.toFixed(4)}`)
       } catch (e) {
         failed = true
@@ -857,7 +890,7 @@ export async function runStreamCompareCli(args: string[]): Promise<number> {
   for (const u of unitStills) console.log(`  ${u.pass ? 'pass' : 'FAIL'} ${u.deck} [marks ${u.marks}] slide ${u.slide} ${u.source}: meanAbs ${u.meanAbs.toFixed(4)} rowMax ${u.rowMax.toFixed(4)} tol ${u.tol.meanAbs.toFixed(4)}/${u.tol.rowMax.toFixed(4)}`)
   const out = { generated: `bun scripts/stream-show-compare.ts ${args.join(' ')}`, approx: TOLERANCE_APPROX, families, widening: wrows, unitStills, results }
   // Only the full run is the published record; a single deck prints.
-  if (opts.deck === 'all') writeFileSync(COMPARE_OUT, `${JSON.stringify(out, null, 2)}\n`)
+  if (opts.deck === 'all' && deps.write !== false) writeFileSync(COMPARE_OUT, `${JSON.stringify(out, null, 2)}\n`)
   return failed ? 1 : 0
 }
 

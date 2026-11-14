@@ -9,7 +9,7 @@
  * (`bun scripts/stream-show-compare.ts --deck all`); this file holds the synthetic decks only.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { compareStreamDeck, deckBytes, installDom, measureWidening, uninstallDom, wideningByFamily, type StreamDeckResult } from '../../scripts/stream-show-compare'
+import { compareStreamDeck, deckBytes, deckVerdict, installDom, measureWidening, runStreamCompareCli, SHOW_STILL_CODES, uninstallDom, wideningByFamily, type StreamDeckResult } from '../../scripts/stream-show-compare'
 import { disposePool } from './harness'
 import { TOLERANCE_APPROX } from '../../src/slideshow/catalogue'
 
@@ -120,6 +120,32 @@ describe('streamed show parity (synthetic decks)', () => {
     expect(r.structure.streamed).toEqual(r.structure.local)
     expect(r.structure.equal).toBe(true)
     expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched').map((o) => o.detail)).toEqual([])
+  }, 120_000)
+
+  test('the CLI fails on an unmatched sample, an unexcused structure difference or a non-still refusal (fix round 1)', async () => {
+    const base = await run('flyInDeck', 'off')
+    expect(deckVerdict(base)).toEqual([])
+    const unmatched: StreamDeckResult = { ...base, outcomes: [...base.outcomes, { ...base.outcomes[0]!, status: 'unmatched', detail: 'stub' }] }
+    expect(deckVerdict(unmatched).join()).toContain('unmatched')
+    const different: StreamDeckResult = { ...base, structure: { ...base.structure, equal: false, equalExceptStills: false } }
+    expect(deckVerdict(different).join()).toContain('structure')
+    // The ruled still adjustment stays excused.
+    expect(deckVerdict({ ...base, structure: { ...base.structure, equal: false, equalExceptStills: true } })).toEqual([])
+    // The CLI itself, over stub measurement and comparison: one unmatched sample, or a different structure → exit 1.
+    const stub = (r: StreamDeckResult) => ({ decks: ['stub'], write: false, measure: async () => [], compare: async () => r })
+    expect(await runStreamCompareCli(['--deck', 'stub', '--marks', 'off'], stub(base))).toBe(0)
+    expect(await runStreamCompareCli(['--deck', 'stub', '--marks', 'off'], stub(unmatched))).toBe(1)
+    expect(await runStreamCompareCli(['--deck', 'stub', '--marks', 'off'], stub(different))).toBe(1)
+  }, 120_000)
+
+  test('a non-still show-plan error fails the comparison; only production still codes become unit stills (fix round 1)', async () => {
+    expect([...SHOW_STILL_CODES].sort()).toEqual(['show-budget', 'show-limits', 'show-plan-timeout', 'still'])
+    // The unit reply succeeds; the show-plan reply is rewritten to a policy-refused error.
+    await expect(compareStreamDeck('flyInDeck', { marks: { kind: 'off' }, testOnly: { showPlanEnd: () => ({ type: 'error', code: 'policy-refused' }) } })).rejects.toThrow(/policy-refused/)
+    // A production still code is still admitted as a unit still.
+    const r = await compareStreamDeck('flyInDeck', { marks: { kind: 'off' }, testOnly: { showPlanEnd: () => ({ type: 'error', code: 'still' }) } })
+    expect(r.structure.stills.map((x) => x.code)).toEqual(['still'])
+    expect(r.outcomes.filter((o) => o.status === 'unit-still').map((o) => o.unitStill?.source)).toEqual(['refused:still'])
   }, 120_000)
 
   test('fallback rate reported', async () => {

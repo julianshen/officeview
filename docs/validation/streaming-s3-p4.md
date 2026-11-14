@@ -85,6 +85,19 @@ resolves through @napi-rs/canvas to a host face. They do pick up the new `Calibr
 - **Also open, on the show path too:** glyphs missing from every pack face (for example CJK) may still fall
   back to host fonts per glyph inside Skia.
 
+**Gate rule (fix round 1).** The harness fails a deck on any of:
+
+- a compared frame over its tolerance;
+- an `unmatched` sample;
+- a structure difference not excused by the ruled still adjustment (`equalExceptStills`).
+
+Only production's still codes (`still`, `show-budget`, `show-limits`, `show-plan-timeout`) become unit stills.
+Any other show-plan error fails the comparison (`SHOW_STILL_CODES`, `deckVerdict`).
+
+The CLI's own regression test covers this. It runs over stub measurement and comparison, and checks that an
+unmatched sample or a differing structure gives exit 1. A second test rewrites the show-plan reply to
+`policy-refused` and checks that the comparison fails.
+
 ## Unit stills (pre-existing unit path)
 
 These are piece-3 unit images: unanimated slides (D5), and the stills of refused animated slides (`refused:<code>`).

@@ -184,6 +184,9 @@ for (const backend of BACKENDS) {
       }
       await page.waitForTimeout(500)
       expect(presses).toBeGreaterThan(150)
+      // The input was not ignored: the show navigated, re-asking the slide-2 Morph pair on its revisits.
+      expect(w.count('show-morph')).toBeGreaterThanOrEqual(10)
+      expect(await surface(page).getAttribute('data-slide')).toMatch(/^[01]$/)
       expect(await presentState(page)).toBe('started')
       expect(await streamError(page)).toBeUndefined()
       expect((await rec(page)).closes).toEqual([])
