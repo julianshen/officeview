@@ -62,6 +62,18 @@ export class UnitSendLog implements UnitBudgetView {
   /** The first reply for `reqId` arrived now; later replies change nothing. */
   answered(reqId: number) { if (this.sends.has(reqId) && this.sends.get(reqId) === undefined) this.sends.set(reqId, this.now()) }
 
+  /**
+   * R30: the send under `from` was refused before the server's rate gate (a
+   * stale token) and goes out again as `to`: its slot, still unanswered, moves
+   * to `to` and ages only from `to`'s reply. A later reply to `from` frees nothing.
+   */
+  transfer(from: number, to: number) {
+    if (!this.sends.has(from)) return
+    const at = this.sends.get(from)
+    this.sends.delete(from)
+    this.sends.set(to, at)
+  }
+
   /** True while `reqId`'s send still occupies a slot. */
   has(reqId: number) { this.prune(this.now()); return this.sends.has(reqId) }
 

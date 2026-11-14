@@ -1622,7 +1622,8 @@ outcomes.
   show restarts and resume. It is stamped on every server-charged unit
   send, from any caller. Each send holds its slot until the first server
   reply for its reqId arrives, and then for 62 s more (R29). Aborted
-  requests stay tracked until answered. A send unanswered at resume is
+  requests stay tracked until answered. A stale-token re-send takes over
+  the refused send's slot under its new reqId (R30). A send unanswered at resume is
   taken as received at the resume reply. A first send waits for fewer than
   48 sends in the log, a re-send for fewer than 56. A `rate-limited` unit
   refusal holds every unit send for 62 s.

@@ -466,7 +466,10 @@ export class StreamSession {
   /** `charged` false only for the stale-jti re-send (R16: refused before the server charged it). */
   private issue(req: UnitReq, charged = true) {
     this.units.delete(req.reqId)
+    const prev = req.reqId
     req.reqId = this.allocId(); req.assets = new Map(); req.assetBytes = 0
+    // R30: the uncharged re-send takes over the refused send's slot (one charge, aged from its own reply).
+    if (!charged) this.sendLog.transfer(prev, req.reqId)
     this.units.set(req.reqId, req)
     // While resuming, the request waits; resume() re-issues it on the new socket.
     if (this.state === 'resuming' || !this.sock || this.sock.readyState !== 1) return
@@ -490,6 +493,12 @@ export class StreamSession {
     if (!this.sendLog.has(reqId)) return
     this.sendLog.answered(reqId)
     if (this.drainTimer && this.waiting.size) { clearTimeout(this.drainTimer); this.drainTimer = undefined; this.scheduleDrain() }
+  }
+  /** A `session-rotated` refusal of a live unit request that onText re-sends once. */
+  private rotatedResend(m: Record<string, unknown>) {
+    if (m.type !== 'refused' || m.code !== 'session-rotated') return false
+    const req = this.units.get(m.reqId as number)
+    return !!req && !req.rotatedRetry
   }
   private hasRoom(req: UnitReq) { return this.sendLog.room(0, req.sent ? UNIT_RESEND_CAP : UNIT_FIRST_CAP) > 0 }
   private waitingFirst() { let n = 0; for (const r of this.waiting) if (!r.sent) n++; return n }
@@ -760,7 +769,9 @@ export class StreamSession {
   private onText(data: string) {
     let m: Record<string, unknown>
     try { m = JSON.parse(data) } catch { return }
-    if (typeof m.reqId === 'number') this.unitAnswered(m.reqId)
+    // R29: any reply starts its send's span — except a stale-token refusal about to be
+    // re-sent (R30): the server never counted it, and its slot passes to the re-send.
+    if (typeof m.reqId === 'number' && !this.rotatedResend(m)) this.unitAnswered(m.reqId)
     if (m.type === 'renew' && typeof m.token === 'string' && typeof m.jti === 'string' && jtiOf(m.token) === m.jti) {
       this.send({ reqId: this.allocId(), type: 'renew-ack', jti: m.jti })
       this.token = m.token

@@ -84,12 +84,25 @@ class FakeServer {
   maxInTransit = 0
   /** Delay of refusals and the 4008 close back to the client, ms. */
   refusalDelay = 0
+  /** The next this-many unit requests are refused `session-rotated` (stale jti,
+   * before the rate gate: not counted), after one RENEW. */
+  rotateNext = 0
+  readonly rotatedIds: number[] = []
+  private renewed = false
   constructor(readonly rates: Rates) {}
   connect() { const s = new ServerSocket(this); this.sockets.push(s); return s }
   get live() { return this.sockets[this.sockets.length - 1]! }
   receive(sock: ServerSocket, m: Record<string, any>) {
     if (m.type === 'hello') return queueMicrotask(() => sock.frame(1, m.reqId, encodeManifest(manifest())))
     if (m.type !== 'unit') return
+    if (this.rotateNext > 0) {
+      this.rotateNext--
+      this.rotatedIds.push(m.reqId)
+      return queueMicrotask(() => {
+        if (!this.renewed) { this.renewed = true; sock.deliver(JSON.stringify({ reqId: 0, type: 'renew', token: tokenFor('j2'), jti: 'j2', exp: 9e9 })) }
+        sock.deliver(JSON.stringify({ reqId: m.reqId, type: 'refused', code: 'session-rotated' }))
+      })
+    }
     if (this.upstreamDelay && !m._delayed) {
       this.inTransit++
       this.maxInTransit = Math.max(this.maxInTransit, this.inTransit)
@@ -300,6 +313,49 @@ describe('R28: the unit budget is the session\'s (real StreamSession, real Sessi
     await advance(62_500, 500)
     expect(s.unitBudget.room()).toBe(47) // 62 s after the send, but only ~57 s after the answer
     await advance(4_700, 100) // the answer (at ~5.1 s) plus a whole span
+    expect(s.unitBudget.room()).toBe(48)
+    s.close()
+  })
+
+  it('R30 reviewer counter-example: a stale-token re-send ages from its own answer, not from the refusal — no 4008', async () => {
+    const { s, srv } = await open()
+    srv.rotateNext = 8; srv.upstreamDelay = 40_000
+    const old = Promise.all(Array.from({ length: 8 }, (_, i) => s.unit(i, 1).then((l) => l.release())))
+    await advance(41_000, 500); await old
+    srv.upstreamDelay = 0; await advance(22_000, 500)
+    // The server counted the eight replacements at ~40 s: they still hold their slots.
+    expect(s.unitBudget.room()).toBe(40)
+    const work: Promise<void>[] = []
+    for (let i = 0; i < 40; i++) { work.push(s.unit(i % COUNT, 1).then((l) => l.release()).catch(() => {})); await advance(400) }
+    srv.hold = true; srv.refusalDelay = 2_000
+    for (let i = 0; i < 8; i++) { work.push(s.unit(i, 1).then((l) => l.release()).catch(() => {})); await advance(400) }
+    srv.hold = false
+    srv.live.end(1006)
+    await advance(4_000)
+    expect(srv.verdicts).toEqual([])
+    const ended = s.isEnded()
+    s.close(); await Promise.all(work)
+    expect(ended).toBe(false)
+  })
+
+  it('R30: a late reply to the stale-token reqId frees nothing; the slot belongs to the replacement', async () => {
+    const { s, srv } = await open()
+    srv.rotateNext = 1
+    const p = s.unit(2, 1).catch((e: unknown) => e)
+    srv.hold = true // the replacement is counted but not answered
+    await advance(100)
+    expect(srv.unitMsgs).toHaveLength(1) // the counted replacement (the stale send never reached the gate)
+    expect(s.unitBudget.room()).toBe(47) // one charge for the request, not two
+    const staleId = srv.rotatedIds[0]!
+    srv.live.deliver(JSON.stringify({ reqId: staleId, type: 'refused', code: 'policy-refused' }))
+    await advance(70_000, 1_000)
+    expect(s.unitBudget.room()).toBe(47) // still unanswered: never expires on time alone
+    srv.live.frame(3, srv.unitMsgs[0]!.reqId, raster(2))
+    await advance(100)
+    await p
+    await advance(61_000, 1_000)
+    expect(s.unitBudget.room()).toBe(47)
+    await advance(1_500, 100)
     expect(s.unitBudget.room()).toBe(48)
     s.close()
   })

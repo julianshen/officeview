@@ -263,9 +263,16 @@ In plain words; the ledger has the full list (R1–R26).
   changes can use up the session's 48/min budget. Viewer paints and an
   earlier show in the same minute use it up sooner. The show then waits
   for the window to free a slot ("Loading slide n" meanwhile).
-- **R28, R29 — what "no 4008" rests on.** Every send the server can still
+- **R28–R30 — what "no 4008" rests on.** Every send the server can still
   count is in the client's log: it holds its slot until its reply arrives
-  and then a whole window. The log holds at most 56 sends. So the client
+  and then a whole window. Each re-send path follows this rule:
+  - A validation, replay or resume re-send is a new counted send, with its
+    own entry.
+  - A stale-token re-send (R30) takes over the refused send's slot under
+    its new reqId. The server never counted the refused send. The slot
+    stays unanswered and ages only from the re-send's own reply, and a late
+    reply to the old reqId frees nothing. If the token goes stale while the
+    session is resuming, the request is counted twice, which errs safe. The log holds at most 56 sends. So the client
   never has more than 56 sends inside any server window, whatever the
   network delay, and never sends a request into its own full window.
   - Navigation aborts do not take back a sent request. The reviewer's
