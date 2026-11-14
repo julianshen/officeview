@@ -21,6 +21,8 @@ export type StreamErrorCode =
   | 'invalid-unit'
   /** Client refusal (Stage 3c show): the slideshow workspace has no room for the surface. */
   | 'workspace-full'
+  /** Show-op refusals (piece 4, D1): the slide plays its piece-3 still (`morph-fallback`: the fade). */
+  | 'still' | 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'morph-fallback'
 
 export class StreamSessionError extends Error {
   override readonly name = 'StreamSessionError'
