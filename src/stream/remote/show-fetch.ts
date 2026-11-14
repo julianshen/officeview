@@ -69,6 +69,11 @@ export interface ShowFetcher {
   bundle(unit: number): ShowBundle | undefined
   /** Σ decodedBytes of the bundles cached. */
   bundleBytes(): number
+  /**
+   * Room for `bytes` more held outside the cache (a track frame): the least recently used bundles that are not the
+   * target are evicted until they fit; `false` when they do not fit even then.
+   */
+  makeRoom(bytes: number): boolean
   /** A charged request besides the fetcher's own (a track, a Morph pair) may go now: no rate pause, budget room left. */
   room(): boolean
   /** Such a request was refused `rate-limited`: every request pauses, as for the fetcher's own. */
@@ -124,6 +129,11 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
   const stills = new Set<number>()
   /** Units refused `admission`: re-issued once their time comes (nothing else pauses). */
   const retryAt = new Map<number, number>()
+  /**
+   * Prefetch candidates evicted for bytes (fix round 1): not asked for again until they become the target or the
+   * wanted set changes, so neighbours that cannot coexist are not charged for over and over.
+   */
+  const evicted = new Set<number>()
   const asBundle = (unit: number) => !!io.bundle && !!opts.animated?.(unit) && !stills.has(unit)
   const wake = clock.wake ?? ((ms: number, cb: () => void) => { const h = setTimeout(cb, ms); return () => clearTimeout(h) })
 
@@ -159,6 +169,18 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
   }
 
   const remove = (id: string, e: Entry) => { cache.delete(id); drop(e) }
+  /** Evicts the least recently used non-target bundles until `bytes` more fit the show budget; whether they do. */
+  function trim(bytes: number): boolean {
+    const over = () => heldBytes() + (opts.extraBytes?.() ?? 0) + bytes > showBytes
+    while (over()) {
+      let victim: [string, Entry] | undefined
+      for (const kv of cache) if (kv[1].bundle && kv[1].unit !== wanted[0]) { victim = kv; break }
+      if (!victim) break
+      evicted.add(victim[1].unit)
+      remove(victim[0], victim[1])
+    }
+    return !over()
+  }
   const heldBytes = () => { let n = 0; for (const e of cache.values()) n += e.bundle?.decodedBytes ?? 0; return n }
 
   /** Stores the result of `unit`; `false` when a bundle that is the target does not fit the show budget on its own. */
@@ -175,12 +197,7 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     if (!got.bundle) return true
     // The per-show budget: the least recently used bundles that are not the target go first.
     const over = () => heldBytes() + (opts.extraBytes?.() ?? 0) > showBytes
-    while (over()) {
-      let victim: [string, Entry] | undefined
-      for (const kv of cache) if (kv[1].bundle && kv[1].unit !== wanted[0]) { victim = kv; break }
-      if (!victim) break
-      remove(victim[0], victim[1])
-    }
+    trim(0)
     const id = `${unit}|${key}`
     if (over() && cache.has(id)) {
       // Still over with only the target's bundle left: the target plays its still.
@@ -272,7 +289,7 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     if (!settled(target)) return
     if (now - wantedSince < PREFETCH_SETTLE_MS) return schedule(now, wantedSince + PREFETCH_SETTLE_MS)
     for (const unit of wanted.slice(1)) {
-      if (settled(unit) || inflight.has(unit)) continue
+      if (settled(unit) || inflight.has(unit) || evicted.has(unit)) continue
       if (outOfBudget(RESERVE)) return
       issue(unit)
     }
@@ -295,6 +312,7 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
     cached(unit) { return lookup(unit, (e) => !!e.bmp, (e) => e.bmp!.width)?.bmp },
     bundle(unit) { return lookup(unit, (e) => !!e.bundle, (e) => e.bundle!.decodedBytes)?.bundle },
     bundleBytes: heldBytes,
+    makeRoom: (bytes) => !disposed && trim(bytes),
     room() {
       if (disposed || clock.now() < pausedUntil) return false
       let unsent = 0
@@ -313,7 +331,8 @@ export function createShowFetcher(io: ShowFetchIo, clock: ShowFetchClock, opts: 
       for (const u of units) if (Number.isInteger(u) && u >= 0 && !next.includes(u)) next.push(u)
       for (const u of next) { const at = failed.get(u); if (at !== undefined && now - at >= BACKOFF_MS) failed.delete(u) }
       if (next[0] !== wanted[0]) targetSince = now
-      if (next.length !== wanted.length || next.some((u, i) => u !== wanted[i])) wantedSince = now
+      if (next.length !== wanted.length || next.some((u, i) => u !== wanted[i])) { wantedSince = now; evicted.clear() }
+      if (next[0] !== undefined) evicted.delete(next[0])
       wanted = next
       pump()
     },

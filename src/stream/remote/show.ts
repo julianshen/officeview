@@ -115,6 +115,8 @@ export const remoteShowDeps = {
   decode: (png: Uint8Array): Promise<ImageBitmapLike> => createImageBitmap(new Blob([png as BlobPart], { type: 'image/png' })),
   /** Piece 4: `'canvas2d'` starts PlanStage on Canvas 2D (tests, the forced path). */
   backend: undefined as 'canvas2d' | undefined,
+  /** Piece 4: the per-show byte budget (spec §5: 128 MiB of plan records, assets and track frames). */
+  get showBytes(): number { return SHOW_PLAN_LIMITS.showDecoded },
 }
 
 /** A show refusal that plays the piece-3 still (Task 10), or a transient one that is not a failed slide. */
@@ -232,6 +234,19 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const viewSubs = new Set<() => void>()
   const frameSubs = new Set<() => void>()
   const clock = remoteShowDeps.clock(win)
+  /**
+   * The show clock (fix round 1): what the driver and PlanStage play by — builds, transitions, tracks, Morph and the
+   * after-timer advance. It stops while the show is paused; transport pacing and deadlines keep `clock`.
+   */
+  let pausedAt: number | undefined
+  let pausedFor = 0
+  const showClock: SessionClock = {
+    now: () => (pausedAt ?? clock.now()) - pausedFor,
+    get paused() { return pausedAt !== undefined },
+    pause() { if (pausedAt === undefined) pausedAt = clock.now() },
+    resume() { if (pausedAt === undefined) return; pausedFor += clock.now() - pausedAt; pausedAt = undefined },
+  }
+  const showBytes = remoteShowDeps.showBytes
 
   // ---------------------------------------------------------------------
   // Fetching: the show fetcher over RemoteOfficeDoc.paint (R2, R16)
@@ -288,7 +303,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     ...(planned ? { bundle: (unit: number, scale: number, dpr: number, m: 'full' | 'reduced', sig: AbortSignal, charge: () => void) => fetchBundle(unit, scale * dpr, m, sig, charge) } : {}),
     // R28: the session's one unit send budget (it outlives this show and stamps every charged send).
     ...(doc.unitBudget ? { budget: doc.unitBudget } : {}),
-  }, clock, { maxCached, animated, motion, extraBytes: () => extraBytes() })
+  }, clock, { maxCached, animated, motion, showBytes, extraBytes: () => extraBytes() })
   /** The show scale of a bucket: the server takes 1 or 2 only (Task 10). */
   const showScale = (bucket: number): 1 | 2 => (bucket >= 2 && doc.manifest.recorder.scalesBuckets.includes(2) ? 2 : 1)
   /** The scale each bundle was fetched at (its tracks and Morph pairs are asked at it). */
@@ -313,13 +328,29 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
    * release waits until the slide's lease lets go of it (pinned), so the stage never loses the bitmaps it draws.
    */
   const pins = new WeakMap<ShowBundle, { n: number; dead: boolean; release(): void }>()
+  /** Bytes of bundles the fetcher let go of that a slide still pins: still held, so still in the show budget. */
+  let pinnedBytes = 0
   function pinnable(b: ShowBundle): ShowBundle {
-    const p: ShowBundle = { ...b, release() { const h = pins.get(p)!; h.dead = true; if (!h.n) h.release() } }
+    const p: ShowBundle = {
+      ...b,
+      release() {
+        const h = pins.get(p)!
+        if (h.dead) return
+        h.dead = true
+        if (!h.n) h.release()
+        else pinnedBytes += b.decodedBytes
+      },
+    }
     pins.set(p, { n: 0, dead: false, release: () => b.release() })
     return p
   }
   const pin = (b: ShowBundle) => { const h = pins.get(b); if (h) h.n++ }
-  const unpin = (b: ShowBundle) => { const h = pins.get(b); if (!h) return; h.n = Math.max(0, h.n - 1); if (!h.n && h.dead) h.release() }
+  const unpin = (b: ShowBundle) => {
+    const h = pins.get(b)
+    if (!h) return
+    h.n = Math.max(0, h.n - 1)
+    if (!h.n && h.dead) { pinnedBytes -= b.decodedBytes; h.release() }
+  }
   /** Streamed index → the bundle the slide's live lease pins (what the stage draws). */
   const held = new Map<number, ShowBundle>()
   const bundleFor = (i: number): ShowBundle | undefined => held.get(i) ?? (unitOf[i] !== undefined && animated(unitOf[i]!) ? fetcher.bundle(unitOf[i]!) : undefined)
@@ -335,13 +366,42 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
   const tracks = new Map<string, TrackSlot>()
   interface PairSlot { key: string; from: number; to: number; fromStep: number; ctl: AbortController; result?: ShowMorph; promise: Promise<ShowMorph | undefined> }
   const pairs = new Map<string, PairSlot>()
+  /** Decoded keyframe-track frames held by the D23 windows (step tracks and composited Morph pairs). */
+  let frameBytes = 0
+  /**
+   * The show's byte owner for decoded track frames (fix round 1): each frame entering a window is admitted against
+   * the show budget — records, assets, encoded tracks, Morph pairs and every frame held — after the least recently
+   * used non-current bundles are evicted for it; no room refuses the frame (the window holds the previous picture,
+   * D23). Leases of any other kind go to the workspace as they are.
+   */
+  const frameOwner: SlideShowWorkspace = {
+    get limit() { return workspace.limit },
+    used: () => workspace.used(),
+    reserveTerminal: (bytes) => workspace.reserveTerminal(bytes),
+    lease(bytes, tag) {
+      if (tag !== 'plan:track-frame') return workspace.lease(bytes, tag)
+      if (exited || !fetcher.makeRoom(bytes)) return undefined
+      const l = workspace.lease(bytes, tag)
+      if (!l) return undefined
+      frameBytes += bytes
+      let held = bytes
+      return {
+        get tag() { return l.tag },
+        get bytes() { return l.bytes },
+        grow: () => false,
+        shrink(n: number) { const k = Math.min(Math.max(0, n), held); held -= k; frameBytes -= k; l.shrink(k) },
+        transfer: (t: string) => l.transfer(t),
+        release() { frameBytes -= held; held = 0; l.release() },
+      }
+    },
+  }
   function extraBytes(): number {
-    let n = 0
+    let n = frameBytes + pinnedBytes
     for (const t of tracks.values()) if (typeof t.state === 'object') n += t.state.bytes
     for (const p of pairs.values()) n += p.result?.bytes ?? 0
     return n
   }
-  const overBudget = () => fetcher.bundleBytes() + extraBytes() > SHOW_PLAN_LIMITS.showDecoded
+  const overBudget = () => fetcher.bundleBytes() + extraBytes() > showBytes
   function dropTrack(key: string): void {
     const t = tracks.get(key)
     if (!t) return
@@ -377,7 +437,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     show.showTrack(unit, k, scaleOf.get(b) ?? 1, motion, slot.ctl.signal, { workspace }).then((reply) => {
       if (!live()) { reply.release(); return }
       try {
-        const t = decodeTrack(unit, count, reply, workspace, remoteShowDeps.decode)
+        const t = decodeTrack(unit, count, reply, frameOwner, remoteShowDeps.decode)
         if (!live()) { t.dispose(); return }
         slot.state = t
         if (overBudget()) {
@@ -424,7 +484,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       try {
         const reply = await show.showMorph!(uf, ut, fromStep, scale, motion, slot.ctl.signal, { workspace })
         if (!live()) { reply.release(); return undefined }
-        const m = await decodeMorph({ from: uf, to: ut, fromStep }, reply, workspace, remoteShowDeps.decode)
+        const m = await decodeMorph({ from: uf, to: ut, fromStep }, reply, frameOwner, remoteShowDeps.decode)
         if (!live()) { m.release(); return undefined }
         slot.result = m
         if (overBudget()) {
@@ -905,7 +965,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       case 'first': firstSlide(); break
       case 'last': lastSlide(); break
       case 'black': case 'white': setScreen(target.kind); break
-      case 'pause': paused = !paused; syncPresenter(); break
+      // The show clock stops with the show: builds, transitions, tracks and the after-timer advance hold.
+      case 'pause': paused = !paused; if (paused) showClock.pause(); else showClock.resume(); syncPresenter(); break
     }
   }
 
@@ -1040,7 +1101,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (planned) {
       planStage = createPlanStage({
         root: surface.root, output: surface.canvas, workspace, sink, reduced: motion === 'reduced',
-        showNow: () => clock.now(),
+        showNow: () => showClock.now(),
         data: planData,
         still: (i) => (unitOf[i] === undefined ? undefined : fetcher.cached(unitOf[i]!)),
         morph: morphFor,
@@ -1052,7 +1113,6 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       prepare() {}, async enter() {}, frame: () => undefined, flattenCurrent() {}, leave() {},
       hitTest: () => undefined, slideTime: (t) => t,
     }
-    const showClock: SessionClock = { now: () => clock.now(), paused: false, pause() {}, resume() {} }
     const hooks: DriverHooks = {
       onSlideChange(i, b) {
         if (exited) return

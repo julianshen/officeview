@@ -708,3 +708,173 @@ describe('Morph and track replies fail closed (Task 11)', () => {
     expect(w.used()).toBe(0)
   })
 })
+
+describe('fix round 1: pause freezes the show clock', () => {
+  const fadeIn = (o: { durationMs: number; advTmMs?: number }) => (p: Plan): Plan => ({ ...p, show: { ...p.show, transition: { element: 'fade', ns: 'p', attrs: {}, advClick: true, ...o } as unknown as NonNullable<Plan['show']['transition']> } })
+  const shot = (c: HTMLCanvasElement) => c.toDataURL()
+
+  it('a build paused mid-flight keeps its pixels until resumed, then finishes', async () => {
+    const fd = animDoc(['fly'])
+    const { s, canvas } = await show(fd)
+    await run(300)
+    s.next()
+    await run(80)
+    s.dispatch({ kind: 'pause' })
+    expect(s.state.paused).toBe(true)
+    const before = shot(canvas)
+    await run(800)
+    expect(shot(canvas)).toBe(before)
+    s.dispatch({ kind: 'pause' })
+    expect(s.state.paused).toBe(false)
+    await run(800)
+    expect(shot(canvas)).not.toBe(before)
+    s.exit()
+  })
+
+  it('a transition paused mid-way holds its progress and completes after resume', async () => {
+    const fd = animDoc(['fly', { messages: (u) => bundleOf(FLY, u, fadeIn({ durationMs: 600 })) }])
+    const { s, canvas } = await show(fd)
+    await run(1_500)
+    s.goTo(1)
+    await run(200)
+    s.dispatch({ kind: 'pause' })
+    const mid = shot(canvas)
+    await run(1_000)
+    expect(shot(canvas)).toBe(mid)
+    s.dispatch({ kind: 'pause' })
+    await run(300)
+    const later = shot(canvas)
+    expect(later).not.toBe(mid)
+    await run(600)
+    // Settled: the transition is over.
+    const settled = shot(canvas)
+    await run(300)
+    expect(shot(canvas)).toBe(settled)
+    s.exit()
+  })
+
+  it('the after-timer auto-advance waits out a pause', async () => {
+    const auto = { messages: (u: number) => bundleOf(MORPH_TO, u, fadeIn({ durationMs: 100, advTmMs: 500 })) }
+    const fd = animDoc([auto, 'fly'])
+    const { s } = await show(fd)
+    await run(50)
+    s.dispatch({ kind: 'pause' })
+    await run(2_000)
+    expect(s.state.slide).toBe(0)
+    s.dispatch({ kind: 'pause' })
+    await run(800)
+    expect(s.state.slide).toBe(1)
+    s.exit()
+  })
+})
+
+describe('fix round 1: decoded track frames are admitted against the show budget', () => {
+  const RGB: Record<string, number[]> = { '#ff0000': [255, 0, 0], '#00ff00': [0, 255, 0], '#0000ff': [0, 0, 255] }
+  /** One track whose frame i is COLORS[i]. */
+  const rainbow = (unit: number) => [0, 1, 2].map((i) => encodeShowMessage({ tag: 4, unit, assetId: i, w: FRAME_W, h: FRAME_H, png: png(COLORS[i]!) }))
+  const F = FRAME_W * FRAME_H * 4
+  const bundleBytes = (msgs: Uint8Array[], unit: number) => msgs.reduce((n, m, i) => {
+    if (i === 0) return n + m.length
+    const a = decodeShowMessage(m, { unit, maxDecoded: SHOW_PLAN_LIMITS.assetDecoded }) as Extract<ShowMessage, { w: number }>
+    return n + a.w * a.h * 4
+  }, 0)
+  const encoded = (unit: number) => rainbow(unit).reduce((n, m) => n + m.length, 0)
+  const one = { messages: (u: number) => bundleOf(FLY, u, compositedFly(1)) }
+  const mid = (c: HTMLCanvasElement) => px(c, c.width >> 1, c.height >> 1)
+
+  it('the review probe: a window of large frames never takes the show past its budget', async () => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 512 * 1024 * 1024, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    let counted = 0, peak = 0
+    const lease = ws.lease.bind(ws)
+    vi.spyOn(ws, 'lease').mockImplementation((n, tag) => {
+      const l = lease(n, tag)
+      if (l && (tag === 'plan:track-frame' || tag === 'remote-show:plan' || tag.startsWith('remote-show:asset:'))) {
+        counted += n; peak = Math.max(peak, counted)
+        const rel = l.release.bind(l)
+        let done = false
+        l.release = () => { if (!done) { done = true; counted -= n } rel() }
+      }
+      return l
+    })
+    const data = png('#f00', 3344, 3344)
+    const fd = animDoc([one], { tracks: (u) => [0, 1, 2].map((i) => encodeShowMessage({ tag: 4, unit: u, assetId: i, w: 3344, h: 3344, png: data })) })
+    vi.spyOn(remoteShowDeps, 'decode').mockImplementation(async (bytes) => {
+      const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      return v.getUint32(16) === 3344 ? { width: 3344, height: 3344, close() {} } : bitmapOf(bytes)
+    })
+    const { s } = await show(fd)
+    await run(100)
+    s.next(); frame?.(); await flush()
+    s.exit()
+    expect(ws.used()).toBe(0)
+    expect(peak).toBeLessThanOrEqual(SHOW_PLAN_LIMITS.showDecoded)
+  })
+
+  it('a frame with no room holds the previous picture (D23)', async () => {
+    const B = bundleBytes(bundleOf(FLY, 0, compositedFly(1)), 0)
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(B + encoded(0) + F - 1)
+    const fd = animDoc([one], { tracks: rainbow })
+    const { s, canvas } = await show(fd)
+    await run(300)
+    const before = mid(canvas)
+    s.next()
+    await run(600)
+    // No keyframe fits: the step holds what was on screen.
+    expect(mid(canvas)).toEqual(before)
+    s.exit()
+  })
+
+  it('room for one frame at a time: the window rolls and the step ends on its last keyframe', async () => {
+    const B = bundleBytes(bundleOf(FLY, 0, compositedFly(1)), 0)
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(B + encoded(0) + F)
+    const fd = animDoc([one], { tracks: rainbow })
+    const { s, canvas } = await show(fd)
+    await run(300)
+    s.next()
+    await run(600)
+    expect(mid(canvas)).toEqual(RGB['#0000ff'])
+    s.exit()
+  })
+
+  it('a pinned bundle the fetcher replaced (a bucket change) still counts until it is released', async () => {
+    const B = bundleBytes(bundleOf(FLY, 0, compositedFly(1)), 0)
+    // Room for both copies of the bundle, and for a frame beside one of them only: counting the pinned old copy,
+    // no frame fits.
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(2 * B + encoded(0) + F - 1)
+    const fd = animDoc([one], { tracks: rainbow })
+    const { s, canvas } = await show(fd)
+    await run(300)
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1920 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1080 })
+    window.dispatchEvent(new Event('resize'))
+    await run(600)
+    expect(fd.log.filter((l) => l.startsWith('motion:'))).toEqual(['motion:full@1', 'motion:full@2'])
+    const before = mid(canvas)
+    s.next()
+    await run(600)
+    expect(mid(canvas)).toEqual(before)
+    s.exit()
+  })
+
+  it('a neighbour\'s bundle is evicted before a current frame is refused', async () => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 512 * 1024 * 1024, scratch: 0 })
+    vi.spyOn(remoteShowDeps, 'workspace').mockReturnValue(ws)
+    const B0 = bundleBytes(bundleOf(FLY, 0, compositedFly(1)), 0)
+    const B1 = bundleBytes(bundleOf(FLY, 1), 1)
+    // Beside both bundles not even one frame fits; without the neighbour every frame does, one at a time.
+    vi.spyOn(remoteShowDeps, 'showBytes', 'get').mockReturnValue(B0 + B1 + encoded(0) + F - 1)
+    const fd = animDoc([one, 'fly'], { tracks: rainbow })
+    const { s, canvas } = await show(fd)
+    await run(1_500)
+    expect(sent(fd, 'plan:')).toEqual(['plan:0', 'plan:1'])
+    const assets = () => ws.used()
+    const withBoth = assets()
+    s.next()
+    await run(600)
+    expect(mid(canvas)).toEqual(RGB['#0000ff'])
+    // The neighbour's decoded bundle went to make room.
+    expect(assets()).toBeLessThan(withBoth)
+    s.exit()
+  })
+})

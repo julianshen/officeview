@@ -598,3 +598,71 @@ describe('show bundles (piece 4 Task 11)', () => {
     expect(b1.release).toHaveBeenCalledOnce()
   })
 })
+
+describe('show bundles: byte eviction (Task 11 fix round 1)', () => {
+  function evictSetup(showBytes: number) {
+    const clock = fakeClock()
+    const io = fakeIo(clock)
+    const bundles: Array<{ unit: number; resolve(bytes: number): void }> = []
+    const f = createShowFetcher({
+      ...io,
+      bundle(unit: number, _s: number, _d: number, _m: 'full' | 'reduced', _sig: AbortSignal, charge: () => void) {
+        charge()
+        return new Promise<ShowBundle>((res) => {
+          bundles.push({ unit, resolve: (bytes) => res({ unit, plan: {} as ShowBundle['plan'], assets: { bitmap: () => undefined, bytes: () => 0 }, decodedBytes: bytes, release: vi.fn<() => void>() }) })
+        })
+      },
+    }, clock, { animated: () => true, showBytes })
+    f.setBucket(1, 1)
+    return { clock, bundles, f }
+  }
+
+  it('a byte-evicted neighbour is not re-requested while the wanted set is unchanged (no 1,2,1,2… loop)', async () => {
+    const { clock, bundles, f } = evictSetup(2_500)
+    f.want([0, 1, 2]); bundles[0]!.resolve(1000); await clock.advance(1_000)
+    bundles[1]!.resolve(1000); await flush()
+    bundles[2]!.resolve(1000); await flush()
+    for (let i = 3; i < 10 && bundles[i]; i++) { bundles[i]!.resolve(1000); await flush() }
+    await clock.advance(10_000)
+    expect(bundles.map((b) => b.unit)).toEqual([0, 1, 2])
+    f.dispose()
+  })
+
+  it('the evicted unit is asked for again when it becomes the target, or when the wanted set changes', async () => {
+    const { clock, bundles, f } = evictSetup(2_500)
+    f.want([0, 1, 2]); bundles[0]!.resolve(1000); await clock.advance(1_000)
+    bundles[1]!.resolve(1000); await flush()
+    bundles[2]!.resolve(1000); await flush()
+    expect(f.bundle(1)).toBeUndefined()
+    // Navigating to 1: it is the target now.
+    f.want([1, 2, 0]); await clock.advance(400)
+    expect(bundles.map((b) => b.unit)).toEqual([0, 1, 2, 1])
+    f.dispose()
+  })
+
+  it('makeRoom evicts non-target bundles for bytes held elsewhere and says whether they fit', async () => {
+    let extra = 0
+    const clock = fakeClock()
+    const bundles: Array<{ resolve(bytes: number): void }> = []
+    const f = createShowFetcher({
+      paint: () => new Promise<ImageBitmapLike>(() => {}),
+      bundle(unit: number, _s: number, _d: number, _m: 'full' | 'reduced', _sig: AbortSignal, charge: () => void) {
+        charge()
+        return new Promise<ShowBundle>((res) => { bundles.push({ resolve: (bytes) => res({ unit, plan: {} as ShowBundle['plan'], assets: { bitmap: () => undefined, bytes: () => 0 }, decodedBytes: bytes, release: vi.fn<() => void>() }) }) })
+      },
+    }, clock, { animated: () => true, showBytes: 3_000, extraBytes: () => extra })
+    f.setBucket(1, 1)
+    f.want([0, 1]); bundles[0]!.resolve(1000); await clock.advance(1_000)
+    bundles[1]!.resolve(1000); await flush()
+    expect(f.makeRoom(500)).toBe(true)
+    expect(f.bundle(1)).toBeDefined()
+    // 1,500 more does not fit beside both: the neighbour goes; the target stays.
+    expect(f.makeRoom(1_500)).toBe(true)
+    expect(f.bundle(1)).toBeUndefined()
+    expect(f.bundle(0)).toBeDefined()
+    extra = 1_500
+    expect(f.makeRoom(1_000)).toBe(false)
+    expect(f.bundle(0)).toBeDefined()
+    f.dispose()
+  })
+})
