@@ -399,3 +399,47 @@ describe('Presenter View Next on a streamed animated show (piece 4 Task 13)', ()
     s.exit()
   })
 })
+
+describe('Presenter View Next on the last slide (Task 13 fix round 1)', () => {
+  const nextPane = (host: HTMLElement) => host.querySelector<HTMLElement>('[data-officeview-presenter-next] [data-officeview-presenter-pane]')!
+  const ended = (host: HTMLElement) => host.querySelector('[data-officeview-presenter-end]')
+
+  it('a one-slide animated deck previews its remaining build, and says end of show only once the last build has settled', async () => {
+    const fd = animDoc(['fly'])
+    const { s, host } = await show(fd, { popup: null })
+    await run(1_500)
+    const pane = nextPane(host)
+    // Before the click: the build is the next click, so its preview shows (and is not an end-of-show card).
+    expect(pane.hidden).toBe(false)
+    expect(ended(host)).toBeNull()
+    expect(host.querySelector('[data-officeview-presenter-next] figcaption')?.textContent).toBe('Next build')
+    expect(host.querySelector('[data-officeview-presenter-next]')?.getAttribute('aria-label')).toBe('Next: slide 1, next build')
+    s.next()
+    await run(2_000)
+    expect(s.state.slide).toBe(0)
+    // The last build has settled: the next click leaves the deck.
+    expect(nextPane(host).hidden).toBe(true)
+    expect(ended(host)?.textContent).toBe('End of slide show')
+    s.exit()
+  })
+
+  it('the last slide of a deck previews its remaining build; its pixels are what the click settles on', async () => {
+    const fd = animDoc(['still', 'fly'])
+    const { s, host, canvas } = await show(fd, { popup: null })
+    await run(300)
+    s.next()
+    await run(1_500)
+    expect(s.state.slide).toBe(1)
+    const pane = nextPane(host)
+    expect(pane.hidden).toBe(false)
+    const preview = host.querySelector<HTMLCanvasElement>('[data-officeview-presenter-next] canvas')!
+    const shown = previewOf(preview)
+    shown.getContext('2d')!.drawImage(preview, 0, 0)
+    s.next()
+    await run(2_000)
+    expect(nextPane(host).hidden).toBe(true)
+    expect(canvas.width).toBeGreaterThan(0)
+    expect(pixels(shown).some((v) => v !== 0)).toBe(true)
+    s.exit()
+  })
+})

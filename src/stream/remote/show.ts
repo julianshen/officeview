@@ -623,6 +623,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     surface.root.setAttribute('data-officeview-show-frame', kind)
     if (frameText && frameText.textContent !== text) frameText.textContent = text
     afterFrame()
+    // A build settling ends what Next is (the last build's settle point leaves the deck) with no other event.
+    if (planned && !exited) syncPresenter()
   }
   /** A loading or error frame is on the output canvas (PlanStage clears it once the slide shows). */
   let textShown = false
@@ -803,7 +805,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
     if (exited || !viewSubs.size) return
     const t = clock.now()
     // The build and the cursor's history move Next (the next checkpoint), so they are part of the key.
-    const key = [slide, build, driver?.visit?.cursor?.events.length ?? 0, screen, paused, presenter, swapped ? 1 : 0, sink.list().length, content,
+    const key = [slide, build, driver?.visit?.cursor?.events.length ?? -1, planned && nextStep() ? 1 : 0, screen, paused, presenter, swapped ? 1 : 0, sink.list().length, content,
       timer ? Math.floor(timer.elapsed(t) / 1000) : 0, timer?.paused, Math.floor(remoteShowDeps.wall() / 60000)].join('|')
     if (!force && key === viewKey) return
     viewKey = key
@@ -1090,7 +1092,7 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
       return !!bmp && fitInto(canvas, bmp)
     },
     // Piece 4 §5.2: only an animated deck composes Next; an unanimated one keeps the piece-3 still path.
-    ...(planned ? { nextImage: (canvas: HTMLCanvasElement) => nextPreview(canvas) } : {}),
+    ...(planned ? { nextImage: (canvas: HTMLCanvasElement) => nextPreview(canvas), nextBuild: () => !exited && !!nextStep() } : {}),
     hidden: () => false,
     key: (e) => presenterKey(e),
     input: (i) => run(i, true),
@@ -1187,6 +1189,8 @@ export async function runRemoteShow(req: RemoteShowStart): Promise<SessionContro
         if (v.cursor) tracksOnEntry(v.index, v.cursor.step)
         prefetchMorph()
         render(false)
+        // The visit's cursor now exists: what Next is (a build or the next slide) can be told.
+        syncPresenter()
       },
       onCursor() { syncPresenter() },
       runLink(link, v) {

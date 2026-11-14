@@ -96,6 +96,11 @@ export interface PresenterSource {
    * `false` when nothing is there yet, cheap, no fetch.
    */
   nextImage?(canvas: HTMLCanvasElement): boolean
+  /**
+   * Image-backed (additive, optional): whether the next click plays another build of the shown slide (so Next is that
+   * checkpoint, not the next slide or the end of the show). Absent: Next is always the next slide.
+   */
+  nextBuild?(): boolean
   /** Image-backed (additive): whether slide `index` is hidden (no grid cell), in place of the model's flag. */
   hidden?(index: number): boolean
   /** Paint inputs for slide `index` (the stage's, or a static stand-in). */
@@ -296,8 +301,9 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
       pos = after === undefined ? 'end' : { slide: after, cursor: END_CURSOR }
     }
   } else if (slide !== 'end' && imageBacked) {
-    // Finished bitmaps have no builds: Next is the next shown slide.
-    pos = after === undefined ? 'end' : { slide: after, cursor: END_CURSOR }
+    // Finished bitmaps have no builds of their own: Next is the next shown slide, unless the source says the shown
+    // slide still has a build to play (an animated show), which holds even on the last slide.
+    pos = src.nextBuild?.() ? { slide, cursor: END_CURSOR } : after === undefined ? 'end' : { slide: after, cursor: END_CURSOR }
   }
   const posKey = pos === 'end' ? 'end' : `${pos.slide}:${pos.cursor.step}:${pos.cursor.mode}`
   /** What Next was last painted with: the stage decodes a neighbour's pictures after its metadata, so they can arrive late. */
@@ -327,7 +333,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   const timer = src.timer
   const status = slide === 'end' ? 'End of slide show' : `Slide ${slide + 1} of ${count}`
   // A finished bitmap has no builds: Next on the same slide (a looping single-slide show) is that slide again.
-  const nextBuild = pos !== 'end' && pos.slide === slide && !imageBacked
+  const nextBuild = pos !== 'end' && pos.slide === slide && (!imageBacked || !!src.nextBuild?.())
   const nextLabel = pos === 'end' ? 'Next: end of slide show' : `Next: slide ${pos.slide + 1}${nextBuild ? ', next build' : ''}`
   const placement = host === 'window' ? src.placement : undefined
   const goField = (e: React.KeyboardEvent<HTMLInputElement>) => {
