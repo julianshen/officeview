@@ -201,3 +201,34 @@ export function revealThenMoveDeck(): Promise<Uint8Array> {
     }],
   })
 }
+
+// ---------------------------------------------------------------------------
+// Morph pairs (piece 4 Task 7, D11)
+// ---------------------------------------------------------------------------
+
+const MORPH = { xml: '<p:transition spd="slow" p14:dur="1200"><p159:morph xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" option="byObject"/></p:transition>' }
+
+/** Two slides; slide 0's box (id 2) is shown and its `Late` box (id 3) appears on click 1; slide 1 moves both, entered by Morph. */
+export const morphLateDeck = () => buildPptxDeck({
+  slides: [
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Box', 80, 80, 200, 140, 'D06040'), rect(3, 'Late', 80, 400, 200, 140, '336699')], timingXml: oneStep(id => [appear(id, 3)]) },
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Box', 600, 300, 200, 140, 'D06040'), rect(3, 'Late', 600, 80, 200, 140, '336699')], transition: MORPH },
+  ],
+})
+
+/**
+ * Two slides, entered by Morph: `Under` (id 4) and `Cover` (id 5) stay put on both, `Cover` hiding part of `Under`
+ * (removed pixels); `Mover` (id 2), between them in z, crosses that part: its swept hull covers a masked layer.
+ */
+export const morphSweepDeck = () => buildPptxDeck({
+  slides: [
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(4, 'Under', 300, 200, 300, 300, '70AD47'), rect(2, 'Mover', 60, 300, 100, 100, 'C00000'), rect(5, 'Cover', 380, 280, 140, 140, '1F4E79')] },
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(4, 'Under', 300, 200, 300, 300, '70AD47'), rect(2, 'Mover', 760, 300, 100, 100, 'C00000'), rect(5, 'Cover', 380, 280, 140, 140, '1F4E79')], transition: MORPH },
+  ],
+})
+
+/** Two slides of `n` small boxes each (ids 2 …), the second entered by Morph: past 256 objects the Morph cannot run. */
+export const manyObjectsMorphDeck = (n = 257) => {
+  const boxes = (dx: number) => Array.from({ length: n }, (_, i) => rect(2 + i, `B${i}`, 10 + (i % 32) * 28 + dx, 10 + Math.floor(i / 32) * 60, 20, 20, '336699'))
+  return buildPptxDeck({ slides: [{ bg: { solid: 'FFFFFF' }, shapes: boxes(0) }, { bg: { solid: 'FFFFFF' }, shapes: boxes(4), transition: MORPH }] })
+}

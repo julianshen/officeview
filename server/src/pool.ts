@@ -13,6 +13,7 @@ import { resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
 import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-raster'
 import { SHOW_PLAN_DEADLINE_MS, type BuiltShowPlan, type ShowPlanJob, type ShowRefusal } from './show/build'
+import type { BuiltMorph, MorphJob } from './show/morph'
 import type { MarkSpec, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
@@ -30,6 +31,8 @@ export type PoolNotesJob = { docRef: string; contentPolicy: 'visible-only' | 'fu
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
 /** Piece 4: a show-plan bundle or track job on the docRef's worker. */
 export type PoolShowJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & ShowPlanJob
+/** Piece 4 Task 7: a Morph pair job on the docRef's worker. */
+export type PoolMorphJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & MorphJob
 /** Piece 4 D7: a show-plan layer's per-session Layer-1 encode. */
 export interface MarkLayerJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
 export { SHOW_PLAN_DEADLINE_MS }
@@ -277,6 +280,12 @@ export class Pool {
   async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
     const { docRef, contentPolicy, hangMs, crash, ...show } = job
     return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>
+  }
+
+  /** Piece 4 Task 7: one Morph pair (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
+  async showMorph(sessionId: string, job: PoolMorphJob, bytesEstimate: number): Promise<BuiltMorph> {
+    const { docRef, contentPolicy, hangMs, crash, ...morph } = job
+    return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-morph', id: this.nextId++, docKey, job: morph, ...this.hooks(hangMs, crash) })) as BuiltMorph
   }
 
   /**

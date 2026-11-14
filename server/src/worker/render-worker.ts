@@ -2,6 +2,7 @@
 import { markLayerRaster, markRaster, type LayerCrop } from '../mark/mark-raster'
 import { DocumentHost, RenderRefusal, type MarkSpec, type NotesJob, type Projection } from '../render'
 import type { ShowPlanJob } from '../show/build'
+import type { MorphJob } from '../show/morph'
 import type { TextJob } from '../text/served'
 
 export type WorkerRequest =
@@ -18,6 +19,8 @@ export type WorkerRequest =
   | { type: 'show-plan'; id: number; docKey: string; job: ShowPlanJob; hangMs?: number; crash?: boolean }
   /** Piece 4: the keyframe track of one composited step. */
   | { type: 'show-track'; id: number; docKey: string; job: ShowPlanJob & { step: number }; hangMs?: number; crash?: boolean }
+  /** Piece 4 Task 7: one Morph pair (`from`, `to`, `fromStep`): its record and assets, or its composited frames. */
+  | { type: 'show-morph'; id: number; docKey: string; job: MorphJob; hangMs?: number; crash?: boolean }
   /** Piece 4 D7: a show-plan layer's per-session Layer-1 (the page basis cropped to its rest). */
   | { type: 'mark-layer'; id: number; png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
 export type WorkerReply = { id: number; ok: true; result: unknown; stats: { parses: number; pages: number; docs: number } } | { id: number; ok: false; error: string; refusal?: string; stats: { parses: number; pages: number; docs: number } }
@@ -44,6 +47,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         : m.type === 'mark-layer' ? markLayerRaster(m)
         : m.type === 'show-plan' ? await host.showPlan(m.docKey, m.job)
         : m.type === 'show-track' ? await host.showTrack(m.docKey, m.job)
+        : m.type === 'show-morph' ? await host.showMorph(m.docKey, m.job)
         : host.render(m.docKey, m)
     }
     const transfer: ArrayBuffer[] = []

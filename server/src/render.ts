@@ -35,6 +35,7 @@ import { readSlideTiming } from '../../src/slideshow/read/timing'
 import type { Lease, SlideShowWorkspace } from '../../src/slideshow/types'
 import { buildShowPlan, createShowDoc, type BuiltShowPlan, type ShowBuildOptions, type ShowDoc, type ShowPlanJob, type ShowRefusal } from './show/build'
 import { renderTrack } from './show/tracks'
+import { buildMorphPlan, MorphInvalid, type BuiltMorph, type MorphJob } from './show/morph'
 import { answerText, buildServedUnit, OBSERVER_BUDGET, prepareWorkspace, recordSpans, ServedCache, TEXT_RECORD_BUDGET, TextBudgetExceeded, TextRefusal, type ServedUnit, type TextJob, type TextReply } from './text/served'
 
 export const MAX_UNIT_PX = 8192
@@ -85,14 +86,15 @@ export function layoutFingerprint(contentPolicyId: string): string {
  * original, which holds withheld content), its metadata store and the show-plan caches. `anim` (D5): the shown
  * units with timing, a transition or both.
  */
-export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; anim: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
+export interface OpenDoc { key: string; docRef: string; show?: ShowDoc; anim: number[]; morph: number[]; paintables: PaintableArray; units: UnitSize[]; hidden: number[]; raw: Array<{ widthPx: number; heightPx: number }>; fingerprint: string; contentPolicyId: string; diagnostics: PolicyDiagnostic[]; format: 'docx' | 'xlsx' | 'pptx'; notes?: { pkg: OfficePackage; slideParts: readonly string[] } }
 /** A notes job (Stage 3c): `draw: false` plans only (size, truncation, characters drawn); `true` draws with the visible mark. */
 export interface NotesJob { unitIndex: number; scale: number; mark: MarkSpec; draw: boolean }
 export interface NotesPlan { kind: 'notes-plan'; w: number; h: number; truncated: boolean; chars: number }
 export type NotesRaster = RenderedUnit & { kind: 'raster'; truncated: boolean; chars: number }
 /** `hidden`: unit indices of hidden slides (pptx under `'full'` only; elsewhere they are not units). */
-/** `anim` (piece 4 D5): shown units with timing, a transition or both (a plan is requested only for these). */
-export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
+/** `anim` (piece 4 D5): shown units with timing, a transition or both (a plan is requested only for these).
+ * `morph` (Task 7): the shown units entered by a Morph transition (a `show-morph` names one as its `to`). */
+export interface OpenResult { docKey: string; units: UnitSize[]; hidden: number[]; anim: number[]; morph: number[]; layoutFingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; diagnostics: PolicyDiagnostic[]; fontDiagnostics: number }
 
 const registerFont = () => { throw new Error('stream server: embedded fonts are not registered in Stage 1') }
 
@@ -181,7 +183,7 @@ export class DocumentHost {
       original.dropCache()
       const units = raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) }))
       let show: ShowDoc | undefined
-      const anim: number[] = []
+      const anim: number[] = [], morph: number[] = []
       if (handle && handle.slideParts.length === paintables.length) {
         try {
           show = await openShow(docRef, key, projected.contentPolicyId, fingerprint, parsed as PptxDocument, handle, units, hidden)
@@ -189,6 +191,7 @@ export class DocumentHost {
             if (hidden.includes(i)) continue
             const h = await show.acquire(i)
             if ((h.slide.timing && !('refused' in h.slide.timing)) || h.slide.transition) anim.push(i)
+            if (h.slide.transition?.element === 'morph') morph.push(i)
             h.release()
           }
         } catch {
@@ -196,12 +199,13 @@ export class DocumentHost {
           show?.store.close()
           show = undefined
           anim.length = 0
+          morph.length = 0
         }
       }
-      doc = { key, docRef, paintables, raw, hidden, anim, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
+      doc = { key, docRef, paintables, raw, hidden, anim, morph, ...(notes ? { notes } : {}), ...(show ? { show } : {}), units, fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
       this.docs.set(key, doc)
     }
-    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
+    return { docKey: key, units: doc.units, hidden: doc.hidden, anim: [...doc.anim], morph: [...doc.morph], layoutFingerprint: doc.fingerprint, contentPolicyId: doc.contentPolicyId, format: doc.format, diagnostics: doc.diagnostics, fontDiagnostics: doc.paintables.fontDiagnostics?.length ?? 0 }
   }
 
   has(docKey: string) { return this.docs.has(docKey) }
@@ -253,6 +257,24 @@ export class DocumentHost {
     await this.loadShow(doc.show!, job.unitIndex)
     this.pages++
     return renderTrack(doc, job, this.showOptions)
+  }
+
+  /**
+   * Piece 4 Task 7: one Morph pair (`buildMorphPlan`): `from` and `to` shown slides of this deck, `to` entered by
+   * Morph, `fromStep` within the from-slide's steps (checked here, on the slide as prepared: `unit-range`).
+   */
+  async showMorph(docKey: string, job: MorphJob): Promise<BuiltMorph> {
+    const doc = this.docs.get(docKey)
+    if (!doc) throw new RenderRefusal('unknown-doc')
+    if (!doc.show) throw new RenderRefusal('unsupported-format', 'no show for this document')
+    if (!job || typeof job !== 'object' || (job.motion !== 'full' && job.motion !== 'reduced') || !job.mark || typeof job.mark !== 'object' || (job.strictMarks !== undefined && typeof job.strictMarks !== 'boolean')) throw new RenderRefusal('bad-job')
+    if (job.scale !== 1 && job.scale !== 2) throw new RenderRefusal('scale')
+    const shown = (u: unknown) => Number.isInteger(u) && (u as number) >= 0 && (u as number) < doc.units.length && !doc.hidden.includes(u as number)
+    if (!shown(job.from) || !shown(job.to) || job.from === job.to || !doc.morph.includes(job.to) || !Number.isInteger(job.fromStep) || job.fromStep < 0) throw new RenderRefusal('unit-range')
+    await this.loadShow(doc.show, job.from)
+    await this.loadShow(doc.show, job.to)
+    this.pages++
+    try { return buildMorphPlan(doc, job) } catch (e) { if (e instanceof MorphInvalid) throw new RenderRefusal('unit-range', e.message); throw e }
   }
 
   /** Show-plan cache counters, summed over open documents (L1: preparation; L2: marked bundles). */

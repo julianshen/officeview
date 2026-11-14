@@ -266,19 +266,32 @@ function stepTriggers(tree: TimingTree | undefined, steps: number): PlanStepReco
   return groups.map(g => { const t = first(g, 0); return t === 'withEffect' ? 'with' : t === 'afterEffect' ? 'after' : 'click' })
 }
 
-function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
-  const unit = job.unitIndex
+/**
+ * Additive (Task 7): slide `unit` prepared as the client will play it (the streamed metadata, text bases laid out)
+ * and its timeline under `motion`, with no raster. The bundle build (`prepareL1`) and the Morph pair build
+ * (`morph.ts`) share it, so both classify the same show.
+ */
+export function prepareShowSlide(show: ShowDoc, unit: number, motion: 'full' | 'reduced'): { ps: PreparedSlide; timeline: SlideTimeline; cmdDropped: boolean; sink: DiagnosticSink } {
   const loaded = show.metas.get(unit)
   if (!loaded) throw new Error(`show: slide ${unit} metadata not loaded`)
   const { meta, cmdDropped } = streamedMeta(loaded.slide)
   const slide = show.doc.slides[unit]!
   const sink = createDiagnosticSink()
   const ps = prepareSlide({ index: unit, slide, meta, watermark: false, charge: loaded.charge, sink })
-  const measure = measureCtx()
-  layoutTextBases(ps, measure, resolveFont)
+  layoutTextBases(ps, measureCtx(), resolveFont)
   const tt = ps.textTiming
   const settings = show.index.settings
-  const timeline = createSlideTimeline(tt?.tree ?? meta.timing, { showAnimation: settings.showAnimation, reducedMotion: job.motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) })
+  const timeline = createSlideTimeline(tt?.tree ?? meta.timing, { showAnimation: settings.showAnimation, reducedMotion: motion === 'reduced', ...(tt ? { orderOf: tt.orderOf } : {}) })
+  return { ps, timeline, cmdDropped, sink }
+}
+
+function prepareL1(show: ShowDoc, job: ShowPlanJob): L1Entry {
+  const unit = job.unitIndex
+  const { ps, timeline, cmdDropped, sink } = prepareShowSlide(show, unit, job.motion)
+  const meta = ps.meta, slide = ps.slide
+  const measure = measureCtx()
+  const tt = ps.textTiming
+  const settings = show.index.settings
   const classes = new Map<boolean, Classification>()
   if (timeline.steps > SHOW_PLAN_LIMITS.steps) return { refusal: { refused: 'show-limits', diagnostics: [{ code: 'show-limits' }] }, classes, refusals: new Map() }
   // D22: the text items the client fans out itself; over 128 key strings the slide plays its still (Task 4 ruling).

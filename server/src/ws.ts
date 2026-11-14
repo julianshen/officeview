@@ -23,7 +23,10 @@ import { loadPack, requiredFacesOf } from './fonts'
 import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthDecision, type AuthRequest, type Authorize, type EffectivePolicy, type ResolveDocument } from './hooks'
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
-import { AdmissionRefused, RenderFailed, type Pool } from './pool'
+import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
+import { encodeShowMessage, PlanRejected, type ShowMessage } from '../../src/stream/show-plan'
+import type { TestOnlyOptions } from './config'
+import type { ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
 import { encodePrintBody, planPrint, PRINT_ENCODED_CAP, PRINT_SEND_HIGH_WATER, printArgs, printSizeOk, runPrint, type PrintJob, type PrintSlot } from './print'
 import { IpRates, SessionRates } from './rate'
@@ -41,7 +44,21 @@ export type CloseName = keyof typeof CLOSE
 export type RefusalCode = 'rate-limited' | 'policy-refused' | 'session-rotated' | 'text-unavailable' | 'copy-too-large' | 'copy-quota-exhausted' | 'print-too-large' | 'print-quota-exhausted'
 /** A notes refusal (Stage 3c), sent as `{reqId, type: 'error', code}`; `session-rotated` is the token preamble's retry signal. */
 export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' | 'session-rotated'
+/**
+ * A show op refusal (piece 4 Task 7, D1), sent as `{reqId, type: 'error', code}`. Every one plays the slide's
+ * piece-3 still on the client (a Morph: the fade look-alike), never a plan with content withheld:
+ * - `invalid-unit`: hidden, out of range, not animated (D5), a step or `fromStep` the slide does not have, a Morph
+ *   pair whose `to` is not entered by Morph;
+ * - `show-budget`, `show-limits`, `show-plan-timeout`: the build's own refusals (D3, D10, §5 admission);
+ * - `still` (controller ruling): the classifier cannot prove the slide (`Classification.fallback`, a trigger that
+ *   can move a layer, a withdrawn interactive slide): the client plays the piece-3 still;
+ * - `morph-fallback` (`show-morph` only): `planMorph` refused (past 256 objects, its layers do not fit);
+ * - `rate-limited`, `policy-refused`, `session-rotated`: as for notes.
+ */
+export type ShowErrorCode = NotesErrorCode | 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'still' | 'morph-fallback'
 
+/** The most click steps a plan carries (D3): a track's step is below it, a Morph's `fromStep` at most it. */
+const SHOW_PLAN_LIMITS_STEPS = 64
 const KIND = { MANIFEST: 1, ASSET_DEFINE: 2, UNIT_RASTER: 3, UNIT_COMMANDS: 4, SHOW_PLAN: 6, NOTES_RASTER: 7, PRINT_RASTER: 8 } as const
 /** Admission charge of a notes plan (a measuring context and the notes part's parse). */
 const NOTES_PLAN_BYTES = 4 * 1024 * 1024
@@ -76,6 +93,10 @@ export interface StreamServerOptions {
   planPrint?: typeof planPrint
   /** TEST-ONLY: interposes on binary sends and the socket's buffered amount (backpressure tests). */
   transport?: { sendBinary(ws: unknown, frame: Uint8Array): number; bufferedAmount(ws: unknown): number }
+  /** Piece 4 (spec §7): `strictMarks` plays every moving step `composited` (`config.animation`). */
+  animation?: { strictMarks?: boolean }
+  /** TEST-ONLY (`config.ts` `TestOnlyOptions`): never read from an `AuthDecision`. */
+  testOnly?: TestOnlyOptions
 }
 
 interface Conn {
@@ -94,7 +115,8 @@ interface Conn {
 type WS = ServerWebSocket<Conn>
 
 /** `hidden`: unit indices of hidden slides (pptx under 'full'); the show skips them and notes refuse them. */
-interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
+/** `anim` (D5): shown units with timing, a transition or both; `morph` (Task 7): those entered by Morph. */
+interface DocState { docRef: string; name: string; bytes: Uint8Array; units: UnitSize[]; hidden: ReadonlySet<number>; anim: ReadonlySet<number>; morph: ReadonlySet<number>; fingerprint: string; contentPolicyId: string; format: 'docx' | 'xlsx' | 'pptx'; refs: number }
 
 const isU32 = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 0xffffffff
 
@@ -248,7 +270,7 @@ export function createStreamServer(o: StreamServerOptions) {
         audit.record(sid, { ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), ip: ws.data.ip, startedAt, keyGeneration: o.keys.keyGeneration, policyId: opened.contentPolicyId, markSettings: { visible: policy.visibleMark, forensicRequested: policy.forensicRequested }, relaxed: policy.relaxed, services: { copy: policy.copy, textA11y: policy.textA11y, print: policy.print, notes: canNotes(policy) }, forensic: forensic ? { codec: CODEC_ID, token24: forensic.token24, salt8: forensic.salt8, msg40: msgHex(forensic.msg40) } : null, docRef, contentPolicy: policy.contentPolicy, visibleMark: markOf(policy, decision) })
       } catch { return close(ws, 'policy-refused') }
       table.create({ sid, docRef, ...(decision.viewerId ? { viewerId: decision.viewerId } : {}), role: policy.role, effectivePolicy: policy, activeSocket: ws as never, jti: token.jti, startedAt })
-      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
+      sessionDoc.set(sid, { doc: { docRef, name: resolved.name ?? 'document', bytes: resolved.bytes, units: opened.units, hidden: new Set(opened.hidden), anim: new Set(opened.anim.filter((i) => !opened.hidden.includes(i))), morph: new Set(opened.morph.filter((i) => !opened.hidden.includes(i))), fingerprint: opened.layoutFingerprint, contentPolicyId: opened.contentPolicyId, format: opened.format, refs: 0 }, policy, decision, tokenExp: token.exp, copiedParagraphs: 0, printedPages: 0, ...(forensic ? { forensic } : {}) })
       sessionRates.set(sid, ws.data.rates)
       ws.data.sid = sid
       committed = true
@@ -325,7 +347,7 @@ export function createStreamServer(o: StreamServerOptions) {
     const sd = sessionDoc.get(sid)!, p = sd.policy
     const m: Manifest = {
       v: 1, docRef: sd.doc.docRef, kind: sd.doc.format, name: sd.doc.name,
-      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : u) },
+      units: { count: sd.doc.units.length, list: sd.doc.units.map((u, i) => sd.doc.hidden.has(i) ? { ...u, hidden: true as const } : sd.doc.anim.has(i) ? { ...u, anim: true as const } : u) },
       layoutFingerprint: sd.doc.fingerprint,
       session: { sid, token, expiresSec: ttl, resume: 'session' },
       policy: { contentPolicy: p.contentPolicy, protection: p.projection, semantic: 'visible-only', contentPolicyId: sd.doc.contentPolicyId, viewerMarkId: p.visibleMark },
@@ -685,6 +707,150 @@ export function createStreamServer(o: StreamServerOptions) {
     sendFrames(ws, [f])
   }
 
+  // -------------------------------------------------------------------------
+  // Piece 4 Task 7: show-plan, show-track, show-morph (plan D1, D4, D7, D11)
+  // -------------------------------------------------------------------------
+
+  /** One asset on its way out: its kind-6 tag, ids and pixels, and its Layer-1 crop (`rest`, page device px). */
+  interface OutAsset { tag: 2 | 3 | 4; assetId: number; w: number; h: number; png: Uint8Array; rest: { x: number; y: number; scale: number } }
+  const SHOW_BUILD_BYTES = 64 * 1024 * 1024
+  const showEstimate = (size: UnitSize, scale: number) => Math.min(SHOW_BUILD_BYTES, size.w * size.h * 4 * scale ** 2 * 4)
+  const shownUnit = (d: DocState, u: unknown): u is number => Number.isInteger(u) && (u as number) >= 0 && (u as number) < d.units.length && !d.hidden.has(u as number)
+  const showFailure = (e: unknown): ShowErrorCode => e instanceof AdmissionRefused ? 'rate-limited' : e instanceof RenderTimeout ? 'show-plan-timeout' : e instanceof RenderFailed && e.refusal === 'unit-range' ? 'invalid-unit' : 'policy-refused'
+
+  /**
+   * The three show ops. Their rules run in this order, all before any render (Task 7 brief):
+   * 1. the token, then `can.present` (a deck);
+   * 2. the unit: in range, not hidden, animated (D5); a track's step and a Morph's pair (`to` entered by Morph,
+   *    `from ≠ to`, both shown, `fromStep` an integer in 0..64; its exact range against the from-slide's steps is
+   *    checked on the worker, after the charge);
+   * 3. `scale` in `SCALE_BUCKETS` (1 or 2) and `motion` valid;
+   * 4. the `'unit'` rate: one charge per op (owner decision 2), `close` → 4008, `refuse` → `rate-limited`;
+   * 5. the fingerprint and the document ledger (as `onUnit`);
+   * 6. the build on the docRef's worker (L1/L2 caches, D6);
+   * 7. Layer-1 per asset with the session's basis (`markLayer`, D7); an asset that keeps no carrier ships unmarked;
+   * 8. every message framed, then the durable `show_deliveries` row;
+   * 9. `diag` text (forensic-unmarked, Morph diagnostics), `*-start`, then the kind-6 messages, each one sent only
+   *    while the session lives.
+   */
+  async function onShow(ws: WS, msg: Record<string, unknown>, kind: ShowDeliveryRecord['kind']) {
+    const deny = (reqId: unknown, code: ShowErrorCode) => send(ws, { reqId: isU32(reqId) ? reqId : 0, type: 'error', code })
+    const a = await textOp(ws, msg, undefined, deny)
+    if (!a) return
+    const { reqId, s, sd } = a
+    const d = sd.doc
+    if (d.format !== 'pptx') return deny(reqId, 'policy-refused')
+    const animated = (u: unknown): u is number => shownUnit(d, u) && d.anim.has(u)
+    const step = (x: unknown, max: number): x is number => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= max
+    let unit: number
+    if (kind === 'morph') {
+      if (!shownUnit(d, msg.from) || !animated(msg.to) || !d.morph.has(msg.to) || msg.from === msg.to || !step(msg.fromStep, SHOW_PLAN_LIMITS_STEPS)) return deny(reqId, 'invalid-unit')
+      unit = msg.to
+    } else {
+      if (!animated(msg.unit)) return deny(reqId, 'invalid-unit')
+      if (kind === 'track' && !step(msg.step, SHOW_PLAN_LIMITS_STEPS - 1)) return deny(reqId, 'invalid-unit')
+      unit = msg.unit
+    }
+    const scale = msg.scale, motion = msg.motion
+    if (!(SCALE_BUCKETS as readonly unknown[]).includes(scale) || (scale !== 1 && scale !== 2) || (motion !== 'full' && motion !== 'reduced')) return deny(reqId, 'policy-refused')
+    const rate = ws.data.rates.check('unit', now())
+    if (rate === 'close') return close(ws, 'rate-limited')
+    if (rate === 'refuse') return deny(reqId, 'rate-limited')
+    if (fingerprintOf(d.contentPolicyId) !== d.fingerprint) return close(ws, 'layout-changed')
+    if (!ledger.touch(d.docRef, sd.policy.contentPolicy, d.bytes.length)) return deny(reqId, 'policy-refused')
+    const alive = textAlive(ws, s.sid, sd)
+    const p = sd.policy, mark = markOf(p, sd.decision), strictMarks = o.animation?.strictMarks === true
+    const base = { docRef: d.docRef, contentPolicy: p.contentPolicy, scale: scale as 1 | 2, motion: motion as 'full' | 'reduced', mark, strictMarks }
+    const estimate = showEstimate(d.units[unit]!, scale)
+
+    // 6. The build.
+    // `head`: the plan (tag 1) or Morph record (tag 5); a track has none.
+    let head: ShowMessage | undefined, assets: OutAsset[], page: { w: number; h: number }, decoded: number
+    const diags: Array<Record<string, unknown>> = []
+    const start: Record<string, unknown> = { reqId, type: `show-${kind}-start`, unit }
+    try {
+      if (kind === 'plan') {
+        const built = await o.pool.showPlan(s.sid, { ...base, unitIndex: unit }, estimate)
+        if (!alive()) return
+        if ('refused' in built) return deny(reqId, built.refused)
+        head = { tag: 1, plan: built.plan }
+        assets = built.assets
+        const entry = built.assets.find((x) => x.tag === 3)
+        if (!entry) return deny(reqId, 'policy-refused')
+        page = { w: entry.w, h: entry.h }
+        decoded = built.decodedBytes
+      } else if (kind === 'track') {
+        const frames = await o.pool.showTrack(s.sid, { ...base, unitIndex: unit, step: msg.step as number }, estimate)
+        if (!alive()) return
+        if (!frames.length) return deny(reqId, 'invalid-unit')
+        assets = frames.map((f) => ({ tag: 4, ...f, rest: { x: 0, y: 0, scale: 1 } }))
+        page = { w: frames[0]!.w, h: frames[0]!.h }
+        decoded = frames.reduce((n, f) => n + f.w * f.h * 4, 0)
+        start.step = msg.step
+      } else {
+        const built = await o.pool.showMorph(s.sid, { ...base, from: msg.from as number, to: unit, fromStep: msg.fromStep as number }, estimate)
+        if (!alive()) return
+        if ('refused' in built) return deny(reqId, built.refused)
+        head = { tag: 5, morph: built.record }
+        assets = 'frames' in built ? built.frames.map((f) => ({ tag: 4 as const, ...f })) : built.assets.map((x) => ({ tag: 2 as const, ...x }))
+        page = built.page
+        decoded = assets.reduce((n, x) => n + x.w * x.h * 4, 0)
+        for (const code of built.diagnostics) diags.push({ reqId, type: 'diag', code, unit, ...(code === 'morph-composited' && 'reason' in built ? { reason: built.reason } : {}) })
+        Object.assign(start, { from: msg.from, to: unit, fromStep: msg.fromStep })
+      }
+    } catch (e) { return alive() ? deny(reqId, showFailure(e)) : undefined }
+
+    // 7. Layer-1 per asset, in order (the scratch lease holds two at most).
+    const marked = await markShow(alive, s.sid, sd, unit, scale, page, assets)
+    if (marked === undefined) return
+    if (typeof marked === 'string') return deny(reqId, marked)
+
+    // 8. Every message framed (none over its cap), then the durable row.
+    const payloads: Uint8Array[] = []
+    try {
+      if (head) payloads.push(encodeShowMessage(head))
+      for (const x of marked.assets) payloads.push(encodeShowMessage({ tag: x.tag, unit, assetId: x.assetId, w: x.w, h: x.h, png: x.png }))
+    } catch (e) { if (e instanceof PlanRejected) return deny(reqId, 'policy-refused'); throw e }
+    // The Morph record's bytes count toward the reply's decoded total (a plan's are in `decodedBytes` already).
+    if (kind === 'morph') decoded += payloads[0]!.length
+    const messages: Uint8Array[][] = []
+    for (const pl of payloads) { const f = frame(KIND.SHOW_PLAN, reqId, pl); if (!f) return deny(reqId, 'policy-refused'); messages.push(f) }
+    const unmarked = marked.unmarked.length
+    try { audit.recordShow({ sid: s.sid, unitIndex: unit, kind, assetCount: assets.length, unmarked, ...(unmarked ? { reason: marked.reason } : {}) }) } catch { return deny(reqId, 'policy-refused') }
+
+    // 9. Diagnostics, the start, the messages.
+    if (marked.reason === 'layer-capacity' && unmarked) diags.push({ reqId, type: 'diag', code: 'forensic-unmarked', unit, reason: 'layer-capacity', assetIds: marked.unmarked })
+    for (const x of diags) send(ws, x)
+    send(ws, { ...start, messages: messages.length, decodedBytes: decoded })
+    for (const m of messages) {
+      if (!alive()) return
+      if (!sendFrames(ws, [m])) return
+    }
+  }
+
+  /**
+   * D7: Layer-1 on each show asset with the session's page-keyed basis (`${unit}@${scale}`), cropped to the asset's
+   * rest. An asset left with no carrier ships its visibly marked bytes, listed in `unmarked` (`layer-capacity`); a
+   * session without Layer-1 (policy, or `testOnly.forensicOff`) lists every asset (`forensic-off`). `undefined`: the
+   * session died meanwhile (send nothing).
+   */
+  async function markShow(alive: () => boolean, sid: string, sd: { doc: DocState; forensic?: Issued }, unit: number, scale: number, page: { w: number; h: number }, assets: OutAsset[]): Promise<{ assets: OutAsset[]; unmarked: number[]; reason: 'layer-capacity' | 'forensic-off' } | ShowErrorCode | undefined> {
+    if (!sd.forensic || o.testOnly?.forensicOff === true) return { assets, unmarked: assets.map((x) => x.assetId), reason: 'forensic-off' }
+    const kBasis = deriveBasisKey(o.keys.kBasisRoot, sd.doc.docRef, `${unit}@${scale}`)
+    const out: OutAsset[] = [], unmarked: number[] = []
+    for (const x of assets) {
+      let release: () => void
+      try { release = await leaseFor(sid).acquire() } catch (e) { return e instanceof LeaseFull ? 'rate-limited' : 'policy-refused' }
+      let r
+      try {
+        r = await o.pool.markLayer(sid, { png: x.png, w: x.w, h: x.h, kBasis, code: sd.forensic.code, crop: { x: x.rest.x, y: x.rest.y, pageW: page.w, pageH: page.h, scale: x.rest.scale }, ...(o.encodeHangMs ? { hangMs: o.encodeHangMs } : {}) }, encodeEstimate(x.w, x.h, x.png.length))
+      } catch (e) { return alive() ? (e instanceof AdmissionRefused ? 'rate-limited' : 'policy-refused') : undefined } finally { release() }
+      if (!alive()) return undefined
+      if ('unmarked' in r) { forensicStats.unmarked++; unmarked.push(x.assetId); out.push(x) } else { forensicStats.marked++; out.push({ ...x, png: r.png }) }
+    }
+    return { assets: out, unmarked, reason: 'layer-capacity' }
+  }
+
   /** A page failure: `rate-limited` (admission or lease full), anything else `policy-refused`. */
   const pageCode = (c: RefusalCode) => c === 'rate-limited' ? c : 'policy-refused'
 
@@ -783,6 +949,9 @@ export function createStreamServer(o: StreamServerOptions) {
     if (m.type === 'print') return onPrint(ws, m)
     if (m.type === 'print-cancel') return onPrintCancel(ws, m)
     if (m.type === 'notes') return onNotes(ws, m)
+    if (m.type === 'show-plan') return onShow(ws, m, 'plan')
+    if (m.type === 'show-track') return onShow(ws, m, 'track')
+    if (m.type === 'show-morph') return onShow(ws, m, 'morph')
     return refuse(ws, m.reqId, 'policy-refused')
   }
 

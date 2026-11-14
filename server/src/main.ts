@@ -25,7 +25,7 @@ export async function startServer(argv: readonly string[], env: Record<string, s
   expire()
   const expiry = setInterval(() => { try { expire() } catch (e) { console.error('[audit] expiry failed', e) } }, 3600_000); expiry.unref()
   const pool = new Pool()
-  const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, ...demoHooks(config) })
+  const stream = createStreamServer({ keys, originAllowlist: origins, pool, audit, animation: config.animation, ...demoHooks(config) })
   const server = Bun.serve({ port: config.port, fetch: stream.fetch as never, websocket: stream.websocket as never })
   return { server, stream, pool, origins, stop() { server.stop(true); pool.dispose(); clearInterval(expiry); store.close() } }
 }

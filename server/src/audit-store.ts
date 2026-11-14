@@ -29,6 +29,13 @@ export interface NotesRecord { sid: string; unitIndex: number; scale: 1 | 2; cha
  * needs to re-derive it — the unit, scale and the canonical notes PNG the mark was applied to. Distinct from
  * `NotesRecord` (written before the draw, also for images that then failed) and from slide deliveries. */
 export interface NotesMarkRecord { sid: string; unitIndex: number; scale: 1 | 2; refSha256: string; at: number }
+/**
+ * One show send answered to a sid (piece 4 Task 7): a slide bundle (`plan`), a keyframe track (`track`) or a Morph
+ * pair (`morph`, unit = the `to` slide), with its asset count and how many of them shipped without Layer-1, and why
+ * (`layer-capacity`: no carrier survived the layer's transparent cells; `forensic-off`: the session carries no
+ * Layer-1). Written after the marks and before `*-start`. Never deduplicated (each is one charged send).
+ */
+export interface ShowDeliveryRecord { sid: string; unitIndex: number; kind: 'plan' | 'track' | 'morph'; assetCount: number; unmarked: number; reason?: 'layer-capacity' | 'forensic-off'; at: number }
 /** A resume that changed the sid's resolved text services (the open row keeps the first value, write-once). */
 export interface ServicesRecord { sid: string; copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean; at: number }
 export interface DetectionLog { at: number; osUser: string; investigator?: string; imageSha256: string; docRefs: string[]; unitIndex: number; answer: string; sid?: string }
@@ -47,6 +54,8 @@ CREATE TABLE IF NOT EXISTS notes_deliveries (sid TEXT NOT NULL REFERENCES rows (
 CREATE INDEX IF NOT EXISTS notes_deliveries_sid ON notes_deliveries (sid);
 CREATE TABLE IF NOT EXISTS notes_marks (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, scale REAL NOT NULL, ref_sha256 TEXT NOT NULL, at INTEGER NOT NULL, UNIQUE (sid, unit_index, scale, ref_sha256));
 CREATE INDEX IF NOT EXISTS notes_marks_unit ON notes_marks (unit_index);
+CREATE TABLE IF NOT EXISTS show_deliveries (sid TEXT NOT NULL REFERENCES rows (sid), unit_index INTEGER NOT NULL, kind TEXT NOT NULL, asset_count INTEGER NOT NULL, unmarked INTEGER NOT NULL, reason TEXT, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS show_deliveries_sid ON show_deliveries (sid);
 CREATE TABLE IF NOT EXISTS services (sid TEXT NOT NULL REFERENCES rows (sid), copy TEXT NOT NULL, text_a11y TEXT NOT NULL, print TEXT, notes INTEGER, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS services_sid ON services (sid);
 CREATE TABLE IF NOT EXISTS counters (gen INTEGER PRIMARY KEY, next INTEGER NOT NULL);
@@ -162,6 +171,15 @@ export class AuditStore {
     return this.db.query<{ sid: string; unit_index: number; scale: number; ref_sha256: string; at: number; row: string }, [string, number]>('SELECT n.*, r.row FROM notes_marks n JOIN rows r ON r.sid = n.sid WHERE r.doc_ref = ? AND n.unit_index = ? ORDER BY n.rowid')
       .all(docRef, unitIndex).map((x) => ({ sid: x.sid, row: JSON.parse(x.row) as StoredRow, delivery: { sid: x.sid, unitIndex: x.unit_index, scale: x.scale, status: 'l1' as const, refSha256: x.ref_sha256, at: x.at } }))
   }
+  /** Appends one show send record (repeats are kept); throws for a sid with no row. */
+  putShow(r: ShowDeliveryRecord): void {
+    this.writable()
+    this.db.query('INSERT INTO show_deliveries (sid, unit_index, kind, asset_count, unmarked, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.sid, r.unitIndex, r.kind, r.assetCount, r.unmarked, r.reason ?? null, r.at)
+  }
+  showDeliveries(sid: string): ShowDeliveryRecord[] {
+    return this.db.query<{ sid: string; unit_index: number; kind: ShowDeliveryRecord['kind']; asset_count: number; unmarked: number; reason: ShowDeliveryRecord['reason'] | null; at: number }, [string]>('SELECT * FROM show_deliveries WHERE sid = ? ORDER BY rowid').all(sid)
+      .map((r) => ({ sid: r.sid, unitIndex: r.unit_index, kind: r.kind, assetCount: r.asset_count, unmarked: r.unmarked, ...(r.reason !== null ? { reason: r.reason } : {}), at: r.at }))
+  }
   /** Appends one services change; throws for a sid with no row. */
   putServices(r: ServicesRecord): void {
     this.writable()
@@ -196,12 +214,12 @@ export class AuditStore {
   detections(): DetectionLog[] {
     return this.db.query<{ log: string }, []>('SELECT log FROM detections ORDER BY id').all().map((r) => JSON.parse(r.log) as DetectionLog)
   }
-  /** Deletes rows older than the retention window with their deliveries, copies, prints, notes images (audited and marked) and services changes (and so their messages); counters stay. */
+  /** Deletes rows older than the retention window with their deliveries, copies, prints, notes images (audited and marked), show sends and services changes (and so their messages); counters stay. */
   expire(nowSec: number): number {
     this.writable()
     const cutoff = nowSec - AUDIT_RETENTION_SEC
     return this.db.transaction(() => {
-      for (const t of ['deliveries', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
+      for (const t of ['deliveries', 'copies', 'prints', 'notes_deliveries', 'notes_marks', 'show_deliveries', 'services']) this.db.query(`DELETE FROM ${t} WHERE sid IN (SELECT sid FROM rows WHERE started_at <= ?)`).run(cutoff)
       return this.db.query('DELETE FROM rows WHERE started_at <= ?').run(cutoff).changes
     })()
   }

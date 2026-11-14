@@ -5,7 +5,7 @@
 import { extendedCodeword } from './mark/bch'
 import { insertMessage } from './mark/message'
 import { CODEC_ID } from './mark/params'
-import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type StoredRow } from './audit-store'
+import { AUDIT_RETENTION_SEC, AuditStore, type CopyRecord, type DeliveryRecord, type NotesMarkRecord, type NotesRecord, type PrintRecord, type ShowDeliveryRecord, type StoredRow } from './audit-store'
 import type { A11yMode, CopyPolicy, PrintPolicy } from './hooks'
 
 export { AUDIT_RETENTION_SEC }
@@ -39,10 +39,12 @@ export interface AuditRow {
   printed: { jobs: number; pages: number }
   /** Notes images recorded for this sid (Stage 3c) and the notes characters they drew. */
   notesShown: { images: number; chars: number }
+  /** Show sends recorded for this sid (piece 4): charged sends, assets sent, and assets shipped without Layer-1. */
+  showSent: { sends: number; assets: number; unmarked: number }
 }
 /** `notes` is whether this sid may get speaker notes (`canNotes`: presenter role and policy), Stage 3c. */
 export interface TextServices { copy: CopyPolicy; textA11y: A11yMode; print: PrintPolicy; notes: boolean }
-export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings' | 'servicesChanged' | 'copied' | 'printed' | 'notesShown'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
+export type AuditRowInput = Omit<AuditRow, 'untraceable' | 'forensicLayers' | 'delivered' | 'markSettings' | 'servicesChanged' | 'copied' | 'printed' | 'notesShown' | 'showSent'> & { markSettings: Omit<AuditRow['markSettings'], 'forensic'> & { forensic?: boolean } }
 
 export interface Issued { token24: number; salt8: number; msg40: Uint8Array; code: Int8Array }
 
@@ -111,6 +113,11 @@ export class AuditTable {
     if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
     this.store.putNotesMark({ ...r, at: Math.floor(Date.now() / 1000) })
   }
+  /** One show send (bundle, track or Morph pair) is about to go to `sid`, its assets marked: durable before `*-start`. Throws for an unknown or expired sid. */
+  recordShow(r: Omit<ShowDeliveryRecord, 'at'>): void {
+    if (!this.store.getRow(r.sid)) throw new Error(`no audit row for ${r.sid}`)
+    this.store.putShow({ ...r, at: Math.floor(Date.now() / 1000) })
+  }
   /** A resume changed `sid`'s resolved text services: durable before they take effect. Throws for an unknown or expired sid. */
   recordServices(sid: string, s: TextServices): void {
     if (!this.store.getRow(sid)) throw new Error(`no audit row for ${sid}`)
@@ -124,7 +131,10 @@ export class AuditTable {
     // Marked notes images count as marked deliveries (they are always marked: an unmarkable one is never sent).
     const notesMarked = this.store.notesMarks(sid).length
     const marked = ds.filter((d) => d.status === 'l1').length + notesMarked
-    const forensicLayers: Array<'l1'> = marked ? ['l1'] : []
+    // A show asset carrying Layer-1 is a delivered layer too (a show-only session is forensically marked).
+    const shows = this.store.showDeliveries(sid)
+    const showMarked = shows.reduce((n, x) => n + x.assetCount - x.unmarked, 0)
+    const forensicLayers: Array<'l1'> = marked || showMarked ? ['l1'] : []
     const copies = this.store.copies(sid).filter((c) => c.kind === 'copy')
     const prints = this.store.prints(sid)
     const notes = this.store.notesDeliveries(sid)
@@ -141,6 +151,7 @@ export class AuditTable {
       copied: Object.freeze({ events: copies.length, paragraphs: copies.reduce((n, c) => n + c.paragraphs, 0) }),
       printed: Object.freeze({ jobs: prints.length, pages: prints.reduce((n, p) => n + p.pages, 0) }),
       notesShown: Object.freeze({ images: notes.length, chars: notes.reduce((n, x) => n + x.charsDrawn, 0) }),
+      showSent: Object.freeze({ sends: shows.length, assets: shows.reduce((n, x) => n + x.assetCount, 0), unmarked: shows.reduce((n, x) => n + x.unmarked, 0) }),
     })
   }
   expire(nowSec: number): number {
