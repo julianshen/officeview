@@ -12,7 +12,7 @@ import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../../src/slideshow/engine/steps'
 import type { StageModel } from '../../src/slideshow/player/stage'
 import type { BehaviourNode, CTn, ContainerNode, Lease, ShowSlide, SlideShowWorkspace, TimingTree, TransitionSpec, Compositor, LayerHandle } from '../../src/slideshow/types'
-import { decodeShowMessage, encodeShowMessage, SHOW_PLAN_LIMITS, type MorphPlanRecord, type ShowPlanRecord } from '../../src/stream/show-plan'
+import { decodeShowMessage, encodeShowMessage, SHOW_PLAN_LIMITS, type MorphPlanRecord, type PlanLayerRecord, type ShowPlanRecord } from '../../src/stream/show-plan'
 import type { ImageBitmapLike } from '../../src/stream/remote/show-fetch'
 import { flyInDeck, loadShowDeck, triggerFadeDeck } from '../../src/testdata/show-decks'
 
@@ -681,5 +681,201 @@ describe('PlanStage', () => {
     await r.enter(1)
     r.stage.frame(r.timelines.get(1)!.initial(), 0)
     expectPx(r.pixel(10, 10), [200, 10, 10])
+  })
+})
+
+const diffPx = (a: number[], b: number[]) => { let n = 0; for (let i = 0; i < a.length; i += 4) if (a.slice(i, i + 4).some((v, j) => Math.abs(v - b[i + j]!) > 1)) n++; return n }
+
+describe('review fix round 1', () => {
+  it('leaving during a fade: the next from-frame is the fade as it was shown', async () => {
+    const r = rig({ slides: [flyIn(), plainSlide(1, fade(1000)), plainSlide(2, fade(1000))] })
+    await r.enter(0)
+    r.stage.frame(r.model(0).timeline.checkpoint(1), 0)
+    r.leave()
+    await r.enter(1)
+    r.now.t = 500
+    r.stage.frame(r.model(1).cursor, 500)
+    const before = pixels(r.output)
+    r.leave()
+    await r.enter(2)
+    r.stage.frame(r.model(2).cursor, 500)
+    expect(diffPx(before, pixels(r.output))).toBe(0)
+  })
+
+  it('leaving during a layered Morph: the next from-frame is the Morph as it was shown', async () => {
+    const record: MorphPlanRecord = morphViaWire({
+      v: 1, from: 0, to: 1, fromStep: 1, over: [], pairs: [],
+      items: [{ from: { assetId: 10, geometry: { x: 380, y: 260, w: 200, h: 200, rot: 0 }, bounds: { x: 380, y: 260, w: 200, h: 200 } }, to: { assetId: 11, geometry: { x: 0, y: 0, w: 200, h: 200, rot: 0 }, bounds: { x: 0, y: 0, w: 200, h: 200 } } }],
+    })
+    const assets = assetsOf(new Map([[10, solid(20, 20, BOX)], [11, solid(20, 20, BOX)]]))
+    const r = rig({ slides: [flyIn(), plainSlide(1, morphSpec(1000)), plainSlide(2, fade(1000))], morph: async () => ({ record, assets }) })
+    await r.enter(0)
+    r.stage.frame(r.model(0).timeline.checkpoint(1), 0)
+    r.leave()
+    await r.enter(1)
+    await tick()
+    r.stage.frame(r.model(1).cursor, 0)
+    r.stage.frame(r.model(1).cursor, 500)
+    expect(r.stage.inspect().lastDraws).toEqual(['morph'])
+    const before = pixels(r.output)
+    r.leave()
+    r.now.t = 500
+    await r.enter(2)
+    r.stage.frame(r.model(2).cursor, 500)
+    expect(diffPx(before, pixels(r.output))).toBe(0)
+  })
+
+  it('leaving while a Morph waits: the held outgoing frame stays the from-frame', async () => {
+    const r = rig({ slides: [flyIn(), plainSlide(1, morphSpec(1200)), plainSlide(2, fade(1000))], morph: () => new Promise(() => {}) })
+    await r.enter(0)
+    r.stage.frame(r.model(0).timeline.checkpoint(1), 0)
+    const shown = pixels(r.output)
+    r.leave()
+    await r.enter(1)
+    r.stage.frame(r.model(1).cursor, 100)
+    expect(r.stage.inspect().lastDraws).toEqual(['from'])
+    r.leave()
+    await r.enter(2)
+    r.stage.frame(r.model(2).cursor, 0)
+    expect(diffPx(shown, pixels(r.output))).toBe(0)
+  })
+
+  it('a composited Morph whose first frame never decodes fades with morph-late at the deadline', async () => {
+    const record = morphViaWire({ v: 1, from: 0, to: 1, fromStep: 0, items: [], over: [], pairs: [], composited: { fps: 15, count: 18 } })
+    const track = fakeTrack(18, () => BOX, () => true)
+    const r = rig({ slides: [flyIn(), plainSlide(1, morphSpec(1200))], morph: async () => ({ record, assets: assetsOf(new Map()), track }) })
+    await r.enter(0)
+    r.stage.frame(r.model(0).cursor, 0)
+    r.leave()
+    await r.enter(1)
+    await tick()
+    r.stage.frame(r.model(1).cursor, 0)
+    expect(r.stage.inspect().lastDraws).toEqual(['from'])
+    expect(track.wanted).toContain(0)
+    r.now.t = 501
+    r.stage.frame(r.model(1).cursor, 501)
+    expect(r.sink.list().map((d) => d.code)).toContain('morph-late')
+    expect(r.stage.inspect().lastDraws).toEqual(['transition'])
+  })
+
+  it('a layered Morph whose assets land within the deadline plays', async () => {
+    const record = morphViaWire({ v: 1, from: 0, to: 1, fromStep: 0, items: [{ to: { assetId: 10, geometry: { x: 0, y: 0, w: 200, h: 200, rot: 0 }, bounds: { x: 0, y: 0, w: 200, h: 200 } } }], over: [], pairs: [] })
+    const assets = new Map<number, ImageBitmapLike>()
+    const r = rig({ slides: [flyIn(), plainSlide(1, morphSpec(1200))], morph: async () => ({ record, assets: assetsOf(assets) }) })
+    await r.enter(0)
+    r.stage.frame(r.model(0).cursor, 0)
+    r.leave()
+    await r.enter(1)
+    await tick()
+    r.stage.frame(r.model(1).cursor, 0)
+    expect(r.stage.inspect().lastDraws).toEqual(['from'])
+    assets.set(10, solid(20, 20, BOX))
+    r.now.t = 100
+    r.stage.frame(r.model(1).cursor, 100)
+    expect(r.stage.inspect().lastDraws).toEqual(['morph'])
+    expect(r.sink.list().map((d) => d.code)).not.toContain('morph-late')
+    expect(r.stage.slideTime(100 + 1200)).toBe(0)
+  })
+
+  /** A real decode window whose bitmaps zero their size on close (as a closed ImageBitmap does); frames ≥ 8 never decode. */
+  const closingWindow = (ws: SlideShowWorkspace) => createTrackWindow({
+    count: 18, frameBytes: OW * OH * 4, workspace: ws,
+    decode: async (i) => {
+      if (i >= 8) return new Promise<ImageBitmapLike>(() => {})
+      const cv = solid(OW, OH, [i * 10, 100, 200]) as HTMLCanvasElement & { close(): void }
+      cv.close = () => { cv.width = 0; cv.height = 0 }
+      return cv
+    },
+  })
+
+  it('a held track frame evicted from the decode window still flattens as the from-frame', async () => {
+    const r = rig({ slides: [flyIn({ steps: [{ trigger: 'click', eligibility: 'composited', track: { fps: 15, count: 18 } }] }), plainSlide(1, fade(1000))] })
+    const win = closingWindow(r.ws)
+    r.tracks.set('0:0', win)
+    win.want(0)
+    await tick()
+    await r.enter(0)
+    const tl = r.model(0).timeline
+    const c = tl.next(tl.initial(), 0)
+    r.stage.frame(c, 200)
+    const before = pixels(r.output)
+    // The step ends: its end frame is wanted, the window moves and frame 3 is closed; the picture holds.
+    r.stage.frame(c, 600)
+    expect(r.stage.inspect().lastDraws).toEqual(['track:0:3'])
+    r.leave()
+    await r.enter(1)
+    r.stage.frame(r.model(1).cursor, 0)
+    expect(r.sink.list().map((d) => d.code)).not.toContain('transition-workspace')
+    expect(diffPx(before, pixels(r.output))).toBe(0)
+    win.dispose()
+  })
+
+  it('a held track frame evicted from the decode window survives a backend rebuild', async () => {
+    gl.on = true
+    const r = rig({ slides: [flyIn({ steps: [{ trigger: 'click', eligibility: 'composited', track: { fps: 15, count: 18 } }] })], force: 'none' })
+    const win = closingWindow(r.ws)
+    r.tracks.set('0:0', win)
+    win.want(0)
+    await tick()
+    await r.enter(0)
+    const tl = r.model(0).timeline
+    const c = tl.next(tl.initial(), 0)
+    r.stage.frame(c, 200)
+    r.stage.frame(c, 600)
+    r.root.querySelector('canvas[data-slideshow-backend="webgl2"]')!.dispatchEvent(new Event('webglcontextlost', { cancelable: true }))
+    r.stage.frame(c, 700)
+    expect(r.stage.inspect().lastDraws).toEqual(['track:0:3'])
+    expectPx(r.pixel(48, 36), [30, 100, 200])
+    win.dispose()
+  })
+
+  /** Trigger shape `sp:9` (its own interactive sequence) inside group `sp:3`, which flies in on click 1. */
+  const groupedTrigger = () => {
+    const f = flyIn()
+    const layer = f.plan.layers[1] as PlanLayerRecord
+    const tt = structuredClone(triggerTiming) as TimingTree
+    const remap = (v: unknown) => {
+      if (!v || typeof v !== 'object') return
+      const o = v as Record<string, unknown>
+      if (o.ctn && typeof o.ctn === 'object') (o.ctn as { id: number }).id += 1000
+      if (o.spid === '3') o.spid = '9'
+      for (const x of Object.values(o)) if (typeof x === 'object') remap(x)
+    }
+    remap(tt.root)
+    const ft = structuredClone(f.plan.show.timing) as TimingTree
+    ;(ft.root as ContainerNode).children.push(tt.root)
+    return {
+      plan: viaWire({
+        ...f.plan, show: { timing: ft, builds: [] },
+        layers: [f.plan.layers[0]!, { id: 10, key: 'sp:3', z: 1, container: true }, { ...layer, key: 'sp:9', parent: 10 }, f.plan.layers[2]!],
+        triggers: [{ spid: '9', rects: [{ x: 380, y: 260, w: 200, h: 200 }] }],
+      }),
+      assets: f.assets,
+    }
+  }
+
+  it('hitTest: a trigger inside a hidden group is not clickable', async () => {
+    const r = rig({ slides: [groupedTrigger()] })
+    await r.enter(0)
+    const tl = r.model(0).timeline
+    const triggers = tl.triggers()
+    expect(triggers).toContain('9')
+    r.stage.frame(tl.initial(), 0)
+    expect(r.stage.inspect().lastDraws).toEqual(['layer:0', 'layer:2'])
+    expect(r.stage.hitTest(48, 36, tl.initial(), 0, { triggers, links: [] })).toBeUndefined()
+    expect(r.stage.hitTest(48, 36, tl.checkpoint(1), 0, { triggers, links: [] })).toEqual({ kind: 'trigger', spid: '9' })
+  })
+
+  it('hitTest: a trigger inside a moving group is hit where the group has moved it', async () => {
+    const r = rig({ slides: [groupedTrigger()] })
+    await r.enter(0)
+    const tl = r.model(0).timeline
+    const triggers = tl.triggers()
+    const c1 = tl.next(tl.initial(), 0)
+    const g = r.stage.frame(c1, 250)!.get('sp:3')!
+    const dx = g.transform[4] + (g.motion?.dx ?? 0)
+    expect(dx).toBeLessThan(-100)
+    expect(r.stage.hitTest(Math.round((480 + dx) / 10), 36, c1, 250, { triggers, links: [] })).toEqual({ kind: 'trigger', spid: '9' })
+    expect(r.stage.hitTest(48, 36, c1, 250, { triggers, links: [] })).toBeUndefined()
   })
 })

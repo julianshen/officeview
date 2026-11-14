@@ -100,6 +100,8 @@ export const MORPH_WAIT_MS = 500
 /** D23: decoded frames a track holds at once. */
 export const TRACK_WINDOW = 8
 const TRACK_FPS = 15
+/** Container nesting walked for a hit test (the codec's records name only earlier containers, so no cycle forms). */
+const SHOW_LAYER_DEPTH = 128
 
 /**
  * D22: the slide's text items fanned out over `tree` exactly as local mode
@@ -262,8 +264,20 @@ interface MorphRun {
   spec?: MorphFrameSpec
   track?: PlanTrack
   handles: LayerHandle[]
+  /** The source each layered handle was uploaded from (an interrupted Morph is recomposed from them). */
+  srcOf: Map<LayerHandle, Src>
   epoch: number
 }
+
+/** What the last frame showed, so `flattenCurrent` captures exactly that (review fix round 1). */
+type Shown =
+  | { kind: 'pics' }
+  | { kind: 'from' }
+  | { kind: 'transition'; progress: number; params: Readonly<Record<string, unknown>> }
+  | { kind: 'morph'; progress: number }
+
+/** The displayed track frame, copied out of the decode window (which may close it) and workspace-charged. */
+interface HeldFrame { key: string; canvas: HTMLCanvasElement; lease: Lease }
 
 interface Running {
   spec: TransitionSpec
@@ -317,6 +331,8 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   let kinds: string[] = []
   /** One track frame uploaded at a time: its slide-local key. */
   let trackKey: string | undefined
+  let heldFrame: HeldFrame | undefined
+  let shown: Shown = { kind: 'pics' }
   /** Fanned text timing per `ShowSlide` (handed to the driver, so its node identities are the timeline's). */
   const texts = new WeakMap<ShowSlide, IteratedTiming | null>()
 
@@ -421,6 +437,22 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   function releaseSlide(p: Slide) {
     for (const key of [...p.ups.keys()]) releaseUp(p, key)
     p.held = []
+    heldFrame?.lease.release()
+    heldFrame = undefined
+    trackKey = undefined
+  }
+
+  /** A charged copy of a track frame: the decode window may close the provider's bitmap once it moves on (D23). */
+  function copyFrame(src: Src): HeldFrame | undefined {
+    const w = src.bmp.width, h = src.bmp.height
+    if (!(w > 0 && h > 0)) return undefined
+    const lease = workspace.lease(surfaceBytes(w, h), 'plan:held-frame')
+    if (!lease) return undefined
+    const canvas = factory(w, h) as HTMLCanvasElement
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { lease.release(); return undefined }
+    ctx.drawImage(src.bmp as unknown as CanvasImageSource, 0, 0)
+    return { key: src.key, canvas, lease }
   }
 
   const entrySrc = (p: Slide): Src | undefined => {
@@ -503,6 +535,22 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     return out
   }
 
+  /** `key`'s state composed through its container records, as `layerPics` draws it (§5.1 hit tests). */
+  function effectiveState(p: Slide, state: RenderState, key: TargetKey): TargetState | undefined {
+    const layers = p.data?.plan.layers ?? []
+    let rec = layers.find(l => l.key === key)
+    if (!rec) return state.get(key)
+    const byId = new Map(layers.map(l => [l.id, l]))
+    const chain: Array<PlanLayerRecord | PlanContainerRecord> = []
+    for (let depth = 0; rec && depth <= SHOW_LAYER_DEPTH; depth++) {
+      chain.unshift(rec)
+      rec = rec.parent === undefined ? undefined : byId.get(rec.parent)
+    }
+    let s: TargetState | undefined
+    for (const r of chain) s = compose(s, r.key === undefined ? undefined : state.get(r.key))
+    return s
+  }
+
   /** The layer draws of `p` at `state`, in paint order (the local `entriesOf` over the flat records). */
   function layerPics(p: Slide, state: RenderState): Pic[] {
     const out: Pic[] = []
@@ -573,17 +621,28 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   /** Draws `pics` of `p` on the compositor; `false` when a source could not be uploaded. */
   function draw(p: Slide, pics: Pic[]): boolean {
     const list: LayerDraw[] = []
+    const drawn: Pic[] = []
+    let fresh: HeldFrame | undefined
     for (const pic of pics) {
-      const isTrack = pic.src.key.startsWith('t:') || pic.src.key.startsWith('mt:')
-      const h = handleOf(p, pic.src)
-      if (!h) return false
+      let src = pic.src
+      const isTrack = src.key.startsWith('t:') || src.key.startsWith('mt:')
+      if (isTrack) {
+        // The displayed track frame is drawn from the stage's own copy (flattened and re-uploaded from it).
+        if (heldFrame?.key === src.key) src = { ...src, bmp: heldFrame.canvas }
+        else if ((fresh = copyFrame(src))) src = { ...src, bmp: fresh.canvas }
+      }
+      const h = handleOf(p, src)
+      if (!h) { fresh?.lease.release(); return false }
       // One track frame uploaded at a time: the new one is in, the previous goes.
-      if (isTrack && trackKey !== pic.src.key) { if (trackKey) releaseUp(p, trackKey); trackKey = pic.src.key }
+      if (isTrack && trackKey !== src.key) { if (trackKey) releaseUp(p, trackKey); trackKey = src.key }
       list.push({ handle: h, state: pic.state, ...(pic.part ? { part: pic.part } : {}) })
+      drawn.push({ ...pic, src })
     }
+    if (fresh) { heldFrame?.lease.release(); heldFrame = fresh }
     compositor().frame(list)
     kinds = pics.map(x => x.kind)
-    p.held = pics
+    p.held = drawn
+    shown = { kind: 'pics' }
     return true
   }
 
@@ -591,34 +650,51 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   // Flattening (outgoing frames, incoming checkpoints, Presenter "Next")
   // -------------------------------------------------------------------
 
-  /** Composes `pics` on a Canvas 2D compositor into `canvas` (its viewport fits `p`); `false` when refused. */
-  function composeInto(p: Slide, pics: Pic[], canvas: HTMLCanvasElement): boolean {
+  type Paint = (c2: Compositor, up: (src: Src) => LayerHandle | undefined, m: Affine) => boolean
+
+  /** Paints on a transient Canvas 2D compositor into `canvas` (its viewport fits `p`); `false` when refused. */
+  function composeWith(p: Slide, canvas: HTMLCanvasElement, paint: Paint): boolean {
     const c2 = createCanvas2DCompositor(canvas, factory, workspace, sink)
     try {
-      c2.setViewport(viewport(p, canvas.width, canvas.height))
-      const list: LayerDraw[] = []
-      for (const pic of pics) {
-        const h = upload(pic.src, 'plan:compose', c2)
-        if (!h) return false
-        list.push({ handle: h, state: pic.state, ...(pic.part ? { part: pic.part } : {}) })
-      }
-      c2.frame(list)
-      return true
+      const v = viewport(p, canvas.width, canvas.height)
+      c2.setViewport(v)
+      return paint(c2, (src) => upload(src, 'plan:compose', c2), v.matrix)
     } finally {
       c2.dispose()
     }
   }
 
-  /** A full-output frame of `pics`, composited in a leased canvas; `undefined` when refused. */
-  function flatten(p: Slide, pics: Pic[], tag: string): Flat | undefined {
+  const paintPics = (pics: Pic[]): Paint => (c2, up) => {
+    const list: LayerDraw[] = []
+    for (const pic of pics) {
+      const h = up(pic.src)
+      if (!h) return false
+      list.push({ handle: h, state: pic.state, ...(pic.part ? { part: pic.part } : {}) })
+    }
+    c2.frame(list)
+    return true
+  }
+
+  const composeInto = (p: Slide, pics: Pic[], canvas: HTMLCanvasElement) => composeWith(p, canvas, paintPics(pics))
+
+  /** A full-output frame painted by `paint`, in a leased canvas; `undefined` when refused. */
+  function flattenWith(p: Slide, tag: string, paint: Paint): Flat | undefined {
     const cw = Math.max(1, output.width), ch = Math.max(1, output.height)
     const lease = workspace.lease(surfaceBytes(cw, ch), tag)
     if (!lease) return undefined
     const canvas = factory(cw, ch) as HTMLCanvasElement
-    if (!composeInto(p, pics, canvas)) { lease.release(); return undefined }
+    if (!composeWith(p, canvas, paint)) { lease.release(); return undefined }
     const f: Flat = { canvas, lease }
     if (!flatHandle(f)) { releaseFlat(f); return undefined }
     return f
+  }
+
+  const flatten = (p: Slide, pics: Pic[], tag: string) => flattenWith(p, tag, paintPics(pics))
+
+  /** A flat frame as a source under the slide-px → device matrix `m` (the whole output). */
+  const flatSrc = (f: Flat, m: Affine): Src => {
+    const s = m[0]
+    return { key: 'flat', bmp: f.canvas, bounds: { x: -m[4] / s, y: -m[5] / s, w: f.canvas.width / s, h: f.canvas.height / s }, scale: s }
   }
 
   /** `f` uploaded under the viewport in force (the whole output in slide px), re-uploaded when that changed. */
@@ -628,10 +704,54 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     if (f.up?.key === key) return f.up.handle
     if (f.up && f.up.epoch === epoch) compositor().release(f.up.handle)
     f.up = undefined
-    const s = m[0]
-    const h = upload({ key: 'flat', bmp: f.canvas, bounds: { x: -m[4] / s, y: -m[5] / s, w: f.canvas.width / s, h: f.canvas.height / s }, scale: s }, 'plan:frame')
+    const h = upload(flatSrc(f, m), 'plan:frame')
     if (h) f.up = { handle: h, epoch, key }
     return h
+  }
+
+  /** What the last frame showed, flattened (the outgoing frame); `undefined` when refused or nothing was shown. */
+  function capture(p: Slide): Flat | undefined {
+    const r = running
+    if (shown.kind === 'from') {
+      // The held outgoing frame (a Morph waiting, or a composited Morph before its first frame): it is still that frame.
+      if (waiting && outgoing) { const f = outgoing; outgoing = undefined; return f }
+      if (r?.from) { const f = r.from; r.from = undefined; return f }
+    }
+    if (shown.kind === 'transition' && r && !r.morph) {
+      const { progress, params } = shown
+      return flattenWith(p, 'plan:from', (c2, up, m) => {
+        const entry = r.to === 'entry' ? entrySrc(p) : undefined
+        const to = r.to === 'entry' ? entry && up(entry) : up(flatSrc(r.to, m))
+        const from = r.from ? up(flatSrc(r.from, m)) : to
+        if (!to || !from) return false
+        c2.frame([], { from, to, effect: r.spec.element, progress, params, rng: r.rng })
+        return true
+      })
+    }
+    if (shown.kind === 'morph' && r?.morph?.spec) {
+      const { spec, srcOf } = r.morph
+      const { progress } = shown
+      return flattenWith(p, 'plan:from', (c2, up) => {
+        const mine = new Map<LayerHandle, LayerHandle>()
+        const swap = (side: MorphLayerFrame | undefined): MorphLayerFrame | undefined | false => {
+          if (!side) return undefined
+          let h = mine.get(side.handle)
+          if (!h) { const src = srcOf.get(side.handle); h = src && up(src); if (!h) return false; mine.set(side.handle, h) }
+          return { ...side, handle: h }
+        }
+        const pairs: MorphFrameItem[] = []
+        for (const { from, to, ...rest } of spec.pairs) {
+          const a = swap(from), b = swap(to)
+          if (a === false || b === false) return false
+          pairs.push({ ...rest, ...(a ? { from: a } : {}), ...(b ? { to: b } : {}) })
+        }
+        morphFrame({ pairs }, progress, c2)
+        return true
+      })
+    }
+    // What was on screen: the last picture (a still's, a held track frame, or the entry frame).
+    const pics = p.held.length ? p.held : entryPics(p)
+    return pics.length ? flatten(p, pics, 'plan:from') : undefined
   }
 
   function blackFrame(): Flat | undefined {
@@ -673,8 +793,9 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   // -------------------------------------------------------------------
 
   function morphRun(r: { record: MorphPlanRecord; assets: PlanAssets; track?: PlanTrack }): MorphRun | string {
-    if (r.record.composited) return r.track ? { track: r.track, handles: [], epoch } : 'its keyframe track is not here'
+    if (r.record.composited) return r.track ? { track: r.track, handles: [], srcOf: new Map(), epoch } : 'its keyframe track is not here'
     const handles: LayerHandle[] = []
+    const srcOf = new Map<LayerHandle, Src>()
     const byAsset = new Map<number, LayerHandle>()
     const fail = (why: string) => { for (const h of handles) compositor().release(h); return why }
     const side = (s: NonNullable<MorphPlanRecord['items'][number]['from']>): MorphLayerFrame | string => {
@@ -682,9 +803,11 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       if (!h) {
         const bmp = r.assets.bitmap(s.assetId)
         if (!bmp) return `asset ${s.assetId} is missing`
-        h = upload({ key: `m:${s.assetId}`, bmp, bounds: s.bounds, scale: bmp.width / Math.max(1e-6, s.bounds.w) }, 'plan:morph')
+        const src: Src = { key: `m:${s.assetId}`, bmp, bounds: s.bounds, scale: bmp.width / Math.max(1e-6, s.bounds.w) }
+        h = upload(src, 'plan:morph')
         if (!h) return 'its layers do not fit the slideshow workspace'
         handles.push(h)
+        srcOf.set(h, src)
         byAsset.set(s.assetId, h)
       }
       return { handle: h, geometry: s.geometry, ...(s.state ? { state: s.state } : {}), ...(s.part ? { part: s.part } : {}), ...(s.key ? { key: s.key } : {}) }
@@ -698,7 +821,17 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       pairs.push({ ...rest, ...(a ? { from: a } : {}), ...(b ? { to: b } : {}) })
     }
     // `over` (the incoming watermark) is not drawn: marks are burned into every asset (the server builds with watermark off).
-    return { spec: { pairs }, handles, epoch }
+    return { spec: { pairs }, handles, srcOf, epoch }
+  }
+
+  /** Whether the Morph `r` has its initial content: every layered asset, or its track's first frame (asked for). */
+  function morphReady(r: { record: MorphPlanRecord; assets: PlanAssets; track?: PlanTrack }): boolean {
+    if (r.record.composited) {
+      if (!r.track) return false
+      r.track.want(0)
+      return r.track.frame(0) !== undefined
+    }
+    return r.record.items.every(it => [it.from, it.to].every(side => !side || r.assets.bitmap(side.assetId) !== undefined))
   }
 
   /** Starts the transition of `w.p` now: the Morph `r`, or (`why`) the fade look-alike. */
@@ -772,18 +905,16 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       if (captured) return
       captured = true
       const p = current
+      left = p && !disposed ? { index: p.index, step: lastStep } : undefined
+      // What the audience saw is captured before anything it was drawn from is released.
+      const f = p && !disposed ? capture(p) : undefined
       waiting = undefined
       endRunning()
-      left = p && !disposed ? { index: p.index, step: lastStep } : undefined
       releaseFlat(outgoing)
-      outgoing = undefined
-      if (!p || disposed) return
-      // What was on screen: the last picture (a still's or the entry frame's, under pressure).
-      const pics = p.held.length ? p.held : entryPics(p)
-      if (!pics.length) return
-      const f = flatten(p, pics, 'plan:from')
-      if (f) outgoing = f
-      else sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The outgoing frame did not fit the slideshow workspace; the slide change is a cut' })
+      outgoing = f
+      if (p && !disposed && !f && (p.held.length || entrySrc(p) || shown.kind !== 'pics')) {
+        sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The outgoing frame did not fit the slideshow workspace; the slide change is a cut' })
+      }
     },
 
     leave() {
@@ -848,6 +979,8 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
         origin = running ? start + duration : start
       }
       if (!running && !waiting) { releaseFlat(outgoing); outgoing = undefined }
+      // Until its first frame, what is on screen is the outgoing frame (a leave now captures it).
+      shown = waiting || running?.from ? { kind: 'from' } : { kind: 'pics' }
       shownBefore = true
     },
 
@@ -859,19 +992,22 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       const c = compositor()
       if (!p) {
         const h = outgoing && flatHandle(outgoing)
-        if (h) { c.frame([{ handle: h, state: PLAIN }]); kinds = ['from'] }
+        if (h) { c.frame([{ handle: h, state: PLAIN }]); kinds = ['from']; shown = { kind: 'from' } }
         return undefined
       }
       if (cursor) lastStep = cursor.step
       if (waiting) {
         const w = waiting
         const now = deps.showNow()
-        if (w.result !== undefined) startMorph(w, w.result)
-        else if (now - w.asked >= MORPH_WAIT_MS) startMorph(w, undefined, { code: 'morph-late', message: `No Morph record within ${MORPH_WAIT_MS} ms; the fade look-alike plays` })
-        else {
+        if (w.result === 'refused') startMorph(w, w.result)
+        else if (w.result && morphReady(w.result)) startMorph(w, w.result)
+        else if (now - w.asked >= MORPH_WAIT_MS) {
+          startMorph(w, undefined, { code: 'morph-late', message: w.result ? `The Morph's ${w.result.record.composited ? 'first keyframe' : 'layers'} did not arrive within ${MORPH_WAIT_MS} ms; the fade look-alike plays` : `No Morph record within ${MORPH_WAIT_MS} ms; the fade look-alike plays` })
+        } else {
           const h = outgoing && flatHandle(outgoing)
           c.frame(h ? [{ handle: h, state: PLAIN }] : [])
           kinds = ['from']
+          shown = { kind: 'from' }
           return EMPTY_STATE
         }
       }
@@ -880,7 +1016,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
         if (progress < 1) {
           const m = running.morph
           if (m && m.epoch === epoch) {
-            if (m.spec) { morphFrame(m.spec, Math.max(0, progress), c); kinds = ['morph']; return EMPTY_STATE }
+            if (m.spec) { morphFrame(m.spec, Math.max(0, progress), c); kinds = ['morph']; shown = { kind: 'morph', progress: Math.max(0, progress) }; return EMPTY_STATE }
             const track = m.track!
             const i = Math.min(track.count - 1, Math.max(0, Math.floor(((t - running.start) * TRACK_FPS) / 1000)))
             track.want(i)
@@ -894,6 +1030,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
             const h = running.from && flatHandle(running.from)
             c.frame(h ? [{ handle: h, state: PLAIN }] : [])
             kinds = ['from']
+            shown = { kind: 'from' }
             return EMPTY_STATE
           }
           const entry = running.to === 'entry' ? entrySrc(p) : undefined
@@ -904,6 +1041,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
             const params = running.three ? transition3DDraw(running.spec, progress, running.rng, aspect) : transitionDraw(running.spec, progress, running.rng, aspect)
             c.frame([], { from, to, effect: running.spec.element, progress, params, rng: running.rng })
             kinds = ['transition']
+            shown = { kind: 'transition', progress, params }
             return EMPTY_STATE
           }
         }
@@ -942,7 +1080,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       for (const trig of plan.triggers) {
         if (!on.triggers.includes(trig.spid)) continue
         const key = targetKey({ spid: trig.spid })
-        const s = state.get(key)
+        const s = effectiveState(p, state, key)
         if (s && (!s.visible || !(s.opacity > 0))) continue
         const m = invert(stateMatrix(s))
         if (!m) continue
