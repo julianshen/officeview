@@ -17,12 +17,12 @@ const appear = (id: () => number, spid: number) =>
   `<p:set><p:cBhvr>${ctn(id(), 1)}${tgt(spid)}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
 
 /** One main-sequence click step holding `behaviours` in one click effect. */
-function oneStep(behaviours: (id: () => number) => string[]): string {
+function oneStep(behaviours: (id: () => number) => string[], start: 'indefinite' | '0' = 'indefinite'): string {
   let n = 3
   const id = () => n++
   const outer = id(), inner = id(), own = id()
   const body = behaviours(id).join('')
-  const step = `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  const step = `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="${start}"/></p:stCondLst><p:childTnLst>` +
     `<p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
     `<p:par><p:cTn id="${own}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>` +
     `<p:childTnLst>${body}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
@@ -129,5 +129,23 @@ export async function groupDeck(): Promise<Uint8Array> {
   const xfrm = `<a:xfrm><a:off x="${e(200)}" y="${e(260)}"/><a:ext cx="${e(500)}" cy="${e(200)}"/><a:chOff x="${e(200)}" y="${e(260)}"/><a:chExt cx="${e(500)}" cy="${e(200)}"/></a:xfrm>`
   xml = `${xml.slice(0, open)}<p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>${xfrm}</p:grpSpPr>${xml.slice(open, tail)}</p:grpSp>${xml.slice(tail)}`
   zip.file(path, xml)
+  return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
+}
+
+/** One slide, no click steps: the box (id 2) fades in with the slide (an autoplayed main-sequence group, delay 0). */
+export const autoplayFadeDeck = () => buildPptxDeck({
+  slides: [{
+    bg: { solid: 'FFFFFF' }, shapes: [rect(2, 'Box', 380, 260, 200, 200, '336699')],
+    timingXml: oneStep(id => [appear(id, 2), `<p:animEffect transition="in" filter="fade"><p:cBhvr>${ctn(id(), 500)}${tgt(2)}</p:cBhvr></p:animEffect>`], '0'),
+  }],
+})
+
+/** `bytes` with every `filter="from"` in slide 1's timing replaced by `filter="to"`. */
+export async function withFilter(bytes: Uint8Array, from: string, to: string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  const path = 'ppt/slides/slide1.xml'
+  const xml = await zip.file(path)!.async('string')
+  if (!xml.includes(`filter="${from}"`)) throw new Error(`withFilter: no ${from}`)
+  zip.file(path, xml.split(`filter="${from}"`).join(`filter="${to}"`))
   return new Uint8Array(await zip.generateAsync({ type: 'uint8array' }))
 }

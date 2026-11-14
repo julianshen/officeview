@@ -477,9 +477,12 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
 
     const init = timeline.initial(), init0 = timeline.stateAt(init, 0)
     const autoplay = timeline.busyUntil(init) > 0 || timeline.keyTimes(init, 0, Number.POSITIVE_INFINITY).length > 0 || init0.active.length > 0 || init0.frozen.length > 0
-    const triggersLayered = [...c.triggers.values()].includes('layers')
+    // Fix round 1 (controller ruling): a trigger needs the layers that draw its end state whether it plays from
+    // layers or is cut (§6a: a cut jumps to its end state), and so does autoplay. Task 5 lets a trigger slide play
+    // from layers only with zero drops and masks, so its layers are complete.
+    const interactive = c.triggers.size > 0 || autoplay
     let steps: Array<{ eligibility: 'layers' | 'composited'; reason?: string; frames?: number }> = c.steps
-    let composited = !(steps.some(s => s.eligibility === 'layers') || triggersLayered || autoplay)
+    let composited = !(steps.some(s => s.eligibility === 'layers') || interactive)
     const diagnostics: Array<{ code: string; step?: number }> = [...c.diagnostics]
 
     /** Every step composited (validation failure, a non-translation rest): D3 frames over all steps. */
@@ -492,6 +495,18 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
         if (frames[k]!.truncated && !diagnostics.some(d => d.code === 'step-truncated' && d.step === k)) diagnostics.push({ code: 'step-truncated', step: k })
       }
       composited = true
+    }
+
+    /**
+     * Fix round 1: after the rest rule or mark validation withdraws the layers, a slide with a trigger or autoplay
+     * cannot draw them from keyframe tracks (which carry main steps only): it plays its still, never a plan whose
+     * triggered or autoplayed content was removed. Zero main steps make no difference.
+     */
+    const stillIfInteractive = (): ShowRefusal | undefined => {
+      if (!interactive) return undefined
+      const diags = diagnostics.filter(d => D21.has(d.code))
+      if (!diags.some(d => d.code === 'step-composited')) diags.push({ code: 'step-composited' })
+      return { refused: 'still', diagnostics: diags.slice(0, MAX_DIAGNOSTICS) }
     }
 
     // The layers that ship: kept by the classifier, masked (`layer × mask`), at their rest (D8).
@@ -515,7 +530,11 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
         shipped.push({ layer, index, bmp, rest })
       })
       // A rest that is not a pure translation cannot carry a page-anchored mark: fail closed.
-      if (shipped.some(s => !Number.isFinite(s.rest.x))) { allComposited('mark-rest'); diagnostics.push({ code: 'mark-rest' }); shipped = [] }
+      if (shipped.some(s => !Number.isFinite(s.rest.x))) {
+        allComposited('mark-rest'); diagnostics.push({ code: 'mark-rest' }); shipped = []
+        const still = stillIfInteractive()
+        if (still) return still
+      }
     }
 
     const layerRecords = (list: readonly Shipped[]): Array<PlanLayerRecord | PlanContainerRecord> => {
@@ -595,6 +614,8 @@ function assemble(show: ShowDoc, e: L1Entry, job: ShowPlanJob, opts: ShowBuildOp
       const ok = validate(ps, rasters, c, shipped.map((s, i) => ({ layer: s.layer, bounds: s.bmp.bounds, scale: s.bmp.scale, asset: layerAssets[i]! })), boundaries, { scale, PW, PH, page, job, docKey: show.docKey, compose: opts.compose, check })
       if (!ok) {
         allComposited('marks')
+        const still = stillIfInteractive()
+        if (still) return still
         shipped = []
         layerAssets = []
         plan = planOf(shipped)

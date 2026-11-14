@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'bun:test'
 import { decodeShowMessage, encodeShowMessage, isRasterLayer, SHOW_PLAN_LIMITS, type ShowPlanRecord } from '../../src/stream/show-plan'
 const R = (p: ShowPlanRecord) => p.layers.filter(isRasterLayer)
-import { ADVERSARY_KINDS, adversaryDeck, flyInDeck, manyLayersDeck, spinStepsDeck } from '../../src/testdata/show-decks'
+import { ADVERSARY_KINDS, adversaryDeck, triggerFadeDeck, flyInDeck, manyLayersDeck, spinStepsDeck } from '../../src/testdata/show-decks'
 import { Pool } from '../src/pool'
 import { moveTwiceDeck } from '../../src/testdata/show-decks'
 import { stateMatrix } from '../../src/slideshow/affine'
@@ -11,7 +11,10 @@ import { createRng } from '../../src/slideshow/rng'
 import { trackInputs } from '../src/show/build'
 import { drawsAt, slideStateAt } from '../src/show/compose'
 import type { DocumentHost } from '../src/render'
-import { appearMoveDeck } from './show-fixtures'
+import { appearMoveDeck, autoplayFadeDeck, withFilter } from './show-fixtures'
+import { createSlideComposer } from '../src/show/compose'
+import { canvasBackend } from '../../src/core/canvas-backend'
+import type { LayerBitmap } from '../../src/slideshow/types'
 import { inkPixels } from './show-classify-helper'
 import { decodePng } from '../src/mark/png'
 import { SHOW_BUNDLE_BUDGET, type BuiltShowPlan, type ShowPlanJob } from '../src/show/build'
@@ -203,6 +206,66 @@ describe('buildShowPlan', () => {
       expect(await restsHold(o.host, o.docKey, ok)).toBeGreaterThan(2)
     }
   }, 60_000)
+
+  describe('fix round 1: triggers and autoplay keep the layers that draw them', () => {
+    const showOf = (host: DocumentHost, docKey: string) => (host as unknown as { docs: Map<string, { show: Parameters<typeof trackInputs>[0] }> }).docs.get(docKey)!.show
+
+    it('a cut trigger ships the layers that draw its end state, reconstructable from the shipped assets', async () => {
+      const deck = await withFilter(await triggerFadeDeck(), 'fade', 'wipe(right)')
+      const { host, docKey } = await openDeck(deck)
+      const b = built(await host.showPlan(docKey, job({ mark: { kind: 'off' } })))
+      expect(b.plan.steps).toEqual([])
+      expect(b.plan.triggers.map(t => t.spid)).toEqual(['3'])
+      expect(b.plan.diagnostics.map(d => d.code)).toContain('trigger-cut')
+      expect(R(b.plan).length).toBeGreaterThan(0)
+      // The trigger's end state, composed from the original rasters and from the decoded shipped assets.
+      const { ps, timeline, rasters } = trackInputs(showOf(host, docKey), job({ mark: { kind: 'off' } }))
+      const cur = timeline.trigger(timeline.checkpoint(0), '3', 0)!
+      const keys = timeline.keyTimes(cur, 0, Number.POSITIVE_INFINITY)
+      const draws = drawsAt(ps, slideStateAt(ps, timeline, cur, keys[keys.length - 1]! + 1, createRng(1), createDiagnosticSink()))
+      const shipped = new Map<(typeof ps.layers)[number], LayerBitmap>()
+      for (const rec of R(b.plan)) {
+        const a = b.assets.find(x => x.assetId === rec.assetId)!, d = decodePng(a.png)
+        const c = canvasBackend().createCanvas(d.w, d.h), x = c.getContext('2d') as unknown as CanvasRenderingContext2D
+        const img = x.createImageData(d.w, d.h); img.data.set(d.rgba); x.putImageData(img, 0, 0)
+        shipped.set(ps.layers[rec.id]!, { canvas: c as never, bounds: rec.bounds, scale: rec.scale, bytes: d.w * d.h * 4 })
+      }
+      const o = createSlideComposer(ps, rasters, 1), s2 = createSlideComposer(ps, shipped, 1)
+      try {
+        const want = o.compose(draws), got = s2.compose(draws)
+        let box = 0, diff = 0
+        for (let i = 0; i < want.length; i += 4) {
+          if (want[i] === 0x33 && want[i + 1] === 0x66 && want[i + 2] === 0x99) box++
+          if (want[i] !== got[i] || want[i + 1] !== got[i + 1] || want[i + 2] !== got[i + 2] || want[i + 3] !== got[i + 3]) diff++
+        }
+        expect(box).toBeGreaterThan(30_000)
+        expect(diff).toBe(0)
+      } finally { o.dispose(); s2.dispose() }
+    }, 60_000)
+
+    const failing = { compose: (_k: number, img: ImageData) => ({ width: img.width, height: img.height, data: new Uint8ClampedArray(img.data.length) }) as unknown as ImageData }
+
+    it('a trigger slide whose mark validation fails is refused still, never a plan without its trigger content', async () => {
+      const { host, docKey } = await openDeck(await triggerFadeDeck())
+      const control = built(await host.showPlan(docKey, job()))
+      expect(R(control.plan).length).toBeGreaterThan(0)
+      host.showOptions = failing
+      const r = await host.showPlan(docKey, job())
+      expect('refused' in r && r.refused).toBe('still')
+      expect('refused' in r && r.diagnostics.map(d => d.code)).toContain('step-composited')
+    }, 60_000)
+
+    it('an autoplay-only slide whose mark validation fails is refused still', async () => {
+      const { host, docKey } = await openDeck(await autoplayFadeDeck())
+      const control = built(await host.showPlan(docKey, job()))
+      expect(control.plan.steps).toEqual([])
+      expect(R(control.plan).length).toBeGreaterThan(0)
+      host.showOptions = failing
+      const r = await host.showPlan(docKey, job())
+      expect('refused' in r && r.refused).toBe('still')
+      expect('refused' in r && r.diagnostics.length).toBeGreaterThan(0)
+    }, 60_000)
+  })
 
   it('cmd nodes dropped with cmd-dropped', async () => {
     const { host, docKey } = await openDeck(await cmdDeck())
