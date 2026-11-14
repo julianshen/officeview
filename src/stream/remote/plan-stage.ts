@@ -240,6 +240,8 @@ interface Slide {
   held: Pic[]
   timeline: SlideTimeline | undefined
   zOf: Map<TargetKey, number>
+  /** `trigger-cut` was diagnosed (once per slide visit, never per frame). */
+  cutNoted: boolean
 }
 
 interface MorphRun {
@@ -269,6 +271,8 @@ interface Waiting {
   spec: TransitionSpec
   duration: number
   asked: number
+  /** The cursor the slide was entered at (its incoming frame if the fade plays). */
+  cursor: SlideCursor
   result?: { record: MorphPlanRecord; assets: PlanAssets; track?: PlanTrack } | 'refused'
 }
 
@@ -308,7 +312,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       // Every handle belonged to the old backend, which released its leases.
       epoch++
       // The stage's own frames keep their canvases and re-upload when next drawn; a Morph's layers go (a cut).
-      if (running?.morph) { running.morph.handles = []; running = undefined }
+      if (running?.morph) { releaseFlat(running.from); running.morph.handles = []; running = undefined }
       if (outgoing) outgoing.up = undefined
       if (running) { if (running.from) running.from.up = undefined; if (running.to !== 'entry') running.to.up = undefined }
       trackKey = undefined
@@ -371,7 +375,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       triggerKeys: triggerTargets(tree, text?.items),
       // The server's unit index seeds the rng, as its tracks do (`0x5eed + unit`).
       rng: createRng((deps.seed ?? 0x5eed) + (plan?.slide.index ?? index)),
-      ups: new Map(), pressure: false, deferred: new Set(), held: [], timeline: undefined, zOf,
+      ups: new Map(), pressure: false, deferred: new Set(), held: [], timeline: undefined, zOf, cutNoted: false,
     }
   }
 
@@ -465,7 +469,10 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
   function liveState(p: Slide, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined): RenderState {
     const state = stateOf(p, cursor, slideT, timeline)
     if (!cursor || !p.triggerKeys.size || !p.data?.plan.diagnostics.some(d => d.code === 'trigger-cut') || !cursor.events.some(e => e.kind === 'trigger')) return state
-    sink.add({ code: 'trigger-cut', slideIndex: p.index, message: 'A triggered effect the layers cannot prove jumps to its end state' })
+    if (!p.cutNoted) {
+      p.cutNoted = true
+      sink.add({ code: 'trigger-cut', slideIndex: p.index, message: 'A triggered effect the layers cannot prove jumps to its end state' })
+    }
     const settled = stateOf(p, cursor, SETTLED_MS, timeline)
     const out = new Map(state)
     for (const k of p.triggerKeys) {
@@ -506,13 +513,14 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     return { key: `t:${step}:${i}`, bmp, bounds: { x: 0, y: 0, w: p.W, h: p.H }, scale: bmp.width / p.W }
   }
 
+  const entryPics = (p: Slide): Pic[] => { const e = entrySrc(p); return e ? [{ src: e, state: PLAIN, kind: e.key }] : [] }
+
   /**
    * What `p` shows at `cursor`/`slideT`: the entry frame (or still) under pressure or without a plan, a
    * composited step's track frame, or the layers. `undefined`: hold the previous picture.
    */
   function picture(p: Slide, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined, state: RenderState, live: boolean): Pic[] | undefined {
-    const entry = entrySrc(p)
-    const entryPic = entry ? [{ src: entry, state: PLAIN, kind: entry.key }] : []
+    const entryPic = entryPics(p)
     if (!p.data || p.pressure) return entryPic
     const k = cursor?.step ?? 0
     const step = k >= 1 ? p.data.plan.steps[k - 1] : undefined
@@ -689,8 +697,8 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       if (!run.track) releaseFlat(outgoing)
       outgoing = undefined
       running = { spec: w.spec, three: false, ...(from ? { from } : {}), to: 'entry', start, duration: w.duration, rng: createRng((deps.seed ?? 0x5eed) ^ (p.index * 2654435761)), morph: run, fromKind: from ? 'flat' : 'none', toKind: 'entry' }
-    } else startFlat(p, w.spec, 'lookalike', w.duration, start, undefined)
-    origin = start + w.duration
+    } else startFlat(p, w.spec, 'lookalike', w.duration, start, w.cursor)
+    origin = running ? start + w.duration : start
   }
 
   /** Starts a flat transition (from the outgoing frame to the incoming one) at `start`. */
@@ -707,13 +715,12 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
     let to: Running['to'] | undefined
     let toKind: Running['toKind'] = 'entry'
     const entry = entrySrc(p)
-    if ((!cursor || cursor.step === 0) && entry) {
-      if (handleOf(p, entry)) to = 'entry'
-    } else {
-      const pics = picture(p, cursor, 0, p.timeline, liveState(p, cursor, 0, p.timeline), false)
-      const f = pics && flatten(p, pics, 'plan:to')
+    // A later checkpoint whose composited end frame is not decoded yet starts from the entry frame, as `frame` holds it.
+    const pics = cursor && cursor.step > 0 ? picture(p, cursor, 0, p.timeline, liveState(p, cursor, 0, p.timeline), false) : undefined
+    if (pics) {
+      const f = flatten(p, pics, 'plan:to')
       if (f) { to = f; toKind = 'flat' }
-    }
+    } else if (entry && handleOf(p, entry)) to = 'entry'
     if (!from || !to) {
       if (from || to) sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The transition frames did not fit the slideshow workspace; the slide change is a cut' })
       releaseFlat(from)
@@ -752,7 +759,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       outgoing = undefined
       if (!p || disposed) return
       // What was on screen: the last picture (a still's or the entry frame's, under pressure).
-      const pics = p.held.length ? p.held : (() => { const e = entrySrc(p); return e ? [{ src: e, state: PLAIN, kind: e.key }] : [] })()
+      const pics = p.held.length ? p.held : entryPics(p)
       if (!pics.length) return
       const f = flatten(p, pics, 'plan:from')
       if (f) outgoing = f
@@ -808,7 +815,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
           origin = running ? start + duration : start
         } else {
           // D11: ask for the pair now; the outgoing frame holds until it lands or MORPH_WAIT_MS passes (polled per frame).
-          const w: Waiting = { p, spec, duration, asked: deps.showNow() }
+          const w: Waiting = { p, spec, duration, asked: deps.showNow(), cursor: model.cursor }
           waiting = w
           deps.morph(out.index, p.index, out.step).then(
             (r) => { if (waiting === w && current === p && !disposed) w.result = r ?? 'refused' },
@@ -887,7 +894,7 @@ export function createPlanStage(deps: PlanStageDeps): PlanStage {
       const state = liveState(p, cursor, slideT, p.timeline)
       const pics = picture(p, cursor, slideT, p.timeline, state, true)
       // Undefined (a missing track frame): hold the previous picture; nothing yet, the entry frame.
-      const held = pics ?? (p.held.length ? p.held : picture(p, undefined, 0, undefined, EMPTY_STATE, false) ?? [])
+      const held = pics ?? (p.held.length ? p.held : entryPics(p))
       if (!draw(p, held)) {
         // A track frame that does not fit: hold what was drawn.
         if (p.held.length && held !== p.held) draw(p, p.held)

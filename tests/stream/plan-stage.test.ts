@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createDiagnosticSink } from '../../src/slideshow/diagnostics'
+import { createSlideShowWorkspace } from '../../src/slideshow/workspace'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../../src/slideshow/engine/steps'
 import type { StageModel } from '../../src/slideshow/player/stage'
 import type { BehaviourNode, CTn, ContainerNode, Lease, ShowSlide, SlideShowWorkspace, TimingTree, TransitionSpec, Compositor, LayerHandle } from '../../src/slideshow/types'
@@ -161,7 +162,7 @@ interface Rig {
   output: HTMLCanvasElement
   root: HTMLElement
   sink: ReturnType<typeof createDiagnosticSink>
-  ws: ReturnType<typeof workspaceOf>
+  ws: SlideShowWorkspace
   now: { t: number }
   slides: Map<number, PlanSlideData>
   tracks: Map<string, PlanTrack | 'pending'>
@@ -181,7 +182,7 @@ afterEach(() => {
   gl.made.length = 0
 })
 
-function rig(opts: { slides?: Array<{ plan: ShowPlanRecord; assets: Map<number, ImageBitmapLike> }>; ws?: ReturnType<typeof workspaceOf>; reduced?: boolean; morph?: PlanStageDeps['morph']; force?: 'canvas2d' | 'none'; stills?: Map<number, ImageBitmapLike> } = {}): Rig {
+function rig(opts: { slides?: Array<{ plan: ShowPlanRecord; assets: Map<number, ImageBitmapLike> }>; ws?: SlideShowWorkspace; reduced?: boolean; morph?: PlanStageDeps['morph']; force?: 'canvas2d' | 'none'; stills?: Map<number, ImageBitmapLike> } = {}): Rig {
   const root = document.createElement('div')
   document.body.appendChild(root)
   root.getBoundingClientRect = () => ({ left: 0, top: 0, width: OW, height: OH, right: OW, bottom: OH, x: 0, y: 0, toJSON: () => ({}) })
@@ -582,8 +583,19 @@ describe('PlanStage', () => {
     expect(ws.used()).toBeLessThanOrEqual(OW * OH * 4 + 1000)
   })
 
-  it('dispose releases every lease', async () => {
-    const ws = workspaceOf()
+  it('entered at a checkpoint whose composited end frame is not decoded: the entry frame, never bare layers', async () => {
+    const steps: ShowPlanRecord['steps'] = [{ trigger: 'click', eligibility: 'composited', track: { fps: 15, count: 8 } }]
+    const r = rig({ slides: [flyIn({ steps })] })
+    r.tracks.set('0:0', fakeTrack(8, () => [9, 9, 9], () => true))
+    const tl = r.model(0).timeline
+    await r.enter(0, tl.checkpoint(1))
+    r.stage.frame(tl.checkpoint(1), 0)
+    expect(r.stage.inspect().lastDraws).toEqual(['entry'])
+    expectPx(r.pixel(48, 36), WHITE)
+  })
+
+  it('dispose releases every lease (the real slideshow workspace)', async () => {
+    const ws = createSlideShowWorkspace('desktop')
     const base = ws.used()
     const steps: ShowPlanRecord['steps'] = [{ trigger: 'click', eligibility: 'composited', track: { fps: 15, count: 8 } }]
     const r = rig({ slides: [flyIn({ steps }), plainSlide(1, fade(500))], ws })
