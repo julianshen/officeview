@@ -156,6 +156,30 @@ export interface MorphDeckOptions {
 }
 
 /**
+ * One slide (as `lo-bnc591147`): the main sequence's first group autoplays a media call (`p:cmd playFrom`) on the
+ * box (id 3) held for `holdMs`, so a → during it seeks the group; there is no click step. Task 14 ruling: a
+ * streamed `cmd` stays in the tree, inert, so the clicks equal local.
+ */
+export function cmdHoldDeck(holdMs = 3000): Promise<Uint8Array> {
+  const id = ids()
+  const outer = id(), inner = id(), effect = id(), behaviour = id()
+  // The group starts with the main sequence (`onBegin` of its cTn), as PowerPoint writes an autoplayed media call.
+  const group = `<p:par><p:cTn id="${outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="__SEQ__"/></p:cond></p:stCondLst><p:childTnLst>` +
+    `<p:par><p:cTn id="${inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:par><p:cTn id="${effect}" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr>${ctn(behaviour, holdMs)}${tgt(3)}</p:cBhvr></p:cmd>` +
+    `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+  const steps = [group]
+  const seq = mainSeqXml(steps)
+  const seqId = /<p:cTn id="(\d+)" dur="indefinite" nodeType="mainSeq"/.exec(seq)![1]!
+  return deck([{
+    bg: { solid: 'FFFFFF' },
+    shapes: [rect(2, 'Box', 380, 260, 200, 200, '336699'), rect(3, 'Media', 80, 560, 160, 80, 'F4B183')],
+    timingXml: timingXmlOf(seq.replace('__SEQ__', seqId)),
+  }])
+}
+
+/**
  * Two slides, each holding shape id 2 named "Box" (the same kind, a text
  * rectangle), moved and resized; the second enters with a Morph
  * (`option`, default `byObject`).

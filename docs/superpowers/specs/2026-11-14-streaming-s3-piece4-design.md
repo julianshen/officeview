@@ -241,6 +241,12 @@ admitted. A slide still too big plays as its piece-3 still image with a
   layer's rest bounds, with the chips translated into layer-local px, so
   the page mark holds at rest. A layer that keeps no carrier still ships,
   audited unmarked with reason `layer-capacity`.
+- **`cmd` nodes (2026-11-15, controller ruling at Task 14; amends D16).** A `cmd` node stays in the timing
+  tree with its begin, duration, fill and restart intact, and its command payload stripped (`cmd: ''`). So
+  the step and click structure equals local mode's. `cmd-dropped` (D21) now names the withheld payload.
+- **Fonts (2026-11-15, controller ruling at Task 14).** Server rasterisation resolves fonts through the
+  pinned pack only. An alias pins to its pack face (the pack gains `Calibri Light → Carlito`), and a generic
+  to its pack family. An unknown family falls back to Liberation Sans, never a host face.
 
 **Layer assets** are marked rasters at the audience bucket. Growth
 behaviours above the bucket request a larger asset, capped at `maxUnitPx`

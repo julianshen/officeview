@@ -7,10 +7,10 @@
   "families": [
     {
       "family": "latin",
-      "meanAbs": 0.011762,
-      "rowMax": 0.323698,
-      "slides": 51,
-      "over": true
+      "meanAbs": 0.003265,
+      "rowMax": 0.154171,
+      "slides": 52,
+      "over": false
     }
   ],
   "widening": [
@@ -79,6 +79,14 @@
       "rowMax": 0.0004003267973856209
     },
     {
+      "deck": "cmdHoldDeck",
+      "slide": 1,
+      "family": "latin",
+      "layers": 2,
+      "meanAbs": 0.0000020708514887436455,
+      "rowMax": 0.0004003267973856209
+    },
+    {
       "deck": "lo-airplane-transition.pptx",
       "slide": 1,
       "family": "latin",
@@ -123,8 +131,8 @@
       "slide": 1,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.0013313206358932462,
-      "rowMax": 0.04986825980392157
+      "meanAbs": 0.0012683780977668846,
+      "rowMax": 0.036663602941176474
     },
     {
       "deck": "lo-tdf104788.pptx",
@@ -195,40 +203,40 @@
       "slide": 1,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.010291726239106753,
-      "rowMax": 0.2773805147058824
+      "meanAbs": 0.0011482800585511984,
+      "rowMax": 0.08622855392156863
     },
     {
       "deck": "lo-tdf115394.pptx",
       "slide": 2,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.01173292824074074,
-      "rowMax": 0.32369791666666664
+      "meanAbs": 0.0013307632080610022,
+      "rowMax": 0.1033455882352941
     },
     {
       "deck": "lo-tdf115394.pptx",
       "slide": 3,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.010109013310185185,
-      "rowMax": 0.28507659313725486
+      "meanAbs": 0.0011726919934640521,
+      "rowMax": 0.08842218137254902
     },
     {
       "deck": "lo-tdf115394.pptx",
       "slide": 4,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.009665956052559913,
-      "rowMax": 0.2532781862745098
+      "meanAbs": 0.001053708809912854,
+      "rowMax": 0.07456801470588235
     },
     {
       "deck": "lo-tdf115394.pptx",
       "slide": 5,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.009107655909586057,
-      "rowMax": 0.2277941176470588
+      "meanAbs": 0.0009741753472222222,
+      "rowMax": 0.07141544117647058
     },
     {
       "deck": "lo-tdf123684.pptx",
@@ -243,16 +251,16 @@
       "slide": 1,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.0003081427015250545,
-      "rowMax": 0.008345588235294117
+      "meanAbs": 0.000022722630718954248,
+      "rowMax": 0.0020618872549019607
     },
     {
       "deck": "lo-tdf142915.pptx",
       "slide": 2,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.0004253174360021786,
-      "rowMax": 0.012549019607843138
+      "meanAbs": 0.00002398641748366013,
+      "rowMax": 0.0025643382352941177
     },
     {
       "deck": "lo-tdf146223.pptx",
@@ -275,8 +283,8 @@
       "slide": 1,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.0009696052900326797,
-      "rowMax": 0.022705269607843137
+      "meanAbs": 0.0005109017565359477,
+      "rowMax": 0.007285539215686275
     },
     {
       "deck": "lo-tdf156808.pptx",
@@ -299,8 +307,8 @@
       "slide": 2,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.011762016612200436,
-      "rowMax": 0.1827359068627451
+      "meanAbs": 0.000699286832788671,
+      "rowMax": 0.045922181372549026
     },
     {
       "deck": "lo-tdf93868.pptx",
@@ -315,8 +323,8 @@
       "slide": 1,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.00499793624046841,
-      "rowMax": 0.11056678921568627
+      "meanAbs": 0.0005711720452069716,
+      "rowMax": 0.035431985294117646
     },
     {
       "deck": "poi-crop-to-0.pptx",
@@ -387,8 +395,8 @@
       "slide": 1,
       "family": "latin",
       "layers": 1,
-      "meanAbs": 0.007344175517429195,
-      "rowMax": 0.17535539215686274
+      "meanAbs": 0.0012770246119281044,
+      "rowMax": 0.05683517156862745
     },
     {
       "deck": "pypptx-missing_rels_item.pptx",
@@ -1257,6 +1265,144 @@
       "stillFrames": []
     },
     {
+      "deck": "cmdHoldDeck",
+      "marks": "off",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:harness-steps"
+      ],
+      "frames": {
+        "pass": 2
+      },
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "b7506470",
+          "streamed": "2a5d4c03"
+        },
+        "status": "pass",
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209,
+        "detail": "meanAbs 0.0000 rowMax 0.0004 (row 640)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
+      "deck": "cmdHoldDeck",
+      "marks": "fixed",
+      "family": "latin",
+      "widening": {
+        "meanAbs": 0.0000020708514887436455,
+        "rowMax": 0.0004003267973856209
+      },
+      "structure": {
+        "local": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "streamed": {
+          "steps": [
+            1
+          ],
+          "transitions": [
+            "none"
+          ],
+          "morphPairs": [],
+          "clicks": 2
+        },
+        "equal": true,
+        "equalExceptStills": true,
+        "stills": []
+      },
+      "fallback": {
+        "steps": 0,
+        "composited": 0,
+        "rate": 0
+      },
+      "diagnostics": [
+        ":backend-fallback",
+        "0:harness-steps"
+      ],
+      "frames": {
+        "pass": 2
+      },
+      "worst": {
+        "slide": 1,
+        "step": 0,
+        "pct": 100,
+        "ms": 0,
+        "streamedMs": 0,
+        "kind": "layers",
+        "rows": [],
+        "tol": {
+          "meanAbs": 0.020002070851488744,
+          "rowMax": 0.10040032679738563
+        },
+        "hash": {
+          "local": "b62c28e2",
+          "streamed": "be3fee97"
+        },
+        "status": "pass",
+        "meanAbs": 0.003779825935003631,
+        "rowMax": 0.006760620915032679,
+        "detail": "meanAbs 0.0038 rowMax 0.0068 (row 48)"
+      },
+      "failures": [],
+      "stillFrames": []
+    },
+    {
       "deck": "lo-airplane-transition.pptx",
       "marks": "off",
       "family": "latin",
@@ -1422,17 +1568,17 @@
         "streamed": {
           "steps": [
             0,
-            0
+            1
           ],
           "transitions": [
             "none",
             "none"
           ],
           "morphPairs": [],
-          "clicks": 2
+          "clicks": 3
         },
         "equal": false,
-        "equalExceptStills": false,
+        "equalExceptStills": true,
         "stills": [
           {
             "slide": 1,
@@ -1447,12 +1593,12 @@
         "rate": 1
       },
       "diagnostics": [
-        ":backend-fallback"
+        ":backend-fallback",
+        "1:harness-steps"
       ],
       "frames": {
         "still": 1,
-        "pass": 1,
-        "unmatched": 1
+        "pass": 2
       },
       "worst": {
         "slide": 2,
@@ -1524,17 +1670,17 @@
         "streamed": {
           "steps": [
             0,
-            0
+            1
           ],
           "transitions": [
             "none",
             "none"
           ],
           "morphPairs": [],
-          "clicks": 2
+          "clicks": 3
         },
         "equal": false,
-        "equalExceptStills": false,
+        "equalExceptStills": true,
         "stills": [
           {
             "slide": 1,
@@ -1549,12 +1695,12 @@
         "rate": 1
       },
       "diagnostics": [
-        ":backend-fallback"
+        ":backend-fallback",
+        "1:harness-steps"
       ],
       "frames": {
         "still": 1,
-        "pass": 1,
-        "unmatched": 1
+        "pass": 2
       },
       "worst": {
         "slide": 2,
@@ -1570,11 +1716,11 @@
         },
         "hash": {
           "local": "5257a787",
-          "streamed": "478c053e"
+          "streamed": "7a9a3896"
         },
         "status": "pass",
-        "meanAbs": 0.003897229030501089,
-        "rowMax": 0.006870915032679739,
+        "meanAbs": 0.0038969850671750185,
+        "rowMax": 0.006858660130718955,
         "detail": "meanAbs 0.0039 rowMax 0.0069 (row 397)"
       },
       "failures": [],
@@ -1868,12 +2014,12 @@
         },
         "hash": {
           "local": "bbd6050a",
-          "streamed": "b87be59a"
+          "streamed": "6d09d6fc"
         },
         "status": "pass",
-        "meanAbs": 0.0039866387527233114,
-        "rowMax": 0.006700367647058823,
-        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 64)"
+        "meanAbs": 0.003987889773965142,
+        "rowMax": 0.0067034313725490196,
+        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 690)"
       },
       "failures": [],
       "stillFrames": []
@@ -1883,8 +2029,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.0013313206358932462,
-        "rowMax": 0.04986825980392157
+        "meanAbs": 0.0012683780977668846,
+        "rowMax": 0.036663602941176474
       },
       "structure": {
         "local": {
@@ -1920,7 +2066,7 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
+        "fail": 1
       },
       "worst": {
         "slide": 1,
@@ -1931,19 +2077,41 @@
         "kind": "still",
         "rows": [],
         "tol": {
-          "meanAbs": 0.021331320635893245,
-          "rowMax": 0.14986825980392157
+          "meanAbs": 0.021268378097766886,
+          "rowMax": 0.13666360294117647
         },
         "hash": {
-          "local": "3af240c7",
+          "local": "4ae80895",
           "streamed": "58aaacf6"
         },
-        "status": "pass",
-        "meanAbs": 0.0013313206358932462,
-        "rowMax": 0.04986825980392157,
-        "detail": "meanAbs 0.0013 rowMax 0.0499 (row 440)"
+        "status": "fail",
+        "meanAbs": 0.009424870642701526,
+        "rowMax": 0.14416666666666667,
+        "detail": "meanAbs 0.0094 rowMax 0.1442 (row 442)"
       },
-      "failures": [],
+      "failures": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021268378097766886,
+            "rowMax": 0.13666360294117647
+          },
+          "hash": {
+            "local": "4ae80895",
+            "streamed": "58aaacf6"
+          },
+          "status": "fail",
+          "meanAbs": 0.009424870642701526,
+          "rowMax": 0.14416666666666667,
+          "detail": "meanAbs 0.0094 rowMax 0.1442 (row 442)"
+        }
+      ],
       "stillFrames": []
     },
     {
@@ -1951,8 +2119,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.0013313206358932462,
-        "rowMax": 0.04986825980392157
+        "meanAbs": 0.0012683780977668846,
+        "rowMax": 0.036663602941176474
       },
       "structure": {
         "local": {
@@ -1988,7 +2156,7 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
+        "fail": 1
       },
       "worst": {
         "slide": 1,
@@ -1999,19 +2167,41 @@
         "kind": "still",
         "rows": [],
         "tol": {
-          "meanAbs": 0.021331320635893245,
-          "rowMax": 0.14986825980392157
+          "meanAbs": 0.021268378097766886,
+          "rowMax": 0.13666360294117647
         },
         "hash": {
-          "local": "bf81b534",
+          "local": "80989f78",
           "streamed": "cc38076c"
         },
-        "status": "pass",
-        "meanAbs": 0.004915024169389978,
-        "rowMax": 0.052411151960784316,
-        "detail": "meanAbs 0.0049 rowMax 0.0524 (row 440)"
+        "status": "fail",
+        "meanAbs": 0.012842584082244009,
+        "rowMax": 0.14428615196078431,
+        "detail": "meanAbs 0.0128 rowMax 0.1443 (row 442)"
       },
-      "failures": [],
+      "failures": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021268378097766886,
+            "rowMax": 0.13666360294117647
+          },
+          "hash": {
+            "local": "80989f78",
+            "streamed": "cc38076c"
+          },
+          "status": "fail",
+          "meanAbs": 0.012842584082244009,
+          "rowMax": 0.14428615196078431,
+          "detail": "meanAbs 0.0128 rowMax 0.1443 (row 442)"
+        }
+      ],
       "stillFrames": []
     },
     {
@@ -2081,26 +2271,26 @@
       },
       "worst": {
         "slide": 6,
-        "step": 1,
+        "step": 6,
         "pct": 100,
-        "ms": 1000,
-        "streamedMs": 1000,
+        "ms": 2000,
+        "streamedMs": 2000,
         "kind": "layers",
         "rows": [
-          "preset:entr:37"
+          "preset:entr:10"
         ],
         "tol": {
           "meanAbs": 0.08,
           "rowMax": 0.3
         },
         "hash": {
-          "local": "175361c4",
-          "streamed": "80bed81d"
+          "local": "eb26bfe0",
+          "streamed": "e6d10b9e"
         },
         "status": "pass",
-        "meanAbs": 0.003645986519607843,
-        "rowMax": 0.15928513071895425,
-        "detail": "meanAbs 0.0036 rowMax 0.1593 (row 101)"
+        "meanAbs": 0.0006498048293391431,
+        "rowMax": 0.025898692810457518,
+        "detail": "meanAbs 0.0006 rowMax 0.0259 (row 503)"
       },
       "failures": [],
       "stillFrames": []
@@ -2173,26 +2363,26 @@
       },
       "worst": {
         "slide": 6,
-        "step": 1,
+        "step": 6,
         "pct": 100,
-        "ms": 1000,
-        "streamedMs": 1000,
+        "ms": 2000,
+        "streamedMs": 2000,
         "kind": "layers",
         "rows": [
-          "preset:entr:37"
+          "preset:entr:10"
         ],
         "tol": {
           "meanAbs": 0.08,
           "rowMax": 0.3
         },
         "hash": {
-          "local": "2bfd3eb5",
-          "streamed": "345dfffa"
+          "local": "90bffcd7",
+          "streamed": "00d6fd42"
         },
         "status": "pass",
-        "meanAbs": 0.006752836782861293,
-        "rowMax": 0.16055555555555556,
-        "detail": "meanAbs 0.0068 rowMax 0.1606 (row 101)"
+        "meanAbs": 0.00379503109114016,
+        "rowMax": 0.030739379084967322,
+        "detail": "meanAbs 0.0038 rowMax 0.0307 (row 503)"
       },
       "failures": [],
       "stillFrames": []
@@ -2474,8 +2664,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.01173292824074074,
-        "rowMax": 0.32369791666666664
+        "meanAbs": 0.0013307632080610022,
+        "rowMax": 0.1033455882352941
       },
       "structure": {
         "local": {
@@ -2527,8 +2717,7 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 23,
-        "fail": 2
+        "pass": 25
       },
       "worst": {
         "slide": 2,
@@ -2541,66 +2730,19 @@
           "transition:p:fade"
         ],
         "tol": {
-          "meanAbs": 0.03173292824074074,
-          "rowMax": 0.3
+          "meanAbs": 0.021330763208061,
+          "rowMax": 0.2033455882352941
         },
         "hash": {
-          "local": "e0556659",
-          "streamed": "e5264dad"
+          "local": "91b00584",
+          "streamed": "0a008154"
         },
-        "status": "fail",
-        "meanAbs": 0.01173292824074074,
-        "rowMax": 0.32369791666666664,
-        "detail": "meanAbs 0.0117 rowMax 0.3237 (row 96)"
+        "status": "pass",
+        "meanAbs": 0.0013307632080610022,
+        "rowMax": 0.1033455882352941,
+        "detail": "meanAbs 0.0013 rowMax 0.1033 (row 95)"
       },
-      "failures": [
-        {
-          "slide": 2,
-          "step": 0,
-          "pct": 100,
-          "ms": 750,
-          "streamedMs": 750,
-          "kind": "transition",
-          "rows": [
-            "transition:p:fade"
-          ],
-          "tol": {
-            "meanAbs": 0.03173292824074074,
-            "rowMax": 0.3
-          },
-          "hash": {
-            "local": "e0556659",
-            "streamed": "e5264dad"
-          },
-          "status": "fail",
-          "meanAbs": 0.01173292824074074,
-          "rowMax": 0.32369791666666664,
-          "detail": "meanAbs 0.0117 rowMax 0.3237 (row 96)"
-        },
-        {
-          "slide": 3,
-          "step": 0,
-          "pct": 0,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "transition",
-          "rows": [
-            "transition:p:fade"
-          ],
-          "tol": {
-            "meanAbs": 0.03173292824074074,
-            "rowMax": 0.3
-          },
-          "hash": {
-            "local": "e0556659",
-            "streamed": "e5264dad"
-          },
-          "status": "fail",
-          "meanAbs": 0.01173292824074074,
-          "rowMax": 0.32369791666666664,
-          "detail": "meanAbs 0.0117 rowMax 0.3237 (row 96)"
-        }
-      ],
+      "failures": [],
       "stillFrames": []
     },
     {
@@ -2608,8 +2750,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.01173292824074074,
-        "rowMax": 0.32369791666666664
+        "meanAbs": 0.0013307632080610022,
+        "rowMax": 0.1033455882352941
       },
       "structure": {
         "local": {
@@ -2661,8 +2803,7 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 23,
-        "fail": 2
+        "pass": 25
       },
       "worst": {
         "slide": 2,
@@ -2675,66 +2816,19 @@
           "transition:p:fade"
         ],
         "tol": {
-          "meanAbs": 0.03173292824074074,
-          "rowMax": 0.3
+          "meanAbs": 0.021330763208061,
+          "rowMax": 0.2033455882352941
         },
         "hash": {
-          "local": "726454f7",
-          "streamed": "b0cce3d9"
+          "local": "7841b372",
+          "streamed": "158daf83"
         },
-        "status": "fail",
-        "meanAbs": 0.015482392088779957,
-        "rowMax": 0.3202481617647059,
-        "detail": "meanAbs 0.0155 rowMax 0.3202 (row 96)"
+        "status": "pass",
+        "meanAbs": 0.0052751353145424834,
+        "rowMax": 0.10496323529411765,
+        "detail": "meanAbs 0.0053 rowMax 0.1050 (row 95)"
       },
-      "failures": [
-        {
-          "slide": 2,
-          "step": 0,
-          "pct": 100,
-          "ms": 750,
-          "streamedMs": 750,
-          "kind": "transition",
-          "rows": [
-            "transition:p:fade"
-          ],
-          "tol": {
-            "meanAbs": 0.03173292824074074,
-            "rowMax": 0.3
-          },
-          "hash": {
-            "local": "726454f7",
-            "streamed": "b0cce3d9"
-          },
-          "status": "fail",
-          "meanAbs": 0.015482392088779957,
-          "rowMax": 0.3202481617647059,
-          "detail": "meanAbs 0.0155 rowMax 0.3202 (row 96)"
-        },
-        {
-          "slide": 3,
-          "step": 0,
-          "pct": 0,
-          "ms": 0,
-          "streamedMs": 0,
-          "kind": "transition",
-          "rows": [
-            "transition:p:fade"
-          ],
-          "tol": {
-            "meanAbs": 0.03173292824074074,
-            "rowMax": 0.3
-          },
-          "hash": {
-            "local": "726454f7",
-            "streamed": "b0cce3d9"
-          },
-          "status": "fail",
-          "meanAbs": 0.015482392088779957,
-          "rowMax": 0.3202481617647059,
-          "detail": "meanAbs 0.0155 rowMax 0.3202 (row 96)"
-        }
-      ],
+      "failures": [],
       "stillFrames": []
     },
     {
@@ -2794,13 +2888,13 @@
           "rowMax": 0.10947610294117648
         },
         "hash": {
-          "local": "53bec09a",
+          "local": "a29fa423",
           "streamed": "2ae13ef7"
         },
         "status": "pass",
-        "meanAbs": 0.0018739830133442266,
-        "rowMax": 0.013002450980392157,
-        "detail": "meanAbs 0.0019 rowMax 0.0130 (row 274)"
+        "meanAbs": 0.0017951729302832244,
+        "rowMax": 0.012925857843137253,
+        "detail": "meanAbs 0.0018 rowMax 0.0129 (row 268)"
       },
       "failures": [],
       "stillFrames": []
@@ -2862,13 +2956,13 @@
           "rowMax": 0.10947610294117648
         },
         "hash": {
-          "local": "2eeafe40",
+          "local": "1eabe12d",
           "streamed": "31667c15"
         },
         "status": "pass",
-        "meanAbs": 0.004250744655501089,
-        "rowMax": 0.015548406862745098,
-        "detail": "meanAbs 0.0043 rowMax 0.0155 (row 297)"
+        "meanAbs": 0.004171934572440087,
+        "rowMax": 0.016240808823529414,
+        "detail": "meanAbs 0.0042 rowMax 0.0162 (row 297)"
       },
       "failures": [],
       "stillFrames": []
@@ -2878,8 +2972,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.0004253174360021786,
-        "rowMax": 0.012549019607843138
+        "meanAbs": 0.00002398641748366013,
+        "rowMax": 0.0025643382352941177
       },
       "structure": {
         "local": {
@@ -2930,17 +3024,17 @@
         "kind": "transition",
         "rows": [],
         "tol": {
-          "meanAbs": 0.02042531743600218,
-          "rowMax": 0.11254901960784314
+          "meanAbs": 0.02002398641748366,
+          "rowMax": 0.10256433823529412
         },
         "hash": {
-          "local": "f41f6bf4",
-          "streamed": "0f4952f1"
+          "local": "b1cb375f",
+          "streamed": "1a84453e"
         },
         "status": "pass",
-        "meanAbs": 0.0004253174360021786,
-        "rowMax": 0.012549019607843138,
-        "detail": "meanAbs 0.0004 rowMax 0.0125 (row 94)"
+        "meanAbs": 0.00002398641748366013,
+        "rowMax": 0.0025643382352941177,
+        "detail": "meanAbs 0.0000 rowMax 0.0026 (row 124)"
       },
       "failures": [],
       "stillFrames": []
@@ -2950,8 +3044,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.0004253174360021786,
-        "rowMax": 0.012549019607843138
+        "meanAbs": 0.00002398641748366013,
+        "rowMax": 0.0025643382352941177
       },
       "structure": {
         "local": {
@@ -2994,25 +3088,25 @@
         "pass": 3
       },
       "worst": {
-        "slide": 2,
+        "slide": 1,
         "step": 0,
-        "pct": 100,
+        "pct": 0,
         "ms": 0,
         "streamedMs": 0,
         "kind": "transition",
         "rows": [],
         "tol": {
-          "meanAbs": 0.02042531743600218,
-          "rowMax": 0.11254901960784314
+          "meanAbs": 0.02002398641748366,
+          "rowMax": 0.10256433823529412
         },
         "hash": {
-          "local": "45528c20",
-          "streamed": "ca45b98b"
+          "local": "4e023c8a",
+          "streamed": "517d1e62"
         },
         "status": "pass",
-        "meanAbs": 0.004358034620098039,
-        "rowMax": 0.015428921568627452,
-        "detail": "meanAbs 0.0044 rowMax 0.0154 (row 89)"
+        "meanAbs": 0.003996255446623093,
+        "rowMax": 0.006700367647058823,
+        "detail": "meanAbs 0.0040 rowMax 0.0067 (row 64)"
       },
       "failures": [],
       "stillFrames": []
@@ -3170,8 +3264,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.0009696052900326797,
-        "rowMax": 0.022705269607843137
+        "meanAbs": 0.0005109017565359477,
+        "rowMax": 0.007285539215686275
       },
       "structure": {
         "local": {
@@ -3226,13 +3320,13 @@
           "rowMax": 0.3
         },
         "hash": {
-          "local": "4dca56ed",
-          "streamed": "8a1362d5"
+          "local": "8de0c7f9",
+          "streamed": "07d10756"
         },
         "status": "pass",
-        "meanAbs": 0.0009696052900326797,
-        "rowMax": 0.022705269607843137,
-        "detail": "meanAbs 0.0010 rowMax 0.0227 (row 296)"
+        "meanAbs": 0.000995404411764706,
+        "rowMax": 0.025689338235294117,
+        "detail": "meanAbs 0.0010 rowMax 0.0257 (row 297)"
       },
       "failures": [],
       "stillFrames": []
@@ -3242,8 +3336,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.0009696052900326797,
-        "rowMax": 0.022705269607843137
+        "meanAbs": 0.0005109017565359477,
+        "rowMax": 0.007285539215686275
       },
       "structure": {
         "local": {
@@ -3298,13 +3392,13 @@
           "rowMax": 0.3
         },
         "hash": {
-          "local": "5f38a54c",
-          "streamed": "97a18b83"
+          "local": "c14fbbdb",
+          "streamed": "e11d8d9d"
         },
         "status": "pass",
-        "meanAbs": 0.0045597426470588235,
-        "rowMax": 0.027711397058823528,
-        "detail": "meanAbs 0.0046 rowMax 0.0277 (row 296)"
+        "meanAbs": 0.00458431202342048,
+        "rowMax": 0.030753676470588232,
+        "detail": "meanAbs 0.0046 rowMax 0.0308 (row 297)"
       },
       "failures": [],
       "stillFrames": []
@@ -3454,8 +3548,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.011762016612200436,
-        "rowMax": 0.1827359068627451
+        "meanAbs": 0.000699286832788671,
+        "rowMax": 0.045922181372549026
       },
       "structure": {
         "local": {
@@ -3508,17 +3602,17 @@
           "transition:p:split"
         ],
         "tol": {
-          "meanAbs": 0.03176201661220043,
-          "rowMax": 0.2827359068627451
+          "meanAbs": 0.020699286832788672,
+          "rowMax": 0.14592218137254903
         },
         "hash": {
-          "local": "f0ef57c4",
-          "streamed": "52fef882"
+          "local": "b3f0e698",
+          "streamed": "c05bfb84"
         },
         "status": "pass",
-        "meanAbs": 0.011762016612200436,
-        "rowMax": 0.1827359068627451,
-        "detail": "meanAbs 0.0118 rowMax 0.1827 (row 352)"
+        "meanAbs": 0.000699286832788671,
+        "rowMax": 0.045922181372549026,
+        "detail": "meanAbs 0.0007 rowMax 0.0459 (row 397)"
       },
       "failures": [],
       "stillFrames": []
@@ -3528,8 +3622,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.011762016612200436,
-        "rowMax": 0.1827359068627451
+        "meanAbs": 0.000699286832788671,
+        "rowMax": 0.045922181372549026
       },
       "structure": {
         "local": {
@@ -3583,17 +3677,17 @@
           "transition:p:split"
         ],
         "tol": {
-          "meanAbs": 0.03176201661220043,
-          "rowMax": 0.2827359068627451
+          "meanAbs": 0.020699286832788672,
+          "rowMax": 0.14592218137254903
         },
         "hash": {
-          "local": "fab63534",
-          "streamed": "d627052c"
+          "local": "c918ce16",
+          "streamed": "33de7f25"
         },
         "status": "pass",
-        "meanAbs": 0.015566491353485838,
-        "rowMax": 0.1823958333333333,
-        "detail": "meanAbs 0.0156 rowMax 0.1824 (row 352)"
+        "meanAbs": 0.0046581095111655774,
+        "rowMax": 0.048691789215686274,
+        "detail": "meanAbs 0.0047 rowMax 0.0487 (row 397)"
       },
       "failures": [],
       "stillFrames": []
@@ -3743,8 +3837,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.00499793624046841,
-        "rowMax": 0.11056678921568627
+        "meanAbs": 0.0005711720452069716,
+        "rowMax": 0.035431985294117646
       },
       "structure": {
         "local": {
@@ -3791,17 +3885,17 @@
         "kind": "still",
         "rows": [],
         "tol": {
-          "meanAbs": 0.02499793624046841,
-          "rowMax": 0.21056678921568628
+          "meanAbs": 0.020571172045206972,
+          "rowMax": 0.13543198529411765
         },
         "hash": {
-          "local": "1badf4f2",
-          "streamed": "4ceff3c3"
+          "local": "623db050",
+          "streamed": "0147b99e"
         },
         "status": "pass",
-        "meanAbs": 0.00499793624046841,
-        "rowMax": 0.11056678921568627,
-        "detail": "meanAbs 0.0050 rowMax 0.1106 (row 307)"
+        "meanAbs": 0.0005711720452069716,
+        "rowMax": 0.035431985294117646,
+        "detail": "meanAbs 0.0006 rowMax 0.0354 (row 306)"
       },
       "failures": [],
       "stillFrames": []
@@ -3811,8 +3905,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.00499793624046841,
-        "rowMax": 0.11056678921568627
+        "meanAbs": 0.0005711720452069716,
+        "rowMax": 0.035431985294117646
       },
       "structure": {
         "local": {
@@ -3859,17 +3953,17 @@
         "kind": "still",
         "rows": [],
         "tol": {
-          "meanAbs": 0.02499793624046841,
-          "rowMax": 0.21056678921568628
+          "meanAbs": 0.020571172045206972,
+          "rowMax": 0.13543198529411765
         },
         "hash": {
-          "local": "1b3b6b39",
-          "streamed": "1925cda6"
+          "local": "333d5907",
+          "streamed": "b873ae53"
         },
         "status": "pass",
-        "meanAbs": 0.008961980017701524,
-        "rowMax": 0.11579656862745098,
-        "detail": "meanAbs 0.0090 rowMax 0.1158 (row 307)"
+        "meanAbs": 0.004535215822440087,
+        "rowMax": 0.04084252450980392,
+        "detail": "meanAbs 0.0045 rowMax 0.0408 (row 306)"
       },
       "failures": [],
       "stillFrames": []
@@ -4327,8 +4421,8 @@
       "marks": "off",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.007344175517429195,
-        "rowMax": 0.17535539215686274
+        "meanAbs": 0.0012770246119281044,
+        "rowMax": 0.05683517156862745
       },
       "structure": {
         "local": {
@@ -4364,7 +4458,7 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
+        "fail": 1
       },
       "worst": {
         "slide": 1,
@@ -4375,19 +4469,41 @@
         "kind": "still",
         "rows": [],
         "tol": {
-          "meanAbs": 0.027344175517429195,
-          "rowMax": 0.2753553921568628
+          "meanAbs": 0.021277024611928104,
+          "rowMax": 0.15683517156862745
         },
         "hash": {
-          "local": "85a5160b",
+          "local": "6c1f0752",
           "streamed": "c5ee0810"
         },
-        "status": "pass",
-        "meanAbs": 0.007344175517429195,
-        "rowMax": 0.17535539215686274,
-        "detail": "meanAbs 0.0073 rowMax 0.1754 (row 327)"
+        "status": "fail",
+        "meanAbs": 0.0072149586397058825,
+        "rowMax": 0.1786703431372549,
+        "detail": "meanAbs 0.0072 rowMax 0.1787 (row 327)"
       },
-      "failures": [],
+      "failures": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021277024611928104,
+            "rowMax": 0.15683517156862745
+          },
+          "hash": {
+            "local": "6c1f0752",
+            "streamed": "c5ee0810"
+          },
+          "status": "fail",
+          "meanAbs": 0.0072149586397058825,
+          "rowMax": 0.1786703431372549,
+          "detail": "meanAbs 0.0072 rowMax 0.1787 (row 327)"
+        }
+      ],
       "stillFrames": []
     },
     {
@@ -4395,8 +4511,8 @@
       "marks": "fixed",
       "family": "latin",
       "widening": {
-        "meanAbs": 0.007344175517429195,
-        "rowMax": 0.17535539215686274
+        "meanAbs": 0.0012770246119281044,
+        "rowMax": 0.05683517156862745
       },
       "structure": {
         "local": {
@@ -4432,7 +4548,7 @@
         ":backend-fallback"
       ],
       "frames": {
-        "pass": 1
+        "fail": 1
       },
       "worst": {
         "slide": 1,
@@ -4443,19 +4559,41 @@
         "kind": "still",
         "rows": [],
         "tol": {
-          "meanAbs": 0.027344175517429195,
-          "rowMax": 0.2753553921568628
+          "meanAbs": 0.021277024611928104,
+          "rowMax": 0.15683517156862745
         },
         "hash": {
-          "local": "5f807df8",
+          "local": "56d3a492",
           "streamed": "cc051717"
         },
-        "status": "pass",
-        "meanAbs": 0.011239123774509805,
-        "rowMax": 0.17899509803921568,
-        "detail": "meanAbs 0.0112 rowMax 0.1790 (row 327)"
+        "status": "fail",
+        "meanAbs": 0.01111063027641612,
+        "rowMax": 0.18231004901960784,
+        "detail": "meanAbs 0.0111 rowMax 0.1823 (row 327)"
       },
-      "failures": [],
+      "failures": [
+        {
+          "slide": 1,
+          "step": 0,
+          "pct": 100,
+          "ms": 0,
+          "streamedMs": 0,
+          "kind": "still",
+          "rows": [],
+          "tol": {
+            "meanAbs": 0.021277024611928104,
+            "rowMax": 0.15683517156862745
+          },
+          "hash": {
+            "local": "56d3a492",
+            "streamed": "cc051717"
+          },
+          "status": "fail",
+          "meanAbs": 0.01111063027641612,
+          "rowMax": 0.18231004901960784,
+          "detail": "meanAbs 0.0111 rowMax 0.1823 (row 327)"
+        }
+      ],
       "stillFrames": []
     },
     {

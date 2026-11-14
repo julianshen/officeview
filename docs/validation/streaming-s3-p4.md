@@ -10,76 +10,90 @@ server ships each animated slide as marked layer bitmaps plus a show plan (`OVSP
 marked keyframes for any step it cannot prove safe. The browser plays them on the shared `createShowDriver`
 over `PlanStage`. No package, shapes or text runs reach the browser.
 
-## Status: parity gate RED (two findings that need a ruling)
+## Status: show path green; two unanimated-slide unit stills red (Stage 1–3 follow-up)
 
-The harness, the browser smoke and the docs are done. The §8 parity gate is **not green** on the corpus. Two
-findings are open. They are not filed as known differences, because neither is covered by a ruling:
+The first Task 14 run had the §8 parity gate red on two findings. The controller ruled on both (2026-11-15),
+and follow-up commits fix them. The re-run shows:
 
-1. **Latin renderer widening over `TOLERANCE_APPROX`.** The node-canvas vs server-backend difference, measured
-   per deck (D20), is `rowMax 0.3237` on `lo-tdf115394.pptx` slide 2. The ceiling is `0.30`. Slides 1–5 of
-   that deck measure 0.23–0.32, so the Latin family figure (0.0118 / 0.3237) is over the ceiling.
-   - The effective tolerance is capped at `TOLERANCE_APPROX`. The parity frames of that slide therefore
-     **fail**:
-     - `2-0-100`: meanAbs 0.0117, rowMax 0.3237;
-     - `3-0-0`, the same picture as the transition's from-frame: 0.0117 / 0.3237 (marks off), and
-       0.0155 / 0.3202 (marks fixed).
-   - The tolerance used is meanAbs 0.0317, rowMax 0.30.
-   - **Cause: a font-availability difference, not rasterisation (measured; the fix is not decided).** Each of
-     these slides is one 44 pt black title line ("Standard transition – …") in `Calibri Light`, and nothing
-     else. The parity frames reproduce the layer-raster difference exactly, so the show path is not involved.
-     - `Calibri Light` is **not in the font pack's aliases**. The pack has Calibri, but not Calibri Light, so the
-       server does not pin it.
-     - `measureText` of the title at 58.67 px gives:
+- **Green:**
+  - Latin widening is within `TOLERANCE_APPROX` (0.0033 / 0.1542).
+  - Every animated slide's frames pass, in both mark passes.
+  - Every deck's structure is equal, or equal except its ruled stills.
+- **Red: two frames, both piece-3 unit images of unanimated slides** (D5: not show assets):
+  - `lo-ooxtheme.pptx` 1-0-100: 0.0094 / 0.1442 against 0.0213 / 0.1367 (marks fixed: 0.0128 / 0.1443);
+  - `poi-text-highlight.pptx` 1-0-100: 0.0072 / 0.1787 against 0.0213 / 0.1568 (fixed: 0.0111 / 0.1823).
+  - Both slides use unpinned families (`Aptos` and East-Asian or complex-script theme faces).
+  - Units still resolve unknown families through @napi-rs/canvas to host faces (see the follow-up below), while
+    the harness's local side now resolves them through the pack. Both frames passed when every server canvas
+    was pack-only (the intermediate run), so they belong to the units follow-up, not to the show path.
+  - They are reported, not widened.
 
-       | font string | node-canvas | napi + pack |
-       |---|---|---|
-       | `"Calibri Light"` | 766.38 | **695.63** |
-       | `"Carlito"` | 709.97 | 709.80 |
-       | `"Calibri Light", sans-serif` | 766.38 | 766.20 |
+1. **The Latin renderer widening was over `TOLERANCE_APPROX`** (rowMax 0.3237 on `lo-tdf115394.pptx` slide 2,
+   against a 0.30 ceiling).
+   - **Cause:** a font-resolution difference, not rasterisation. `Calibri Light` (the Office theme's heading
+     face) was not in the font pack's aliases.
+   - Each backend then resolved the unknown family differently. node-canvas fell back to sans-serif, and the
+     server's @napi-rs/canvas to a host default face. `measureText` of the title was 766.38 against 695.63 px.
+   - Any unknown family behaved the same way (`"Nonexistent Font"`: 766.38 against 695.63).
+   - **Ruling and fix:** the server never depends on host fonts.
+     - The pack gains the alias `Calibri Light → Carlito` (`scripts/stream-s1/fontpack-lock.ts`,
+       `fontpack/pack.json`).
+     - Every **show-path** canvas resolves fonts **through the pack only**: `showBackend` (in
+       `server/src/backend.ts`, used through `server/src/show/canvas.ts`), which is `pinFontString(...,
+       { packOnly: true })` layered over the server backend. An alias pins to its pack face, and a generic to its pack family
+       (sans-serif to Liberation Sans, serif to Liberation Serif, monospace to Liberation Mono). An unknown
+       family is dropped, and a font string left empty falls back to Liberation Sans.
+     - The harness's local side resolves through the same rule.
+     - The layout fingerprint now hashes the alias table and the resolution rule, so caches turn over.
+   - **Result:** Latin widening is 0.0033 / 0.1542 (`lo-tdf93868` slide 1); `lo-tdf115394` slide 2 is
+     0.0013 / 0.1033. All 25 `lo-tdf115394` frames pass in both mark passes.
+2. **`lo-bnc591147.pptx`: the click count differed (local 4, streamed 2).**
+   - **Cause:** each slide auto-starts a `mediacall` group whose `cmd playFrom(0.0)` holds it, for 30,093 ms
+     on slide 1 and 350,603 ms on slide 2. Locally a → during the hold seeks the group (`nextAc="seek"`). D16
+     dropped `cmd` nodes, so the streamed group was empty and the press advanced. Waiting out the hold on each
+     local slide made each advance in one press, which confirmed this.
+   - **Ruling and fix:** this replaces D16's drop. A `cmd` leaf stays in the tree with its timing and
+     `cmdType` intact and its command payload stripped (`cmd: ''`; `inertCommands` in
+     `server/src/show/build.ts`).
+     - The diagnostic keeps its D21 name, `cmd-dropped`. It now means that the command payload was dropped,
+       not the node.
+     - The shared driver needs no change. It already plays a `cmd` node exactly as local mode does: no media
+       player handles it, and it is timed by the engine. It is not a media node, so no synthetic end fires.
+     - A synthetic end would cut the hold short and make the click count differ again. So the ruling's
+       "synthetic end" clause is satisfied by local parity, not by a new end.
+   - **Result:** `lo-bnc591147` is equal except its slide-1 still: the trigger-slide `still` refusal, a ruled
+     difference covered by `equalExceptStills`. `cmdHoldDeck`, the synthetic copy of the pattern, is equal,
+     with 2 clicks on each side.
 
-     - So each backend resolves the unpinned family differently. This Mac has Microsoft's `calibril.ttf`
-       (Calibri Light) installed in its user fonts. Skia appears to find it, while node-canvas falls back to
-       sans-serif.
-     - A scratch alias experiment (registering another face as `Calibri Light` on one backend) was inert: the
-       registration did not take effect. It proves nothing either way.
-   - **The figure is machine-dependent.** It also shows the server resolving an unpinned family from the
-     host's installed fonts, which is a determinism gap in the pinned-pack model, separate from this piece.
-   - **Not widened, as the brief requires.** A ruling is needed. One option is to alias `Calibri Light` (and
-     any other unpinned families) in the pack, or to stop the server reaching host fonts, then re-measure.
-     The other is to hold this deck to its own tolerance.
-2. **`lo-bnc591147.pptx`: click count differs (local 4, streamed 2).**
-   - Slide 1 is refused `still`. It is the trigger slide (the Task 5/6 trigger rulings). The `still` refusal is
-     an expected difference: `equalExceptStills` removes its one local step.
-   - Slide 2 differs independently: local has 1 step, streamed has 0.
-   - **Cause, checked.** Each slide's main sequence auto-starts a `mediacall` group (`cmd playFrom(0.0)`).
-     Its `cmd` duration is 30,093 ms on slide 1 and 350,603 ms on slide 2.
-     - Locally the `cmd` keeps the slide busy for that long, and a → during it seeks the group (`nextAc="seek"`),
-       so the slide costs one extra press.
-     - The server drops `cmd` nodes (D16; the plan carries the `cmd-dropped` diagnostic, checked on the wire).
-       So the streamed group is empty and the press advances.
-     - Waiting 31 s on local slide 1, and 351 s on slide 2, before pressing makes each advance in one press,
-       which confirms this for both slides.
-   - `lo-narration.pptx` has the same pattern with a 1 ms `cmd`. There, local and streamed agree, with 0 steps
-     and 1 click.
-   - A ruling is needed: record this as a D16 known difference (a press that would seek a `cmd` interval
-     advances instead), or have the server keep the `cmd` interval as an empty timed node.
+**Follow-up (Stage 1–3, not this piece): units, print and notes still reach host fonts.** They use
+`serverBackend`, which pins aliases only, so an unknown family on a unit, print page or notes image still
+resolves through @napi-rs/canvas to a host face. They do pick up the new `Calibri Light` alias.
 
-Everything else is green. The other 24 corpus `.pptx` decks match in structure and in every sampled frame, and
-so do the 5 synthetic decks.
+- **Why pack-only was not extended to them here.** I first made `serverBackend` pack-only, and a Stage 3c test
+  broke: `server/test/text-served.test.ts` › "the combining marks inflate the ink…". Its probe relies on the
+  current face's stacked combining marks. So the change is scoped to the show path, as the ruling allows when
+  the code is not shared.
+- **Command-unit eligibility is unaffected:** an unpinned font still makes a unit a raster (§7.4 rule 4).
+- **Also open, on the show path too:** glyphs missing from every pack face (for example CJK) may still fall
+  back to host fonts per glyph inside Skia.
 
 ## Verification (2026-11-15)
 
 Machine: Apple-silicon Mac (darwin), bun 1.3.10. Branch `feature/streaming-s3-p4` at the Task 14 commit.
 
-| check | result |
+| check | result (re-run after the controller rulings) |
 |---|---|
-| `cd server && bun test` | **1016 pass, 1 fail** (58 files). The failure is `print-wire.test.ts` › "two cancelled jobs back to back…". It is pre-existing: no print code changed in this piece. It also fails 1 in 3 when run alone. See "Flakes" |
-| `npx vitest run` | **14,006 passed, 2 failed**, 64 skipped, 1 todo (704 files). The failures are `tests/xlsx-viewer-construction-memory.test.ts` (a heap-probe bound) and `tests/fc-t2-drawing-reply-grant.test.ts` (the known XLSX grant flake, see `streaming-s3c.md`). Re-run together 4 times: 1 failure on the first run, then 32/32 three times. No XLSX code changed in this piece |
-| `npm run test:browser:stream` | **35 passed** (6 new in `stream-present-anim.spec.ts`) |
+| `cd server && bun test` | **1021 pass, 0 fail** (58 files) |
+| `npx vitest run` | **14,007 passed, 1 failed**, 64 skipped, 1 todo (704 files). The failure is `tests/xlsx-viewer-construction-memory.test.ts`, the heap-probe flake (see "Flakes"); no XLSX code changed |
+| `npm run test:browser:stream` | **35 passed** |
 | `npm run -s lint` | clean |
 | `npx tsc --noEmit -p .` | clean |
 | `npm run -s typecheck:server` | clean |
 | `bun run gates:core` | **FAIL, red as before this piece**: index closure 421,385 B |
+| `bun scripts/stream-show-compare.ts --deck all` | 26 corpus decks plus 6 synthetic decks. Every frame passes except the 2 unanimated unit stills in the status above |
+
+The first run of these gates (at `833719b2`) differed in three places. The server run had 1016 pass and 1
+fail (the print-wire flake). vitest had 2 flakes (the heap probe and fc-t2). The parity run had the 2 findings.
 
 ### Size gate
 
@@ -93,10 +107,10 @@ adds no client product code: the harness, test and debug-page changes do not rea
 
 | line | proof |
 |---|---|
-| The corpus's animated decks play through the stream with pixel diff against local playback at fixed timeline samples, within the tolerance | `bun scripts/stream-show-compare.ts --deck all` → `docs/validation/stream-show-compare.json` (parity table below). **RED: finding 1.** `server/test/stream-show-parity.test.ts` holds the synthetic decks (fly-in, Morph, Cube, composited Morph) green |
+| The corpus's animated decks play through the stream with pixel diff against local playback at fixed timeline samples, within the tolerance | `bun scripts/stream-show-compare.ts --deck all` → `docs/validation/stream-show-compare.json` (parity table below): **green** after the font ruling (finding 1). `server/test/stream-show-parity.test.ts` holds the synthetic decks green (fly-in, Morph, Cube, composited Morph, `cmdHoldDeck`), plus a check that both backends measure `Calibri Light` and unknown families identically |
 | The §12a.3 wire audit is green | `server/test/t5-wire-audit.test.ts`: 7 appearance adversaries in both mark modes, 4 Morph adversaries, and a positive control (T5, Task 9) |
 | The `step-composited` fallback rate is recorded | `scripts/show-fallback-rate.ts` → `docs/validation/streaming-s3-p4-rates.json` (Task 9). Per-deck rates from the parity run are below |
-| Build steps, transitions and Morph pairs match local mode's step count and order | the harness's `structure` (steps per slide from presses on both shows, transition kind and attributes, Morph pairs as `(fromKey, toKey, rule)`, clicks to the end). **RED: finding 2** (`lo-bnc591147`). The test "Morph pairs map to the local keys" |
+| Build steps, transitions and Morph pairs match local mode's step count and order | the harness's `structure` (steps per slide from presses on both shows, transition kind and attributes, Morph pairs as `(fromKey, toKey, rule)`, clicks to the end): **green** after the `cmd` ruling (finding 2); `lo-bnc591147` is equal except its ruled still. The tests "Morph pairs map to the local keys" and "cmdHoldDeck: an inert cmd keeps its interval, so the clicks equal local" |
 | Browser: a fly-in, a Morph and a 3-D deck play end to end, under WebGL2 and Canvas 2D | `tests/browser/stream-present-anim.spec.ts` "fly-in, Morph and 3-D decks play end to end" (each backend asserted from the DOM) |
 | No 4008 | the same spec, "holding → for 10 s: socket stays open (no 4008)", on the Morph deck, where revisits charge again (measurement below) |
 | Revocation mid-animation exits, and nothing draws after `ended` | the same spec, "revocation mid-animation exits; no canvas mutation after ended". It counts the draws on show canvases after the page's own `ended` time, checks that the canvas hash holds for 500 ms, and uses the draws while the fly-in plays as its control |
@@ -126,7 +140,8 @@ deck twice in one bun process under jsdom:
 Common to both sides:
 
 - Both composite with Canvas 2D at the scale-1 bucket, 1 device px per slide px, so nothing is resampled.
-- Text uses the server's pinned font pack, registered with node-canvas under its aliases.
+- Text uses the server's pinned font pack. Both sides resolve every font string through the pack only, by the
+  server's `pinFontString` pack-only rule.
 - jsdom's canvas is node-canvas by path, so the server test's napi preload never reaches the local side.
 
 Sampling:
@@ -154,7 +169,7 @@ Slides the streamed show plays as stills, and steps only one side plays:
 - Triggers are not fired, so `trigger-cut` effects are exempt from pixels and counted in clicks.
 
 **Corpus:** 26 fetched `.pptx` decks (the brief's "16" is the LibreOffice slideshow list; the corpus has 26),
-plus 5 synthetic decks. `pypptx-minimal.pptx` has no slides.
+plus 6 synthetic decks (`cmdHoldDeck` added with the `cmd` ruling). `pypptx-minimal.pptx` has no slides.
 
 ### Parity table (`docs/validation/stream-show-compare.json`)
 
@@ -165,27 +180,28 @@ plus 5 synthetic decks. `pypptx-minimal.pptx` has no slides.
 | cubeDeck | 6 pass | 6 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-100) |
 | morphCompositedDeck | 6 pass | 6 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (2-0-50) |
 | longStepDeck | 6 pass | 3 pass, 3 skipped-mark | equal | 0.0000 / 0.0004 | 0.0001 / 0.0039 (1-1-25) |
+| cmdHoldDeck | 2 pass | 2 pass | equal | 0.0000 / 0.0004 | 0.0000 / 0.0004 (1-0-100) |
 | lo-airplane-transition.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
-| lo-bnc591147.pptx | 1 pass, 1 still, 1 unmatched | 1 pass, 1 still, 1 unmatched | **different** | 0.0000 / 0.0000 | 0.0000 / 0.0005 (2-0-100) |
+| lo-bnc591147.pptx | 2 pass, 1 still | 2 pass, 1 still | equal except stills | 0.0000 / 0.0000 | 0.0000 / 0.0005 (2-0-100) |
 | lo-connector-shape-animations.pptx | 6 pass | 6 pass | equal | 0.0000 / 0.0093 | 0.0000 / 0.0080 (1-1-100) |
 | lo-narration.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0003 (1-0-0) |
-| lo-ooxtheme.pptx | 1 pass | 1 pass | equal | 0.0013 / 0.0499 | 0.0013 / 0.0499 (1-0-100) |
-| lo-tdf104788.pptx | 36 pass | 21 pass, 15 skipped-mark | equal | 0.0005 / 0.0114 | 0.0036 / 0.1593 (6-1-100) |
+| lo-ooxtheme.pptx | 1 fail | 1 fail | equal | 0.0013 / 0.0367 | 0.0094 / 0.1442 (1-0-100) |
+| lo-tdf104788.pptx | 36 pass | 21 pass, 15 skipped-mark | equal | 0.0005 / 0.0114 | 0.0006 / 0.0259 (6-6-100) |
 | lo-tdf104792-smart-art-animation.pptx | 11 pass | 11 pass | equal | 0.0003 / 0.0241 | 0.0003 / 0.0241 (1-0-100) |
 | lo-tdf105739.pptx | 1 pass | 1 pass | equal | 0.0020 / 0.0031 | 0.0020 / 0.0031 (1-0-100) |
-| lo-tdf115394.pptx | 23 pass, 2 fail | 23 pass, 2 fail | equal | 0.0117 / 0.3237 | 0.0117 / 0.3237 (2-0-100) |
-| lo-tdf123684.pptx | 1 pass | 1 pass | equal | 0.0003 / 0.0095 | 0.0019 / 0.0130 (1-0-100) |
-| lo-tdf142915.pptx | 3 pass | 3 pass | equal | 0.0004 / 0.0125 | 0.0004 / 0.0125 (2-0-100) |
+| lo-tdf115394.pptx | 25 pass | 25 pass | equal | 0.0013 / 0.1033 | 0.0013 / 0.1033 (2-0-100) |
+| lo-tdf123684.pptx | 1 pass | 1 pass | equal | 0.0003 / 0.0095 | 0.0018 / 0.0129 (1-0-100) |
+| lo-tdf142915.pptx | 3 pass | 3 pass | equal | 0.0000 / 0.0026 | 0.0000 / 0.0026 (2-0-100) |
 | lo-tdf146223.pptx | 10 pass | 10 pass | equal | 0.0008 / 0.0333 | 0.0008 / 0.0332 (1-0-100) |
-| lo-tdf149588_transparentSolidFill.pptx | 5 pass | 5 pass | equal | 0.0010 / 0.0227 | 0.0010 / 0.0227 (1-0-100) |
+| lo-tdf149588_transparentSolidFill.pptx | 5 pass | 5 pass | equal | 0.0005 / 0.0073 | 0.0010 / 0.0257 (1-0-100) |
 | lo-tdf156808.pptx | 5 pass | 5 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
-| lo-tdf44223.pptx | 11 pass | 8 pass, 3 skipped-mark | equal | 0.0118 / 0.1827 | 0.0118 / 0.1827 (2-0-50) |
+| lo-tdf44223.pptx | 11 pass | 8 pass, 3 skipped-mark | equal | 0.0007 / 0.0459 | 0.0007 / 0.0459 (2-0-50) |
 | lo-tdf93868.pptx | 11 pass | 11 pass | equal | 0.0033 / 0.1542 | 0.0021 / 0.1540 (1-2-50) |
-| poi-copy-slide-demo.pptx | 1 pass | 1 pass | equal | 0.0050 / 0.1106 | 0.0050 / 0.1106 (1-0-100) |
+| poi-copy-slide-demo.pptx | 1 pass | 1 pass | equal | 0.0006 / 0.0354 | 0.0006 / 0.0354 (1-0-100) |
 | poi-crop-to-0.pptx | 15 pass | 15 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
 | poi-picture-transparency.pptx | 20 pass | 20 pass | equal | 0.0000 / 0.0000 | 0.0000 / 0.0000 (1-0-0) |
 | poi-table_test.pptx | 1 pass | 1 pass | equal | 0.0003 / 0.0365 | 0.0003 / 0.0365 (1-0-100) |
-| poi-text-highlight.pptx | 1 pass | 1 pass | equal | 0.0073 / 0.1754 | 0.0073 / 0.1754 (1-0-100) |
+| poi-text-highlight.pptx | 1 fail | 1 fail | equal | 0.0013 / 0.0568 | 0.0072 / 0.1787 (1-0-100) |
 | pypptx-minimal.pptx | — | — | equal | 0.0000 / 0.0000 | — |
 | pypptx-missing_rels_item.pptx | 1 pass | 1 pass | equal | 0.0013 / 0.0827 | 0.0013 / 0.0827 (1-0-100) |
 | pypptx-no-core-props.pptx | 1 pass | 1 pass | equal | 0.0007 / 0.0417 | 0.0007 / 0.0417 (1-0-100) |
@@ -201,6 +217,7 @@ plus 5 synthetic decks. `pypptx-minimal.pptx` has no slides.
 | cubeDeck | 2 | 0 | 0 | — | — |
 | morphCompositedDeck | 2 | 0 | 0 | — | — |
 | longStepDeck | 1 | 1 | 1 | 1 | — |
+| cmdHoldDeck | 1 | 0 | 0 | — | — |
 | lo-airplane-transition.pptx | 1 | 0 | 0 | — | — |
 | lo-bnc591147.pptx | 2 | 1 | 1 | 1 | slide 1 `still` |
 | lo-connector-shape-animations.pptx | 1 | 1 | 1 | 1 | — |
@@ -237,18 +254,18 @@ Cyrillic, Greek or Indic deck is in the corpus, so those families are **unmeasur
 
 | family | slides | meanAbs | rowMax | over `TOLERANCE_APPROX` (0.08 / 0.30) |
 |---|---|---|---|---|
-| latin | 51 | 0.0118 | 0.3237 | **yes** |
+| latin | 52 | 0.0033 | 0.1542 | no |
 
 The slides that set it:
 
 | deck | slide | layers | meanAbs | rowMax |
 |---|---|---|---|---|
-| lo-tdf115394.pptx | 2 | 1 | 0.0117 | 0.3237 |
-| lo-tdf115394.pptx | 3 | 1 | 0.0101 | 0.2851 |
-| lo-tdf115394.pptx | 1 | 1 | 0.0103 | 0.2774 |
-| lo-tdf115394.pptx | 4 | 1 | 0.0097 | 0.2533 |
-| lo-tdf115394.pptx | 5 | 1 | 0.0091 | 0.2278 |
-| lo-tdf44223.pptx | 2 | 1 | 0.0118 | 0.1827 |
+| lo-tdf93868.pptx | 1 | 3 | 0.0033 | 0.1542 |
+| lo-tdf115394.pptx | 2 | 1 | 0.0013 | 0.1033 |
+| lo-tdf115394.pptx | 3 | 1 | 0.0012 | 0.0884 |
+| lo-tdf115394.pptx | 1 | 1 | 0.0011 | 0.0862 |
+| pypptx-missing_rels_item.pptx | 1 | 1 | 0.0013 | 0.0827 |
+| pypptx-test.pptx | 1 | 1 | 0.0013 | 0.0827 |
 
 ## 4008 measurement
 
@@ -289,7 +306,8 @@ no close followed. A hold longer than about 12 s on a Morph pair would reach the
   - Refusals, timeouts included, are cached (L1, and the pool level for tracks and Morph), so a repeat
     request does not rebuild the slide or retire a worker.
 - **Charging reserves** are track 2, Morph 4, prefetch 8. A revisit charges its tracks and Morph pair again.
-- **`cmd` nodes are dropped** (D16). See finding 2 for the click-count consequence.
+- **`cmd` payloads are dropped, and the nodes stay inert** (D16 as amended by the Task 14 ruling). The command
+  is withheld, but its timing plays as locally.
 - **Mark validation is a backstop** (Task 6). The structural D8 rest rule is the primary guarantee. A tiny
   misplacement of a mover's mark is caught only through rowMax.
 - **Tinted colour-split layers** whose raw ink is never observed composite their tinted steps (Task 5,
@@ -324,11 +342,25 @@ no close followed. A hold longer than about 12 s on a Morph pair would reach the
   - A real client typing ahead can hit the same reversal.
   - Suggested fix (server): serialise text-op dispatch per socket (an inbox chain around `textOp`), or stamp
     an arrival sequence before the await and let only the newest run.
-- **`server/test/print-wire.test.ts` › "two cancelled jobs back to back…"** failed once in the full run and
-  1 in 3 alone. It is pre-existing, since no print code changed in this piece.
-  - Its comment says "at most its rate-limited refusal", but its assertion requires exactly one refusal for
-    reqId 161, and the run saw none.
-  - The same async-verify ordering is the likely cause. It was not investigated further.
+- The text-search race is recorded as a **follow-up**: it is a pre-existing server bug, not this piece, and is
+  not fixed here (controller ruling).
+- **`server/test/print-wire.test.ts` › "two cancelled jobs back to back…"** is pre-existing (controller
+  check).
+  - It failed once in the branch's full run and 1 in 3 alone on the branch.
+  - On the merge base `adef68e9`, in a temporary worktree, it failed **2 times in 12 runs alone**, always the
+    same test.
+  - Its comment says "at most its rate-limited refusal", but the assertion requires exactly one refusal for
+    reqId 161, and the failing runs saw none. The async-verify ordering is the likely cause.
+- **XLSX vitest flakes (controller check).**
+  - `tests/fc-t2-drawing-reply-grant.test.ts` › "keeps an empty sheet ready under admissible pressure and
+    refunds the whole grant" is the known Stage 3c flake. It failed only under full-suite load, and passed
+    12/12 alone on the branch and 6/6 on the base.
+  - `tests/xlsx-viewer-construction-memory.test.ts` › "each modelled structure charges at least its measured
+    live heap (and at most twice it), across capacity transitions" spawns a Bun heap probe.
+    - On the branch it failed 2 times in 16 runs alone, each time the first run of a batch.
+    - On the base it failed 0 times in 11 runs.
+    - No XLSX code differs between the base and the branch (`git diff adef68e9..HEAD -- src/xlsx
+      src/components/xlsx src/core` is empty), so this reads as a heap-probe timing flake, not a regression.
 - **Browser: an extra press was needed in the first test against a fresh server.** It happened in both
   debug runs. With → every 1.5 s right after `present()` resolved, the fly-in deck needed 3 presses, not 2.
   - The cause is unverified. One explanation is two presses queued during the cold bundle build and replayed
@@ -341,7 +373,8 @@ no close followed. A hold longer than about 12 s on a Morph pair would reach the
 - Projector and real-hardware frame pacing.
 - GPUs other than CI's SwiftShader (3-D transitions and the WebGL2 compositor).
 - Script families other than Latin (none in the corpus).
-- Linux CI fonts: the widening figures are from this Mac, with its installed fonts (see finding 1).
+- Linux CI fonts: the widening figures are from this Mac. With pack-only resolution, the face choice no
+  longer depends on the host's installed fonts; only the rasterisers (and any per-glyph fallback) remain.
 - **CI runs neither the server suite nor the stream browser project.** `.github/workflows/ci.yml` runs
   `vitest` and the `slideshow` Playwright project only. So `server/test/stream-show-parity.test.ts` and
   `tests/browser/stream-present-anim.spec.ts` are local gates, as the whole server suite already is.

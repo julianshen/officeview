@@ -1256,6 +1256,10 @@ One per slide, framed with the §7.1 `SHOW_PLAN` kind:
   cross-ref fix: it is a show-plan gate, not lifecycle).
 - **Refused behaviours:** `cmd` (OLE) dropped with diagnostics; the rest
   plays.
+  *Amendment (2026-11-15, Stage 3 piece 4, controller ruling):* the `cmd`
+  payload is dropped, but the node stays in the timing tree, inert, with its
+  timing intact, so the click structure equals local playback
+  (`cmd-dropped`).
 
 *Amendment (2026-11-14, Stage 3 piece 4, owner decision 2; piece-4 design
 §5, §11):* charging. Each of these is **one charged `'unit'` send**:

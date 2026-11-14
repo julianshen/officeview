@@ -98,6 +98,27 @@ describe('streamed show parity (synthetic decks)', () => {
     }
   }, 120_000)
 
+  test('both backends measure Calibri Light text identically (the pack alias, no host fallback)', async () => {
+    const { nodeCanvas } = await import('../../scripts/stream-show-compare')
+    const { serverBackend, showBackend } = await import('../src/backend')
+    const b = showBackend(serverBackend())
+    const text = 'Standard transition – medium'
+    for (const font of ['58.67px "Calibri Light"', '58.67px "Nonexistent Font"', '58.67px sans-serif', 'bold 20px Calibri']) {
+      const local = nodeCanvas().createCanvas(1, 1).getContext('2d'); local.font = font
+      const server = b.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D; server.font = font
+      expect(Math.abs(local.measureText(text).width - server.measureText(text).width), font).toBeLessThan(0.5)
+    }
+  })
+
+  test('cmdHoldDeck: an inert cmd keeps its interval, so the clicks equal local', async () => {
+    const r = await compareStreamDeck('cmdHoldDeck', { marks: { kind: 'off' }, widening: { meanAbs: 0.01, rowMax: 0.05 }, family: 'latin' })
+    // Local: one → seeks the held media call, one leaves the slide.
+    expect(r.structure.local.clicks).toBe(2)
+    expect(r.structure.streamed).toEqual(r.structure.local)
+    expect(r.structure.equal).toBe(true)
+    expect(r.outcomes.filter((o) => o.status === 'fail' || o.status === 'unmatched').map((o) => o.detail)).toEqual([])
+  }, 120_000)
+
   test('fallback rate reported', async () => {
     for (const deck of DECKS) {
       const r = await run(deck, 'off')

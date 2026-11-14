@@ -14,7 +14,8 @@
  *
  * Both sides composite with the Canvas 2D compositor at the server's scale-1 bucket (1 device px per slide px, DPR
  * 1), so nothing is resampled. The local side draws text with the server's pinned font pack (registered with
- * node-canvas under its families and aliases), so the remaining text difference is the rasteriser's alone.
+ * node-canvas), resolving every font string through the pack only by the server's own rule (`pinFontString`
+ * pack-only, Task 14 ruling), so the remaining text difference is the rasteriser's alone.
  *
  * **Samples** are `(slide, step, pct ∈ CAPTURE_PCTS)` at the capture plan's times (`planDeck`).
  * - A `composited` step (and a composited Morph, D11) is sampled at its keyframe times only: the track frame `i`
@@ -79,6 +80,16 @@ export function installDom(): Promise<void> {
       nc.registerFont(join(REPO, 'fontpack', f.file), { family: f.family, ...desc })
       for (const [alias, target] of Object.entries(pack.aliases)) if (target === f.family) nc.registerFont(join(REPO, 'fontpack', f.file), { family: alias, ...desc })
     }
+    // Font resolution through the pack only, by the server's own rule (Task 14 ruling): node-canvas cannot take an
+    // alias like "Calibri Light" by registration (pango reads "Light" as a weight), and an unknown family must not
+    // fall through to this machine's fonts on either side.
+    const { pinFontString } = await import('../server/src/fonts')
+    const proto = (nc as unknown as { CanvasRenderingContext2D: { prototype: object } }).CanvasRenderingContext2D.prototype
+    const desc = Object.getOwnPropertyDescriptor(proto, 'font')
+    if (desc?.set && !(desc.set as { packOnly?: true }).packOnly) {
+      const set = Object.assign(function (this: unknown, v: string) { desc.set!.call(this, typeof v === 'string' ? pinFontString(v, pack as never, { packOnly: true }) : v) }, { packOnly: true as const })
+      Object.defineProperty(proto, 'font', { ...desc, set })
+    }
     const utils = req(join(REPO, 'node_modules/jsdom/lib/jsdom/utils.js')) as { Canvas: unknown }
     utils.Canvas = nc
     if (typeof (globalThis as { document?: unknown }).document !== 'undefined') return
@@ -114,6 +125,8 @@ export const SYNTHETIC: Record<string, () => Promise<Uint8Array>> = {
   /** An unproven Morph (an item sweeps a masked layer): the server composites it (D11, `morph-composited`). */
   morphCompositedDeck: async () => (await import('../src/testdata/show-decks')).morphAdversaryDeck('sweptCover'),
   longStepDeck: async () => (await import('../src/testdata/show-decks')).longStepDeck(),
+  /** An autoplayed `cmd` media call held 3 s, then a click (the lo-bnc591147 pattern; Task 14 cmd ruling). */
+  cmdHoldDeck: async () => (await import('../src/testdata/show-decks')).cmdHoldDeck(),
 }
 
 export function deckFile(deck: string): string {
@@ -211,7 +224,7 @@ export interface WideningRow { deck: string; slide: number; family: string; laye
 
 /**
  * Each shown slide's layers, prepared and rasterised once by node-canvas (the local side) and once by the server
- * backend (`serverBackend`, @napi-rs/canvas with the pinned pack), each set composited at rest (plain state, z
+ * show path's backend (`showBackend(serverBackend())`: @napi-rs/canvas, the pinned pack, pack-only), each set composited at rest (plain state, z
  * order) on a node-canvas page at scale 1, then compared. Images are left out on both sides (equal placeholders).
  */
 export async function measureWidening(deck: string, bytes: Uint8Array): Promise<WideningRow[]> {
@@ -219,12 +232,13 @@ export async function measureWidening(deck: string, bytes: Uint8Array): Promise<
   const { loadShowDeck } = await import('../src/testdata/show-decks')
   const { prepareSlide, rasterPreparedLayer, layoutTextBases } = await import('../src/slideshow/prepare')
   const { installCanvasBackend } = await import('../src/core/canvas-backend')
-  const { serverBackend } = await import('../server/src/backend')
+  const { serverBackend, showBackend } = await import('../server/src/backend')
   const { createDiagnosticSink } = await import('../src/slideshow/diagnostics')
   const { slideSize } = await import('../src/slideshow/render/scene')
   const { compareFrames } = await import('../src/slideshow/compare')
   const nc = nodeCanvas()
-  const napi = serverBackend()
+  // The show path's canvases: the server backend with pack-only font resolution (Task 14 ruling).
+  const napi = showBackend(serverBackend())
   const local = { name: 'canvas', createCanvas: (w: number, h: number) => nc.createCanvas(w, h) } as unknown as import('../src/core/canvas-backend').CanvasBackend
   const OPEN = { lease: (b: number) => ({ bytes: b, release() {}, shrink() {}, grow: () => true }), used: () => 0, limit: Number.MAX_SAFE_INTEGER } as never
   const d = await loadShowDeck(bytes)

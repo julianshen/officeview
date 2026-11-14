@@ -613,7 +613,9 @@ written before its messages go out.
 `step-deferred`, `trigger-cut`, `morph-late`, `morph-composited`,
 `morph-fallback`, `show-budget`, `show-limits`, `show-plan-timeout`,
 `link-withheld`, `preview-reduced`, `plan-stage-pressure`, `mark-rest`
-and `cmd-dropped`.
+and `cmd-dropped` (a `cmd` node's command payload is withheld; the node stays
+in the timing tree, inert, so its timing and the click structure are local
+mode's).
 
 **Known differences from local mode** (each is in the validation doc):
 
@@ -626,7 +628,14 @@ and `cmd-dropped`.
   pixels. Otherwise, or if any of its triggers moves geometry, it plays
   its still.
 - A wipe (a masked draw) composites its step.
-- `cmd` nodes are dropped.
+- A `cmd` node's command is withheld, but the node keeps its timing (inert).
+
+**Fonts.** The show path (layers, keyframes, Morph assets) resolves fonts
+through the pinned pack only (`showBackend`). An alias (`Calibri`, `Calibri
+Light`, `Arial`, …) pins to its pack face, and a generic to its pack family. An
+unknown family falls back to Liberation Sans, never a host face. Units, print
+and notes get the new `Calibri Light` alias, but still pin aliases only, so
+an unknown family there can still reach a host face. That is a follow-up.
 
 ## The browser side (Stage 1d)
 

@@ -128,7 +128,7 @@
   - `withheld` consumes the click (no advance, as locally) and adds a `link-withheld` diagnostic.
   - Triggers are `triggers[]: {spid, rects[]}`. The spid is the tree's own target id, which is not new data.
 - **D15. Late layers.** Controller ruling (2026-11-14): accepted — the entry frame arrives first in the reply, so no extra charge is spent on a still. "Its composed image" (§3 anti-goals) means the bundle's entry frame, which is the first asset in the reply. No separate still is fetched for an animated slide. Until the entry frame decodes, the piece-3 "Loading slide n" frame shows.
-- **D16. Media and `cmd`.** The server drops `cmd` nodes (`cmd-dropped`). Audio and video nodes stay in the tree with `media: []`. The driver fires their synthetic end at once (`timeline.mediaEnd(..., synthetic = true)`), as local mode does when it refuses media.
+- **D16. Media and `cmd`.** The server drops `cmd` nodes (`cmd-dropped`). *Amended by controller ruling (Task 14, 2026-11-15): a `cmd` node stays in the tree with its timing intact and its command payload stripped (inert), so the step and click structure equals local. The code `cmd-dropped` now means the payload was dropped.* Audio and video nodes stay in the tree with `media: []`. The driver fires their synthetic end at once (`timeline.mediaEnd(..., synthetic = true)`), as local mode does when it refuses media.
 - **D17. PlanStage location and backend.**
   - `src/stream/remote/plan-stage.ts` builds its compositor through a new painter-free `createPlanCompositor`. `render/backend.ts` cannot be used as-is, because it imports `paintDirect` at `:47`.
   - On a lost WebGL2 context it switches to Canvas 2D and re-uploads from the retained bitmaps.
