@@ -11,7 +11,8 @@
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 import { AdmissionModel, DEFAULT_CAPS, type Caps, type Job } from './admission'
-import type { MarkRasterResult } from './mark/mark-raster'
+import type { LayerCrop, MarkLayerResult, MarkRasterResult } from './mark/mark-raster'
+import { SHOW_PLAN_DEADLINE_MS, type BuiltShowPlan, type ShowPlanJob, type ShowRefusal } from './show/build'
 import type { MarkSpec, NotesJob, NotesPlan, NotesRaster, OpenResult, Projection, RenderedUnit } from './render'
 import type { WorkerReply, WorkerRequest } from './worker/render-worker'
 import { prepareWorkspace, TEXT_PREPARE_ALLOWANCE, type TextJob, type TextReply } from './text/served'
@@ -27,6 +28,11 @@ export interface RenderJob { docRef: string; contentPolicy: 'visible-only' | 'fu
 export type PoolNotesJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & NotesJob
 /** A per-session Layer-1 encode (§9.4); no document affinity. */
 export interface EncodeJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; hangMs?: number; crash?: boolean }
+/** Piece 4: a show-plan bundle or track job on the docRef's worker. */
+export type PoolShowJob = { docRef: string; contentPolicy: 'visible-only' | 'full'; hangMs?: number; crash?: boolean } & ShowPlanJob
+/** Piece 4 D7: a show-plan layer's per-session Layer-1 encode. */
+export interface MarkLayerJob { png: Uint8Array; w: number; h: number; kBasis: Uint8Array; code: Int8Array; crop: LayerCrop; hangMs?: number; crash?: boolean }
+export { SHOW_PLAN_DEADLINE_MS }
 export type PoolTextJob = { docRef: string; contentPolicy: 'visible-only' | 'full' } & TextJob
 /** Admission charge of one text op itself (index assembly, answer text);
  * every prepare it needs is charged separately (`prepareWorkspace`). */
@@ -237,6 +243,70 @@ export class Pool {
     }
   }
 
+  /**
+   * Piece 4: one slide's show-plan bundle, with the same document affinity, admission and recycle paths as
+   * `render`, under `SHOW_PLAN_DEADLINE_MS` (10 s, against 2 s for units). A bundle past the deadline retires
+   * its worker and plays its still: `{ refused: 'show-plan-timeout' }`.
+   */
+  async showPlan(sessionId: string, job: PoolShowJob, bytesEstimate: number): Promise<BuiltShowPlan | ShowRefusal> {
+    const { docRef, contentPolicy, hangMs, crash, ...show } = job
+    try {
+      return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-plan', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as BuiltShowPlan | ShowRefusal
+    } catch (e) {
+      if (e instanceof RenderTimeout) return { refused: 'show-plan-timeout', diagnostics: [{ code: 'show-plan-timeout' }] }
+      throw e
+    }
+  }
+
+  /** Piece 4: the keyframe track of one composited step (affinity, admission, `SHOW_PLAN_DEADLINE_MS`; a timeout throws `RenderTimeout`). */
+  async showTrack(sessionId: string, job: PoolShowJob & { step: number }, bytesEstimate: number): Promise<Array<{ assetId: number; w: number; h: number; png: Uint8Array }>> {
+    const { docRef, contentPolicy, hangMs, crash, ...show } = job
+    return await this.showJob(sessionId, docRef, contentPolicy, bytesEstimate, (docKey) => ({ type: 'show-track', id: this.nextId++, docKey, job: show, ...this.hooks(hangMs, crash) })) as Array<{ assetId: number; w: number; h: number; png: Uint8Array }>
+  }
+
+  /**
+   * Piece 4 D7: a layer's per-session Layer-1 encode. It reads no document, so it runs on the least-loaded
+   * worker as `encode` does, with the same admission, under `SHOW_PLAN_DEADLINE_MS`.
+   */
+  async markLayer(sessionId: string, job: MarkLayerJob, bytesEstimate: number): Promise<MarkLayerResult> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    const slot = [...this.slots].sort((a, b) => (Number(a.busy) - Number(b.busy)) || (a.queue.length - b.queue.length) || a.index - b.index)[0]!
+    try {
+      return await this.exclusive(slot, () => {
+        const msg: WorkerRequest = { type: 'mark-layer', id: this.nextId++, png: job.png, w: job.w, h: job.h, kBasis: job.kBasis, code: job.code, crop: job.crop, ...this.hooks(job.hangMs, job.crash) }
+        return this.runJob(slot, admitted, msg, SHOW_PLAN_DEADLINE_MS) as Promise<MarkLayerResult>
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
+  private hooks(hangMs?: number, crash?: boolean) { return { ...(this.testHooks && hangMs ? { hangMs } : {}), ...(this.testHooks && crash ? { crash: true } : {}) } }
+
+  /** A show job on the docRef's worker: admission, affinity, the show deadline, the recycle check. */
+  private async showJob(sessionId: string, docRef: string, contentPolicy: 'visible-only' | 'full', bytesEstimate: number, msg: (docKey: string) => WorkerRequest): Promise<unknown> {
+    if (this.disposed) throw new RenderFailed('pool disposed')
+    const res = this.admission.request(sessionId, bytesEstimate, this.now())
+    if (res.status === 'refused') throw new AdmissionRefused(res.reason)
+    const admitted = res.job
+    if (res.status === 'queued' && !(await new Promise<boolean>((r) => this.waiters.set(admitted.id, r)))) throw new RenderFailed('pool disposed')
+    const slot = this.pick(docRef)
+    try {
+      return await this.exclusive(slot, async () => {
+        const { docKey } = await this.ensureOpen(slot, docRef, contentPolicy)
+        const r = await this.runJob(slot, admitted, msg(docKey), SHOW_PLAN_DEADLINE_MS)
+        if (slot.pages >= this.recyclePages) { await this.replace(slot); this.recycled++ }
+        return r
+      })
+    } finally {
+      if (admitted.state === 'running') this.finish(admitted)
+    }
+  }
+
   /** A text op on the docRef's worker (affinity, admission, deadline as
    * `render`). The op is charged `bytesEstimate`; every prepare (explicit or
    * for a `{ missing }` answer) is charged `prepareWorkspace(w, h)` from the
@@ -312,10 +382,10 @@ export class Pool {
   }
 
   /** Posts one admitted job under the render deadline; owns the retire paths. */
-  private async runJob(slot: Slot, admitted: Job, msg: WorkerRequest): Promise<unknown> {
+  private async runJob(slot: Slot, admitted: Job, msg: WorkerRequest, deadlineMs = this.admission.caps.renderDeadlineMs): Promise<unknown> {
     // The deadline covers the paint only (the worker is idle when we post).
     admitted.startedAt = this.now()
-    const reply = await this.post(slot, msg, this.admission.caps.renderDeadlineMs + 1)
+    const reply = await this.post(slot, msg, deadlineMs + 1)
     if (reply === 'timeout') {
       // Retirement owner: only THIS job retires; its charge stays reserved
       // until the worker is gone, then is refunded once.

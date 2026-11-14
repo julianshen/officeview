@@ -102,6 +102,16 @@ function stepInterval(timeline: SlideTimeline, step: number): Interval {
   return { cursor, t0, dur: Number.isFinite(end) && end > t0 ? end - t0 : 0 }
 }
 
+/** Additive (Task 6): each click step's duration in ms (its finite effects), for D3 frame allocation and tracks. */
+export function stepDurations(timeline: SlideTimeline): number[] {
+  return Array.from({ length: timeline.steps }, (_, k) => stepInterval(timeline, k).dur)
+}
+
+/** Additive (Task 6): step `step` (0-based) entered from its settled checkpoint: its cursor, start time and duration. */
+export function stepWindow(timeline: SlideTimeline, step: number): { cursor: SlideCursor; t0: number; dur: number } {
+  return stepInterval(timeline, step)
+}
+
 /** `SAMPLES_PER_INTERVAL` times evenly spaced over `[0, dur]` (both ends included), plus `extra`, sorted and distinct. */
 function samplesOver(dur: number, extra: readonly number[]): number[] {
   const out = new Set<number>()
@@ -398,17 +408,19 @@ export function classifySlide(input: ClassifyInput): Classification {
     const full = composeCounted(list, undefined, true)
     const without = composeCounted(list, info.layer, true)
     const b = info.bmp.bounds, kx = info.w / b.w, ky = info.h / b.h
-    const local = (x: number, y: number): [number, number] => [
-      ((inv[0] * x + inv[2] * y + inv[4]) - b.x) * kx, ((inv[1] * x + inv[3] * y + inv[5]) - b.y) * ky,
-    ]
+    const [i0, i1, i2, i3, i4, i5] = inv
+    // Task 6 (cost, same arithmetic): the device pixel square's four corners mapped into the bitmap as scalars
+    // (no per-pixel arrays): every bitmap px the square touches is observed.
+    const lu = (x: number, y: number) => ((i0 * x + i2 * y + i4) - b.x) * kx
+    const lv = (x: number, y: number) => ((i1 * x + i3 * y + i5) - b.y) * ky
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
         const i = (y * W + x) * 4
         if (full[i] === without[i] && full[i + 1] === without[i + 1] && full[i + 2] === without[i + 2] && full[i + 3] === without[i + 3]) continue
-        // The device pixel's square, mapped into the bitmap: every bitmap px it touches is observed.
-        const c = [local(x, y), local(x + 1, y), local(x, y + 1), local(x + 1, y + 1)]
-        const u0 = Math.max(0, Math.floor(Math.min(...c.map(p => p[0])))), v0 = Math.max(0, Math.floor(Math.min(...c.map(p => p[1]))))
-        const u1 = Math.min(info.w, Math.ceil(Math.max(...c.map(p => p[0])))), v1 = Math.min(info.h, Math.ceil(Math.max(...c.map(p => p[1]))))
+        const ua = lu(x, y), ub = lu(x + 1, y), uc = lu(x, y + 1), ud = lu(x + 1, y + 1)
+        const va = lv(x, y), vb = lv(x + 1, y), vc = lv(x, y + 1), vd = lv(x + 1, y + 1)
+        const u0 = Math.max(0, Math.floor(Math.min(ua, ub, uc, ud))), v0 = Math.max(0, Math.floor(Math.min(va, vb, vc, vd)))
+        const u1 = Math.min(info.w, Math.ceil(Math.max(ua, ub, uc, ud))), v1 = Math.min(info.h, Math.ceil(Math.max(va, vb, vc, vd)))
         for (let v = v0; v < v1; v++) info.seen.fill(1, v * info.w + u0, v * info.w + Math.max(u0, u1))
       }
     }
