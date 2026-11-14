@@ -1157,12 +1157,11 @@ slow device for a load-independent outcome: a device four times slower than this
 call at the cap, in 128-unit slices separated by host yields.
 
 **Browser** (`.superpowers/t22/pw.config.ts`: the stock config's second webServer needs `@napi-rs/canvas`):
-chromium and Playwright WebKit (`webkit-2370`) each 17 passed plus the 1 expected failure (forced-paged bar
-descriptor) reported as expected. The Stage 3 tests (bars paint and the
+chromium and Playwright WebKit (`webkit-2370`) each 18 passed, 0 expected failures (the former expected failure, the forced-paged
+bar descriptor, is a normal test since the S3-A11Y-PAGED fix). The Stage 3 tests (bars paint and the
 resident, worker and forced-paged legs agree within 0.2 % of pixels; six zoom/DPR pairs; frozen panes; a live max
 edit that rescales the bars; print capture with bar pixels on the prepared page) pass on every leg; the bar
-descriptor is asserted on the resident and worker legs, and the forced-paged descriptor by the expected-failure test
-(known limit below).
+descriptor is asserted on all three legs, which announce the same descriptors.
 
 **`cf-compare --stage 3`** (bound to each case's `savedSha256` and oracle hash): static 0 pass / 3 unsupported / 33
 fail, print 0 / 3 / 33 (no printer captures), export 0 / 3 / 33 — whole-image comparisons fail for Stage 1/2 cases
@@ -1173,17 +1172,47 @@ and composition F2 (a matching DXF with no visible property); the two Stage 1 in
 clock-dependent timePeriod cases. Bar geometry fidelity is proven by the Lesson 1 conformance, not by cf-compare.
 
 **Known limits (recorded, not fixed).**
-- **Forced-paged descriptor (defect).** In the forced-paged view the grid semantics read a second wire scope
-  (`InteractiveSheetDoc` semantic text scope) that never paints, and a host-less wire scope announces a bar only after
-  painting it, so every painted bar announces "Conditional formatting unavailable" there. The bars do paint (and the
-  worker sends the same descriptors as the resident path). Pinned by an expected-failure browser test; the fix needs
-  the semantic scope to read the painter's outcome or a host source.
+- **Forced-paged descriptor (fixed, Ruling S3-A11Y-PAGED).** The forced-paged grid semantics read a second wire
+  scope that never paints, and a host-less wire scope announced a bar only after painting it, so every painted bar
+  announced "Conditional formatting unavailable" there. That scope now takes the frame's own host source
+  (`CfFrameHostSource`, `frameBarHosts` in `cf/render.ts`): each cell's logical box from the sheet metrics
+  (`sourceCellToLogical`, as the viewport placements are laid out) and its screen base style (own style through the
+  region layer, then the scope's CF style), and decides each bar with the painter's own `barWithheld` at the capture
+  scale. A cell the frame has no exact host for (not loaded, hidden, outside the metrics) withholds, so no bar the
+  frame would not paint is ever announced, including the too-small host and unverified capabilities. Only the
+  semantic call site passes hosts: the paged paint scope (which still learns from its paints), copy and the resident
+  and worker legs are unchanged, and nothing is retained per host. Evidence: `tests/xlsx-cf-paged-a11y.test.ts`
+  (RED before the fix: 4 of 6 failed, the painted bar announcing unavailable; after: 6 passed, including a test that
+  each hosted descriptor equals a host-less scope's after painting the same hosts), and the browser tests now assert
+  the descriptor on all three legs, which announce the same names for C3, C6 and E3.
+  Fix round 1 (review):
+  - *Invariant.* The paged semantic scope announces what a **detail** frame paints for the cell. A coarse frame is a
+    transient summary that paints only the retained active cell; the cells it summarises still announce their bar
+    (or "unavailable") as the detail frame that replaces it paints them. The resident and worker legs behave the
+    same way, deciding from geometry rather than from a particular frame, so the three legs still agree. Gating on
+    a coarse frame's paint records instead would announce "unavailable" for bars that paint once the frame settles
+    (design (b)'s drawback).
+  - *Host fill.* The frame styles every placement through the CF paint layer (`paintLayer.styleAt`, the scope's
+    `effectiveStyle` over the region and own base), so the painter's host fill (`record.body.fill`) already includes
+    a CF fill. The semantic host resolves its fill the same way. `tests/xlsx-cf-paged-a11y.test.ts` "a CF fill under
+    an automatic-axis bar" renders a frame with `renderSheetViewport`, captures the hosts it hands the painter, and
+    checks that the semantic hosts are equal to them and that both withhold the bar under the CF yellow fill. A
+    base-only fill would differ there, and would announce a bar the frame withholds.
+  - *Legs.* Hosts are passed only on the `remote` (paged workbook) branch. The `?worker=1` leg without `paged=1`
+    routes to the paged worker only when admission says `paged`. Admission keeps the Stage 3 fixture on the object
+    route under both profiles (unit test), so that leg stays on the resident text scope, unchanged. A workbook that
+    admission does route paged is the paged view itself, which gets the fix.
+  - *Cache lifetime.* `assembleScope` builds the host function once per scope (`hostAt ??=`). The source reads the
+    committed entry at call time, so it never holds stale metrics.
 - **Merged hosts.** `assembleScope` (text.ts) would announce a bar inside a merge where `render.ts` refuses to paint
   it; unreachable while `bar:scope-merged-cell` is unverified (the service withholds any bar scope that intersects a
   merge on every production path, as the paged agreement test confirms).
 - **Resident host vs frame host.** `barAt`/`describe` decide withholding on a host computed from the sheet's own
   metrics, the painter on the frame's host; in sorted or filtered views they may differ by up to 1 px, which can only
-  matter for a share that rounds to zero at the capture scale.
+  matter for a share that rounds to zero at the capture scale. This applies to the resident leg only. The paged semantic host comes
+  from the entry's projection metrics (`ProjectedSheetMetrics.sourceCellToLogical`, which follows the view's row
+  order and visibility), the same metrics the viewport placements use (`cols.start`, `rows.start` of the display
+  slot), so in sorted and filtered paged views it is the frame's host.
 - **`residentBarHosts` budget** charges 8 B per axis entry and 64 B per cell, not the JS per-entry overhead.
 - **Worker cache split charge.** A large reply is charged whole and definitions are not shared between entries
   (bounded memory, recorded from Task 21).

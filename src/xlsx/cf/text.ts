@@ -4,7 +4,8 @@ import { CF_LIMITS, createCfMemory } from './limits'
 import { createCfService, estimateCfPrepareBytes, type CfPaintStatistics } from './service'
 import { createCfStatistics } from './statistics'
 import { resolveCfCellStyle } from './dxf'
-import { residentBarHosts, residentSource, storeCfSource } from './render'
+import { frameBarHosts, residentBarHosts, residentSource, storeCfSource, type CfFrameHostSource } from './render'
+export type { CfFrameHostSource } from './render'
 import { regionStylesFor } from '../tableStyleLoader'
 import type { XlsxCellStyle } from '../types'
 import { cfRuntimeEvidence } from './predicates'
@@ -205,8 +206,9 @@ function assembleScope(
   release: () => void,
   current: () => boolean = () => true,
   regions?: EffectiveFormatScope['regions'],
-  /** Resident scopes: each bar's host from the sheet (given the scope's own effective style). Absent (paged), the
-   * scope learns withholding from its own paints and announces no bar it has not seen laid out. */
+  /** Each bar's host (given the scope's own effective style): from the sheet for resident scopes, from the frame's host
+   * source for the paged semantic scope (S3-A11Y-PAGED). Absent (the paged paint scope), the scope learns withholding
+   * from its own paints and announces no bar it has not seen laid out. */
   barHosts?: (styleAt: (row: number, col: number, base: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) => (row: number, col: number) => CfBarHost | undefined,
 ): EffectiveFormatScope {
   const cache = new Map<string, CfDescriptor>()
@@ -220,7 +222,8 @@ function assembleScope(
     return barPaintable(bar) ? bar : undefined
   }
   // Fix round 2: `barAt` (and so `describe`) reports a bar only where painting does not withhold it, by the painter's
-  // own predicate. Without hosts (paged) the outcome is learned at paint time; until then the bar counts as withheld.
+  // own predicate. Without hosts (the paged paint scope) the outcome is learned at paint time; until then the bar counts
+  // as withheld.
   let hostAt: ((row: number, col: number) => CfBarHost | undefined) | undefined
   const laidOut = new Map<number, boolean>()
   const barAt = (row: number, col: number): CfBarDescriptor | undefined => {
@@ -518,6 +521,9 @@ export async function prepareCfWireScope(
     onEmpty?: () => void
     current?: () => boolean
     base?: import('../tableStyles/regionLayer').RegionStyleLayer
+    /** The frame's host source (S3-A11Y-PAGED): a scope that never paints (the paged grid semantics) decides each bar
+     * with the painter's own predicate on the host the frame lays it out in, instead of waiting for a paint. */
+    hosts?: CfFrameHostSource
   },
 ): Promise<EffectiveFormatScope | undefined> {
   if (!rects.length) return undefined
@@ -602,7 +608,7 @@ export async function prepareCfWireScope(
         disposed = true
         options.budget.release(bytes)
       }
-    }, options.current, regions)
+    }, options.current, regions, options.hosts ? styleAt => frameBarHosts(options.hosts!, styleAt) : undefined)
     const paintLayer: import('../tableStyles/regionLayer').RegionStyleLayer = {
       rects: [...options.base?.rects ?? [], ...regions], retainedBytes: 0,
       styleAt: (row,col,own,mode) => scope.effectiveStyle(row,col,options.base?.styleAt(row,col,own,mode) ?? own),

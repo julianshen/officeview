@@ -73,8 +73,9 @@ export function barSheet(values: readonly number[], options: { col?: number; wid
 
 /**
  * Paints a paged (wire) scope's bars once on a throwaway canvas, every cell of `rows` × `cols` a 200 × 20 px unfilled
- * host. A paged scope learns which bars painting withholds only by painting them (fix round 2), so its `barAt` reports
- * a bar after this, as it does in the viewer once a tile has painted.
+ * host. A host-less paged scope (the paged paint scope) learns which bars painting withholds only by painting them (fix
+ * round 2), so its `barAt` reports a bar after this, as it does in the viewer once a tile has painted. The paged
+ * semantic scope is given the frame's hosts instead (S3-A11Y-PAGED, tests/xlsx-cf-paged-a11y.test.ts).
  */
 export async function paintScopeBars(scope: { paintBars?: (ctx: CanvasRenderingContext2D, cellRect: (row: number, col: number) => { x: number; y: number; width: number; height: number } | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, scale: { zoom: number; dpr: number }) => boolean }, rows: number, cols: number): Promise<void> {
   const { createCanvas } = await import('canvas')
