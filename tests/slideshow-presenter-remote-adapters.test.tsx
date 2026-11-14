@@ -241,6 +241,19 @@ describe('Presenter View over an image-backed source (Task 5)', () => {
     root.unmount()
   })
 
+  it('image notes display at the server\'s 720 CSS px, not their device-pixel backing (DPR 2 → 1,440 px), and fit a narrower pane (PR #75)', async () => {
+    const r = remote(2)
+    r.notes.current = { kind: 'image', state: 'ready', paint: (c) => { c.width = 1440; c.height = 400 } }
+    const { el, root } = mount(r)
+    await flush()
+    const canvas = el.querySelector<HTMLCanvasElement>('[data-officeview-presenter-notes] canvas')!
+    expect(canvas.width).toBe(1440)
+    expect(canvas.style.maxWidth).toBe('720px')
+    expect(canvas.style.width).toBe('100%')
+    expect(canvas.style.height).toBe('auto')
+    root.unmount()
+  })
+
   it('NotesPane keeps the text variant unchanged', () => {
     const el = document.createElement('div')
     document.body.append(el)

@@ -164,4 +164,12 @@ describe('hidden detection failure releases the paintables', () => {
     // The default reader then opens the same bytes normally.
     expect((await new DocumentHost().open('d1', await hiddenSlideDeck(), 'full')).hidden).toEqual([1])
   })
+
+  test.each([['visible-only'], ['full']] as const)('%p: the retained original package holds no decompressed reads (PR #75)', async (policy) => {
+    const host = new DocumentHost()
+    const r = await host.open('d2', await hiddenSlideDeck(), policy)
+    const doc = (host as unknown as { docs: Map<string, { notes?: { pkg: { cache: Map<string, unknown> } } }> }).docs.get(r.docKey)!
+    expect(doc.notes).toBeDefined()
+    expect(doc.notes!.pkg.cache.size).toBe(0)
+  })
 })

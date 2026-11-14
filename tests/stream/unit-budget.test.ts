@@ -131,6 +131,13 @@ async function advance(ms: number, chunk = 50) {
     await realFlush()
   }
 }
+/** Lets real work (admission frees a slot only after a real gzip decode) catch up
+ * WITHOUT moving fake time, until `cond` holds or 10 s of wall time pass. A slow
+ * CI machine needs more real ticks per fake millisecond than a laptop. */
+async function settle(cond: () => boolean) {
+  const until = performance.now() + 10_000
+  while (!cond() && performance.now() < until) { await vi.advanceTimersByTimeAsync(0); await realFlush() }
+}
 /** Max sends inside any 60 s window (the server's own counting). */
 const maxInWindow = (times: number[]) => {
   let max = 0
@@ -199,11 +206,13 @@ describe('R28: the unit budget is the session\'s (real StreamSession, real Sessi
     let done = 0
     const all = Promise.all(Array.from({ length: 70 }, (_, i) => s.unit(i % COUNT, 1).then((l) => { done++; l.release() })))
     await advance(1_000)
+    await settle(() => done >= 48)
     expect(srv.sends).toHaveLength(48)
     expect(done).toBe(48)
     await advance(60_900, 1_000)
     expect(srv.sends).toHaveLength(48) // the client window is 62 s (a receipt margin over the server's 60 s)
     await advance(2_000)
+    await settle(() => done === 70)
     await all
     expect(srv.sends).toHaveLength(70)
     expect(srv.verdicts).toEqual([])

@@ -167,6 +167,8 @@ export class DocumentHost {
       // Projected slide parts keep their original paths; a list that does not line up with the units serves no notes.
       const handle = admitted.format === 'pptx' ? pptxPackageHandle(parsed as PptxDocument) : undefined
       const notes = handle && handle.slideParts.length === paintables.length ? { pkg: original, slideParts: [...handle.slideParts] } : undefined
+      // Projection read every original entry through the cache: the retained package keeps the archive, not those reads.
+      original.dropCache()
       doc = { key, paintables, raw, hidden, ...(notes ? { notes } : {}), units: raw.map((r) => ({ w: sizeCeil(Math.max(1, r.widthPx)), h: sizeCeil(Math.max(1, r.heightPx)) })), fingerprint, contentPolicyId: projected.contentPolicyId, diagnostics: projected.diagnostics, format: admitted.format }
       this.docs.set(key, doc)
     }

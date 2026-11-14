@@ -40,6 +40,9 @@ export interface NotesPaneProps {
 }
 
 const refuse = (e: SyntheticEvent) => e.preventDefault()
+/** The server draws notes 720 CSS px wide at any scale: show the backing at that
+ * size (never its device pixels), shrinking to a narrower pane. */
+const IMAGE_SIZE = { display: 'block', width: '100%', maxWidth: '720px', height: 'auto' } as const
 
 /** The image variant: never selectable, no copy menu or drag, whatever the copy policy says. */
 function ImageNotesView({ notes }: { notes: ImageNotes }): ReactElement {
@@ -59,7 +62,7 @@ function ImageNotesView({ notes }: { notes: ImageNotes }): ReactElement {
       onCut={refuse}
     >
       {ready
-        ? <canvas ref={canvas} role="img" aria-label="Speaker notes (image)" draggable={false} onContextMenu={refuse} onDragStart={refuse} />
+        ? <canvas ref={canvas} role="img" aria-label="Speaker notes (image)" draggable={false} style={IMAGE_SIZE} onContextMenu={refuse} onDragStart={refuse} />
         : <p data-officeview-presenter-notes-status="">{notes.state === 'error' ? 'Notes could not be loaded' : 'Loading notes…'}</p>}
     </div>
   )
