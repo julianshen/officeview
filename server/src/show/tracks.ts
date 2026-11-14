@@ -7,7 +7,7 @@
  * settled checkpoint after the step). One frame is the end frame alone; a step longer than its frames (the
  * 90-frame cap, or the slide's 512) plays its first frames and then cuts to the end (`step-truncated`).
  */
-import { canvasBackend } from '../../../src/core/canvas-backend'
+import { showCanvasBackend } from './canvas'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createRng } from '../../../src/slideshow/rng'
 import { encodePng } from '../mark/png'
@@ -40,7 +40,7 @@ export function renderTrack(doc: ShowHost, job: ShowPlanJob & { step: number }, 
   try {
     const win = stepWindow(timeline, job.step)
     const rng = createRng(0x5eed + ps.index), sink = createDiagnosticSink()
-    const draw = { measure: canvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D, resolveFont: (f: string) => f }
+    const draw = { measure: showCanvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D, resolveFont: (f: string) => f }
     const W = composer.width, H = composer.height
     const page = { w: built.plan.slide.w, h: built.plan.slide.h }
     return trackTimes(win.dur, step.track.count).map((t, i, all) => {

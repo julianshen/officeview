@@ -27,7 +27,7 @@
  * tracks: `MORPH_ASSET_BASE + ref` for layers, `MORPH_FRAME_BASE + i` for frames.
  */
 import { invert, stateMatrix } from '../../../src/slideshow/affine'
-import { canvasBackend } from '../../../src/core/canvas-backend'
+import { showCanvasBackend } from './canvas'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { morphFrame, type MorphFrameItem, type MorphFrameSpec } from '../../../src/slideshow/morph/render'
 import { rasterPreparedLayer } from '../../../src/slideshow/prepare'
@@ -77,7 +77,7 @@ const MAX_UNIT_PX = 8192
 
 const open = (bytes: number, tag: string): Lease => { const l: Lease = { tag, bytes, grow: () => true, shrink() {}, transfer: () => l, release() {} }; return l }
 const OPEN_WORKSPACE: SlideShowWorkspace = { limit: Number.POSITIVE_INFINITY, used: () => 0, reserveTerminal: () => undefined, lease: open }
-const factory: CanvasFactory = (w, h) => canvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
+const factory: CanvasFactory = (w, h) => showCanvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
 const resolveFont = (f: string) => f
 
 /** Why a Morph plays composited: rule 4 (`colour`, `mask`, `swept`), rule 5 (`budget`), the reconstruction, `strictMarks`, a rest that is not a box (D8), a cap, the §7 mark validation (`marks`). */
@@ -394,7 +394,7 @@ function prove(order: readonly number[], bmpOf: (ref: number) => LayerBitmap | u
 }
 
 const bitmapOf = (w: number, h: number, rgba: Uint8ClampedArray, like: LayerBitmap): LayerBitmap => {
-  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const canvas = showCanvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   const img = ctx.createImageData(w, h)
   img.data.set(rgba)
@@ -484,7 +484,7 @@ function maskOf(bmp: LayerBitmap, seen: Uint8Array): Uint8Array | undefined {
 
 function maskedOf(bmp: LayerBitmap, mask: Uint8Array): LayerBitmap {
   const w = bmp.canvas.width, h = bmp.canvas.height
-  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const canvas = showCanvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   ctx.drawImage(bmp.canvas as CanvasImageSource, 0, 0)
   const img = ctx.getImageData(0, 0, w, h)

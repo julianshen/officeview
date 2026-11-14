@@ -11,7 +11,7 @@
  *   marked once, within `MARK_FIDELITY`, and the validation code must be attributed on it (D7). A slide that
  *   fails plays every step `composited`.
  */
-import { canvasBackend } from '../../../src/core/canvas-backend'
+import { showCanvasBackend } from './canvas'
 import { compareFrames, type CompareResult } from '../../../src/slideshow/compare'
 import type { LayerBitmap, Tolerance } from '../../../src/slideshow/types'
 import type { Rect } from '../../../src/stream/show-plan'
@@ -29,7 +29,7 @@ export function burnVisibleMark(layer: LayerBitmap, rest: Rect, mark: MarkSpec, 
   const opts = markOptions(mark)
   if (!opts) return layer
   const w = layer.canvas.width, h = layer.canvas.height
-  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const canvas = showCanvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   ctx.drawImage(layer.canvas as CanvasImageSource, 0, 0)
   ctx.globalCompositeOperation = 'source-atop'

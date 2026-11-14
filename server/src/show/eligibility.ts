@@ -48,7 +48,7 @@ import { createRng } from '../../../src/slideshow/rng'
 import { targetKey } from '../../../src/slideshow/target'
 import type { Affine, BehaviourNode, DiagnosticSink, TimeNode, LayerBitmap, RenderState, TargetState } from '../../../src/slideshow/types'
 import { SHOW_PLAN_LIMITS, type Rect } from '../../../src/stream/show-plan'
-import { canvasBackend } from '../../../src/core/canvas-backend'
+import { showCanvasBackend } from './canvas'
 import { createSlideComposer, deviceMatrix, drawsAt, maskedRaster, slideStateAt, type DrawnLayer } from './compose'
 
 export const SAMPLES_PER_INTERVAL = 8, CLASSIFY_BUDGET = 4096, TRACK_FPS = 15, TRACK_MAX_FRAMES = 90
@@ -375,7 +375,7 @@ export function classifySlide(input: ClassifyInput): Classification {
   const composer = createSlideComposer(ps, rasters, scale)
   const W = composer.width, H = composer.height
   const rng = createRng(0x5eed + ps.index)
-  const measure = canvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+  const measure = showCanvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
   const drawOpts = { measure, ...(input.resolveFont ? { resolveFont: input.resolveFont } : {}) }
   const stateAt = (cursor: SlideCursor, t: number) => slideStateAt(ps, timeline, cursor, t, rng, NOOP_SINK)
   const draws = (state: RenderState) => drawsAt(ps, state, drawOpts)

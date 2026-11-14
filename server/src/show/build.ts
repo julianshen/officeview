@@ -21,7 +21,7 @@
  * `strictMarks`; L2 (L1 + mark settings + `strictMarks`) holds the finished bundle and its verdict.
  */
 import { createHash } from 'node:crypto'
-import { canvasBackend } from '../../../src/core/canvas-backend'
+import { showCanvasBackend } from './canvas'
 import type { PptxDocument, PptxPackageHandle } from '../../../src/pptx/types'
 import { createDiagnosticSink } from '../../../src/slideshow/diagnostics'
 import { createSlideTimeline, type SlideTimeline } from '../../../src/slideshow/engine/steps'
@@ -154,9 +154,9 @@ const OPEN_WORKSPACE: SlideShowWorkspace = {
   limit: Number.POSITIVE_INFINITY, used: () => 0, reserveTerminal: () => undefined,
   lease: (bytes, tag) => { const l: Lease = { tag, bytes, grow: () => true, shrink() {}, transfer: () => l, release() {} }; return l },
 }
-const factory: CanvasFactory = (w, h) => canvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
+const factory: CanvasFactory = (w, h) => showCanvasBackend().createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h))) as never
 const resolveFont = (f: string) => f
-const measureCtx = () => canvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
+const measureCtx = () => showCanvasBackend().createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D
 const D21 = new Set<string>(SHOW_DIAGNOSTIC_CODES)
 const MAX_DIAGNOSTICS = 1024
 
@@ -373,7 +373,7 @@ const rgbaOf = (canvas: LayerBitmap['canvas']) => (canvas.getContext('2d') as un
 export function markFrame(rgba: Uint8ClampedArray, W: number, H: number, scale: number, page: { w: number; h: number }, mark: MarkSpec): Uint8ClampedArray {
   const opts = markOptions(mark)
   if (!opts) return rgba
-  const c = canvasBackend().createCanvas(W, H)
+  const c = showCanvasBackend().createCanvas(W, H)
   const ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
   const img = ctx.createImageData(W, H)
   img.data.set(rgba)
@@ -385,7 +385,7 @@ export function markFrame(rgba: Uint8ClampedArray, W: number, H: number, scale: 
 
 /** A canvas-backed bitmap from straight RGBA, at `bounds` (slide px). */
 function bitmapOf(w: number, h: number, rgba: Uint8ClampedArray, bounds: Rect, scale: number): LayerBitmap {
-  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const canvas = showCanvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   const img = ctx.createImageData(w, h)
   img.data.set(rgba)

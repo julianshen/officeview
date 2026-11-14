@@ -16,7 +16,7 @@
  * The watermark layer is never composed here: marks are applied to the
  * classified assets later (D7), so classification sees unmarked ink only.
  */
-import { canvasBackend } from '../../../src/core/canvas-backend'
+import { showCanvasBackend } from './canvas'
 import type { FontResolver } from '../../../src/core/fonts/register'
 import { mul, stateMatrix } from '../../../src/slideshow/affine'
 import { renderStateAt, type BaseGeometry } from '../../../src/slideshow/engine/behaviours'
@@ -130,7 +130,7 @@ export interface SlideComposer {
 export function createSlideComposer(ps: PreparedSlide, rasters: ReadonlyMap<PlanLayer, LayerBitmap>, scale: number): SlideComposer {
   const { w, h } = slideSize(ps.slide)
   const width = Math.max(1, Math.ceil(w * scale)), height = Math.max(1, Math.ceil(h * scale))
-  const backend = canvasBackend()
+  const backend = showCanvasBackend()
   const factory: CanvasFactory = (cw, ch) => backend.createCanvas(Math.max(1, Math.ceil(cw)), Math.max(1, Math.ceil(ch))) as never
   const canvas = factory(width, height)
   const codes: string[] = []
@@ -189,7 +189,7 @@ export function classifiedRasters(rasters: ReadonlyMap<PlanLayer, LayerBitmap>, 
 /** `bmp` with its alpha multiplied by `mask` (layer-local, one byte per bitmap px), as a new bitmap. */
 export function maskedRaster(bmp: LayerBitmap, mask: Uint8Array): LayerBitmap {
   const w = bmp.canvas.width, h = bmp.canvas.height
-  const canvas = canvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
+  const canvas = showCanvasBackend().createCanvas(w, h) as unknown as HTMLCanvasElement
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   ctx.drawImage(bmp.canvas as CanvasImageSource, 0, 0)
   const img = ctx.getImageData(0, 0, w, h)

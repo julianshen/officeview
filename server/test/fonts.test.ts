@@ -19,9 +19,11 @@ function record(paint: (ctx: CanvasRenderingContext2D) => void): Uint8Array {
 }
 
 describe('pinned font pack', () => {
-  it('pack.json pins 20 faces + 6 aliases and matches the bytes', () => {
+  it('pack.json pins 20 faces + 7 aliases and matches the bytes', () => {
     expect(pack.faces.length).toBe(20)
-    expect(Object.keys(pack.aliases).sort()).toEqual(['Arial', 'Calibri', 'Cambria', 'Courier New', 'Helvetica', 'Times New Roman'])
+    // Calibri Light (piece 4 Task 14 ruling): the Office theme's heading face pins to Carlito like Calibri.
+    expect(Object.keys(pack.aliases).sort()).toEqual(['Arial', 'Calibri', 'Calibri Light', 'Cambria', 'Courier New', 'Helvetica', 'Times New Roman'])
+    expect(pack.aliases['Calibri Light']).toBe('Carlito')
     expect(verifyPack(PACK_DIR)).toEqual([])
     const dir = mkdtempSync(join(tmpdir(), 'pack-'))
     cpSync(PACK_DIR, dir, { recursive: true })
@@ -41,6 +43,28 @@ describe('pinned font pack', () => {
     expect(pinFontString('italic 20px "Times New Roman"', pack)).toBe('italic 20px "Liberation Serif"')
     expect(pinFontString('bold 12pt Calibri, sans-serif', pack)).toBe('bold 12pt "Carlito", sans-serif')
     expect(pinFontString('12pt Aptos', pack)).toBe('12pt Aptos')
+    expect(pinFontString('58px "Calibri Light"', pack)).toBe('58px "Carlito"')
+  })
+
+  it('packOnly: every family resolves through the pack, never the host (Task 14 ruling)', () => {
+    const only = (f: string) => pinFontString(f, pack, { packOnly: true })
+    expect(only('58px "Calibri Light"')).toBe('58px "Carlito"')
+    expect(only('bold 12pt Calibri, sans-serif')).toBe('bold 12pt "Carlito", "Liberation Sans"')
+    expect(only('12pt "Liberation Serif"')).toBe('12pt "Liberation Serif"')
+    // An unknown family is dropped; a generic maps to its pack family; nothing left → the pack's sans fallback.
+    expect(only('12pt Aptos')).toBe('12pt "Liberation Sans"')
+    expect(only('12pt Aptos, serif')).toBe('12pt "Liberation Serif"')
+    expect(only('italic 10px "Nonexistent Font", monospace')).toBe('italic 10px "Liberation Mono"')
+    expect(only('10px sans-serif')).toBe('10px "Liberation Sans"')
+  })
+
+  it('the show backend measures an unpinned family with the pack fallback, not a host face', async () => {
+    const { serverBackend, showBackend } = await import('../src/backend')
+    const b = showBackend(serverBackend())
+    const w = (font: string) => { const x = b.createCanvas(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D; x.font = font; return x.measureText('Standard transition – medium').width }
+    expect(w('58.67px "Calibri Light"')).toBe(w('58.67px "Carlito"'))
+    expect(w('58.67px "Nonexistent Font"')).toBe(w('58.67px "Liberation Sans"'))
+    expect(w('58.67px sans-serif')).toBe(w('58.67px "Liberation Sans"'))
   })
 
   it('parses font shorthands', () => {
@@ -66,6 +90,6 @@ describe('pinned font pack', () => {
 
   it('requiredFaces carries identity only', () => {
     const r = requiredFacesOf(['carlito-bold'], pack)
-    expect(r).toEqual([{ id: 'carlito-bold', hash: pack.faces.find((f) => f.id === 'carlito-bold')!.hash96, alias: 'Calibri' }])
+    expect(r).toEqual([{ id: 'carlito-bold', hash: pack.faces.find((f) => f.id === 'carlito-bold')!.hash96, alias: 'Calibri,Calibri Light' }])
   })
 })

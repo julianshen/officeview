@@ -28,7 +28,9 @@ const STYLES = [
   { suffix: 'BoldItalic', weight: 700, style: 'italic' },
 ] as const
 export const PACK_ALIAS_TABLE: Record<string, string> = {
-  Calibri: 'Carlito', Cambria: 'Caladea', Arial: 'Liberation Sans', Helvetica: 'Liberation Sans',
+  // 'Calibri Light' (piece 4 Task 14 ruling): the Office theme's heading face. Carlito is not metric-compatible
+  // with it (t4-fonts), but the pack's closest face keeps it off the host's fonts.
+  Calibri: 'Carlito', 'Calibri Light': 'Carlito', Cambria: 'Caladea', Arial: 'Liberation Sans', Helvetica: 'Liberation Sans',
   'Times New Roman': 'Liberation Serif', 'Courier New': 'Liberation Mono',
 }
 

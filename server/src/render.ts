@@ -76,6 +76,8 @@ export function layoutFingerprint(contentPolicyId: string): string {
   h.update(`officeview@${versionOf(resolve(root, 'package.json'))}\n`)
   h.update(`@napi-rs/canvas@${versionOf(resolve(root, 'node_modules/@napi-rs/canvas/package.json'))}\n`)
   h.update(`pack@${pack.version}:${pack.faces.map((f) => `${f.id}=${f.hash96}`).join(',')}\n`)
+  // The alias table changes layout too, and the show path resolves fonts pack-only (Task 14 ruling).
+  h.update(`aliases=${Object.entries(pack.aliases).sort().map(([k, v]) => `${k}>${v}`).join(',')};show=pack-only/1\n`)
   h.update(`locale=en-US\npolicy=${contentPolicyId}\n`)
   return h.digest('hex')
 }
