@@ -1783,11 +1783,12 @@ describe('CF statistics reuse by data bars (Task 20)', () => {
     return { scanned, source: wrapped }
   }
 
-  async function prepareWith(rules: CfRule[], source: CfValueSource, session: ReturnType<typeof createCfStatistics>, diagnostics?: CfDiagnostic[]) {
+  async function prepareWith(rules: CfRule[], source: CfValueSource, session: ReturnType<typeof createCfStatistics>, diagnostics?: CfDiagnostic[], statisticsBudget?: () => CfWorkBudget) {
     const memory = createCfMemory({})
     const results = new Map()
     const service = createCfService({ rules, diagnostics: [] }, memory, {
       evidence: none,
+      ...(statisticsBudget ? { statisticsBudget } : {}),
       statistics: { session, stamp: stamp(1), results },
       ...(diagnostics ? { statisticsOptions: { diagnostics } } : {}),
     })
@@ -1887,6 +1888,64 @@ describe('CF statistics reuse by data bars (Task 20)', () => {
     }
     ok.release(); minMaxSession.dispose()
   }, 30_000)
+
+  it('a refused shared sorted scan leaves the streaming fallback its own statistics budget (PR #74 P2)', async () => {
+    const count = 2_000
+    // Descending values make the sorted copy's insertion sort quadratic in work units while a streaming scan stays linear.
+    const cells: XlsxCell[] = []
+    for (let r = 0; r < count; r++) cells.push(cell(r, 0, count - r))
+    const scope = [rect(0, count - 1)]
+    const scale = { kind: 'colorScale', dialect: 'base', formulas: [], points: [{ bound: { type: 'min' }, argb: 0xfff8696b }, { bound: { type: 'max' }, argb: 0xff63be7b }] } as CfDefinition
+    const isPercentile = (r: CfRule) => r.definition.kind === 'dataBar' && r.definition.bounds[0].type === 'percentile'
+    const units = async (rules: CfRule[]) => {
+      const budgets: CfWorkBudget[] = []
+      const session = createCfStatistics(createCfMemory({}))
+      const run = await prepareWith(rules, arraySource(cells).source as unknown as CfValueSource, session, undefined, () => { const b = createCfWorkBudget({ scan: true }); budgets.push(b); return b })
+      run.release(); session.dispose()
+      return budgets.map(b => b.units)
+    }
+    const streamingUnits = (await units([minMaxBar(0, scope)]))[0]!
+    const sortedUnits = (await units([percentileBar(0, scope)]))[0]!
+    // A cap strictly between the two: the sorted scan is refused part-way, a streaming scan still fits whole.
+    const cap = Math.floor((streamingUnits + sortedUnits) / 2)
+    expect(streamingUnits).toBeLessThan(cap)
+    expect(sortedUnits).toBeGreaterThan(cap)
+    expect(cap).toBeLessThan(CF_LIMITS.workUnits)
+    const budgets: CfWorkBudget[] = []
+    const capped = () => { const b = createCfWorkBudget({ scan: true, maxUnits: cap }); budgets.push(b); return b }
+
+    const readsMinMax = (rule: CfRule) => rule.definition.kind === 'colorScale' || (rule.definition.kind === 'dataBar' && rule.definition.bounds[0].type === 'min')
+    // Both priority orders; the colour-scale twin shares the statistics loop, so it gets the same fallback.
+    const cases: Array<Array<(i: number) => CfRule>> = [
+      [i => minMaxBar(i, scope), i => percentileBar(i, scope)],
+      [i => percentileBar(i, scope), i => minMaxBar(i, scope)],
+      [i => ruleOf(i, scale, scope, ['colorScale', 'fill']), i => percentileBar(i, scope)],
+      [i => percentileBar(i, scope), i => ruleOf(i, scale, scope, ['colorScale', 'fill'])],
+    ]
+    for (const [n, make] of cases.entries()) {
+      const rules = make.map((f, i) => f(i))
+      const session = createCfStatistics(createCfMemory({}))
+      const diagnostics: CfDiagnostic[] = []
+      budgets.length = 0
+      const run = await prepareWith(rules, arraySource(cells).source as unknown as CfValueSource, session, diagnostics, capped)
+      for (const rule of rules) {
+        const out = run.outcome(rule)
+        if (isPercentile(rule)) expect(out, `case ${n} percentile`).toMatchObject({ kind: 'unresolved', reason: 'cf-resource-limit' })
+        else {
+          expect(readsMinMax(rule)).toBe(true)
+          expect(out?.kind, `case ${n} streaming rule`).toBe('ready')
+          if (out?.kind === 'ready') {
+            expect(out.value.value.min).toBe(1)
+            expect(out.value.value.max).toBe(count)
+            expect(out.value.value.sortedAsc.length).toBe(0)
+          }
+        }
+      }
+      expect(diagnostics.filter(d => d.feature === 'cf-resource-limit'), `case ${n} diagnostics`).toHaveLength(1) // one per preparation
+      run.release() // asserts the memory ledger is back to 0
+      session.dispose()
+    }
+  })
 
   it('bar statistics over a 20k+ scope run once under the uncapped count budget', async () => {
     const rowCount = 25_000

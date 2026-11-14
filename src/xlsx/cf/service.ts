@@ -178,14 +178,16 @@ export function createCfService(sheet: CfSheetRules, memory: CfMemory,
           const sortedScopes = new Set<string>()
           for (const rule of ordered) { await work(); if (statistical(rule) && ownSorted(rule)) sortedScopes.add(scopeOf(rule)) }
           for (const rule of ordered) if (statistical(rule) && !stats.has(rule)) {
-            const statsBudget = options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
+            const newStatsBudget = (): CfWorkBudget => options.statisticsBudget?.() ?? createCfWorkBudget({ signal, scan: true })
             const own = ownSorted(rule)
             const upgraded = !own && sortedScopes.has(scopeOf(rule))
-            const prepare = async (sorted: boolean, report: boolean) => (await statistics.prepareStatistics([rule.ranges], stamp, source, statsBudget, {
+            const prepare = async (sorted: boolean, report: boolean) => (await statistics.prepareStatistics([rule.ranges], stamp, source, newStatsBudget(), {
               signal, ...options.statisticsOptions, sorted, ...(report ? {} : { diagnostics: undefined }),
             }))[0]!
             let out = await prepare(own || upgraded, !upgraded)
-            // The shared sorted copy is a convenience for this rule: refused, it streams on its own instead.
+            // The shared sorted copy is a convenience for this rule: refused, it streams on its own instead, under a
+            // fresh budget (a budget refuses permanently once exhausted, and the failed optimisation must not spend the
+            // streaming attempt's allowance).
             if (upgraded && out.kind === 'unresolved' && out.reason === 'cf-resource-limit') out = await prepare(false, true)
             stats.set(rule, out)
             if (!options.statistics && out.kind === 'ready') leases.push(out.value)
