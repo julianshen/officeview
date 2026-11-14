@@ -41,6 +41,9 @@ export const SHOW_PLAN_LIMITS = Object.freeze({
 } as const)
 /** D22: every `TargetKey` string in `iterate`, keys and groups together. Not in `SHOW_PLAN_LIMITS`, whose shape is fixed. */
 export const SHOW_PLAN_ITERATE_ITEMS = 128
+/** D23: the decoded frames a keyframe track (or composited Morph pair) holds at once. A track's start declares this
+ * many frames' `w·h·4` (plus a Morph record), not Σ its frames. Not in `SHOW_PLAN_LIMITS`, whose shape is fixed. */
+export const SHOW_TRACK_WINDOW = 8
 /** D21. A diagnostic outside this list rejects the record (fail closed). */
 export const SHOW_DIAGNOSTIC_CODES = [
   'step-composited', 'step-truncated', 'step-deferred', 'trigger-cut', 'morph-late', 'morph-composited', 'morph-fallback',

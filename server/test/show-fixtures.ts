@@ -206,7 +206,8 @@ export function revealThenMoveDeck(): Promise<Uint8Array> {
 // Morph pairs (piece 4 Task 7, D11)
 // ---------------------------------------------------------------------------
 
-const MORPH = { xml: '<p:transition spd="slow" p14:dur="1200"><p159:morph xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" option="byObject"/></p:transition>' }
+const morphOf = (durMs: number) => ({ xml: `<p:transition spd="slow" p14:dur="${durMs}"><p159:morph xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" option="byObject"/></p:transition>` })
+const MORPH = morphOf(1200)
 
 /** Two slides; slide 0's box (id 2) is shown and its `Late` box (id 3) appears on click 1; slide 1 moves both, entered by Morph. */
 export const morphLateDeck = () => buildPptxDeck({
@@ -220,10 +221,10 @@ export const morphLateDeck = () => buildPptxDeck({
  * Two slides, entered by Morph: `Under` (id 4) and `Cover` (id 5) stay put on both, `Cover` hiding part of `Under`
  * (removed pixels); `Mover` (id 2), between them in z, crosses that part: its swept hull covers a masked layer.
  */
-export const morphSweepDeck = () => buildPptxDeck({
+export const morphSweepDeck = (durMs = 1200) => buildPptxDeck({
   slides: [
     { bg: { solid: 'FFFFFF' }, shapes: [rect(4, 'Under', 300, 200, 300, 300, '70AD47'), rect(2, 'Mover', 60, 300, 100, 100, 'C00000'), rect(5, 'Cover', 380, 280, 140, 140, '1F4E79')] },
-    { bg: { solid: 'FFFFFF' }, shapes: [rect(4, 'Under', 300, 200, 300, 300, '70AD47'), rect(2, 'Mover', 760, 300, 100, 100, 'C00000'), rect(5, 'Cover', 380, 280, 140, 140, '1F4E79')], transition: MORPH },
+    { bg: { solid: 'FFFFFF' }, shapes: [rect(4, 'Under', 300, 200, 300, 300, '70AD47'), rect(2, 'Mover', 760, 300, 100, 100, 'C00000'), rect(5, 'Cover', 380, 280, 140, 140, '1F4E79')], transition: morphOf(durMs) },
   ],
 })
 

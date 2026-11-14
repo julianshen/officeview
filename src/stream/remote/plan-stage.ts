@@ -60,7 +60,7 @@ import type {
   Affine, BehaviourNode, CanvasFactory, Compositor, DiagnosticSink, LayerDraw, LayerHandle, Lease, RenderState, Rng,
   ShowSlide, SlideShowWorkspace, TargetKey, TargetState, TimeNode, TimingTree, TransitionSpec,
 } from '../../slideshow/types'
-import type { MorphPlanRecord, PlanContainerRecord, PlanLayerRecord, Rect, ShowPlanRecord } from '../show-plan'
+import { SHOW_TRACK_WINDOW, type MorphPlanRecord, type PlanContainerRecord, type PlanLayerRecord, type Rect, type ShowPlanRecord } from '../show-plan'
 import type { ImageBitmapLike } from './show-fetch'
 
 export interface PlanAssets { bitmap(assetId: number): ImageBitmapLike | undefined; bytes(assetId: number): number }
@@ -97,8 +97,8 @@ export interface PlanStageInspection {
 
 /** D11: how long the outgoing frame holds for a Morph record or track before the fade plays (`morph-late`). */
 export const MORPH_WAIT_MS = 500
-/** D23: decoded frames a track holds at once. */
-export const TRACK_WINDOW = 8
+/** D23: decoded frames a track holds at once (the bound a track's start declares). */
+export const TRACK_WINDOW = SHOW_TRACK_WINDOW
 const TRACK_FPS = 15
 /** Container nesting walked for a hit test (the codec's records name only earlier containers, so no cycle forms). */
 const SHOW_LAYER_DEPTH = 128

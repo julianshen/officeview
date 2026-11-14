@@ -24,7 +24,7 @@ import { canNotes, effectivePolicy, forensicNotices, resumeInvariant, type AuthD
 import { docRefOf, type Keys } from './keys'
 import { admit } from './policy'
 import { AdmissionRefused, RenderFailed, RenderTimeout, type Pool } from './pool'
-import { encodeShowMessage, PlanRejected, type ShowMessage } from '../../src/stream/show-plan'
+import { encodeShowMessage, PlanRejected, SHOW_TRACK_WINDOW, type ShowMessage } from '../../src/stream/show-plan'
 import type { TestOnlyOptions } from './config'
 import type { ShowDeliveryRecord } from './audit-store'
 import { encodeNotesBody, NOTES_ENCODED_CAP, notesBasisLabel } from './notes'
@@ -56,6 +56,12 @@ export type NotesErrorCode = 'policy-refused' | 'invalid-unit' | 'rate-limited' 
  * - `rate-limited`, `policy-refused`, `session-rotated`: as for notes.
  */
 export type ShowErrorCode = NotesErrorCode | 'show-budget' | 'show-limits' | 'show-plan-timeout' | 'still' | 'morph-fallback'
+/**
+ * D23 (final review finding 1): the decoded bytes a keyframe track holds at once — at most `SHOW_TRACK_WINDOW`
+ * frames of the largest frame's `w·h·4` — which its start declares, not Σ its frames (never decoded together).
+ */
+export const trackWindowBytes = (frames: ReadonlyArray<{ w: number; h: number }>) =>
+  Math.min(frames.length, SHOW_TRACK_WINDOW) * frames.reduce((m, f) => Math.max(m, f.w * f.h * 4), 0)
 
 /** The most click steps a plan carries (D3): a track's step is below it, a Morph's `fromStep` at most it. */
 const SHOW_PLAN_LIMITS_STEPS = 64
@@ -788,7 +794,7 @@ export function createStreamServer(o: StreamServerOptions) {
         if (!frames.length) return deny(reqId, 'invalid-unit')
         assets = frames.map((f) => ({ tag: 4, ...f, rest: { x: 0, y: 0, scale: 1 } }))
         page = { w: frames[0]!.w, h: frames[0]!.h }
-        decoded = frames.reduce((n, f) => n + f.w * f.h * 4, 0)
+        decoded = trackWindowBytes(frames)
         start.step = msg.step
       } else {
         const built = await o.pool.showMorph(s.sid, { ...base, from: msg.from as number, to: unit, fromStep: msg.fromStep as number }, estimate)
@@ -797,7 +803,8 @@ export function createStreamServer(o: StreamServerOptions) {
         head = { tag: 5, morph: built.record }
         assets = 'frames' in built ? built.frames.map((f) => ({ tag: 4 as const, ...f })) : built.assets.map((x) => ({ tag: 2 as const, ...x }))
         page = built.page
-        decoded = assets.reduce((n, x) => n + x.w * x.h * 4, 0)
+        // A composited pair plays through the D23 window like a track; a layered pair's assets are all held at once.
+        decoded = 'frames' in built ? trackWindowBytes(assets) : assets.reduce((n, x) => n + x.w * x.h * 4, 0)
         for (const code of built.diagnostics) diags.push({ reqId, type: 'diag', code, unit, ...(code === 'morph-composited' && 'reason' in built ? { reason: built.reason } : {}) })
         Object.assign(start, { from: msg.from, to: unit, fromStep: msg.fromStep })
       }
@@ -824,7 +831,8 @@ export function createStreamServer(o: StreamServerOptions) {
     // 9. Diagnostics, the start, the messages.
     if (marked.reason === 'layer-capacity' && unmarked) diags.push({ reqId, type: 'diag', code: 'forensic-unmarked', unit, reason: 'layer-capacity', assetIds: marked.unmarked })
     for (const x of diags) send(ws, x)
-    send(ws, { ...start, messages: messages.length, decodedBytes: decoded })
+    // D23: a track or Morph start also declares Σ its encoded payloads (retained while it plays); a plan's never.
+    send(ws, { ...start, messages: messages.length, decodedBytes: decoded, ...(kind === 'plan' ? {} : { encodedBytes: payloads.reduce((n, p) => n + p.length, 0) }) })
     for (const m of messages) {
       if (!alive()) return
       if (!sendFrames(ws, [m])) return

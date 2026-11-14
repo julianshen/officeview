@@ -560,7 +560,13 @@ export class StreamSession {
   showPlan(unit: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
     return this.showRequest('plan', unit, { unit }, scale, motion, signal, o)
   }
-  /** One keyframe track of `step` (D1, D4): `show-track-start`, then tag-4 frames only. As `showPlan`. */
+  /**
+   * One keyframe track of `step` (D1, D4): `show-track-start {unit, step, messages, decodedBytes, encodedBytes}`, then
+   * tag-4 frames only. D23 (final review finding 1): the frames are never all decoded together, so `decodedBytes` is
+   * the live window's bound (at most 8 frames' `w·h·4`) and `encodedBytes` is Σ the encoded payloads, which stay
+   * retained while the track plays: each ≤ 128 MiB, the encoded total also ≤ `messages` × 8 MiB, and the payloads
+   * received never past it. Otherwise as `showPlan`; a track or Morph start of any other key set is refused.
+   */
   showTrack(unit: number, step: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
     const bad = !Number.isInteger(step) || step < 0 || step >= SHOW_PLAN_LIMITS.steps
     return this.showRequest('track', unit, { unit, step }, scale, motion, signal, o, bad ? `no step ${step}` : undefined)
@@ -568,7 +574,9 @@ export class StreamSession {
   /**
    * One Morph pair (D1, D11): `show-morph-start`, then the tag-5 record, whose `from`, `to` and
    * `fromStep` must be the request's, then its tag-2 assets or, for a composited record, exactly its
-   * `count` tag-4 frames. Every asset carries `to`'s unit. `morph-fallback` means play the fade. As `showPlan`.
+   * `count` tag-4 frames. Every asset carries `to`'s unit. `morph-fallback` means play the fade. The start also declares
+   * `encodedBytes`, as a track's; a composited pair's `decodedBytes` is its window bound plus the record, a layered
+   * pair's Σ its assets plus the record (all held together). As `showPlan`.
    */
   showMorph(from: number, to: number, fromStep: number, scale: 1 | 2, motion: ShowMotion, signal: AbortSignal, o: ShowRequestOptions): Promise<ShowReply> {
     const bad = !this.shownUnit(from) || from === to || !Number.isInteger(fromStep) || fromStep < 0 || fromStep > SHOW_PLAN_LIMITS.steps
@@ -886,16 +894,25 @@ export class StreamSession {
     if (m.type !== `show-${req.show}-start`) return hostile(`unexpected ${String(m.type)} on a show-${req.show} request`)
     if (req.start) return hostile('a second start')
     if (m.unit !== req.unit || Object.entries(req.fields).some(([k, v]) => m[k] !== v)) return hostile(`show-${req.show}-start does not match the request`)
-    const n = m.messages, decoded = m.decodedBytes
+    // A closed key set per kind: a track or Morph start also declares its encoded bytes (D23), a plan start never.
+    const windowed = req.show !== 'plan'
+    const keys = new Set(['reqId', 'type', 'unit', 'messages', 'decodedBytes', ...Object.keys(req.fields), ...(windowed ? ['encodedBytes'] : [])])
+    if (Object.keys(m).length !== keys.size || Object.keys(m).some((k) => !keys.has(k))) return hostile(`show-${req.show}-start has another key set`)
+    const n = m.messages, decoded = m.decodedBytes, encoded = m.encodedBytes
     if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > SHOW_MAX_MESSAGES[req.show]) return hostile('the declared message count is out of range')
-    // §5 admission: the reply's decoded layer assets and records never exceed the show budget.
+    // §5 admission: the reply's decoded bytes held at once never exceed the show budget. A plan's are all its
+    // assets together; a track's (and a Morph pair's) are its live D23 window, at most 8 decoded frames (plus the record).
     if (!Number.isInteger(decoded) || (decoded as number) < 1 || (decoded as number) > SHOW_PLAN_LIMITS.showDecoded) return hostile('the declared decoded bytes are out of range')
+    // D23: a windowed reply's encoded PNGs stay retained (and charged) while it plays: within the show budget, and
+    // within the kind-6 per-message encoded cap for every declared message.
+    if (windowed && (!Number.isInteger(encoded) || (encoded as number) < 1 || (encoded as number) > SHOW_PLAN_LIMITS.showDecoded || (encoded as number) > (n as number) * CAPS[Kind.SHOW_PLAN]![0])) return hostile('the declared encoded bytes are out of range')
     // Nothing is reserved here: each message takes its grant at its first fragment (`showAdmits`).
     req.start = {
       messages: n as number, decodedBytes: decoded as number,
       encodedCap: showEncodedAllowance(decoded as number),
       bodyCap: Math.min(CAPS[Kind.SHOW_PLAN]![1], decoded as number),
-      retainCap: (decoded as number) + (n as number) * SHOW_MESSAGE_SLACK,
+      // A plan's retained bytes are bounded by its decoded total; a windowed reply's are exactly its declared encoded bytes.
+      retainCap: windowed ? encoded as number : (decoded as number) + (n as number) * SHOW_MESSAGE_SLACK,
     }
     // A declared reply's messages must start arriving in time too.
     req.deadline = this.now() + REASSEMBLY_MS

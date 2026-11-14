@@ -349,6 +349,51 @@ track 2, Morph 4, prefetch 8). Over 10 s the hold spent 44 of them, 40 of those 
 no close followed. A hold longer than about 12 s on a Morph pair would reach the 48 cap and play the fade
 (`morph-late`), not 4008. That is by design, but it is noted as a cost of re-charging revisits.
 
+## Track and Morph admission (D23; final review finding 1)
+
+The parity harness reads raw replies (`server/test/harness.ts`) and decodes tracks directly. It never passes
+production `StreamSession` start admission, so it missed this defect: the server declared a track's
+`decodedBytes` as Σ `w·h·4` over every frame. The `longStepDeck` track has 90 frames at 960×720, about 249 MB in
+all, so the client refused its start (over 128 MiB) and the step lost its whole track. Controller ruling: the
+declarations follow D23's residency model.
+
+- **`show-track-start`** carries a closed key set: `reqId, type, unit, step, messages, decodedBytes, encodedBytes`.
+  - `decodedBytes` is the live window bound, min(count, 8) × the largest frame's `w·h·4`
+    (`trackWindowBytes`, `server/src/ws.ts`; `SHOW_TRACK_WINDOW`, `src/stream/show-plan.ts`).
+  - `encodedBytes` is Σ the encoded kind-6 payloads, after marking.
+- **`show-morph-start`** has the same key set, with `from, to, fromStep` in place of `step`.
+  - A **composited** pair declares the window bound plus the record's bytes.
+  - A **layered** pair keeps Σ its assets plus the record, since those assets are all held together.
+  - Both declare `encodedBytes`, because the client cannot tell the two apart at the start.
+- **`show-plan-start`** is unchanged, since a bundle's assets are all resident together. Its key set is closed
+  too, with no `encodedBytes`.
+
+The client (`onShowText`, `src/stream/remote/session.ts`) refuses a start `policy-refused` before any message
+when any of these fails:
+
+- `decodedBytes` ≤ 128 MiB;
+- for a track or Morph start, `encodedBytes` is an integer with 1 ≤ `encodedBytes` ≤ 128 MiB and ≤ `messages` × 8 MiB;
+- the start has exactly its kind's key set.
+
+A track or Morph reply whose received payloads pass `encodedBytes` is refused and releases everything it held.
+
+These are unchanged:
+
+- the per-message grant (`showGrant(decodedBytes)`);
+- the per-message encoded and decoded caps;
+- the encoded retention, charged to the show workspace until the track is disposed;
+- the window's decoded frames, charged through the show's byte owner (`frameOwner`) as Task 11 made them.
+
+Evidence:
+
+- `server/test/show-session.test.ts` runs the real server with the production `StreamSession`:
+  - the `longStepDeck` track (Σ decoded over 128 MiB) is admitted and played through the window to frame 89;
+  - a 4 s composited `morphSweepDeck(4000)` pair (60 frames, Σ decoded over 128 MiB) is admitted and played to
+    its last frame.
+- The scripted-socket cases in `tests/stream/remote-show-plan.test.ts` cover the hostile starts: an encoded total
+  over either cap, a decoded total over the budget, a missing, zero or fractional `encodedBytes`, an extra key,
+  and a plan start carrying `encodedBytes`.
+
 ## Known differences (rulings recorded in the plan and the Task 1–13 ledger)
 
 - **Hit regions are static rectangles** (§5.1). Link and trigger regions do not follow animated geometry.

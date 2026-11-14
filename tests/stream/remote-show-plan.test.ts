@@ -200,10 +200,10 @@ describe('StreamSession show requests (scripted socket)', () => {
     expect(mr).toEqual({ reqId: mr.reqId, type: 'show-morph', token: tokenFor('j1'), from: 0, to: 1, fromStep: 2, scale: 1, motion: 'full' })
     expect(record.mock.calls).toEqual([[tr.reqId], [mr.reqId]])
     const frames = [asset(4, 1, 0, 960, 540), asset(4, 1, 1, 960, 540)]
-    sock.text({ reqId: tr.reqId, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 2 * 960 * 540 * 4 })
+    sock.text({ reqId: tr.reqId, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 2 * 960 * 540 * 4, encodedBytes: frames[0]!.length + frames[1]!.length })
     for (const f of frames) sock.frame(6, tr.reqId, f)
     const morphMsgs = [encodeShowMessage({ tag: 5, morph: morphRecord() }), asset(2, 1, 1, 10, 10), asset(2, 1, 2, 10, 10)]
-    sock.text({ reqId: mr.reqId, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: morphMsgs[0]!.length + 800 })
+    sock.text({ reqId: mr.reqId, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: morphMsgs[0]!.length + 800, encodedBytes: morphMsgs.reduce((n, m) => n + m.length, 0) })
     for (const m of morphMsgs) sock.frame(6, mr.reqId, m)
     const [tl, ml] = await Promise.all([t, mo])
     expect(tl.messages.length).toBe(2)
@@ -427,19 +427,19 @@ describe('StreamSession show requests (scripted socket)', () => {
     const { s, sock } = await opened()
     const cases: Array<[string, () => Promise<unknown>, (reqId: number) => void]> = [
       ['a start for another unit', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 0, messages: 2, decodedBytes: 4 * MiB })],
-      ['a start of another kind', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB })],
-      ['a track start for another step', () => s.showTrack(1, 1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB })],
+      ['a start of another kind', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB })],
+      ['a track start for another step', () => s.showTrack(1, 1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB })],
       ['zero messages', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 0, decodedBytes: 4 * MiB })],
       ['more messages than a plan can carry', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 131, decodedBytes: 4 * MiB })],
       ['a second start', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }); sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }) }],
       ['a start over 64 KiB', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB, pad: 'x'.repeat(65536) })],
       ['an unexpected text type', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-plan-done' })],
       ['a plan reply whose first message is not the plan', () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 8 * MiB }); sock.frame(6, r, asset(3, 1, 3, 960, 540)) }],
-      ['a track reply carrying a layer', () => s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 8 * MiB }); sock.frame(6, r, asset(2, 1, 0, 960, 540)) }],
-      ['a Morph start for another pair', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB })],
-      ['a Morph record for another fromStep', () => s.showMorph(0, 1, 1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ fromStep: 2 }) })) }],
-      ['a Morph record for another from', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 4 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ from: 1, to: 0 }) })) }],
-      ['a composited Morph whose frame count is not the declared reply', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 8 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ items: [], composited: { fps: 15, count: 5 } }) })) }],
+      ['a track reply carrying a layer', () => s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 8 * MiB, encodedBytes: 2 * MiB }); sock.frame(6, r, asset(2, 1, 0, 960, 540)) }],
+      ['a Morph start for another pair', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB })],
+      ['a Morph record for another fromStep', () => s.showMorph(0, 1, 1, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 1, messages: 3, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ fromStep: 2 }) })) }],
+      ['a Morph record for another from', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ from: 1, to: 0 }) })) }],
+      ['a composited Morph whose frame count is not the declared reply', () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }), (r) => { sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 8 * MiB, encodedBytes: 2 * MiB }); sock.frame(6, r, encodeShowMessage({ tag: 5, morph: morphRecord({ items: [], composited: { fps: 15, count: 5 } }) })) }],
     ]
     for (const [what, ask, hostile] of cases) {
       const before = sock.sent.length
@@ -538,6 +538,101 @@ describe('StreamSession show requests (scripted socket)', () => {
   })
 })
 
+describe('track and Morph starts declare the D23 window (final review finding 1)', () => {
+  const WINDOW = 8
+  const sumOf = (msgs: Uint8Array[]) => msgs.reduce((n, m) => n + m.length, 0)
+  const frames = (n: number, w: number, h: number) => Array.from({ length: n }, (_, i) => asset(4, 1, i, w, h))
+
+  it('a 90-frame 960×720 track (Σ decoded over 128 MiB) is admitted on its window bound and its encoded bytes', async () => {
+    const { s, sock } = await opened()
+    const t = s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS }); void t.catch(() => {})
+    await settle()
+    const r = sock.of('show-track').at(-1)!.reqId
+    const msgs = frames(90, 960, 720)
+    expect(90 * 960 * 720 * 4).toBeGreaterThan(128 * MiB)
+    sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 90, decodedBytes: WINDOW * 960 * 720 * 4, encodedBytes: sumOf(msgs) })
+    for (const m of msgs) sock.frame(6, r, m)
+    const reply = await t
+    expect(reply.messages.length).toBe(90)
+    reply.release()
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+    await usable(s, sock)
+  })
+
+  it('a composited Morph whose Σ is over 128 MiB is admitted on its window bound plus its record', async () => {
+    const { s, sock } = await opened()
+    const mo = s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS }); void mo.catch(() => {})
+    await settle()
+    const r = sock.of('show-morph').at(-1)!.reqId
+    const rec = encodeShowMessage({ tag: 5, morph: morphRecord({ items: [], composited: { fps: 15, count: 60 } }) })
+    const msgs = [rec, ...frames(60, 960, 720)]
+    expect(60 * 960 * 720 * 4).toBeGreaterThan(128 * MiB)
+    sock.text({ reqId: r, type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 61, decodedBytes: WINDOW * 960 * 720 * 4 + rec.length, encodedBytes: sumOf(msgs) })
+    for (const m of msgs) sock.frame(6, r, m)
+    const reply = await mo
+    expect(reply.messages.length).toBe(61)
+    reply.release()
+    await settle()
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+
+  it('hostile track and Morph starts are refused before any message', async () => {
+    const { s, sock } = await opened()
+    const track = () => s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS })
+    const morph = () => s.showMorph(0, 1, 2, 1, 'full', new AbortController().signal, { workspace: WS })
+    const T = { type: 'show-track-start', unit: 1, step: 0, messages: 2, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB }
+    const M = { type: 'show-morph-start', unit: 1, from: 0, to: 1, fromStep: 2, messages: 3, decodedBytes: 4 * MiB, encodedBytes: 2 * MiB }
+    const P = { type: 'show-plan-start', unit: 1, messages: 4, decodedBytes: 4 * MiB }
+    const plan = () => s.showPlan(1, 1, 'full', new AbortController().signal, { workspace: WS })
+    const { encodedBytes: _t, ...noEncT } = T
+    const { encodedBytes: _m, ...noEncM } = M
+    const cases: Array<[string, () => Promise<unknown>, Record<string, unknown>]> = [
+      ['a track start over 128 MiB encoded', track, { ...T, messages: 90, encodedBytes: 128 * MiB + 1 }],
+      ['a track start over messages × 8 MiB encoded', track, { ...T, encodedBytes: 16 * MiB + 1 }],
+      ['a track start over 128 MiB decoded', track, { ...T, decodedBytes: 128 * MiB + 1 }],
+      ['a track start with no encodedBytes', track, noEncT],
+      ['a track start with a zero encodedBytes', track, { ...T, encodedBytes: 0 }],
+      ['a track start with a fractional encodedBytes', track, { ...T, encodedBytes: 1.5 }],
+      ['a track start with an extra key', track, { ...T, extra: 1 }],
+      ['a Morph start over 128 MiB encoded', morph, { ...M, messages: 61, encodedBytes: 128 * MiB + 1 }],
+      ['a Morph start over messages × 8 MiB encoded', morph, { ...M, encodedBytes: 24 * MiB + 1 }],
+      ['a Morph start over 128 MiB decoded', morph, { ...M, decodedBytes: 128 * MiB + 1 }],
+      ['a Morph start with no encodedBytes', morph, noEncM],
+      ['a Morph start with an extra key', morph, { ...M, scale: 1 }],
+      ['a plan start with encodedBytes (not its key set)', plan, { ...P, encodedBytes: 2 * MiB }],
+      ['a plan start with an extra key', plan, { ...P, step: 0 }],
+    ]
+    const push = vi.spyOn(Reassembler.prototype, 'push')
+    for (const [what, ask, start] of cases) {
+      const before = sock.sent.length
+      const p = ask(); void p.catch(() => {})
+      await settle()
+      const reqId = sock.sent.slice(before).find((m) => m.type.startsWith('show-'))!.reqId
+      sock.text({ reqId, ...start })
+      expect({ what, code: await codeOf(p) }).toEqual({ what, code: 'policy-refused' })
+      await settle()
+      expect({ what, stats: s.stats() }).toMatchObject({ what, stats: { inFlight: 0, inFlightBytes: 0 } })
+    }
+    expect(push).not.toHaveBeenCalled()
+    await usable(s, sock)
+  })
+
+  it('a track reply past its declared encoded bytes is refused and releases what it held', async () => {
+    const { s, sock } = await opened()
+    const t = s.showTrack(1, 0, 1, 'full', new AbortController().signal, { workspace: WS }); void t.catch(() => {})
+    await settle()
+    const r = sock.of('show-track').at(-1)!.reqId
+    const msgs = frames(3, 960, 720)
+    sock.text({ reqId: r, type: 'show-track-start', unit: 1, step: 0, messages: 3, decodedBytes: 3 * 960 * 720 * 4, encodedBytes: sumOf(msgs) - 1 })
+    for (const m of msgs) sock.frame(6, r, m)
+    expect(await codeOf(t)).toBe('policy-refused')
+    await settle()
+    expect(WS.used()).toBe(0)
+    expect(s.stats()).toMatchObject({ inFlight: 0, inFlightBytes: 0 })
+  })
+})
+
 /** The recorded harness sessions (Task 9, `tests/fixtures/show-plan/*.bin`; format in scripts/record-show-fixtures.ts). */
 interface Rec { op: number; unit: number; a: number; b: number; bytes: Uint8Array }
 function records(name: string): Rec[] {
@@ -579,7 +674,7 @@ describe('recorded server replies', () => {
         const kind = r.op === 1 ? 'plan' : r.op === 2 ? 'track' : 'morph'
         const req = sock.of(`show-${kind}`).at(-1)!
         const echo = r.op === 1 ? {} : r.op === 2 ? { step: r.a } : { from: r.a, to: r.unit, fromStep: r.b }
-        sock.text({ reqId: req.reqId, type: `show-${kind}-start`, unit: r.unit, ...echo, messages: r.messages.length, decodedBytes: rgbaOf(r.messages) })
+        sock.text({ reqId: req.reqId, type: `show-${kind}-start`, unit: r.unit, ...echo, messages: r.messages.length, decodedBytes: rgbaOf(r.messages), ...(r.op === 1 ? {} : { encodedBytes: r.messages.reduce((n, m) => n + m.length, 0) }) })
         for (const m of r.messages) sock.frame(6, req.reqId, m)
         const reply = await p
         expect(reply.messages.length).toBe(r.messages.length)
