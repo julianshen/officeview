@@ -495,6 +495,59 @@ export function adversaryDeck(kind: AdversaryKind): Promise<Uint8Array> {
   }
 }
 
+export type MorphAdversaryKind = 'hiddenFrom' | 'sweptCover' | 'coveredPair' | 'movingCover'
+export const MORPH_ADVERSARY_KINDS: readonly MorphAdversaryKind[] = ['hiddenFrom', 'sweptCover', 'coveredPair', 'movingCover']
+
+/**
+ * Two slides, the second entered by Morph (`byObject`), whose ink in
+ * `HIDDEN_INK` is never shown by the composed show (T5 wire audit, fix round
+ * 1), hidden by `kind`:
+ *
+ * - `hiddenFrom`: on slide 1 the ink box `Ink` (id 3) appears and, listed
+ *   after it at the same instant, disappears on click 1, so it is hidden at
+ *   the Morph's `fromStep` (1). Slide 2's `Ink` is #336699: the pair matches
+ *   by name, its from side is hidden. `Box` (id 2) moves.
+ * - `sweptCover`: `morphSweepDeck`'s layout (`Under` partly covered by
+ *   `Cover`, `Mover` crossing it, so the pair is unproven and composited),
+ *   plus an ink box (id 6) wholly under `Cover`, below `Mover`, on both
+ *   slides.
+ * - `coveredPair`: the ink box `Ink` (id 2) under its opaque `Cover` (id 3),
+ *   which contains it, both in place on both slides, while `Box` (id 4)
+ *   moves clear of them: a layered Morph whose matched ink pair is under the
+ *   cover throughout.
+ * - `movingCover`: the ink box `Box` (id 2) under its containing `Cover`
+ *   (id 3), both moved by the same (+320, +160) on slide 2: the ink stays
+ *   under the cover throughout (the server composites this pair).
+ */
+export function morphAdversaryDeck(kind: MorphAdversaryKind): Promise<Uint8Array> {
+  const t = morphTransition('byObject')
+  const W = 'FFFFFF'
+  switch (kind) {
+    case 'hiddenFrom':
+      return deck([
+        { bg: { solid: W }, shapes: [rect(2, 'Box', 80, 80, 200, 140, 'D06040'), rect(3, 'Ink', 80, 400, 200, 140, HIDDEN_INK)], timingXml: mainSequence([[appear(3), disappear(3)]]) },
+        { bg: { solid: W }, shapes: [rect(2, 'Box', 600, 300, 200, 140, 'D06040'), rect(3, 'Ink', 600, 80, 200, 140, '336699')], transition: t },
+      ])
+    case 'sweptCover': {
+      const shapes = (moverX: number) => [
+        rect(4, 'Under', 300, 200, 300, 300, '70AD47'),
+        rect(6, 'Ink', 400, 300, 100, 100, HIDDEN_INK),
+        rect(2, 'Mover', moverX, 300, 100, 100, 'C00000'),
+        rect(5, 'Cover', 380, 280, 140, 140, '1F4E79'),
+      ]
+      return deck([{ bg: { solid: W }, shapes: shapes(60) }, { bg: { solid: W }, shapes: shapes(760), transition: t }])
+    }
+    case 'coveredPair': {
+      const shapes = (x: number) => [rect(2, 'Ink', 100, 100, 160, 120, HIDDEN_INK), rect(3, 'Cover', 60, 60, 240, 200, '336699'), rect(4, 'Box', x, 500, 160, 120, 'D06040')]
+      return deck([{ bg: { solid: W }, shapes: shapes(100) }, { bg: { solid: W }, shapes: shapes(700), transition: t }])
+    }
+    case 'movingCover': {
+      const shapes = (dx: number, dy: number) => [rect(2, 'Box', 100 + dx, 100 + dy, 160, 120, HIDDEN_INK), rect(3, 'Cover', 60 + dx, 60 + dy, 240, 200, '336699')]
+      return deck([{ bg: { solid: W }, shapes: shapes(0, 0) }, { bg: { solid: W }, shapes: shapes(320, 160), transition: t }])
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // A tiny PNG encoder (stored deflate): the crop adversary's picture
 // ---------------------------------------------------------------------------
